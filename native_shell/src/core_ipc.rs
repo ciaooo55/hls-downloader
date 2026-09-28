@@ -21,6 +21,8 @@ pub const V7_PIPE_MAX_FRAME: usize = 4 * 1024 * 1024;
 // bound finite without invalidating a connection that the client may still reuse.
 const V7_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(120);
 const V7_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);
+// 报完协议违规后收连接前，等对端把残留输入收尾的最长时间。见 linger_close。
+const V7_LINGER_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 // 每连接一线程模型下的并发连接上限。超限的新连接直接关闭，客户端按连接失败
 // 自行重试。桌面 UI、原生宿主与 presenter 的常驻连接总量远小于该值。
@@ -591,11 +593,19 @@ impl NamedPipeServer {
         F: FnMut(CorePipeRequest) -> CorePipeResponse,
     {
         let mut stream = self.serve_once_inner(None)?;
-        while let Some(request) = read_server_pipe_message::<CorePipeRequest>(&mut stream)? {
-            let response = handler(request);
-            write_message(&mut stream, &response)?;
+        loop {
+            match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
+                Ok(Some(request)) => {
+                    let response = handler(request);
+                    write_message(&mut stream, &response)?;
+                }
+                Ok(None) => return Ok(()),
+                Err(error) => {
+                    report_protocol_violation(&mut stream, &error);
+                    return Err(error);
+                }
+            }
         }
-        Ok(())
     }
 
     pub fn serve_loop(
@@ -617,12 +627,19 @@ impl NamedPipeServer {
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
                         let _slot = slot;
-                        while let Ok(Some(request)) =
-                            read_server_pipe_message::<CorePipeRequest>(&mut stream)
-                        {
-                            let response = handler(request);
-                            if write_message(&mut stream, &response).is_err() {
-                                break;
+                        loop {
+                            match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
+                                Ok(Some(request)) => {
+                                    let response = handler(request);
+                                    if write_message(&mut stream, &response).is_err() {
+                                        break;
+                                    }
+                                }
+                                Ok(None) => break,
+                                Err(error) => {
+                                    report_protocol_violation(&mut stream, &error);
+                                    break;
+                                }
                             }
                         }
                     });
@@ -922,16 +939,68 @@ pub fn serve_tcp_listener(
     }
     Ok(())
 }
+/// 收连接前的优雅收尾。
+///
+/// Windows 上 close() 一个接收缓冲区里还有没读掉的字节的 socket 会发 RST，
+/// 把刚要送出去的错误帧一起冲掉——客户端于是看到"连接被重置"而不是那条
+/// protocol_violation，等于白报。所以先把写端 shutdown 送出 FIN，再把对端
+/// 残留的输入读丢掉，等对端自己收尾；等待上限 V7_LINGER_CLOSE_TIMEOUT，
+/// 对端不配合也不会把这个线程挂住。
+fn linger_close(stream: &mut TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut sink = [0u8; 512];
+    let deadline = std::time::Instant::now() + V7_LINGER_CLOSE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        if stream.set_read_timeout(Some(remaining)).is_err() {
+            return;
+        }
+        match stream.read(&mut sink) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => continue,
+        }
+    }
+}
+
+/// 收连接前把 framing 违规报给对端。
+///
+/// 读不出下一帧（超长、半截帧头、载荷不是 CorePipeRequest、读超时）时，以前是直接
+/// 收连接：客户端只看到"对端没动静"，分不清是对端崩了还是"我发的东西对端不认"。
+/// 后者是协议违规，报出来才定位得了。写不进去也无妨——连接本来就要收了。
+fn report_protocol_violation(stream: &mut impl Write, error: &str) {
+    let _ = write_message(
+        stream,
+        &CorePipeResponse::Error {
+            request_id: None,
+            code: "protocol_violation".into(),
+            message: error.to_string(),
+        },
+    );
+}
 
 fn handle_stream(
     mut stream: TcpStream,
     handler: &dyn Fn(CorePipeRequest) -> CorePipeResponse,
 ) -> Result<(), String> {
     let _ = stream.set_nodelay(true);
-    while let Some(request) = read_server_tcp_message::<CorePipeRequest>(&mut stream)? {
-        write_message(&mut stream, &handler(request))?;
+    loop {
+        match read_server_tcp_message::<CorePipeRequest>(&mut stream) {
+            Ok(Some(request)) => write_message(&mut stream, &handler(request))?,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                // 读不出下一帧（超长、半截帧头、载荷不是 CorePipeRequest、读超时）
+                // 时，以前是直接 return Err：连接一关，客户端只看到"对端没动静"，
+                // 分不清是对端崩了还是"我发的东西对端不认"。后者是协议违规，报出来
+                // 才定位得了。
+                report_protocol_violation(&mut stream, &error);
+                linger_close(&mut stream);
+                return Err(error);
+            }
+        }
     }
-    Ok(())
 }
 
 pub struct CoreIpcClient {
@@ -1433,5 +1502,167 @@ mod tests {
                 "unexpected message: {err}"
             );
         }
+    }
+
+    /// 第五轮发现 5：framing 违规以前只是把连接关掉，客户端看到"对端没动静"，
+    /// 分不清是对端崩了还是自己发的东西对端不认。现在对端必须在收连接之前回一条
+    /// protocol_violation 错误帧。
+    #[test]
+    fn a_framing_violation_answers_with_a_protocol_violation_frame() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let handler = |_request: CorePipeRequest| CorePipeResponse::Hello {
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
+                pid: 0,
+            };
+            // 两条连接：一条发能解析但语义不对的载荷，一条发超长帧头。
+            let unparseable = handle_stream(listener.accept().unwrap().0, &handler);
+            let oversize = handle_stream(listener.accept().unwrap().0, &handler);
+            (unparseable, oversize)
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+
+        // 正常路径不能被改坏。
+        write_message(&mut client, &hello_request()).unwrap();
+        match read_message::<CorePipeResponse>(&mut client)
+            .unwrap()
+            .unwrap()
+        {
+            CorePipeResponse::Hello { version, .. } => assert_eq!(version, V7_PROTOCOL_VERSION),
+            other => panic!("expected hello, got {other:?}"),
+        }
+
+        // 帧头合法、载荷不是 CorePipeRequest。
+        let payload = b"1234";
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        client.write_all(&frame).unwrap();
+        match read_message::<CorePipeResponse>(&mut client)
+            .unwrap()
+            .unwrap()
+        {
+            CorePipeResponse::Error { code, message, .. } => {
+                assert_eq!(code, "protocol_violation");
+                assert!(
+                    message.contains("JSON invalid"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected a protocol violation frame, got {other:?}"),
+        }
+        // 错误帧之后是对端直接收连接：干净的 EOF，而不是又一条沉默。
+        assert!(matches!(
+            read_message::<CorePipeResponse>(&mut client),
+            Ok(None)
+        ));
+        drop(client);
+
+        // 超长帧：帧头就过不了，同样要报成协议违规。
+        let mut client = TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        let mut frame = (V7_PIPE_MAX_FRAME as u32 + 1).to_le_bytes().to_vec();
+        frame.extend_from_slice(&[0u8; 8]);
+        client.write_all(&frame).unwrap();
+        match read_message::<CorePipeResponse>(&mut client)
+            .unwrap()
+            .unwrap()
+        {
+            CorePipeResponse::Error { code, message, .. } => {
+                assert_eq!(code, "protocol_violation");
+                assert!(
+                    message.contains("too large"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected a protocol violation frame, got {other:?}"),
+        }
+        drop(client);
+
+        let (unparseable, oversize) = server.join().unwrap();
+        assert!(
+            unparseable.is_err(),
+            "handle_stream must still report the violation: {unparseable:?}"
+        );
+        assert!(
+            oversize.is_err(),
+            "handle_stream must still report the violation: {oversize:?}"
+        );
+    }
+
+    /// 命名管道才是产品 IPC（TCP 环回是 opt-in，见 windows_tcp_loopback_is_opt_in），
+    /// 所以这条路径上的 framing 违规也必须报成 protocol_violation，而不是让客户端把
+    /// "连接消失"当成对端崩溃。
+    #[cfg(windows)]
+    #[test]
+    fn a_pipe_framing_violation_answers_with_a_protocol_violation_frame() {
+        let name = format!(
+            r"\\.\pipe\HLSDownloader.v7.t{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|_request: CorePipeRequest| CorePipeResponse::Hello {
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
+                pid: 0,
+            });
+        let serve_name = name.clone();
+        let serve_stop = Arc::clone(&stop);
+        let serve_handler = Arc::clone(&handler);
+        thread::spawn(move || {
+            let _ = NamedPipeServer::new(serve_name).serve_loop(serve_stop, serve_handler);
+        });
+
+        // serve_loop 的管道实例是异步建的，照 core_server 的测试那样轮询等到它出现。
+        let mut client = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Ok(pipe) = NamedPipeClient::connect(&name, 100) {
+                client = Some(pipe.into_file());
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let mut client = client.expect("the serve_loop instance never appeared");
+        write_message(&mut client, &hello_request()).unwrap();
+        match read_message::<CorePipeResponse>(&mut client)
+            .unwrap()
+            .unwrap()
+        {
+            CorePipeResponse::Hello { version, .. } => assert_eq!(version, V7_PROTOCOL_VERSION),
+            other => panic!("expected hello, got {other:?}"),
+        }
+
+        // 帧头合法、载荷不是 CorePipeRequest。
+        let payload = b"1234";
+        let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        client.write_all(&frame).unwrap();
+        match read_message::<CorePipeResponse>(&mut client)
+            .unwrap()
+            .unwrap()
+        {
+            CorePipeResponse::Error { code, message, .. } => {
+                assert_eq!(code, "protocol_violation");
+                assert!(
+                    message.contains("JSON invalid"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected a protocol violation frame, got {other:?}"),
+        }
+
+        stop.store(true, Ordering::SeqCst);
     }
 }
