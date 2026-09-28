@@ -417,14 +417,27 @@ fn pushing_to_an_unknown_device_asks_the_user_to_scan_first() {
 fn a_non_lan_control_url_is_rejected_before_any_socket_work() {
     // 这条不依赖假设备，验证 is_lan_host 的边界：公网地址不被当成 LAN。
     assert!(hls_native_shell::cast::is_lan_host("127.0.0.1"));
-    assert!(hls_native_shell::cast::is_lan_host("192.168.1.50"));
-    assert!(hls_native_shell::cast::is_lan_host("172.16.9.9"));
     assert!(!hls_native_shell::cast::is_lan_host("8.8.8.8"));
+    assert!(!hls_native_shell::cast::is_lan_host("203.0.113.9"));
+    // 域名不在这条判定里（本产品只接受字面 IPv4 地址），历史行为，保持不变。
     assert!(!hls_native_shell::cast::is_lan_host("example.com"));
 }
 
-/// SSDP 响应的解析：LOCATION 大小写、http/https 都收，别的协议不收。
+/// 局域网地址的"正例"只能由本机网卡推导：写死 192.168.1.50 / 172.16.9.9 能过，
+/// 只是因为开发机恰好在那个段；换台在热点 100.64/10 上的机器它就成了负例。
 #[test]
+fn a_host_on_this_machines_own_subnet_is_accepted() {
+    let networks = hls_native_shell::cast::lan_ipv4_networks();
+    let Some((own, _)) = networks.first().copied() else {
+        eprintln!("skip: no LAN adapter on this machine");
+        return;
+    };
+    // 翻转最后一位，得到同网段里一个确定不是本机的地址。
+    let neighbour = std::net::Ipv4Addr::from(u32::from(own) ^ 1);
+    assert!(hls_native_shell::cast::is_lan_host(&own.to_string()));
+    assert!(hls_native_shell::cast::is_lan_host(&neighbour.to_string()));
+}
+/// SSDP 响应的解析：LOCATION 大小写、http/https 都收，别的协议不收。
 fn ssdp_location_parsing_accepts_only_http_urls() {
     use hls_native_shell::cast::{parse_device_description, parse_ssdp_location};
     assert_eq!(

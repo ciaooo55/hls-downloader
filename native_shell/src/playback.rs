@@ -191,19 +191,18 @@ fn fill_random_bytes(buf: &mut [u8]) {
     }
 }
 
+/// 谁能连我的本地媒体服务器。回环永远放行（界面和 presenter 自己走这条）。
+/// 局域网成员只有一条判据：**对端在不在我某块网卡的网段上**，规则与
+/// `cast::is_lan_ipv4` 共用一份，不另写一套"私有地址"清单——那样热点段
+/// 100.64/10 上的电视会连不上，而换台机器又会漏掉别的段。
 fn peer_allowed(ip: IpAddr, lan: bool) -> bool {
     match ip {
         IpAddr::V4(addr) if addr.is_loopback() => true,
         IpAddr::V6(addr) if addr.is_loopback() => true,
-        IpAddr::V4(addr) if lan && (addr.is_private() || addr.is_link_local()) => true,
-        IpAddr::V6(addr)
-            if lan
-                && addr
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| mapped.is_private()) =>
-        {
-            true
-        }
+        IpAddr::V4(addr) if lan => crate::cast::is_lan_ipv4(addr),
+        // IPv4-mapped 的 v6（::ffff:a.b.c.d）在 socket 层就是那个 v4 地址，
+        // 必须先归一化再判，否则换个写法就绕过局域网检查。
+        IpAddr::V6(addr) if lan => addr.to_ipv4_mapped().is_some_and(crate::cast::is_lan_ipv4),
         _ => false,
     }
 }

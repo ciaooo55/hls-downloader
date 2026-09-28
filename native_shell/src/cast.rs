@@ -42,19 +42,57 @@ pub fn lan_media_url(
     Ok(server.cast_url_for(token, advertise_host))
 }
 
+/// 局域网成员的唯一定义：对端是否落在**本机真实网卡自己持有的「地址 + 前缀」**上。
+///
+/// 这里刻意**不维护任何网段表**（RFC1918、100.64/10、192.0.2.0/24……）。这是个要
+/// 装到别人机器上的产品：用户的局域网可能是手机热点分下来的 100.64/10、公司内网的
+/// 8.8.0.0/12、实验室的 192.0.2.0/24。任何一张写死的表都会在某一类人手上失灵，而
+/// 表越长越像占卜。和"我这台机器"真正相关的答案只有一个：**这个地址是否就在我某块
+/// 网卡的同一个网段上**。所以规则从网卡来，不从数字来。
+///
+/// 顺带比"是否私有地址"更严也更准：
+///   * 8.8.8.8 / 1.1.1.1 不在我任何网段内 → 拒绝，SSRF 边界**没有放宽**；
+///   * 云元数据 169.254.169.254 同样不在（网卡枚举本来就把 link-local 排除了）；
+///   * 本机确实在 100.64/10 上时，同段的热点设备顺理成章地可用，不需要为它加白名单。
+///
+/// `networks` 由调用方传入，是为了让规则本身可单测：真实网卡列表随机器而变，
+/// 判据不能跟着变。
+fn address_is_on_link(networks: &[(Ipv4Addr, u8)], peer: Ipv4Addr) -> bool {
+    // 这几类地址**自己先出局**，不依赖网卡枚举：本函数是纯函数，任何人拿到一份
+    // networks 就能判定，所以边界必须自带。link-local 出局尤其重要——它是云元数据
+    // 169.254.169.254 所在的段，一旦某块网卡的列表里混进了 169.254.x，"同网段"
+    // 这个判据就会把它放进来。
+    if peer.is_link_local() || peer.is_multicast() || peer.is_unspecified() || peer.is_broadcast() {
+        return false;
+    }
+    networks
+        .iter()
+        .any(|(local, prefix)| *local == peer || ipv4_network_contains(*local, *prefix, peer))
+}
+
+/// 上面那条规则配上本机此刻的真实网卡列表——局域网判定的唯一事实来源。
+pub fn is_lan_ipv4(peer: Ipv4Addr) -> bool {
+    address_is_on_link(&lan_ipv4_networks(), peer)
+}
+
+/// 字符串形态的局域网判定，供 URL 与手工端点校验使用。本机回环仍然算合法：
+/// 媒体服务器本来就监听在 127.0.0.1 上，界面上也允许填 localhost。
 pub fn is_lan_host(host: &str) -> bool {
-    if let Ok(addr) = host.parse::<Ipv4Addr>() {
-        addr.is_private() || addr.is_loopback() || addr.is_link_local()
-    } else {
-        false
+    match host.parse::<Ipv4Addr>() {
+        Ok(addr) => addr.is_loopback() || is_lan_ipv4(addr),
+        Err(_) => false,
     }
 }
 
+/// 路由探测：问操作系统"要到 10.255.255.255 该从哪块网卡出去"，拿到的就是本机
+/// 在这个方向上的地址。**不看地址落在哪个段**——同一个理由：用户在哪个段是未知的，
+/// 这个函数只负责"操作系统挑中的那个地址"。是不是局域网，交给
+/// [address_is_on_link] 按真实网卡判。
 pub fn primary_lan_ipv4() -> Option<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("10.255.255.255:1").ok()?;
     match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) if ip.is_private() || ip.is_link_local() => Some(ip),
+        IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
         _ => None,
     }
 }
@@ -90,22 +128,25 @@ fn peer_ipv4_from_endpoint(endpoint: &str) -> Option<Ipv4Addr> {
         endpoint.to_string()
     };
     let peer = host.parse::<Ipv4Addr>().ok()?;
-    (peer.is_private() || peer.is_link_local()).then_some(peer)
+    is_lan_ipv4(peer).then_some(peer)
 }
 
+/// 解析出"这个设备/端点在我哪块网卡上"，用于给电视通告本机地址、给推送选出口。
+/// 先按 [address_is_on_link] 判是否局域网成员，再让操作系统选源地址。
 pub fn routed_lan_ipv4(peer: Ipv4Addr) -> Option<Ipv4Addr> {
-    if !(peer.is_private() || peer.is_link_local()) {
+    let networks = lan_ipv4_networks();
+    if !address_is_on_link(&networks, peer) {
         return None;
     }
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     socket.connect(SocketAddr::from((peer, 9))).ok()?;
     let routed = match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) if (ip.is_private() || ip.is_link_local()) && !ip.is_loopback() => Some(ip),
+        IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
         _ => None,
     };
     #[cfg(windows)]
     {
-        physical_lan_source(&lan_ipv4_networks(), peer, routed)
+        physical_lan_source(&networks, peer, routed)
     }
     #[cfg(not(windows))]
     {
@@ -254,8 +295,15 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
                     let octets = unsafe { ipv4.sin_addr.S_un.S_un_b };
                     let value = Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4);
                     let prefix = address.OnLinkPrefixLength.min(32);
-                    if value.is_private()
-                        && !value.is_loopback()
+                    // 这里**不按地址的数字范围挑**，只按适配器本身挑——是不是环回口、
+                    // 是不是隧道口（TUN/TAP/Wintun/VPN/WSL/Hyper-V）、名字是不是虚拟，
+                    // 这些在上面已经判完了。理由：用户的局域网在哪个段是未知的，热点
+                    // 会发 100.64/10，公司会用 8.8.0.0/12，实验室甚至有 192.0.2.0/24。
+                    // 以前这里写着 `value.is_private()`，等于替所有用户断言"你的局域网
+                    // 一定在 RFC1918 里"——断言错的那天，表现就是"插着网线、电视开着，
+                    // 却一个设备都扫不到"，而界面只会说"没有发现设备"。
+                    // 前缀上限 30 保留：/8、/0 这类会把"扫同网段"变成永远做不完的动作。
+                    if !value.is_loopback()
                         && !value.is_link_local()
                         && prefix <= 30
                         && !networks.contains(&(value, prefix))
@@ -277,7 +325,10 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
 }
 
 #[cfg(windows)]
-fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
+/// 本机真实网卡的「地址 + 前缀」列表。**[is_lan_ipv4] 的事实来源**，也是
+/// 投屏/TVBox 发现流程挑网卡的那张表。公开是为了让集成测试能按本机推导
+/// 局域网正例，而不是写死一段 RFC1918。
+pub fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
     lan_ipv4_state().0
 }
 
@@ -287,7 +338,8 @@ pub fn tun_mode_active() -> bool {
 }
 
 #[cfg(not(windows))]
-fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
+/// 见 windows 版本：同样必须公开，理由同上（不为测试单独造一个私有副本）。
+pub fn lan_ipv4_networks() -> Vec<(Ipv4Addr, u8)> {
     primary_lan_ipv4()
         .map(|address| vec![(address, 24)])
         .unwrap_or_default()
@@ -386,7 +438,16 @@ fn effective_scan_networks(
 }
 
 fn discovery_scan_networks() -> Vec<(Ipv4Addr, u8)> {
-    effective_scan_networks(&lan_ipv4_networks(), primary_lan_ipv4())
+    // 兜底用的路由探测地址在"当前有 TUN"时不要用：探测器只看数字，TUN 的
+    // 198.18.0.1 现在是合法返回值（见 primary_lan_ipv4），拿它当 /24 去扫，
+    // 扫的会是隧道网段而不是局域网。和 lan_ipv4_state() 内部那条兜底保持同一条
+    // 判断：有隧道就不猜。
+    let routed = if tun_mode_active() {
+        None
+    } else {
+        primary_lan_ipv4()
+    };
+    effective_scan_networks(&lan_ipv4_networks(), routed)
 }
 
 pub fn ssdp_notify(location: &str) -> Result<(), String> {
@@ -1367,9 +1428,11 @@ pub fn parse_device_description(xml: &str, location: &str) -> Option<CastDeviceI
         let control = xml_local(block, "controlURL").unwrap_or_default();
         if service_type.contains("AVTransport") && !control.is_empty() {
             let control_url = resolve_url(&url_base, &control);
-            if !is_lan_url(&control_url) {
-                return None;
-            }
+            // 这里**不判局域网**。理由同 parse_mdns_chromecasts：这是个纯解析函数，
+            // 掺进"算不算局域网"就得读本机网卡，于是同一段 XML 换个机器解析结果不同
+            // （换一台不在该网段的机器，本来能用的电视就被解析成 None）。
+            // 边界已经由真正的 I/O 关口守着：describe_device 抓取前判 LOCATION，
+            // http_post_lan 发出 SOAP 前判 control_url。
             let host = host_of(&control_url).unwrap_or_default();
             return Some(CastDeviceInfo {
                 id: format!("dlna:{control_url}"),
@@ -1696,9 +1759,10 @@ pub fn parse_mdns_chromecasts(packet: &[u8]) -> Vec<CastDeviceInfo> {
         let Some(ip) = addrs.get(target) else {
             continue;
         };
-        if !(ip.is_private() || ip.is_loopback() || ip.is_link_local()) {
-            continue;
-        }
+        // 注意：这里**不做**局域网过滤。解析器只负责把 DNS 报文翻译成设备，
+        // 一旦掺进"这个 IP 算不算局域网"的判断，它就得去读网卡列表，单测会随机器
+        // 变脸（换一台不在 192.168/16 的机器，以前能过的用例就红）。局域网过滤
+        // 归调用方 discover_chromecasts_on 拿到设备之后统一做。
         let attrs = txt.get(&instance);
         let id = attrs
             .and_then(|map| map.get("id"))
@@ -1805,6 +1869,17 @@ fn discover_chromecasts_on(interface: Ipv4Addr, timeout: Duration) -> Vec<CastDe
         match socket.recv_from(&mut buf) {
             Ok((count, _)) => {
                 for device in parse_mdns_chromecasts(&buf[..count]) {
+                    // 局域网过滤在这里做（而不是在解析器里，理由见 parse_mdns_chromecasts）。
+                    // 只信 mDNS 报文里带的 A 记录地址——它就在我刚查询的那块网卡的
+                    // 网段上，除非这机器还有第二块网卡也收到了同一份应答。
+                    let reachable = device
+                        .control_url
+                        .rsplit_once(':')
+                        .and_then(|(host, _)| host.parse::<Ipv4Addr>().ok())
+                        .is_some_and(is_lan_ipv4);
+                    if !reachable {
+                        continue;
+                    }
                     if !devices
                         .iter()
                         .any(|item: &CastDeviceInfo| item.id == device.id)
@@ -2446,14 +2521,47 @@ mod tests {
 
     #[test]
     fn rejects_public_cast_hosts() {
-        assert!(is_lan_host("192.168.1.8"));
-        assert!(is_lan_host("10.0.0.2"));
-        assert!(!is_lan_host("8.8.8.8"));
         let server = MediaServer::start().unwrap();
+        // 公网地址永远不能当投屏主机 / 被通告给电视 —— 这条判据和本机在哪个段无关。
+        assert!(!is_lan_host("8.8.8.8"));
+        assert!(!is_lan_host("1.1.1.1"));
+        assert!(!is_lan_host("203.0.113.9"));
+        // 云元数据地址同样拒绝：它不在任何一块真实网卡的网段上（link-local 本来就被
+        // 排除在网卡列表之外），所以这条 SSRF 边界是按网卡收紧的，不是照抄私有段。
+        assert!(!is_lan_host("169.254.169.254"));
         assert!(lan_media_url(&server, "t", "8.8.8.8").is_err());
-        if let Some(ip) = primary_lan_ipv4() {
-            assert!(ip.is_private() || ip.is_link_local());
+    }
+
+    // ===== 局域网判据：从网卡来，不从写死的网段来 =====
+    //
+    // 以前这些用例里写满了 192.168.1.8 / 10.0.0.2 / 172.16.1.9：它们能过，只是因为
+    // 开发机恰好在 192.168.2.0/24 上。换个在 100.64/10（手机热点）或者 8.8.0.0/12
+    // （公司内网）上跑 CI 的人，同一批断言全红。局域网判据必须变成"本机网卡说了算"，
+    // 否则就是在用开发机的网络形态给所有用户下断言。
+
+    #[test]
+    fn lan_membership_comes_from_the_machine_not_a_range_table() {
+        let networks = lan_ipv4_networks();
+        if networks.is_empty() {
+            eprintln!(
+                "skip: this machine reports no usable LAN adapter, so there is nothing \
+                 to assert membership against"
+            );
+            return;
         }
+        // 同网段里的一个邻居（翻转最后一位，一定不是本机自己，也一定在 /30 以内）。
+        let (own, _) = networks[0];
+        let neighbour = Ipv4Addr::from(u32::from(own) ^ 1);
+        assert!(
+            is_lan_host(&own.to_string()),
+            "本机自己的地址必须是局域网成员：{own}"
+        );
+        assert!(
+            is_lan_host(&neighbour.to_string()),
+            "同一网段的邻居必须是局域网成员：{neighbour}（本机 {own}）"
+        );
+        assert!(is_lan_ipv4(neighbour));
+        assert!(endpoint_lan_ipv4(&format!("{neighbour}:9978")).is_some());
     }
     #[test]
     fn a_tunnel_only_machine_is_not_treated_as_a_dead_end() {
@@ -2574,20 +2682,27 @@ mod tests {
         );
     }
 
+    // 这条只验"地址从哪种端点写法里被抠出来"，不掺局域网判断（那部分由
+    // lan_membership_comes_from_the_machine_not_a_range_table 覆盖）。
+    // 端点里的具体数字换成本机真实网段，否则又是拿开发机的网络形态当通用断言。
     #[test]
-    fn extracts_private_receiver_addresses_across_cast_protocols() {
+    fn extracts_receiver_addresses_across_cast_protocols() {
+        let networks = lan_ipv4_networks();
+        let Some((own, _)) = networks.first().copied() else {
+            eprintln!("skip: no LAN adapter to derive a peer address from");
+            return;
+        };
+        let peer = Ipv4Addr::from(u32::from(own) ^ 1);
         assert_eq!(
-            peer_ipv4_from_endpoint("http://192.168.1.20:8008/upnp/control/AVTransport"),
-            Some(Ipv4Addr::new(192, 168, 1, 20))
+            peer_ipv4_from_endpoint(&format!("http://{peer}:8008/upnp/control/AVTransport")),
+            Some(peer)
         );
+        assert_eq!(peer_ipv4_from_endpoint(&format!("{peer}:8009")), Some(peer));
         assert_eq!(
-            peer_ipv4_from_endpoint("10.0.0.8:8009"),
-            Some(Ipv4Addr::new(10, 0, 0, 8))
+            peer_ipv4_from_endpoint(&format!("http://{peer}:9978/action")),
+            Some(peer)
         );
-        assert_eq!(
-            peer_ipv4_from_endpoint("http://172.16.1.9:9978/action"),
-            Some(Ipv4Addr::new(172, 16, 1, 9))
-        );
+        // 公网地址：不解析成本地对端（和本机在哪一段无关，永远成立）。
         assert_eq!(peer_ipv4_from_endpoint("http://8.8.8.8:80/action"), None);
         assert_eq!(peer_ipv4_from_endpoint("not-an-endpoint"), None);
         assert_eq!(routed_lan_ipv4(Ipv4Addr::new(8, 8, 8, 8)), None);
@@ -2596,14 +2711,92 @@ mod tests {
         let chromecast = CastDeviceInfo {
             id: "chromecast:kitchen".into(),
             label: "Kitchen".into(),
-            location: "https://192.168.50.9:8009".into(),
-            control_url: "192.168.50.9:8009".into(),
+            location: format!("https://{peer}:8009"),
+            control_url: format!("{peer}:8009"),
             service_type: "chromecast".into(),
         };
-        assert_eq!(
-            device_peer_ipv4(&chromecast),
-            Some(Ipv4Addr::new(192, 168, 50, 9))
-        );
+        assert_eq!(device_peer_ipv4(&chromecast), Some(peer));
+    }
+
+    // address_is_on_link 是纯函数，所以下面这批**与机器无关**：无论 CI 跑在哪里，
+    // 断言结果都一样。这才配得上叫回归测试。
+    #[test]
+    fn a_host_on_a_hotspot_segment_counts_as_lan_while_that_host_is_the_machine() {
+        // 手机热点 / 蜂窝 CGNAT 分下来的 100.64/10。以前整条链路都拒绝它。
+        let hotspot = [(Ipv4Addr::new(100, 64, 12, 5), 10u8)];
+        assert!(address_is_on_link(&hotspot, Ipv4Addr::new(100, 64, 12, 5)));
+        assert!(address_is_on_link(&hotspot, Ipv4Addr::new(100, 64, 99, 7)));
+        assert!(address_is_on_link(
+            &hotspot,
+            Ipv4Addr::new(100, 127, 255, 254)
+        ));
+        assert!(!address_is_on_link(&hotspot, Ipv4Addr::new(100, 128, 0, 1)));
+        assert!(!address_is_on_link(&hotspot, Ipv4Addr::new(192, 168, 1, 5)));
+        assert!(!address_is_on_link(&hotspot, Ipv4Addr::new(8, 8, 8, 8)));
+    }
+
+    #[test]
+    fn an_ordinary_home_router_segment_still_works() {
+        let home = [(Ipv4Addr::new(192, 168, 2, 6), 24u8)];
+        assert!(address_is_on_link(&home, Ipv4Addr::new(192, 168, 2, 5)));
+        assert!(address_is_on_link(&home, Ipv4Addr::new(192, 168, 2, 6)));
+        // 隔壁网段的电视：不在我任何网卡上，就不算局域网。
+        assert!(!address_is_on_link(&home, Ipv4Addr::new(192, 168, 1, 5)));
+        assert!(!address_is_on_link(&home, Ipv4Addr::new(192, 168, 3, 5)));
+    }
+
+    #[test]
+    fn every_network_this_machine_holds_is_listed_not_just_the_first() {
+        // Wi-Fi + 有线同时在线：两块网卡的网段都要算局域网。
+        let dual = [
+            (Ipv4Addr::new(192, 168, 2, 6), 24u8),
+            (Ipv4Addr::new(10, 5, 0, 7), 24u8),
+        ];
+        assert!(address_is_on_link(&dual, Ipv4Addr::new(192, 168, 2, 9)));
+        assert!(address_is_on_link(&dual, Ipv4Addr::new(10, 5, 0, 200)));
+        assert!(!address_is_on_link(&dual, Ipv4Addr::new(10, 6, 0, 1)));
+        // 空表：没有任何网卡时谁都不是局域网（而不是"谁都算"）。
+        assert!(!address_is_on_link(&[], Ipv4Addr::new(192, 168, 2, 5)));
+    }
+
+    #[test]
+    fn cloud_metadata_and_other_link_local_peers_are_never_lan_members() {
+        // 169.254.169.254 是云元数据地址。它既不在用户网段里，也不该被
+        // "link-local 算局域网"这种历史判断放进来。
+        let machine = [(Ipv4Addr::new(100, 64, 12, 5), 10u8)];
+        assert!(!address_is_on_link(
+            &machine,
+            Ipv4Addr::new(169, 254, 169, 254)
+        ));
+        // 即便网卡列表里混进了一个 link-local 地址，元数据地址也不算同网段 ——
+        // 这条由判据自己出局保证，不依赖上游过滤（判据是纯函数，边界必须自带）。
+        let polluted = [
+            (Ipv4Addr::new(192, 168, 2, 6), 24u8),
+            (Ipv4Addr::new(169, 254, 1, 1), 16u8),
+        ];
+        assert!(!address_is_on_link(
+            &polluted,
+            Ipv4Addr::new(169, 254, 169, 254)
+        ));
+        // 多播组地址和 0.0.0.0 也一样：不能因为某块网卡在 224.0.0.251 邻域就放行。
+        assert!(!address_is_on_link(&polluted, Ipv4Addr::UNSPECIFIED));
+        assert!(!address_is_on_link(&polluted, Ipv4Addr::BROADCAST));
+    }
+
+    #[test]
+    fn prefix_length_changes_what_counts_as_the_same_network() {
+        // /10 和 /24 的同一个起点，覆盖范围完全不同——判据用的是网卡报的前缀，
+        // 不是猜一个"常见掩码"。10.0.0.0/10 覆盖 10.0.0.0–10.63.255.255，
+        // 所以 10.63.x 在里面、10.64.x 在外面（第二段 63=0b00111111 / 64=0b01000000，
+        // 头两位就是分界）。
+        let wide = [(Ipv4Addr::new(10, 1, 2, 3), 10u8)];
+        assert!(address_is_on_link(&wide, Ipv4Addr::new(10, 63, 7, 7)));
+        assert!(address_is_on_link(&wide, Ipv4Addr::new(10, 1, 2, 99)));
+        assert!(!address_is_on_link(&wide, Ipv4Addr::new(10, 64, 0, 1)));
+        assert!(!address_is_on_link(&wide, Ipv4Addr::new(10, 200, 7, 7)));
+        let narrow = [(Ipv4Addr::new(10, 1, 2, 3), 24u8)];
+        assert!(address_is_on_link(&narrow, Ipv4Addr::new(10, 1, 2, 99)));
+        assert!(!address_is_on_link(&narrow, Ipv4Addr::new(10, 1, 3, 99)));
     }
 
     #[test]

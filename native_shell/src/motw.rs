@@ -67,6 +67,14 @@ fn ip_is_public(address: IpAddr) -> bool {
     }
 }
 
+/// 这里的每一段都不是"本项目替用户猜的网段"，而是 IANA IPv4 Special-Purpose
+/// Registry（RFC 6890 起，含 RFC 6598 的 100.64/10 共享段）里写死的标准条目。
+/// 它问的是"这个地址是不是公网"，是个**与机器无关的标准事实**，所以照标准抄
+/// 不构成"写死用户的网段"——换成任何一台机器答案都一样。
+/// 真正不能写死的是"这个用户的局域网在哪一段"，那条规则在
+/// [`crate::cast::is_lan_ipv4`]：一律按本机网卡推导，不查任何表。
+///（标准库本来有 is_global/is_shared 能直接表达上述条目，但它们在
+/// `feature(ip)` 里尚未稳定，CI 的 1.98.1 用不了，所以这里逐条写明出处。）
 fn ipv4_is_public(v4: Ipv4Addr) -> bool {
     let oct = v4.octets();
     !(v4.is_loopback()
