@@ -389,6 +389,7 @@ fn is_segment_url(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn internet_shortcut_reads_url() {
@@ -473,5 +474,91 @@ mod tests {
         let urls = expand_source(&path.to_string_lossy()).unwrap().unwrap();
         assert_eq!(urls, vec!["https://cdn.test/clip.mp4".to_string()]);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    /// 批量的 Hot Path 需要有耗时上限，否则一次"整页粘贴"的复杂度回退不会有人发现。
+    ///
+    /// `collect_absolute_urls` 是线性扫（6 个协议前缀各扫一遍 + BTreeSet 去重），
+    /// 实测 5MB 量级文本在毫秒级跑完。这里报出数字并给一个**宽**上限：
+    /// 数字本身要能看到（性能回归才有可对照的基线），上限故意放宽到秒级，
+    /// 免得测试机上负载波动让测试flake。
+    #[test]
+    fn scanning_a_page_sized_clipboard_has_a_documented_budget() {
+        let text = page_sized_text(5 * 1024 * 1024);
+        let started = Instant::now();
+        let urls = collect_absolute_urls(&text);
+        let took = started.elapsed();
+        println!(
+            "clipboard_scan_5mb_amount={} urls={} took_ms={:.2}",
+            text.len(),
+            urls.len(),
+            took.as_secs_f64() * 1000.0
+        );
+        assert_eq!(
+            urls.len(),
+            MAX_LINK_URLS,
+            "上限 100 条必须仍然生效，否则批量粘贴会灌满任务表"
+        );
+        assert!(
+            took < Duration::from_secs(10),
+            "5MB 剪贴板扫描超过 10s（耗时 {took:?}）——线性扫很可能被改成了二次扫"
+        );
+    }
+
+    /// 最坏情况：整块文本里**一条**合格链接都没有。
+    /// 密集链接那种会在凑满 100 条后提前返回（实测只扫了约 5% 就退出），
+    /// 而这里每个前缀都要扫完 5MB——复杂度若被改成二次，这里第一个爆。
+    #[test]
+    fn scanning_a_linkless_page_sized_clipboard_has_a_documented_budget() {
+        let mut text = page_sized_text(5 * 1024 * 1024);
+        // 把 50 个候选 URL 全换成不可识别的东西，凑不满 100 条 => 不会提前返回
+        for link in [
+            "https://cdn.test/",
+            "javascript:void(0)",
+            "ftp://",
+            "magnet:?dn=x",
+            "relative/path/file.mp4",
+        ] {
+            text = text.replace(link, "notalink");
+        }
+        text = text.replace("seg ", "seg-");
+        let started = Instant::now();
+        let urls = collect_absolute_urls(&text);
+        let took = started.elapsed();
+        println!(
+            "linkless_scan_5mb_amount={} urls={} took_ms={:.2}",
+            text.len(),
+            urls.len(),
+            took.as_secs_f64() * 1000.0
+        );
+        assert!(
+            urls.len() < MAX_LINK_URLS,
+            "这块文本本该凑不满 100 条（实际 {}）——构造失效，上限提前返回就不是最坏情况了",
+            urls.len()
+        );
+        assert!(
+            took < Duration::from_secs(10),
+            "5MB 无链接文本扫描超过 10s（耗时 {took:?}）——线性扫很可能被改成了二次扫"
+        );
+    }
+
+    /// 拼一块"页面源码"体量的文本：绝大部分是噪声，候选 URL 稀疏。
+    /// 这是最坏情况（`MAX_LINK_URLS` 触发不了提前返回，必须扫完整块）。
+    fn page_sized_text(target: usize) -> String {
+        let mut text = String::with_capacity(target);
+        let mut i = 0usize;
+        while text.len() < target {
+            if i.is_multiple_of(50) {
+                text.push_str(&format!(
+                    "<li><a href=\"https://cdn.test/{i}/file.mp4\">seg {i}</a></li>\n"
+                ));
+            } else {
+                text.push_str(
+                    "<div class=\"row\"><span>metadata</span><script>var x=1</script></div>\n",
+                );
+            }
+            i += 1;
+        }
+        text
     }
 }

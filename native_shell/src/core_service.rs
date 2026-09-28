@@ -472,6 +472,49 @@ mod tests {
     }
 
     #[test]
+    fn file_store_new_task_after_restart_never_reuses_a_restored_task_id() {
+        // 重启后 next_task 必须从已恢复的 task-N 最大值继续（core_runtime.rs:54 的 max 折叠）。
+        // 这条不变式没有任何测试钉住：一旦 counter 归零，新任务会拿到 task-1，
+        // 与恢复出来的 task-1 撞号——同 id 两条不同任务，静默污染 store。
+        let path = std::env::temp_dir().join(format!(
+            "hls-v7-core-restart-idcollision-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let mut core = PersistentCore::open(&path).unwrap();
+            core.handle(CoreCommand::CreateTask { spec: test_spec() })
+                .unwrap();
+        }
+        let mut reopened = PersistentCore::open(&path).unwrap();
+        assert_eq!(reopened.tasks().len(), 1);
+        assert_eq!(reopened.tasks()[0].task_id, "task-1");
+        // 重启后再建一条：必须拿到 task-2，绝不能回到 task-1。
+        reopened
+            .handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        let ids: Vec<String> = reopened
+            .tasks()
+            .iter()
+            .map(|task| task.task_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["task-1".to_string(), "task-2".to_string()]);
+        // 再建一条，确认 counter 不是只跳过一次。
+        reopened
+            .handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        assert_eq!(reopened.tasks().len(), 3);
+        assert_eq!(reopened.tasks()[2].task_id, "task-3");
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
     fn queue_profile_removal_migrates_tasks_and_settings_together() {
         let mut core = PersistentCore::in_memory().unwrap();
         core.handle(CoreCommand::CreateTask { spec: test_spec() })

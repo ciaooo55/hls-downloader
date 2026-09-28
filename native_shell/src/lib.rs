@@ -1,7 +1,7 @@
 #[cfg(feature = "full-core")]
 mod av_scan;
 #[cfg(feature = "full-core")]
-mod cast;
+pub mod cast;
 #[cfg(feature = "full-core")]
 mod category;
 #[cfg(feature = "full-core")]

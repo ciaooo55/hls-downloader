@@ -250,13 +250,33 @@ fn native_host_registration(unregister: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::workbench_candidates;
-    use std::path::Path;
+    /// 按**当前平台的分隔符**拼路径。`r"E:\h\app\resources\HLSDownloaderEngine.exe"` 这种字面量
+    /// 在 Windows 上是一条四级路径，在 Linux 上却只是一个文件名（backslash 不是分隔符），
+    /// `parent()` 会返回 None——于是同一条断言在 Windows 上是绿的、在 Linux 上是红的。
+    fn platform_path(parts: &[&str]) -> std::path::PathBuf {
+        let mut path = std::path::PathBuf::from(parts[0]);
+        for part in &parts[1..] {
+            path.push(part);
+        }
+        path
+    }
 
     #[test]
     fn installed_engine_resolves_the_compose_launcher() {
-        let candidates =
-            workbench_candidates(Path::new(r"E:\h\app\resources\HLSDownloaderEngine.exe"));
-        assert!(candidates.contains(&Path::new(r"E:\h\HLSDownloader.exe").to_path_buf()));
+        let engine = platform_path(&["E:", "h", "app", "resources", "HLSDownloaderEngine.exe"]);
+        let candidates = workbench_candidates(&engine);
+        // 引擎装在 resources 下，工作台 exe 允许出现在三处：同级、上一级、再上一级。
+        for expected in [
+            platform_path(&["E:", "h", "app", "resources", "HLSDownloader.exe"]),
+            platform_path(&["E:", "h", "app", "HLSDownloader.exe"]),
+            platform_path(&["E:", "h", "HLSDownloader.exe"]),
+        ] {
+            assert!(
+                candidates.contains(&expected),
+                "launcher candidate {} missing from {candidates:?}",
+                expected.display()
+            );
+        }
     }
 
     #[test]
