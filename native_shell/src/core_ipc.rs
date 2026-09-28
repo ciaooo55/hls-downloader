@@ -960,6 +960,39 @@ impl IpcTransport {
     }
 }
 
+/// 三个"写入类"客户端方法的应答分类。单独抽成纯函数是为了可测：transport
+/// 要在管道/套接字上才能构造，而这些分类规则正是版本偏差会栽倒的地方。
+///
+/// 以前这三个方法的兜底分支是 `_ => Ok(())`：对端换了构建、回了别的形状
+/// （Hello、Snapshot、残缺的 Credential，或者干脆是另一类请求的应答），上层只看到
+/// "设置保存成功"。往库里写设置失败而 UI 不报错，用户以为偏好已经生效。
+fn store_setting_response(response: CorePipeResponse) -> Result<(), String> {
+    match response {
+        CorePipeResponse::Settings { .. } | CorePipeResponse::Events { .. } => Ok(()),
+        CorePipeResponse::Error { message, .. } => Err(message),
+        other => Err(format!("unexpected store-setting response: {other:?}")),
+    }
+}
+
+fn store_credential_response(response: CorePipeResponse) -> Result<(), String> {
+    match response {
+        CorePipeResponse::Credential {
+            protected_blob: Some(_),
+            ..
+        } => Ok(()),
+        CorePipeResponse::Error { message, .. } => Err(message),
+        other => Err(format!("unexpected store-credential response: {other:?}")),
+    }
+}
+
+fn save_handoff_response(response: CorePipeResponse) -> Result<(), String> {
+    match response {
+        CorePipeResponse::Handoffs { .. } => Ok(()),
+        CorePipeResponse::Error { message, .. } => Err(message),
+        other => Err(format!("unexpected save-handoff response: {other:?}")),
+    }
+}
+
 impl CoreIpcClient {
     pub fn connect_addr(addr: std::net::SocketAddr) -> Result<Self, String> {
         if !addr.ip().is_loopback() {
@@ -1099,15 +1132,12 @@ impl CoreIpcClient {
     }
 
     pub fn store_setting(&mut self, key: &str, value: Value) -> Result<(), String> {
-        match self.request(&CorePipeRequest::StoreSetting {
+        let response = self.request(&CorePipeRequest::StoreSetting {
             request_id: 1,
             key: key.into(),
             value,
-        })? {
-            CorePipeResponse::Settings { .. } | CorePipeResponse::Events { .. } => Ok(()),
-            CorePipeResponse::Error { message, .. } => Err(message),
-            _ => Ok(()),
-        }
+        })?;
+        store_setting_response(response)
     }
 
     pub fn store_credential(
@@ -1116,15 +1146,13 @@ impl CoreIpcClient {
         protected_blob: &str,
         kind: &str,
     ) -> Result<(), String> {
-        match self.request(&CorePipeRequest::StoreCredential {
+        let response = self.request(&CorePipeRequest::StoreCredential {
             request_id: 1,
             credential_ref: credential_ref.into(),
             protected_blob: protected_blob.into(),
             kind: kind.into(),
-        })? {
-            CorePipeResponse::Error { message, .. } => Err(message),
-            _ => Ok(()),
-        }
+        })?;
+        store_credential_response(response)
     }
 
     pub fn load_credential(&mut self, credential_ref: &str) -> Result<Option<String>, String> {
@@ -1160,17 +1188,15 @@ impl CoreIpcClient {
         task_id: Option<&str>,
         created_at_ms: u64,
     ) -> Result<(), String> {
-        match self.request(&CorePipeRequest::SaveHandoff {
+        let response = self.request(&CorePipeRequest::SaveHandoff {
             request_id: 1,
             handoff_id: handoff_id.into(),
             handoff_json: handoff_json.into(),
             status: status.into(),
             task_id: task_id.map(str::to_string),
             created_at_ms,
-        })? {
-            CorePipeResponse::Error { message, .. } => Err(message),
-            _ => Ok(()),
-        }
+        })?;
+        save_handoff_response(response)
     }
 
     pub fn load_handoffs(&mut self) -> Result<Vec<String>, String> {
@@ -1323,5 +1349,89 @@ mod tests {
         frame.extend_from_slice(b" ");
         let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();
         assert!(err.contains("JSON invalid"), "unexpected error: {err}");
+    }
+
+    // 第五轮发现 6 的回归。这三个"写入类"方法原来用 `_ => Ok(())` 兜底：对端换了构建、
+    // 回了别的形状（Value、Hello、残缺的 Credential），上层只看到"保存成功"。设置其实没
+    // 落库而 UI 不报错，用户会以为偏好已经生效。样本走和真实管线同一条 serde 路径。
+    fn response(json: &str) -> CorePipeResponse {
+        serde_json::from_str(json).expect("fixture must be a valid CorePipeResponse")
+    }
+
+    fn error_response() -> CorePipeResponse {
+        response(
+            r#"{"type":"error","request_id":1,"code":"setting_failed","message":"database is locked"}"#,
+        )
+    }
+
+    #[test]
+    fn store_setting_accepts_only_settings_and_events() {
+        let ok = response(
+            r#"{"type":"settings","request_id":1,"takeover_enabled":false,"takeover_minimum_bytes":0,"legal_accepted":true,"speed_limit_kib":0}"#,
+        );
+        assert!(store_setting_response(ok).is_ok());
+        let events = response(r#"{"type":"events","request_id":1,"events":[]}"#);
+        assert!(store_setting_response(events).is_ok());
+
+        // 对端错误必须原样带到上层，不能被包成"意外应答"。
+        assert_eq!(
+            store_setting_response(error_response()).unwrap_err(),
+            "database is locked"
+        );
+
+        for json in [
+            r#"{"type":"hello","protocol":"hls-downloader-v7-core","version":1,"pid":1}"#,
+            r#"{"type":"credential","request_id":1,"protected_blob":"blob"}"#,
+            r#"{"type":"handoffs","request_id":1,"items":[]}"#,
+        ] {
+            let err = store_setting_response(response(json)).unwrap_err();
+            assert!(
+                err.starts_with("unexpected store-setting response"),
+                "unexpected message: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn store_credential_requires_a_protected_blob() {
+        let ok = response(r#"{"type":"credential","request_id":1,"protected_blob":"blob"}"#);
+        assert!(store_credential_response(ok).is_ok());
+        assert_eq!(
+            store_credential_response(error_response()).unwrap_err(),
+            "database is locked"
+        );
+
+        // 没有 protected_blob 说明凭据没写进凭据库；换了形状同样不算保存成功。
+        for json in [
+            r#"{"type":"credential","request_id":1,"protected_blob":null}"#,
+            r#"{"type":"settings","request_id":1,"takeover_enabled":false,"takeover_minimum_bytes":0,"legal_accepted":true,"speed_limit_kib":0}"#,
+        ] {
+            let err = store_credential_response(response(json)).unwrap_err();
+            assert!(
+                err.starts_with("unexpected store-credential response"),
+                "unexpected message: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_handoff_accepts_only_handoffs() {
+        let ok = response(r#"{"type":"handoffs","request_id":1,"items":[]}"#);
+        assert!(save_handoff_response(ok).is_ok());
+        assert_eq!(
+            save_handoff_response(error_response()).unwrap_err(),
+            "database is locked"
+        );
+
+        for json in [
+            r#"{"type":"hello","protocol":"hls-downloader-v7-core","version":1,"pid":1}"#,
+            r#"{"type":"credential","request_id":1,"protected_blob":"blob"}"#,
+        ] {
+            let err = save_handoff_response(response(json)).unwrap_err();
+            assert!(
+                err.starts_with("unexpected save-handoff response"),
+                "unexpected message: {err}"
+            );
+        }
     }
 }
