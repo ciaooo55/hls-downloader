@@ -117,7 +117,7 @@ fn write_manifest_pair(directory: &Path, host: &Path) -> Result<ManifestPaths, S
     })?;
     let paths = manifest_paths(directory);
     let result = (|| {
-        std::fs::write(&paths.chromium, manifest_bytes(host, "allowed_origins")?).map_err(
+        write_atomic(&paths.chromium, &manifest_bytes(host, "allowed_origins")?).map_err(
             |error| {
                 format!(
                     "write Native Host manifest {}: {error}",
@@ -125,7 +125,7 @@ fn write_manifest_pair(directory: &Path, host: &Path) -> Result<ManifestPaths, S
                 )
             },
         )?;
-        std::fs::write(&paths.firefox, manifest_bytes(host, "allowed_extensions")?).map_err(
+        write_atomic(&paths.firefox, &manifest_bytes(host, "allowed_extensions")?).map_err(
             |error| {
                 format!(
                     "write Native Host manifest {}: {error}",
@@ -140,6 +140,28 @@ fn write_manifest_pair(directory: &Path, host: &Path) -> Result<ManifestPaths, S
         let _ = std::fs::remove_file(&paths.firefox);
     }
     result
+}
+
+/// 原子落盘：同目录临时文件 + rename（Windows 上 std::fs::rename 走
+/// MoveFileEx(MOVEFILE_REPLACE_EXISTING)，是替换语义）。浏览器随时可能
+/// connectNative 读这份清单，直接写目标文件会让它读到写了一半的 JSON，
+/// 于是"主机启动失败但诊断说清单不存在"。
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut temporary_extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    temporary_extension.push_str(&format!(".{}.tmp", std::process::id()));
+    let temporary = path.with_extension(temporary_extension);
+    if let Err(error) = std::fs::write(&temporary, bytes) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn prepare_manifests_with_fallback(
@@ -201,7 +223,7 @@ fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
-        REG_OPTION_NON_VOLATILE, REG_SZ,
+        KEY_WOW64_64KEY, REG_OPTION_NON_VOLATILE, REG_SZ,
     };
 
     let key_wide = wide(key);
@@ -214,7 +236,7 @@ fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
             0,
             null(),
             REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
+            KEY_SET_VALUE | KEY_WOW64_64KEY,
             null(),
             &mut handle,
             null_mut(),
@@ -252,7 +274,9 @@ fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
 fn default_value(key: &str) -> Result<Option<PathBuf>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY,
+    };
 
     let key_wide = wide(key);
     let mut bytes = 0u32;
@@ -261,7 +285,7 @@ fn default_value(key: &str) -> Result<Option<PathBuf>, String> {
             HKEY_CURRENT_USER,
             key_wide.as_ptr(),
             null(),
-            RRF_RT_REG_SZ,
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
             null_mut(),
             null_mut(),
             &mut bytes,
@@ -279,7 +303,7 @@ fn default_value(key: &str) -> Result<Option<PathBuf>, String> {
             HKEY_CURRENT_USER,
             key_wide.as_ptr(),
             null(),
-            RRF_RT_REG_SZ,
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
             null_mut(),
             buffer.as_mut_ptr().cast(),
             &mut bytes,
@@ -333,8 +357,12 @@ fn delete_owned_key(
     host: &Path,
     allowlist_field: &str,
 ) -> Result<Option<PathBuf>, String> {
+    use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
-    use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteTreeW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_ALL_ACCESS,
+        KEY_WOW64_64KEY,
+    };
 
     let Some(current) = default_value(key)? else {
         return Ok(None);
@@ -343,7 +371,27 @@ fn delete_owned_key(
         return Ok(None);
     }
     let key_wide = wide(key);
-    let result = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, key_wide.as_ptr()) };
+    // 注册是钉在 64 位视图里写的（set_default_value），删除也必须落在同一个
+    // 视图：RegDeleteTreeW 用的是句柄自己的视图，32 位引擎进程的默认视图是
+    // Wow6432Node，直接拿 HKEY_CURRENT_USER 删会留下一条指向我们的注册，
+    // 64 位浏览器照旧启动主机。
+    let mut view = null_mut();
+    let open = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            null(),
+            0,
+            KEY_WOW64_64KEY | KEY_ALL_ACCESS,
+            &mut view,
+        )
+    };
+    if open != 0 {
+        return Err(registry_error("open HKCU 64-bit view", open));
+    }
+    let result = unsafe { RegDeleteTreeW(view, key_wide.as_ptr()) };
+    unsafe {
+        RegCloseKey(view);
+    }
     if result != 0 && result != ERROR_FILE_NOT_FOUND {
         return Err(registry_error(&format!("delete HKCU\\{key}"), result));
     }
@@ -539,5 +587,56 @@ mod tests {
             without_verbatim_prefix(Path::new(r"\\?\UNC\server\share\host.exe")),
             PathBuf::from(r"\\server\share\host.exe")
         );
+    }
+
+    /// 浏览器随时可能读这份清单，写必须原子；注册表必须钉 64 位视图。
+    /// 视图这件事行为上验不了：测试进程是 64 位时默认视图就是 64 位视图，
+    /// 钉不钉行为一样。所以这里用源码金丝雀——断言用的字符串全部运行时拼装，
+    /// 测试自身不包含被检字面量，金丝雀才不会永远绿。
+    #[test]
+    fn registration_pins_the_64_bit_view_and_writes_manifests_atomically() {
+        let source = include_str!("native_host_registration.rs");
+        // 金丝雀必须钉在**调用点**上，不是"文件里出现过这个常量"：
+        // delete_owned_key 自己也 import 了同一个常量，只查出现与否的断言
+        // 在写入点被改松时依然会是绿的。
+        let write_pin = ["KEY_SET_VALUE | KEY_WOW64", "_64KEY"].concat();
+        let read_pin = ["RRF_RT_REG_SZ | RRF_SUBKEY", "_WOW6464KEY"].concat();
+        let direct_write = ["std::fs::write", "(&paths."].concat();
+        let atomic = ["write", "_atomic"].concat();
+        assert!(
+            source.contains(&write_pin),
+            "HKCU 写入必须钉 64 位视图，否则 32 位引擎会把主机注册写进 Wow6432Node，64 位浏览器永远找不到主机"
+        );
+        assert!(
+            source.contains(&read_pin),
+            "读回也要钉同一个视图，否则注册和删除会落在不同视图上"
+        );
+        assert!(
+            !source.contains(&direct_write),
+            "manifest 必须走临时文件 + rename，不能直接写目标文件"
+        );
+        assert!(source.contains(&atomic), "清单写出必须走原子 helper");
+    }
+
+    #[test]
+    fn manifests_are_written_atomically_and_leave_no_temporary_files() {
+        let (engine, root) = fixture();
+        let host = expected_host(&engine, true).unwrap();
+        let manifests = write_manifest_pair(&root, &host).unwrap();
+        for path in [&manifests.chromium, &manifests.firefox] {
+            let value: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(value["name"].as_str(), Some(HOST_NAME));
+        }
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp"))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "临时文件必须被 rename 消耗掉：{leftovers:?}"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
