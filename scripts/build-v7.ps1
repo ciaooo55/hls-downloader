@@ -359,8 +359,11 @@ $env:HLS_ENGINE_PATH = $engine
             }
         }
         'test' { & .\gradlew.bat test --no-daemon }
-        'candidate' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
-        'package' { & .\gradlew.bat clean createDistributable packageDistributionForCurrentOS }
+        # 上面的显式删除会让 createRuntimeImage 变成 UP-TO-DATE（它不把被删掉的输出目录当作需要重建的依据），
+        # 于是 packageDistributionForCurrentOS 的 runtimeImage 输入缺失、jpackage 直接失败。
+        # 把 createRuntimeImage 显式拉进同一次任务图并强制重跑，只重跑本次显式请求的任务，依赖仍可命中增量缓存。
+        'candidate' { & .\gradlew.bat clean createRuntimeImage --rerun createDistributable packageDistributionForCurrentOS }
+        'package' { & .\gradlew.bat clean createRuntimeImage --rerun createDistributable packageDistributionForCurrentOS }
         'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
