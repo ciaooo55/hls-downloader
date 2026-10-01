@@ -368,7 +368,6 @@ function stableResourceUrl(resource: Pick<MediaResource, 'url' | 'kind'>): URL {
   // A few CDN families use terse signature keys (s/e/_t) rather than the
   // conventional token/expires names. Treat the trio as volatile only when s
   // and e occur together, so an ordinary semantic `e` stays meaningful.
-  const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
   const hasShortLivedSignature = usesShortLivedMediaSignature(resource)
   const adaptiveOrMedia = ['hls', 'dash', 'media'].includes(resource.kind)
   for (const key of [...url.searchParams.keys()]) {

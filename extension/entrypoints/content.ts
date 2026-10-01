@@ -284,7 +284,6 @@ export default defineContentScript({
         const videoButtons = element('div', 'video-buttons')
         root.append(style, panelWrap, videoButtons)
         container.append(root)
-        const wrap = root.querySelector<HTMLElement>('.wrap')!
         return root
       },
     })

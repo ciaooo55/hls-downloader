@@ -3,6 +3,10 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "strict": true,
+    // 死代码开关：本仓刚清掉 1 个从未被 import 的导出和 3 个未用局部量/导入。
+    // 留着它，这一类"删了没人知道"的垃圾以后每次 tsc 都会报，而不是攒到下一轮人工扫。
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": false
   }
 }
