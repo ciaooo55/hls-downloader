@@ -951,42 +951,16 @@ fn completed_actions(snapshot: &TaskSnapshot) -> Vec<String> {
         .map(|(_, extension)| extension.to_ascii_lowercase())
         .unwrap_or_default();
     let mut actions = vec!["open".into(), "open_folder".into()];
-    if matches!(
-        extension.as_str(),
-        "appx" | "bat" | "cmd" | "com" | "exe" | "msi" | "msix" | "ps1"
-    ) {
+    if crate::media_ext::EXECUTABLE_EXTENSIONS.contains(&extension.as_str()) {
         actions.push("launch".into());
     }
     let media_kind = matches!(
         snapshot.resource_kind,
         ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
     );
-    let media_file = matches!(
-        extension.as_str(),
-        "3gp"
-            | "aac"
-            | "ac3"
-            | "avi"
-            | "flac"
-            | "flv"
-            | "m2ts"
-            | "m4a"
-            | "m4v"
-            | "mka"
-            | "mkv"
-            | "mov"
-            | "mp3"
-            | "mp4"
-            | "mpeg"
-            | "mpg"
-            | "ogg"
-            | "opus"
-            | "ts"
-            | "wav"
-            | "webm"
-            | "wma"
-            | "wmv"
-    );
+    // 播放动作表与分类文件夹表是两张**有意不同**的表，都在 media_ext.rs；
+    // 图片/mpd 归媒体文件夹但没有播放语义。
+    let media_file = crate::media_ext::MEDIA_PLAYABLE_EXTENSIONS.contains(&extension.as_str());
     if media_kind || media_file {
         actions.push("play".into());
         actions.push("cast".into());

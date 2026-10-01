@@ -7,63 +7,76 @@ import kotlin.test.assertTrue
 /**
  * 下载分类表的**跨语言**守卫。
  *
- * 这张表在 Rust（`native_shell/src/category.rs::download_category`）和 Kotlin
- * （`Main.kt::downloadCategory`）各有一份。历史上它们分叉过：Kotlin 那份漏了
+ * 这张表在 Rust（`native_shell/src/media_ext.rs::MEDIA_FOLDER_EXTENSIONS` 等）和
+ * Kotlin（`Main.kt::downloadCategory`）各有一份。历史上它们分叉过：Kotlin 那份漏了
  * ts / m4v / m4a / jpg / png / gif / webp，多了 Core 不认识的 apk / dmg / pkg，
  * 又少了 iso，还没有 hls/dash/live 的媒体短路。症状是同一个 .ts 文件在接管弹窗里
  * 归"媒体"、在任务栏里归"其他"。
  *
- * 判据直接读 Rust 源码里的字符串字面量，与 Kotlin 的集合逐一比对。任何一边单独
- * 改表，这条都会失败——逼着改的人一次改完。
+ * 判据按**常量名**从 Rust 源码取表，与 Kotlin 的集合逐一比对。任何一边单独改表，
+ * 这条都会失败——逼着改的人一次改完。
+ *
+ * 扫描源曾经是逐行扫 `category.rs::download_category` 的函数体。后来 Rust 侧把
+ * media / program 两张表搬进了 `media_ext.rs`，逐行扫就再也找不到字面量，Rust 侧
+ * 被读成空集，于是它把 Kotlin 那 28 项全判成"多"——那是扫描器的锅，不是两边真分叉。
+ * 所以改成按常量名取表：既精确，也不怕以后再搬。
  */
 class CategoryParityTest {
-    private fun categorySource(): List<String> =
-        File("../native_shell/src/category.rs").readText().split("\n")
+    private fun mediaExtSource(): String =
+        File("../native_shell/src/media_ext.rs").readText()
+
+    private fun categorySource(): String =
+        File("../native_shell/src/category.rs").readText()
 
     private fun recognizeSource(): String =
         File("../native_shell/src/recognize.rs").readText()
 
     /**
-     * 按行扫 `download_category` 的函数体：形如扩展名的字面量进暂存区，
-     * 遇到"这一行只有一个分类名"就结算给上一个分支。
-     * `return "media";` 这种短路直接跳过——它不带扩展表。
+     * 从 `media_ext.rs` 的 `pub const NAME: &[&str] = &[ ... ];` 里按名字取表。
      */
-    private fun rustBranches(): Map<String, Set<String>> {
-        val lines = categorySource()
-        val start = lines.indexOfFirst { it.startsWith("pub fn download_category(") }
-        assertTrue(start >= 0, "download_category not found in category.rs")
-        // 函数体到下一个顶层声明为止（第一个匹配的 "}" 是 if matches! 那个块的收尾，
-        // 不是函数本身的右括号）。
-        var end = start + 1
-        while (end < lines.size && !lines[end].startsWith("pub fn ") && !lines[end].startsWith("impl ")) {
-            end += 1
-        }
-        assertTrue(end < lines.size, "download_category 后面的顶层声明没找到")
-        val pending = mutableSetOf<String>()
-        val result = mutableMapOf<String, Set<String>>()
-        for (raw in lines.subList(start + 1, end)) {
-            val line = raw.trim()
-            if (line.isEmpty() || line.startsWith("//")) continue
-            // 短路分支先跳过：它只有 return、没有扩展表。
-            if (line.startsWith("return ")) continue
-            val literals = QUOTED_LITERAL.findAll(line).map { it.groupValues[1] }.toList()
-            val only = literals.singleOrNull { it in CATEGORY_NAMES }
-            if (only != null && literals.size == 1) {
-                result[only] = pending.toSet()
-                pending.clear()
-                continue
-            }
-            pending += literals.filter { it !in CATEGORY_NAMES && it.length <= 5 }
-        }
-        return result
+    private fun rustTable(constant: String): Set<String> {
+        val source = mediaExtSource()
+        val declaration = source.indexOf("pub const $constant")
+        assertTrue(declaration >= 0, "$constant 在 media_ext.rs 里找不到")
+        val open = source.indexOf('[', declaration)
+        val close = source.indexOf("];", open)
+        assertTrue(declaration < open && open < close, "$constant 的数组没闭合")
+        return QUOTED_LITERAL.findAll(source.substring(open, close))
+            .map { it.groupValues[1] }
+            .toSet()
     }
+
+    /**
+     * archive 表仍留在 `category.rs` 里（没有搬），取 `"archive"` 之前最近的那个
+     * `matches!` 块。media / program 已搬去 [rustTable]。
+     */
+    private fun rustArchiveBranch(): Set<String> {
+        val source = categorySource()
+        val marker = source.indexOf("\"archive\"")
+        assertTrue(marker > 0, "category.rs 里找不到 archive 分支")
+        val block = source.substring(0, marker)
+        val matches = block.lastIndexOf("matches!(")
+        assertTrue(matches >= 0, "archive 分支前面的 matches! 块没找到")
+        return QUOTED_LITERAL.findAll(block.substring(matches))
+            .map { it.groupValues[1] }
+            .toSet()
+    }
+
+    private fun rustBranches(): Map<String, Set<String>> = mapOf(
+        "media" to rustTable("MEDIA_FOLDER_EXTENSIONS"),
+        "program" to rustTable("EXECUTABLE_EXTENSIONS"),
+        "archive" to rustArchiveBranch(),
+        // category.rs 的 else 分支就是"其它"，不带扩展表；这里显式给空集，
+        // 好让"四个分支"这个结构断言与下载分类的枚举成员一一对应。
+        "other" to emptySet(),
+    )
 
     @Test
     fun kotlin_category_table_matches_the_rust_source() {
         // 直接拿生产代码里的三张表来比，不另抄一份——初版曾经拿测试侧的拷贝去比，
         // 负向对照一击就穿了（Rust 有 ts、Kotlin 没有时这条照样绿）。
         val rust = rustBranches()
-        assertTrue(rust.size == 4, "没能从 category.rs 解析出四个分支：$rust")
+        assertTrue(rust.size == 4, "没能解析出四个分支：$rust")
         assertTrue(rust["other"]!!.isEmpty(), "other 分支不该带扩展名：${rust["other"]}")
         assertTrue(rust["media"] == catMEDIA_EXTENSIONS, "media 表与 Rust 不一致，缺：${rust["media"]!! - catMEDIA_EXTENSIONS}，多：${catMEDIA_EXTENSIONS - rust["media"]!!}")
         assertTrue(rust["program"] == catPROGRAM_EXTENSIONS, "program 表与 Rust 不一致，缺：${rust["program"]!! - catPROGRAM_EXTENSIONS}，多：${catPROGRAM_EXTENSIONS - rust["program"]!!}")
@@ -107,7 +120,21 @@ class CategoryParityTest {
         // 大小写不敏感，与 Rust 的 to_ascii_lowercase 对齐。
         assertTrue(downloadCategory("CLIP.MP4", "file") == TaskCategory.MEDIA, "大写扩展名")
     }
+
+    @Test
+    fun playable_media_never_lands_in_the_other_folder() {
+        // Core 的 completed_actions 按 MEDIA_PLAYABLE_EXTENSIONS 给"播放 / 投屏"动作。
+        // 它们必须同时归"媒体"文件夹，否则同一个文件在动作菜单里是媒体、在分类筛选和
+        // 保存目录里却是"其他"——这正是本轮修掉的自相矛盾。Rust 侧有
+        // playable_is_subset_of_folder 盯着两张表的关系，但两张表都在 Rust 里；
+        // 这条负责跨语言那一侧：只改 Rust 的 playable 表、不改 Kotlin 的 folder 表，
+        // 也必须红。
+        val playable = rustTable("MEDIA_PLAYABLE_EXTENSIONS")
+        assertTrue(
+            playable.all { it in catMEDIA_EXTENSIONS },
+            "这些扩展名可播放却不在媒体分类表里：${playable - catMEDIA_EXTENSIONS}",
+        )
+    }
 }
 
 private val QUOTED_LITERAL = Regex("\"([a-z0-9]+)\"")
-private val CATEGORY_NAMES = setOf("media", "program", "archive", "other")

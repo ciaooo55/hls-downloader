@@ -43,6 +43,7 @@ mod instance;
 mod link_file;
 #[cfg(feature = "full-core")]
 mod media;
+mod media_ext;
 #[cfg(feature = "full-core")]
 mod metalink;
 #[cfg(feature = "full-core")]

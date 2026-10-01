@@ -2159,9 +2159,10 @@ private fun displayStatus(status: String) = when (status.lowercase()) {
 private val mediaResourceKinds = setOf("hls", "dash", "live", "media")
 internal val catMEDIA_EXTENSIONS = setOf(
     "mp4", "mkv", "webm", "mov", "avi", "m4v", "ts", "mp3", "m4a", "flac", "wav",
-    "jpg", "png", "gif", "webp",
+    "ac3", "aac", "3gp", "flv", "m2ts", "mka", "mpd", "mpeg", "mpg", "ogg", "opus",
+    "wma", "wmv", "jpg", "png", "gif", "webp",
 )
-internal val catPROGRAM_EXTENSIONS = setOf("exe", "msi", "msix", "appx", "bat", "cmd")
+internal val catPROGRAM_EXTENSIONS = setOf("exe", "msi", "msix", "appx", "bat", "cmd", "com", "ps1")
 internal val catARCHIVE_EXTENSIONS = setOf("zip", "7z", "rar", "tar", "gz", "bz2", "xz", "iso")
 /**
  * 下载分类的**唯一**实现，与 `native_shell/src/category.rs::download_category` 一一对应。
@@ -2170,9 +2171,8 @@ internal val catARCHIVE_EXTENSIONS = setOf("zip", "7z", "rar", "tar", "gz", "bz2
  * ts / m4v / m4a / jpg / png / gif / webp，多了 Core 不认识的 apk / dmg / pkg，
  * 又少了 iso，还没有 hls/dash/live 的媒体短路。同一个 .ts 文件在接管弹窗里是"媒体"、
  * 在任务栏里却是"其他"。现在两边都走这一个函数。
- *
- * 改这张表必须同时改 category.rs；desktop_ui 的 CategoryParityTest 会把两边的
- * 扩展名清单逐项比对，防止再次分叉。
+ * 改这三张表必须同时改 `native_shell/src/media_ext.rs`；desktop_ui 的
+ * CategoryParityTest 会把两边的扩展名清单逐项比对，防止再次分叉。
  */
 internal fun downloadCategory(filename: String, resourceKind: String): TaskCategory {
     // Core：ResourceKind::Hls | Dash | Live 一律算媒体，不看扩展名。
