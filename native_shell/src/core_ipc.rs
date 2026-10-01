@@ -1083,7 +1083,6 @@ impl CoreIpcClient {
     /// startup wait. Native Messaging uses this short probe before it decides
     /// whether it needs to launch the single-instance engine.
     pub fn connect_existing(timeout: Duration) -> Result<Self, String> {
-        #[cfg_attr(not(windows), allow(unused_variables))]
         #[cfg(windows)]
         {
             let started = std::time::Instant::now();

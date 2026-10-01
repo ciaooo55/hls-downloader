@@ -15,7 +15,6 @@ const ES_AWAYMODE_REQUIRED: u32 = 0x0000_0040;
 #[cfg(windows)]
 const ES_CONTINUOUS: u32 = 0x8000_0000;
 
-#[cfg_attr(not(windows), allow(clippy::needless_return))]
 pub fn set_active(active: bool) {
     if ACTIVE.swap(active, Ordering::SeqCst) == active {
         return;
