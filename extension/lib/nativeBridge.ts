@@ -1,4 +1,13 @@
 // Native Messaging is the extension's only transport to the resident v7 Core.
+//
+// 构建门禁契约哨兵（**不是死代码，禁止删除**）：scripts/build-v7.ps1 按名字断言本常量存在，
+// 用来证明扩展仍面向 v7 Core 协议 hls-downloader-v7-core。TS 侧没有任何调用方，
+// 所以历次"清理未被引用的导出"会顺手把它删掉——而删掉之后整个产品构建直接被拒：
+//   v7 build refused: browser extension v7 Core protocol contract is missing
+// 2026-10-02 已因此返工一次（e6ff702 删了它，此后所有候选包构建都失败）。
+// 同类哨兵：Protocol.kt 的 CORE_PROTOCOL / CORE_PIPE、contract.rs 的 V7_PROTOCOL_NAME。
+export const V7_CORE_PROTOCOL = 'hls-downloader-v7-core'
+
 const MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS = 4096
 
 function scalarSafeNativeText(value: string): string {
