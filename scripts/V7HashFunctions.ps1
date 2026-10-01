@@ -38,20 +38,3 @@ function Get-FileHash {
         Path       = $path
     }
 }
-
-function Get-V7SHA256 {
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $resolved = if ([IO.Path]::IsPathRooted($Path)) { [IO.Path]::GetFullPath($Path) } else { [IO.Path]::GetFullPath((Join-Path $PWD.Path $Path)) }
-    if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { throw "file not found: $resolved" }
-    $hash = [Security.Cryptography.SHA256]::Create()
-    try {
-        $stream = [IO.File]::OpenRead($resolved)
-        try { $bytes = $hash.ComputeHash($stream) } finally { $stream.Dispose() }
-    } finally {
-        $hash.Dispose()
-    }
-    $builder = New-Object Text.StringBuilder
-    foreach ($b in $bytes) { [void]$builder.Append($b.ToString('x2')) }
-    return $builder.ToString()
-}

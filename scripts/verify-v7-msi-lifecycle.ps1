@@ -70,20 +70,6 @@ function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
     return [int]$process.ExitCode
 }
 
-function Get-TreeDigest([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-    $lines = @(Get-ChildItem -LiteralPath $Path -File -Recurse | Sort-Object FullName | ForEach-Object {
-        $relative = $_.FullName.Substring($Path.TrimEnd('\').Length).TrimStart('\')
-        "$relative`t$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
-    })
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))))).Replace('-', '').ToLowerInvariant() }
-    finally { $sha.Dispose() }
-}
-
 function Get-InstalledProduct([string]$UpgradeCode) {
     $installer = New-Object -ComObject WindowsInstaller.Installer
     try {
