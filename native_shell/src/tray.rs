@@ -128,20 +128,16 @@ unsafe extern "system" {
 }
 
 #[cfg(windows)]
-#[allow(unused_imports, unused_variables)]
 unsafe fn tray_loop(tx: Sender<TrayAction>) {
     use std::mem::size_of;
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
-        NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, PostQuitMessage, RegisterClassW,
-        RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-        CS_VREDRAW, CW_USEDEFAULT, HWND_MESSAGE, MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP,
-        WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+        CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, RegisterClassW,
+        RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+        HWND_MESSAGE, WM_APP, WM_COMMAND, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;
@@ -240,7 +236,6 @@ unsafe extern "system" fn tray_wnd_proc(
     lparam: windows_sys::Win32::Foundation::LPARAM,
 ) -> windows_sys::Win32::Foundation::LRESULT {
     use windows_sys::Win32::Foundation::POINT;
-    #[allow(unused_imports)]
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DefWindowProcW, DestroyMenu, GetCursorPos, GetWindowLongPtrW,
         PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu, GWLP_USERDATA,

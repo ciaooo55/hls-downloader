@@ -18,6 +18,7 @@
 //!
 //! 整个模块挂在 `#[cfg(feature = "full-core")]` 上：`presenter-client` 组合不碰本地时间。
 
+#[cfg(not(windows))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 与 kernel32 `SYSTEMTIME` 布局一致的本地时间字段。

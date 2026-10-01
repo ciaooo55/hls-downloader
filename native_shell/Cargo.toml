@@ -66,3 +66,18 @@ required-features = ["full-core"]
 name = "HLSDownloaderUpdater"
 path = "src/bin/hls_downloader_updater.rs"
 required-features = ["full-core"]
+
+[[test]]
+name = "cast_simulated_lan_device"
+path = "tests/cast_simulated_lan_device.rs"
+required-features = ["full-core"]
+
+[[test]]
+name = "concurrent_dispatch"
+path = "tests/concurrent_dispatch.rs"
+required-features = ["full-core"]
+
+[[test]]
+name = "handoff_restore_order"
+path = "tests/handoff_restore_order.rs"
+required-features = ["full-core"]

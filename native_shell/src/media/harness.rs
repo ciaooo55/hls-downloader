@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use super::{download_hls, download_hls_with, HlsDownloadOptions};
+use super::hls::{download_hls, download_hls_with, HlsDownloadOptions};
 
 #[derive(Clone)]
 pub struct FixtureOrigin {

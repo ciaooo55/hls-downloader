@@ -373,7 +373,20 @@ fn simulated_device_survives_a_second_scan_round() {
         );
         return;
     }
+    let searches_after_first = device.m_searches();
     let second = discover_devices_for_mode(Duration::from_secs(3), "cast").expect("second scan");
+    let searches_after_second = device.m_searches();
+    if searches_after_second == searches_after_first {
+        // 第一轮收到了 M-SEARCH 不代表第二轮也收得到：同一个 239.255.255.250:1900
+        // 被 Windows SSDPSRV 抢走的机器上，多播是"时有时无"的。这一轮没收到就是
+        // 一次证明不了任何事的运行（和上面第一轮的同款原因），按本文件开头的既定
+        // 策略打印原因跳过，而不是把整条链路的失败记成回归。
+        eprintln!(
+            "skip: the simulated device received no M-SEARCH during the second scan window ({} before, {} after); the OS SSDP stack owns 239.255.255.250:1900 here, so this run proves nothing",
+            searches_after_first, searches_after_second
+        );
+        return;
+    }
     let in_first = first
         .iter()
         .filter(|i| i.location == device.location())
