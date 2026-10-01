@@ -3146,6 +3146,28 @@ internal fun WorkbenchDialog(
  * 窄目标的规则沿用 [IconButton] / [RadioButton] 的既有约定：缩到 .92f。
  */
 internal const val SEGMENT_SCALE = .92f
+
+/**
+ * 完成后动作的选项表。此前这份 `listOf(...)` 在 Main.kt 抄了两遍、SettingsV7.kt 一遍，
+ * 共三份，加一个动作要改三处。
+ */
+internal val POWER_ACTION_OPTIONS: List<Pair<String, String>> = listOf(
+    "none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机",
+)
+
+/**
+ * 确认弹窗里"X 秒后将…"用的动词。
+ *
+ * 刻意与 [POWER_ACTION_OPTIONS] 的标签不同措辞，这不是分叉：
+ * "秒后将进入睡眠"读得通，"秒后将睡眠"不通；而"进入关机"反而是错的，
+ * 所以关机不带前缀。两处是同一个枚举的两种渲染。
+ */
+internal fun powerActionVerb(kind: String): String = when (kind) {
+    "shutdown" -> "关机"
+    "sleep" -> "进入睡眠"
+    "hibernate" -> "进入休眠"
+    else -> "执行系统操作"
+}
 /**
  * 把任务操作失败翻译成用户能照着做的提示。
  *
@@ -3374,7 +3396,7 @@ private fun QueueManagerDialog(
                     Spacer(Modifier.height(8.dp))
                     DialogLabel("队列全部完成后")
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
-                        listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) ->
+                        POWER_ACTION_OPTIONS.forEach { (value, label) ->
                             val active = selected.completionAction == value
                             TextButton(
                                 onClick = { update { it.copy(completionAction = value) } },
@@ -3521,7 +3543,7 @@ private fun NewTaskDialog(
                 Spacer(Modifier.height(9.dp)); DialogLabel("其他请求头（每行“名称: 值”）"); OutlinedTextField(requestHeaders, { requestHeaders = it }, Modifier.fillMaxWidth(), minLines = 3, maxLines = 3, isError = parsedHeaders.isFailure, shape = RoundedCornerShape(Radius.md), placeholder = { Text("Authorization: Bearer ...\nX-Playback-Token: ...") }); Text(parsedHeaders.exceptionOrNull()?.message ?: "敏感请求头只保存在下载引擎的加密凭据中。", color = if (parsedHeaders.isFailure) errorStrong else faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
             }
             else -> {
-                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机").forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(completionAction == value, selectedSurface, Color.Transparent)), contentPadding = PaddingValues(horizontal = 4.dp), hoverColor = if (completionAction == value) selectedSurface else surface3, pressedColor = if (completionAction == value) selectedSurface else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
+                DialogLabel("计划开始（ISO 时间或留空）"); OutlinedTextField(startAt, { startAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("计划停止（ISO 时间或留空）"); OutlinedTextField(stopAt, { stopAt = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)); Spacer(Modifier.height(9.dp)); DialogLabel("完成后动作"); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { POWER_ACTION_OPTIONS.forEach { (value, label) -> TextButton(onClick = { completionAction = value }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(completionAction == value, selectedSurface, Color.Transparent)), contentPadding = PaddingValues(horizontal = 4.dp), hoverColor = if (completionAction == value) selectedSurface else surface3, pressedColor = if (completionAction == value) selectedSurface else surface3.blendToward(ink, .05f), pressScale = SEGMENT_SCALE) { Text(label, color = if (completionAction == value) blue else muted, fontSize = TypeScale.micro) } } }
             }
         }
     }, actions = {
@@ -4589,7 +4611,7 @@ private fun HarvestResultDialog(
     description = "完成后操作确认",
     width = 480.dp,
     content = {
-        val action = when (signal.action) { "shutdown" -> "关机"; "sleep" -> "进入睡眠"; "hibernate" -> "进入休眠"; else -> "执行系统操作" }
+        val action = powerActionVerb(signal.action)
         Text("${signal.title.ifBlank { "下载任务" }} 已完成。${signal.delaySeconds} 秒后将$action。", color = ink, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle)
         Text("可以立即执行，或取消本次操作。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 8.dp))
     },

@@ -229,7 +229,7 @@ internal fun FullSettingsDialog(
                         SettingRow("队列自动停止", "到达计划时间后暂停活动任务", draft.queueAutoStopEnabled) { draft = draft.copy(queueAutoStopEnabled = it) }
                         V7Field("自动停止时间", draft.queueAutoStopTime) { draft = draft.copy(queueAutoStopTime = it) }
                         V7WeekdayChoice(draft.queueActiveDays) { draft = draft.copy(queueActiveDays = it) }
-                        V7Choice("全部完成后", listOf("none" to "无", "sleep" to "睡眠", "hibernate" to "休眠", "shutdown" to "关机"), draft.completionPowerAction) { draft = draft.copy(completionPowerAction = it) }
+                        V7Choice("全部完成后", POWER_ACTION_OPTIONS, draft.completionPowerAction) { draft = draft.copy(completionPowerAction = it) }
                     }
                     "网络" -> SettingsSection("代理与站点") {
                         Row(
