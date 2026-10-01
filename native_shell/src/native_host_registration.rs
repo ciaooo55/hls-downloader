@@ -441,6 +441,7 @@ pub fn unregister_packaged_native_host(engine: &Path) -> Result<usize, String> {
     let fallback_directory = fallback_manifest_directory()?;
     let fallback = manifest_paths(&fallback_directory);
     let entries = registration_entries(&preferred);
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut candidates = vec![
         (preferred.chromium, "allowed_origins"),
         (preferred.firefox, "allowed_extensions"),

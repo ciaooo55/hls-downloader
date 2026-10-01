@@ -1,10 +1,14 @@
 //! GitHub release check. Download starts only after the user confirms.
 
 use serde::{Deserialize, Serialize};
-use std::ffi::{OsStr, OsString};
+#[cfg(windows)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LATEST_API: &str = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest";
@@ -870,6 +874,7 @@ fn installer_matches(
     Ok(crate::checksum::verify_file(path, &format!("sha256:{expected_sha256}")).is_ok())
 }
 
+#[cfg_attr(not(windows), allow(unused_variables))]
 fn mark_downloaded_from_internet(path: &Path) {
     #[cfg(windows)]
     {
