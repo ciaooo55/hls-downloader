@@ -1,3 +1,4 @@
+#[cfg(feature = "full-core")]
 mod atomic_replace;
 #[cfg(feature = "full-core")]
 mod av_scan;
@@ -41,9 +42,11 @@ mod http_engine;
 mod instance;
 #[cfg(feature = "full-core")]
 mod link_file;
+#[cfg(feature = "full-core")]
 mod local_time;
 #[cfg(feature = "full-core")]
 mod media;
+#[cfg(feature = "full-core")]
 mod media_ext;
 #[cfg(feature = "full-core")]
 mod metalink;
@@ -93,6 +96,7 @@ mod tray;
 mod updater;
 #[cfg(feature = "full-core")]
 mod v6_migrate;
+#[cfg(feature = "full-core")]
 mod win_reg;
 mod window_util;
 

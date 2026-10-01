@@ -9,12 +9,14 @@
 //! `#[link(name = "kernel32")]`，无条件编译会让非 Windows 链接 `-lkernel32` 而失败。
 //! 所以 extern 块与调用留在 `net_policy.rs` 的 `#[cfg(windows)]` 里，只搬：
 //!
-//! 1. 字段结构体（纯 Rust，无链接依赖，所有平台编译）；
-//! 2. **派生逻辑**——`windows_day_of_week_to_iso` 与 Unix 时间的星期公式。
+//! 1. 字段结构体（纯 Rust，无链接依赖）——Windows 侧唯一的取时入口；
+//! 2. Unix 时间的星期公式——**只服务非 Windows 支路**，见下方 `#[cfg(not(windows))]`。
 //!
 //! 第 2 项才是真正值得收的：星期映射算错时不会报错，只会安静地把"周日"当成"周一"，
-//! 而计划任务的触发窗口就整体偏移一天。这恰恰是 Linux 上唯一能覆盖到的部分
-//! （SYSTEMTIME 那条路径编不出 Windows 目标就碰不到）。
+//! 而计划任务的触发窗口就整体偏移一天。Windows 侧同一风险由 `GetLocalTime` 的
+//! `wDayOfWeek` 映射承担，两条各有自己的用例。
+//!
+//! 整个模块挂在 `#[cfg(feature = "full-core")]` 上：`presenter-client` 组合不碰本地时间。
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,17 +50,22 @@ impl LocalTimeFields {
         u32::from(self.hour) * 60 + u32::from(self.minute)
     }
 }
-
+/// **只服务非 Windows 支路**：`net_policy::local_weekday_iso` 的 `#[cfg(not(windows))]`
+/// 分支。Windows 上走 `GetLocalTime` + [LocalTimeFields::iso_weekday]，不需要它，
+/// 所以整条（含下方同名测试）都挂在 `#[cfg(not(windows))]` 上——Windows 构建里既没有
+/// 这段公式，也不该有一批测它的用例。
 /// 非 Windows 上由 Unix 秒推 ISO 星期。
 ///
 /// 1970-01-01 是星期四（ISO 4），故 `(days + 3) % 7 + 1`。
 /// 这里按 Unix 秒取整到天，与 Windows 侧"按本地日历日"在语义上一致：
 /// 两者都以**本地**一天的起点为界，而不是按 UTC 日界。
+#[cfg(not(windows))]
 pub(crate) fn unix_seconds_to_iso_weekday(unix_seconds: u64) -> u8 {
     (((unix_seconds / 86_400) + 3) % 7 + 1) as u8
 }
 
 /// 非 Windows 上取当前 Unix 秒。失败（时钟早于 epoch）时按 0 处理，与旧行为一致。
+#[cfg(not(windows))]
 pub(crate) fn unix_now_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -147,12 +154,14 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn unix_epoch_day_is_thursday() {
         // 1970-01-01 是星期四（ISO 4）。这条钉住整条公式的锚点。
         assert_eq!(unix_seconds_to_iso_weekday(0), 4);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn known_dates_map_to_their_iso_weekday() {
         // 三个已知日期，覆盖"非epoch起点"与跨闰年。
@@ -170,6 +179,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn unix_weekday_advances_by_one_each_day_and_returns_to_sunday() {
         // 连续性：相邻两天必须相差一天；第 8 天回到起点。
@@ -186,6 +196,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn both_platforms_agree_on_the_epoch_day() {
         // 两侧必须给同一个答案，否则"计划任务按星期触发"会随平台漂移。

@@ -438,6 +438,7 @@ fn a_host_on_this_machines_own_subnet_is_accepted() {
     assert!(hls_native_shell::cast::is_lan_host(&neighbour.to_string()));
 }
 /// SSDP 响应的解析：LOCATION 大小写、http/https 都收，别的协议不收。
+#[test]
 fn ssdp_location_parsing_accepts_only_http_urls() {
     use hls_native_shell::cast::{parse_device_description, parse_ssdp_location};
     assert_eq!(
