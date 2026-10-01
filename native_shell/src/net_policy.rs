@@ -1,5 +1,20 @@
 //! Process-wide HTTP connection budget, shared backoff, and download throttle.
 
+/// kernel32 的本地时钟。**只有这份 extern 声明**——此前它在 local_weekday_iso 与
+/// chrono_minutes_now 里各写了一遍。
+///
+/// 故意留在 `#[cfg(windows)]` 里：它带 `#[link(name = "kernel32")]`，无条件编译会让
+/// 非 Windows 构建链接 `-lkernel32` 而失败。能安全搬到共享模块的是结构体与派生逻辑
+/// （见 `crate::local_time`，那里有对应单测），拿本地时间这一次 FFI 不行。
+#[cfg(windows)]
+mod sys_time {
+    use crate::local_time::LocalTimeFields;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        pub(crate) fn GetLocalTime(time: *mut LocalTimeFields);
+    }
+}
+
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -741,47 +756,21 @@ fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
     Some(days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds)
 }
 
+/// 本地 ISO 星期（1=周一…7=周日）。
+///
+/// 字段结构体与派生逻辑见 `crate::local_time`：那里有对应单测，包括"周日必须落到 7"
+/// 与"两个平台对同一天必须给同一答案"——星期映射算错不会报错，只会让计划窗口
+/// 整体偏移一天，所以这两条是核心。
 fn local_weekday_iso() -> u8 {
     #[cfg(windows)]
     {
-        #[repr(C)]
-        struct SystemTime {
-            year: u16,
-            month: u16,
-            day_of_week: u16,
-            day: u16,
-            hour: u16,
-            minute: u16,
-            second: u16,
-            milliseconds: u16,
-        }
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn GetLocalTime(time: *mut SystemTime);
-        }
-        let mut now = SystemTime {
-            year: 0,
-            month: 0,
-            day_of_week: 0,
-            day: 0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            milliseconds: 0,
-        };
-        unsafe { GetLocalTime(&mut now) };
-        match now.day_of_week {
-            0 => 7,
-            other => other as u8,
-        }
+        let mut now = crate::local_time::LocalTimeFields::default();
+        unsafe { sys_time::GetLocalTime(&mut now) };
+        now.iso_weekday()
     }
     #[cfg(not(windows))]
     {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        (((secs / 86400) + 3) % 7 + 1) as u8
+        crate::local_time::unix_seconds_to_iso_weekday(crate::local_time::unix_now_seconds())
     }
 }
 
@@ -803,33 +792,9 @@ pub fn local_hhmm() -> String {
 fn chrono_minutes_now() -> u32 {
     #[cfg(windows)]
     {
-        #[repr(C)]
-        struct SystemTime {
-            year: u16,
-            month: u16,
-            day_of_week: u16,
-            day: u16,
-            hour: u16,
-            minute: u16,
-            second: u16,
-            milliseconds: u16,
-        }
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn GetLocalTime(time: *mut SystemTime);
-        }
-        let mut now = SystemTime {
-            year: 0,
-            month: 0,
-            day_of_week: 0,
-            day: 0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            milliseconds: 0,
-        };
-        unsafe { GetLocalTime(&mut now) };
-        u32::from(now.hour) * 60 + u32::from(now.minute)
+        let mut now = crate::local_time::LocalTimeFields::default();
+        unsafe { sys_time::GetLocalTime(&mut now) };
+        now.minutes_since_midnight()
     }
     #[cfg(not(windows))]
     {

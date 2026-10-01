@@ -41,6 +41,7 @@ mod http_engine;
 mod instance;
 #[cfg(feature = "full-core")]
 mod link_file;
+mod local_time;
 #[cfg(feature = "full-core")]
 mod media;
 mod media_ext;
