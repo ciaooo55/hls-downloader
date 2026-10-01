@@ -93,6 +93,7 @@ mod tray;
 mod updater;
 #[cfg(feature = "full-core")]
 mod v6_migrate;
+mod win_reg;
 mod window_util;
 
 #[cfg(not(feature = "full-core"))]

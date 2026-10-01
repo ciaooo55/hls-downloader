@@ -206,18 +206,7 @@ fn registration_entries(paths: &ManifestPaths) -> Vec<RegistrationEntry> {
 }
 
 #[cfg(windows)]
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-#[cfg(windows)]
-fn registry_error(action: &str, code: u32) -> String {
-    format!(
-        "{action}: {}",
-        std::io::Error::from_raw_os_error(code as i32)
-    )
-}
-
+use crate::win_reg::{registry_error, wide};
 #[cfg(windows)]
 fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
     use std::ptr::{null, null_mut};

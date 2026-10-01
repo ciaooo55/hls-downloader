@@ -1,17 +1,7 @@
 //! HKCU Run key so the v7 Core starts with Windows. User-scope only.
 
 #[cfg(windows)]
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-#[cfg(windows)]
-fn registry_error(action: &str, code: u32) -> String {
-    format!(
-        "{action}: {}",
-        std::io::Error::from_raw_os_error(code as i32)
-    )
-}
+use crate::win_reg::{registry_error, wide};
 
 #[cfg(windows)]
 fn disable_startup() -> Result<(), String> {
