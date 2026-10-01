@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.imageio.ImageIO
 import javax.swing.SwingUtilities
+import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
@@ -35,9 +36,69 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
-
 private const val TEST_API_HEADER = "X-HLS-Test-Token"
 private const val MAX_ACTION_BYTES = 64 * 1024
+
+/**
+ * **坐标空间速查**：本文件里有**两个**坐标空间，混用就会产生看起来像"按钮坏了"的假故障。
+ *
+ *  1. **Compose 画布坐标（设备像素）**：`UiTestState` 的 controlBounds 用它，
+ *     值是 positionInWindow() 的原始结果。125% 缩放的显示器上请求 1024x600，
+ *     画布实际是 1280x750（实测）。
+ *  2. **虚拟屏幕坐标**：`java.awt.Robot` 与 `window.locationOnScreen` 用它。
+ *     Robot 跑在 DPI 不识别的进程里，它看到的屏幕是 1536x864，不是 1920x1080。
+ *
+ * 所以 Robot 的坐标必须**除以**缩放比，而不是乘以：给 Robot 一个画布坐标
+ * (1194,75)，它会理解为虚拟坐标 (1194,75)，而窗口在虚拟空间里只到 1024x600，
+ * 点击就落到窗口外的桌面上——没有报错，只是什么都没发生。
+ * 屏幕捕获同理：把"设备像素"矩形传给 Robot，只会把右 256px / 下 150px 的
+ * 桌面色拍进来（实测黑占比从 0% 涨到 4%），看起来是张截图，其实是错的。
+ *
+ * 100% 缩放的显示器上缩放比是 1.0，两个空间重合，所以这个缺陷在开发机上
+ * 完全看不见，也从来没被任何测试抓到。
+ */
+private fun windowDeviceScale(window: Window): Double =
+    runCatching { window.graphicsConfiguration?.defaultTransform?.scaleX ?: 1.0 }
+        .getOrDefault(1.0)
+        .takeIf { it > 0.0 && it.isFinite() } ?: 1.0
+
+/**
+ * Compose 画布坐标 → Robot 的虚拟屏幕坐标。
+ *
+ * 除以缩放比而不是相加：Robot 工作在虚拟化空间里（125% 的机器上就是 1536x864），
+ * 而画布坐标是设备像素。两者相差 scale 倍，实测点击 (1194,75) 直接相加会落空。
+ */
+private fun canvasToVirtualPoint(window: Window, x: Int, y: Int): Point {
+    val scale = windowDeviceScale(window)
+    val location = runCatching { window.locationOnScreen }.getOrNull() ?: Point(0, 0)
+    return Point(
+        (location.x + x / scale).roundToInt(),
+        (location.y + y / scale).roundToInt(),
+    )
+}
+
+/**
+ * 窗口在**设备像素**里的矩形，只用于向调用方报告窗口真实占了多少物理像素。
+ *
+ * 它不能喂给 Robot：Robot 的坐标空间是虚拟化的，见 [canvasToVirtualPoint]。
+ */
+private fun deviceWindowRect(window: Window): Rectangle {
+    val scale = windowDeviceScale(window)
+    val location = runCatching { window.locationOnScreen }.getOrNull() ?: Point(0, 0)
+    return Rectangle(
+        (location.x * scale).roundToInt(),
+        (location.y * scale).roundToInt(),
+        (window.width * scale).roundToInt().coerceAtLeast(1),
+        (window.height * scale).roundToInt().coerceAtLeast(1),
+    )
+}
+
+/** Compose 画布的像素尺寸（= 设备像素）；`/action` 的坐标校验用它。 */
+private fun canvasSize(window: Window): Pair<Int, Int> {
+    val scale = windowDeviceScale(window)
+    return (window.width * scale).roundToInt().coerceAtLeast(1) to
+        (window.height * scale).roundToInt().coerceAtLeast(1)
+}
 
 @Serializable
 internal data class UiTestAction(
@@ -417,7 +478,15 @@ internal class UiTestApi private constructor(
             handle(exchange, "GET") {
                 val snapshot = onEventThread {
                     val icon = window.iconImages.maxByOrNull { it.getWidth(null) * it.getHeight(null) }
-                    WindowSnapshot(window.x, window.y, window.width, window.height, window.isActive, window.isShowing, window.iconImages.size, icon?.getWidth(null) ?: 0, icon?.getHeight(null) ?: 0)
+                    val rect = deviceWindowRect(window)
+                    val scale = windowDeviceScale(window)
+                    WindowSnapshot(
+                        window.x, window.y, window.width, window.height,
+                        window.isActive, window.isShowing, window.iconImages.size,
+                        icon?.getWidth(null) ?: 0, icon?.getHeight(null) ?: 0,
+                        scale, scale,
+                        rect.x, rect.y, rect.width, rect.height,
+                    )
                 }
                 jsonResponse(exchange, 200, protocolJson.encodeToString(snapshot))
             }
@@ -440,8 +509,12 @@ internal class UiTestApi private constructor(
             handle(exchange, "GET") {
                 val image = withFocusedWindow {
                     if (exchange.requestURI.query == "mode=paint") {
+                        // 打印路径画布用 Compose 画布尺寸（设备像素）。
+                        // 用 AWT 的 width/height 会给一张 1024x600 的画布，
+                        // 而 Compose 真的排版到了 1280 宽，右侧内容被裁掉。
+                        val canvas = onEventThread { canvasSize(window) }
                         onEventThread {
-                            BufferedImage(window.width, window.height, BufferedImage.TYPE_INT_ARGB).also { image ->
+                            BufferedImage(canvas.first, canvas.second, BufferedImage.TYPE_INT_ARGB).also { image ->
                                 val graphics = image.createGraphics()
                                 try {
                                     window.printAll(graphics)
@@ -451,6 +524,19 @@ internal class UiTestApi private constructor(
                             }
                         }
                     } else {
+                        // 屏幕捕获的坐标必须留在 AWT/JVM 的**虚拟化**坐标空间里。
+                        //
+                        // 这里有一个反直觉的点：Robot 本身跑在 DPI 不识别的进程里，
+                        // 它读到的屏幕就是 1536x864，而不是显示适配器的 1920x1080。
+                        // 所以给 Robot 一个"设备像素"矩形（1280x750）并不会截到更多
+                        // UI —— 它只会把矩形原样解释成虚拟坐标，于是右 256 px 与
+                        // 下 150 px 实际落在窗口外的桌面上，截出来的图右下角是桌面色，
+                        // 黑占比直接从 0% 涨到 4%（实测），是比原来更隐蔽的错误证据。
+                        //
+                        // 窗口真实大小由 /window 的 deviceWidth/deviceHeight 给出，
+                        // 调用方要的是"这一帧有没有把整个窗口拍全"，
+                        // 那应该比对 deviceWidth/Height 与 width*sx/height*sy，
+                        // 而不是去改 Robot 的坐标。
                         val bounds = onEventThread {
                             val location = window.locationOnScreen
                             Rectangle(location.x, location.y, window.width, window.height)
@@ -468,7 +554,11 @@ internal class UiTestApi private constructor(
                 val body = exchange.requestBody.readNBytes(MAX_ACTION_BYTES + 1)
                 require(body.size <= MAX_ACTION_BYTES) { "action body is too large" }
                 val action = protocolJson.decodeFromString<UiTestAction>(body.toString(StandardCharsets.UTF_8))
-                val dimensions = onEventThread { window.width to window.height }
+                // 动作坐标是 Compose 画布坐标（= 设备像素），`/state` 的
+                // controlBounds 也报这一套。拿 AWT 的 width/height 校验会把
+                // 右边缘的真实控件全部判成"坐标越界"。实测：125% 缩放的显示器上
+                // 工具栏"设置"的 controlBounds 右边缘 1217，而 AWT 只报 1024。
+                val dimensions = onEventThread { canvasSize(window) }
                 validateUiTestAction(action, dimensions.first, dimensions.second)?.let { throw IllegalArgumentException(it) }
                 perform(action)
                 jsonResponse(exchange, 200, """{"ok":true,"action":"${escapeJson(action.type)}"}""")
@@ -550,7 +640,9 @@ internal class UiTestApi private constructor(
         releaseHeldButton()
         val point = onEventThread {
             mouseTarget(x, y)
-            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+            // canvasToVirtualPoint 把 Compose 画布坐标换算成 Robot 的虚拟屏幕坐标。
+            // 直接相加会在 125% 缩放的显示器上偏 25%（实测：点击 (1194,75) 落空）。
+            canvasToVirtualPoint(window, x, y)
         }
         val buttonMask = if (secondary) InputEvent.BUTTON3_DOWN_MASK else InputEvent.BUTTON1_DOWN_MASK
         withRobotModifiers(modifiers) {
@@ -573,7 +665,7 @@ internal class UiTestApi private constructor(
         releaseHeldButton()
         val point = onEventThread {
             mouseTarget(x, y)
-            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+            canvasToVirtualPoint(window, x, y)
         }
         withRobotModifiers(modifiers) {
             robot.mouseMove(point.x, point.y)
@@ -592,25 +684,26 @@ internal class UiTestApi private constructor(
     private fun dispatchMouseMove(x: Int, y: Int) {
         val point = onEventThread {
             mouseTarget(x, y)
-            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+            canvasToVirtualPoint(window, x, y)
         }
         robot.mouseMove(point.x, point.y)
     }
 
     private fun dispatchMouseDrag(fromX: Int, fromY: Int, toX: Int, toY: Int, modifiers: List<String>) {
         releaseHeldButton()
-        val origin = onEventThread {
+        val start = onEventThread {
             mouseTarget(fromX, fromY)
-            window.locationOnScreen
+            canvasToVirtualPoint(window, fromX, fromY)
         }
         withRobotModifiers(modifiers) {
-            robot.mouseMove(origin.x + fromX, origin.y + fromY)
+            robot.mouseMove(start.x, start.y)
             robot.mousePress(InputEvent.BUTTON1_DOWN_MASK)
             repeat(20) { step ->
                 val ratio = (step + 1) / 20.0
                 val x = (fromX + (toX - fromX) * ratio).toInt()
                 val y = (fromY + (toY - fromY) * ratio).toInt()
-                robot.mouseMove(origin.x + x, origin.y + y)
+                val step = canvasToVirtualPoint(window, x, y)
+                robot.mouseMove(step.x, step.y)
                 robot.delay(8)
             }
             robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK)
@@ -621,7 +714,7 @@ internal class UiTestApi private constructor(
         releaseHeldButton()
         val point = onEventThread {
             mouseTarget(x, y)
-            window.locationOnScreen.let { Point(it.x + x, it.y + y) }
+            canvasToVirtualPoint(window, x, y)
         }
         withRobotModifiers(modifiers) {
             robot.mouseMove(point.x, point.y)
@@ -647,7 +740,15 @@ internal class UiTestApi private constructor(
     }
 
     private fun mouseTarget(x: Int, y: Int): Component {
-        val deepest = SwingUtilities.getDeepestComponentAt(window, x, y) ?: window
+        // AWT 的命中测试用的是虚拟化坐标，而调用方给的是 Compose 画布坐标。
+        // 不换算的话，右侧控件一律落到 window 上（getDeepestComponentAt 对越界
+        // 坐标返回 null），inputTarget 退化成"窗口"——一个不报错的错诊断。
+        val scale = windowDeviceScale(window)
+        val deepest = SwingUtilities.getDeepestComponentAt(
+            window,
+            (x / scale).roundToInt(),
+            (y / scale).roundToInt(),
+        ) ?: window
         return (generateSequence(deepest) { it.parent }
             .firstOrNull { it.mouseListeners.isNotEmpty() || it.mouseMotionListeners.isNotEmpty() }
             ?: deepest).also(UiTestState::updateInputTarget)
@@ -814,6 +915,17 @@ internal fun belongsToWindow(candidate: Window?, root: Window): Boolean {
     return false
 }
 
+/**
+ * `width`/`height` 是 AWT 的虚拟化尺寸；`deviceWidth`/`deviceHeight` 是
+ * Compose 画布真正占用的设备像素。
+ *
+ * 两者在 100% 缩放的显示器上相等，在 125% 上不等（实测 AWT 1024x600 vs 设备
+ * 1280x750）。`/state` 的 controlBounds 用的是设备像素这一套，所以调用方要拿
+ * deviceWidth/deviceHeight 去对 controlBounds；拿 width/height 只会得出
+ * "控件在窗口外"的错误结论。
+ *
+ * `scaleX`/`scaleY` 直接给出两套坐标的倍数，调用方不必自己算。
+ */
 @Serializable
 private data class WindowSnapshot(
     val x: Int,
@@ -825,6 +937,12 @@ private data class WindowSnapshot(
     val iconCount: Int,
     val iconWidth: Int,
     val iconHeight: Int,
+    val scaleX: Double = 1.0,
+    val scaleY: Double = 1.0,
+    val deviceX: Int = 0,
+    val deviceY: Int = 0,
+    val deviceWidth: Int = 0,
+    val deviceHeight: Int = 0,
 )
 
 private fun escapeJson(value: String): String = buildString(value.length + 8) {
