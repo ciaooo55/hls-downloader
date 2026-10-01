@@ -4715,7 +4715,7 @@ private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAU
                         ToolbarIcon(Icons.Outlined.Forward10, "前进 10 秒") { onAction("seek", 10) }
                     }
                     if (signal.positionAvailable && signal.durationSeconds > 0) {
-                        Slider(value = scrubPosition.coerceIn(0f, signal.durationSeconds.toFloat()), onValueChange = { scrubPosition = it }, onValueChangeFinished = { onAction("seek_to", scrubPosition.toLong()) }, valueRange = 0f..signal.durationSeconds.toFloat(), modifier = Modifier.fillMaxWidth().height(28.dp), colors = SliderDefaults.colors(thumbColor = blue, activeTrackColor = blue, inactiveTrackColor = surface3, activeTickColor = blue, inactiveTickColor = surface3), accessibilityLabel = "投屏播放位置")
+                        Slider(value = scrubPosition.coerceIn(0f, signal.durationSeconds.toFloat()), onValueChange = { scrubPosition = it }, onValueChangeFinished = { onAction("seek_to", scrubPosition.toLong()) }, valueRange = 0f..signal.durationSeconds.toFloat(), modifier = Modifier.fillMaxWidth().height(28.dp), colors = SliderDefaults.colors(thumbColor = blue, activeTrackColor = blue, inactiveTrackColor = surface3), accessibilityLabel = "投屏播放位置")
                         Row(Modifier.fillMaxWidth()) { Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = TypeScale.micro); Spacer(Modifier.weight(1f)); Text(formatClock(signal.durationSeconds), color = muted, fontSize = TypeScale.micro) }
                     }
                 } else {

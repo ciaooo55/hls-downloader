@@ -720,8 +720,6 @@ internal object SliderDefaults {
         thumbColor: Color = blue,
         activeTrackColor: Color = blue,
         inactiveTrackColor: Color = surface3,
-        activeTickColor: Color = activeTrackColor,
-        inactiveTickColor: Color = inactiveTrackColor,
     ) = SliderColors(thumbColor, activeTrackColor, inactiveTrackColor)
 }
 
