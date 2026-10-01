@@ -285,6 +285,7 @@ fn write_active_ranges(progress: &Path, ranges: &[(u64, u64)]) {
 
 #[cfg(windows)]
 fn replace_checkpoint_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use crate::atomic_replace::replace_with_retry;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -300,7 +301,7 @@ fn replace_checkpoint_file(source: &Path, destination: &Path) -> std::io::Result
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    for attempt in 0..20 {
+    replace_with_retry(|| {
         let moved = unsafe {
             MoveFileExW(
                 source.as_ptr(),
@@ -308,16 +309,12 @@ fn replace_checkpoint_file(source: &Path, destination: &Path) -> std::io::Result
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
             )
         };
-        if moved != 0 {
-            return Ok(());
+        if moved == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
         }
-        let error = std::io::Error::last_os_error();
-        if !matches!(error.raw_os_error(), Some(5 | 32)) || attempt == 19 {
-            return Err(error);
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    unreachable!()
+    })
 }
 
 #[cfg(not(windows))]

@@ -125,6 +125,7 @@ static TORRENT_SELECTION_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(windows)]
 fn replace_torrent_selection_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use crate::atomic_replace::replace_with_retry;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -140,18 +141,23 @@ fn replace_torrent_selection_file(source: &Path, destination: &Path) -> std::io:
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let moved = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if moved == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    // 过去这里是单发 MoveFileExW：BT 选择表就写在 BT 客户端自己持有的目录旁边，
+    // 撞上 ERROR_SHARING_VIOLATION 就直接失败。现在与 checkpoint 共用带退避重试的
+    // 助手，语义一致。
+    replace_with_retry(|| {
+        let moved = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
 }
 
 #[cfg(not(windows))]

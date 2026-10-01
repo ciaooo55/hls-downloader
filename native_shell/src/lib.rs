@@ -1,3 +1,4 @@
+mod atomic_replace;
 #[cfg(feature = "full-core")]
 mod av_scan;
 #[cfg(feature = "full-core")]
