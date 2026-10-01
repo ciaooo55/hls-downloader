@@ -336,7 +336,7 @@ internal fun FullSettingsDialog(
                                 val feedback = rememberPressFeedback(
                                     restColor = if (active) selectedSurface else surface2,
                                     hoverColor = if (active) selectedSurface else surface3,
-                                    pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f),
+                                    pressedColor = if (active) selectedSurface else pressedSurface,
                                     pressScale = 1f,
                                     hoverMillis = 120,
                                 )

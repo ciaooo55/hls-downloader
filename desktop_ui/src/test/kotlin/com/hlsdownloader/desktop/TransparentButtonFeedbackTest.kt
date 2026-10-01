@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * `ToolbarButton`——鼠标悬停和按住时**完全没有任何反馈**，而同屏其它控件应有尽有。
  *
  * 修法（沿用 [IconButton] 的现成约定）：给这类调用显式一档可见底色
- * `hoverColor = surface3` + `pressedColor = surface3.blendToward(ink, .05f)`。
+ * `hoverColor = surface3` + `pressedColor = pressedSurface`（令牌即 `surface3.blendToward(ink, .05f)`，见 Main.kt 顶部）。
  * [Button] / [TextButton] 因此各新增两个可空覆盖参数，不传时行为与从前完全一致。
  *
  * 一处重要的**反向约束**：`TextButton` 自己不默认给 hoverColor。分段控件（GET/POST、
@@ -140,8 +140,16 @@ class TransparentButtonFeedbackTest {
             "DialogSecondary 必须显式给出可见的悬停档位（透明底 + 默认 blendToward 量出来是 0 像素）",
         )
         assertTrue(
-            body.contains("pressedColor = surface3.blendToward(ink, .05f)"),
-            "DialogSecondary 还必须给一档按压底色，否则按住只缩 1.5%（窄目标几乎看不出来）",
+            body.contains("pressedColor = pressedSurface"),
+            "DialogSecondary 还必须给一档按压底色（统一走 pressedSurface 令牌），否则按住只缩 1.5%（窄目标几乎看不出来）",
+        )
+        // 令牌本身必须仍是一档"朝墨色推 5%"的可见底色——这一条是上一行的后盾：
+        // 若只钉 pressedColor = pressedSurface，把令牌改成 Color.Transparent 也能整条绿过去，
+        // 而那正是这个测试要防的事。DialogSecondary 是单行写法，取的 body 里没有令牌定义，所以去 src 上取。
+        val token = src.substringAfter("val pressedSurface: Color").substringBefore("\n")
+        assertTrue(
+            token.contains("surface3.blendToward(ink, .05f)"),
+            "pressedSurface 必须继续由 surface3 朝墨色推 5% 派生，不能改成透明或实色",
         )
     }
 

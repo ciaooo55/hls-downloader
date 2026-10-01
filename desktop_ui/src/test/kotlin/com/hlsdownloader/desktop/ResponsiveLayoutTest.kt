@@ -234,7 +234,10 @@ class ResponsiveLayoutTest {
         // 档位必须是 hover 之上再加一格：未选中按下压到 surface3，停在 surface2 就等于没做。
         assertFalse(source.contains("pressed -> surface2"))
         // 表头同一类问题：注释写"反馈只走底色"，但没传 pressedColor，按下时底色停在 hover 档。
-        assertTrue(source.contains("pressedColor = if (active) selectedSurface else surface3.blendToward(ink, .05f)"))
+        assertTrue(
+            source.contains("pressedColor = if (active) selectedSurface else pressedSurface"),
+            "表头按住必须落在 selectedSurface 或 pressedSurface 上，不能落回 surface2",
+        )
         // 表头仍然不缩放（文字缩一下像"表格在抖"），所以这一处必须继续是 1f。
         assertTrue(source.contains("pressScale = 1f,"))
     }
