@@ -43,7 +43,7 @@ internal class WorkbenchInstanceLock private constructor(
 
 internal fun wakeRunningWorkbench() {
     repeat(100) { attempt ->
-        if (runCatching { EnginePipeClient().openMain() }.isSuccess) return
+        if (runCatching { EnginePipeClient.openMain() }.isSuccess) return
         if (attempt < 99) Thread.sleep(100)
     }
 }

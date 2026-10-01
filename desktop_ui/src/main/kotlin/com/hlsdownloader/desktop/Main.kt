@@ -811,7 +811,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    EnginePipeClient().resolveMediaPush(requestId, status, message, location)
+                    EnginePipeClient.resolveMediaPush(requestId, status, message, location)
                 }
             }
             if (result.isSuccess) return
@@ -943,14 +943,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 when (action) {
-                    "play" -> EnginePipeClient().playTask(taskId)
-                    "cast" -> EnginePipeClient().discoverCastDevices("cast")
-                    "push_tvbox" -> EnginePipeClient().discoverCastDevices("tvbox")
-                    "open" -> EnginePipeClient().openCompleted(taskId, false)
-                    "open_folder" -> EnginePipeClient().openCompleted(taskId, true)
-                    "log" -> EnginePipeClient().getTaskLog(taskId)
-                    "save_site_profile" -> EnginePipeClient().saveSiteProfile(taskId)
-                    else -> EnginePipeClient().taskAction(taskId, action)
+                    "play" -> EnginePipeClient.playTask(taskId)
+                    "cast" -> EnginePipeClient.discoverCastDevices("cast")
+                    "push_tvbox" -> EnginePipeClient.discoverCastDevices("tvbox")
+                    "open" -> EnginePipeClient.openCompleted(taskId, false)
+                    "open_folder" -> EnginePipeClient.openCompleted(taskId, true)
+                    "log" -> EnginePipeClient.getTaskLog(taskId)
+                    "save_site_profile" -> EnginePipeClient.saveSiteProfile(taskId)
+                    else -> EnginePipeClient.taskAction(taskId, action)
                 }
             } }.onSuccess { result ->
                 if (action == "log") recordTaskLog(taskId, result.taskLogLines())
@@ -980,7 +980,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 // 状态不允许/任务不存在/未知动作 -> Error），而 taskAction() 返回的 CommandResult.events
                 // 里就装着这些信封；按 id upsert 进 tasks 即可。事件轮询仍在跑，漏掉的下一轮 waitEvents 会补。
                 // 千任务库里全量 snapshot 约 1.4MB，这个钱每次操作都付没有必要。
-                runCatching { withContext(Dispatchers.IO) { taskIds.map { EnginePipeClient().taskAction(it, action) } } }
+                runCatching { withContext(Dispatchers.IO) { taskIds.map { EnginePipeClient.taskAction(it, action) } } }
                     .onSuccess { results ->
                         results.forEach { result ->
                             result.events.forEach { envelope ->
@@ -1025,7 +1025,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     LaunchedEffect(externalDropPaths) {
         if (externalDropPaths.isNotEmpty()) {
             val paths = externalDropPaths
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.importPaths(paths) } }
                 .onSuccess { result ->
                     val count = result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }
                     notice = UiSignal.Notice("success", "已导入 $count 项任务")
@@ -1045,7 +1045,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         var lastSpawnAt = 0L
         var spawnDelayMs = 2_000L
         while (!snapshotReady) {
-            val snapshot = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().snapshotState() } }
+            val snapshot = runCatching { withContext(Dispatchers.IO) { EnginePipeClient.snapshotState() } }
             val state = snapshot.getOrNull()
             if (state != null) {
                 tasks.clear()
@@ -1072,7 +1072,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
             delay((100L + attempts * 40L).coerceAtMost(500L))
         }
-        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffs() } }
+        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffs() } }
             .onSuccess { offers ->
                 offers.forEach { offer ->
                     val index = handoffQueue.indexOfFirst { it.handoffId == offer.handoffId }
@@ -1094,7 +1094,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 notice = UiSignal.Notice("error", error.message ?: "读取浏览器接管请求失败")
             }
         val settingsEpochAtLoad = settingsEpoch
-        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadSettings() } }
+        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadSettings() } }
             .onSuccess { loaded ->
                 if (settingsEpochAtLoad == settingsEpoch) {
                     settings = loaded
@@ -1102,7 +1102,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
             }
         if (visualFixture.isBlank()) {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadMediaPushRequests().firstOrNull() } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadMediaPushRequests().firstOrNull() } }
                 .onSuccess { request ->
                     if (request != null && pendingPushRequestId == null) {
                         pendingPushRequestId = request.id
@@ -1112,7 +1112,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         castDiscovering = true
                         deviceResult = UiSignal.Devices(emptyList())
                         scope.launch {
-                            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(request.pushKind) } }
+                            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.discoverCastDevices(request.pushKind) } }
                                 .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) }
                         }
                     }
@@ -1123,7 +1123,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         if (visualFixture == "tasks_1000") return@LaunchedEffect
         while (true) {
             if (!snapshotReady) { delay(80); continue }
-            val received = runCatching { withContext(Dispatchers.IO) { EnginePipeClient().waitEvents(eventSequence) } }
+            val received = runCatching { withContext(Dispatchers.IO) { EnginePipeClient.waitEvents(eventSequence) } }
             received.onSuccess { events ->
                 events.forEach { envelope -> try {
                     // Core 的事件序号单调且随快照下发基线；快照后的下一个事件应为 eventSequence + 1，
@@ -1199,7 +1199,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                 castDiscovering = true
                                 deviceResult = UiSignal.Devices(emptyList())
                                 scope.launch {
-                                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(signal.request.pushKind) } }
+                                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient.discoverCastDevices(signal.request.pushKind) } }
                                         .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) }
                                 }
                             }
@@ -1282,7 +1282,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         if (!snapshotReady || visualFixture.isNotBlank()) return@LaunchedEffect
         delay(5_000)
         while (true) {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = true) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.checkUpdate(silent = true) } }
                 .onFailure { UiDiagnostics.warning("update.check.silent", describeFailure(it, "静默检查更新失败")) }
             delay(24 * 60 * 60 * 1_000L)
         }
@@ -1291,7 +1291,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         var castPollReachable = true
         while (visualFixture !in setOf("cast", "cast_tvbox", "cast_lan", "cast_offline", "media_stack") && castSession?.active == true && castSession?.supportedActions?.contains("status") == true) {
             delay(1_000)
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().controlCast("status") } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.controlCast("status") } }
                 .onSuccess { castPollReachable = true }
                 .onFailure { error ->
                     castPollFailures++
@@ -1310,7 +1310,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch {
                 taskActionLimiter.withPermit {
                     // 同上：靠命令响应里已经带回的事件增量更新任务行，不再拉全量快照。
-                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().taskAction(taskId, action) } }
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient.taskAction(taskId, action) } }
                         .onSuccess { result ->
                             result.events.forEach { envelope ->
                                 handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
@@ -1336,7 +1336,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
             settingsEpoch++
             darkMode = !darkMode
-            scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("dark_mode", darkMode) } } }
+            scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("dark_mode", darkMode) } } }
         })
         Row(Modifier.weight(1f).fillMaxWidth()) {
                 // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
@@ -1353,15 +1353,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 Column(Modifier.weight(1f).fillMaxHeight().background(canvas)) {
                 ContentHeader(filter, visible.size, selected.isNotEmpty(), tasks.any { it.status == "已完成" }, { refreshKey++ }, {
                     scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().clearCompleted() } }
+                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.clearCompleted() } }
                             .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "清理已完成任务失败")) }
                     }
                 }, onMore = { action ->
                     when (action) {
-                        "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().importPaths(paths) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导入 ${result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }} 项任务"); refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "导入失败")) } } }
+                        "import" -> chooseImportPaths()?.let { paths -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.importPaths(paths) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导入 ${result.events.count { it.event["kind"]?.jsonPrimitive?.content == "task_created" }} 项任务"); refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "导入失败")) } } }
                         "export" -> chooseExportPath()?.let { path -> scope.launch { runCatching { withContext(Dispatchers.IO) { exportTaskList(path, selected.toList()) } }.onSuccess { result -> notice = UiSignal.Notice("success", "已导出 ${result.taskCount} 项任务") }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "导出失败")) } } }
-                        "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "检查更新失败")) } }
-                        "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "取消电源动作失败")) } }
+                        "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "检查更新失败")) } }
+                        "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "取消电源动作失败")) } }
                         "notices" -> noticesDialog = true
                         "about" -> aboutDialog = true
                         "exit" -> onExit()
@@ -1373,7 +1373,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     else scope.launch {
                         // 同上（与 runTaskActions / launchTaskActions 一致）：靠命令响应里已经带回的
                         // 事件增量更新，不再 refreshKey++ 拉全量快照。
-                        runCatching { withContext(Dispatchers.IO) { selected.map { EnginePipeClient().taskAction(it, action) } } }
+                        runCatching { withContext(Dispatchers.IO) { selected.map { EnginePipeClient.taskAction(it, action) } } }
                             .onSuccess { results ->
                                 results.forEach { result ->
                                     result.events.forEach { envelope ->
@@ -1392,7 +1392,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     { detailTaskId = it },
                     onDeleteSelection = { if (selected.isNotEmpty()) destructiveRequest = DestructiveRequest("delete", selected) },
                     onQueueMove = { taskId, delta -> scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().reorderQueue(taskId, delta) } }
+                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.reorderQueue(taskId, delta) } }
                             .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "队列排序失败")) }
                     } },
                     modifier = Modifier.weight(1f),
@@ -1401,7 +1401,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         val next = nextTaskSort(settings.taskSort, field)
                         settingsEpoch++
                         settings = settings.copy(taskSort = next)
-                        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("task_sort", next) } } }
+                        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("task_sort", next) } } }
                     },
                 ) { taskId, action -> performTaskAction(taskId, action) }
                 }
@@ -1422,14 +1422,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         if (taskProbeTarget(draft) == ResourceProbeTarget.Torrent) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
             scope.launch {
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeTorrent(draft.url) } }
                     .onSuccess { newTaskDialog = false }
                     .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
             }
         } else {
             scope.launch {
                 probeDraft = draft
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeUrl(draft) } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeUrl(draft) } }
                     .onSuccess { newTaskDialog = false }
                     .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "资源分析失败")) }
             }
@@ -1438,7 +1438,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         if (draft.kind.equals("torrent", true)) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
             scope.launch {
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().probeTorrent(draft.url) } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeTorrent(draft.url) } }
                     .onSuccess { newTaskDialog = false }
                     .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
             }
@@ -1447,7 +1447,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 val queued = draft.copy(queueId = selectedQueueId ?: "default")
-                if (queued.curlCommand.isNotBlank()) EnginePipeClient().importCurl(queued) else EnginePipeClient().createTask(queued)
+                if (queued.curlCommand.isNotBlank()) EnginePipeClient.importCurl(queued) else EnginePipeClient.createTask(queued)
             } }
                 .onSuccess { newTaskDialog = false; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建下载失败")) }
@@ -1458,8 +1458,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    EnginePipeClient().selectTorrentFiles(draft.url, files)
-                    EnginePipeClient().createTask(draft.copy(torrentSelection = files))
+                    EnginePipeClient.selectTorrentFiles(draft.url, files)
+                    EnginePipeClient.createTask(draft.copy(torrentSelection = files))
                 }
             }.onSuccess { torrentProbe = null; torrentDraft = null; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建种子任务失败")) }
@@ -1467,7 +1467,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     } }
     if (batchDialog) BatchAddDialog({ batchDialog = false }) { urls ->
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { urls.forEach { EnginePipeClient().createTask(TaskDraft(url = it, queueId = selectedQueueId ?: "default")) } } }
+            runCatching { withContext(Dispatchers.IO) { urls.forEach { EnginePipeClient.createTask(TaskDraft(url = it, queueId = selectedQueueId ?: "default")) } } }
                 .onSuccess { refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "批量创建任务失败")) }
         }
@@ -1477,7 +1477,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         val effectiveReferer = referer.ifBlank { url }
         harvestReferer = effectiveReferer
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().harvestPage(url, effectiveReferer) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.harvestPage(url, effectiveReferer) } }
                 .onSuccess { refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "页面抓取失败")) }
         }
@@ -1498,7 +1498,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             castDiscovering = true
             deviceResult = UiSignal.Devices(emptyList())
             scope.launch {
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(mode) } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.discoverCastDevices(mode) } }
                     .onFailure { error ->
                         castDiscovering = false
                         notice = UiSignal.Notice("error", describeFailure(error, "设备扫描失败"))
@@ -1511,7 +1511,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         settingsSaveBusy = true
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
-                val client = EnginePipeClient()
+                val client = EnginePipeClient
                 var saved = client.saveSettings(updated)
                 if (defaultCookie != null) saved = client.saveDefaultCookie(defaultCookie)
                 siteRuleCredentialEdits.forEach { edit -> saved = client.saveSiteRuleCredential(edit) }
@@ -1532,7 +1532,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     if (queueManagerDialog) QueueManagerDialog(settings.queueProfiles, { queueManagerDialog = false }) { profiles ->
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
-                EnginePipeClient().saveSettings(settings.copy(queueProfiles = profiles))
+                EnginePipeClient.saveSettings(settings.copy(queueProfiles = profiles))
             } }.onSuccess { saved ->
                 settings = saved
                 if (selectedQueueId !in profiles.map { it.id }) selectedQueueId = null
@@ -1550,7 +1550,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         val taskIds = queueAssignTaskIds
         queueAssignTaskIds = emptySet()
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().assignQueue(taskIds, queueId) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.assignQueue(taskIds, queueId) } }
                 .onSuccess { refreshKey++; notice = UiSignal.Notice("success", "已移动 ${taskIds.size} 个任务") }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "移动任务失败")) }
         }
@@ -1563,7 +1563,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             return@LaunchedEffect
         }
         val fetched = runCatching {
-            withContext(Dispatchers.IO) { EnginePipeClient().getTask(id) }
+            withContext(Dispatchers.IO) { EnginePipeClient.getTask(id) }
         }.getOrNull()
         detailTaskFallback = if (fetched == null) null else {
             val scratch = mutableStateListOf<DownloadTask>()
@@ -1596,7 +1596,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             onRefreshRequest = { url, cookie ->
                 val requestId = UUID.randomUUID().toString()
                 scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().refreshTaskRequest(task.id, url, cookie) } }
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient.refreshTaskRequest(task.id, url, cookie) } }
                         .onSuccess { refreshKey++; notice = UiSignal.Notice("success", if (cookie.isBlank()) "下载地址已更新" else "下载地址和凭据已更新") }
                         .onFailure { error ->
                             UiDiagnostics.error("task_refresh_request", error, task.id, requestId)
@@ -1636,7 +1636,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         var failureReported = false
         while (!presenterReady.value && handoffQueue.any { it.handoffId == offer.handoffId && it.presentation != "fallback" }) {
             val claimed = runCatching {
-                withContext(Dispatchers.IO) { EnginePipeClient().presentHandoff(offer.handoffId, presented = false) }
+                withContext(Dispatchers.IO) { EnginePipeClient.presentHandoff(offer.handoffId, presented = false) }
             }
             if (claimed.isSuccess) {
                 val index = handoffQueue.indexOfFirst { it.handoffId == offer.handoffId }
@@ -1652,7 +1652,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 failureReported = true
             }
             val status = runCatching {
-                withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffStatuses() }
+                withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffStatuses() }
             }.getOrNull()?.firstOrNull { it.id == offer.handoffId }?.status
             if (status != null && status != "pending") {
                 handoffQueue.removeAll { it.handoffId == offer.handoffId }
@@ -1667,7 +1667,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             var statusReadFailed = false
             while (handoffQueue.any { it.handoffId == offer.handoffId }) {
                 delay(1_500)
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().loadHandoffStatuses() } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffStatuses() } }
                     .onSuccess { statuses ->
                         statusReadFailed = false
                         val status = statuses.firstOrNull { it.id == offer.handoffId }?.status
@@ -1699,7 +1699,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 scope.launch {
                     runCatching {
                         withContext(Dispatchers.IO) {
-                            val client = EnginePipeClient()
+                            val client = EnginePipeClient
                             client.acceptHandoff(offer.handoffId, decision.filename, decision.directory)
                             if (decision.rememberDirectory && decision.directory.isNotBlank()) {
                                 val dirs = buildJsonObject {
@@ -1723,7 +1723,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             onReject = { suppressSiteKind ->
                 handoffBusy = true
                 scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient().rejectHandoff(offer.handoffId, suppressSiteKind) } }
+                    runCatching { withContext(Dispatchers.IO) { EnginePipeClient.rejectHandoff(offer.handoffId, suppressSiteKind) } }
                         .onSuccess { handoffQueue.removeAll { it.handoffId == offer.handoffId } }
                         .onFailure { error ->
                             UiDiagnostics.error("handoff.reject", error, offer.handoffId)
@@ -1738,7 +1738,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     probeResult?.let { signal -> ProbeResultDialog(signal, { probeResult = null; probeDraft = null }) { variant ->
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
-                EnginePipeClient().createTask((probeDraft ?: TaskDraft(url = signal.url)).copy(
+                EnginePipeClient.createTask((probeDraft ?: TaskDraft(url = signal.url)).copy(
                     preferredBandwidth = variant?.bandwidth ?: 0,
                     preferredHeight = variant?.height ?: 0,
                     preferredAudio = variant?.name.orEmpty(),
@@ -1759,7 +1759,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             harvestProbeBusy = true
             scope.launch {
                 runCatching {
-                    withContext(Dispatchers.IO) { EnginePipeClient().probeHarvestSizes(signal.url, referer, urls) }
+                    withContext(Dispatchers.IO) { EnginePipeClient.probeHarvestSizes(signal.url, referer, urls) }
                 }.onSuccess { sizes ->
                     harvestResult = harvestResult?.let { current ->
                         current.copy(links = mergeHarvestSizes(current.links, sizes))
@@ -1773,7 +1773,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             runCatching {
                 withContext(Dispatchers.IO) {
                     request.urls.forEach { url ->
-                        EnginePipeClient().createTask(TaskDraft(
+                        EnginePipeClient.createTask(TaskDraft(
                             url = url,
                             referer = request.referer,
                             concurrency = request.concurrency,
@@ -1796,7 +1796,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         castDiscovering = true
         deviceResult = UiSignal.Devices(emptyList())
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(pendingCastMode) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.discoverCastDevices(pendingCastMode) } }
                 .onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) }
         }
     }
@@ -1816,15 +1816,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }
     }, onRescan = {
         castDiscovering = true
-        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient().discoverCastDevices(pendingCastMode) } }.onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) } }
+        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.discoverCastDevices(pendingCastMode) } }.onFailure { castDiscovering = false; notice = UiSignal.Notice("error", describeFailure(it, "设备搜索失败")) } }
     }, onPublish = {
         val taskId = pendingCastTask
         val media = pendingMediaSource
         if (taskId != null || media != null) scope.launch {
             castConnecting = true
             val outcome = runCatching { withContext(Dispatchers.IO) {
-                if (taskId != null) EnginePipeClient().castTask(taskId)
-                else EnginePipeClient().shareMedia(media!!.path, media.url, media.title, "")
+                if (taskId != null) EnginePipeClient.castTask(taskId)
+                else EnginePipeClient.shareMedia(media!!.path, media.url, media.title, "")
             } }
             val requestId = pendingPushRequestId
             if (outcome.isSuccess) {
@@ -1850,13 +1850,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         if (taskId != null || media != null) scope.launch {
             castConnecting = true
             val outcome = runCatching { withContext(Dispatchers.IO) {
-                if (taskId != null) EnginePipeClient().castToDevice(taskId, device.id)
-                else EnginePipeClient().shareMedia(media!!.path, media.url, media.title, device.id)
+                if (taskId != null) EnginePipeClient.castToDevice(taskId, device.id)
+                else EnginePipeClient.shareMedia(media!!.path, media.url, media.title, device.id)
             } }
             val requestId = pendingPushRequestId
             if (outcome.isSuccess) {
                 settings = settings.copy(preferredCastDeviceId = device.id)
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient().storeSetting("preferred_cast_device_id", device.id) } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("preferred_cast_device_id", device.id) } }
                     .onFailure { error ->
                         UiDiagnostics.warning(
                             "media_push.preferred_device",
@@ -1896,7 +1896,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }) {
         if (!updateDownloadBusy) scope.launch {
             updateDownloadBusy = true
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().downloadUpdate() } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.downloadUpdate() } }
                 .onSuccess { notice = UiSignal.Notice("success", "安装包已下载并完成身份校验") }
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "下载或校验安装包失败")) }
             updateDownloadBusy = false
@@ -1905,7 +1905,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     preparedUpdate?.let { signal -> UpdatePreparedDialog(signal, updateDownloadBusy, { if (!updateDownloadBusy) preparedUpdate = null }) {
         if (!updateDownloadBusy) scope.launch {
             updateDownloadBusy = true
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().installUpdate(ProcessHandle.current().pid()) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.installUpdate(ProcessHandle.current().pid()) } }
                 .onSuccess {
                     notice = UiSignal.Notice("info", "任务断点已保存，正在关闭工作台并完成升级")
                     delay(100)
@@ -1918,21 +1918,21 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     powerPending?.let { signal -> PowerActionDialog(signal, onCancel = {
         powerPending = null
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().cancelPowerAction() } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.cancelPowerAction() } }
                 .onSuccess { notice = UiSignal.Notice("info", "已取消完成后电源动作") }
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "取消电源动作失败")) }
         }
     }, onConfirm = {
         powerPending = null
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().confirmPowerAction() } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.confirmPowerAction() } }
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "执行电源动作失败")) }
         }
     }) }
     playerSession?.takeIf { it.active }?.let { signal -> PlayerSessionHud(signal, playerControlBusy) { action ->
         if (!playerControlBusy) scope.launch {
             playerControlBusy = true
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().playerControl(action) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.playerControl(action) } }
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "播放器控制失败")) }
             playerControlBusy = false
         }
@@ -1944,7 +1944,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }) { action, seconds ->
         if (!castControlBusy) scope.launch {
             castControlBusy = true
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().controlCast(action, seconds) } }
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.controlCast(action, seconds) } }
                 .onSuccess { if (action == "stop") castSession = null }
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "投屏控制失败")) }
             castControlBusy = false
@@ -1953,7 +1953,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     destructiveRequest?.let { request -> DestructiveConfirmDialog(request, { destructiveRequest = null }) {
         destructiveRequest = null
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { request.taskIds.map { EnginePipeClient().taskAction(it, request.action) } } }
+            runCatching { withContext(Dispatchers.IO) { request.taskIds.map { EnginePipeClient.taskAction(it, request.action) } } }
                 .onSuccess { results ->
                     selected = selected - request.taskIds
                     results.forEach { result ->
@@ -2243,7 +2243,7 @@ private fun exportTaskList(path: java.nio.file.Path, taskIds: List<String>): Tas
         "txt", "urls" -> "urls"
         else -> "json"
     }
-    val result = EnginePipeClient().exportTasks(taskIds, format)
+    val result = EnginePipeClient.exportTasks(taskIds, format)
     path.parent?.let(Files::createDirectories)
     Files.writeString(path, result.data, Charsets.UTF_8)
     return result
@@ -3673,7 +3673,7 @@ private fun HarvestDialog(
     LaunchedEffect(task.id, torrentTask) {
         if (!torrentTask) return@LaunchedEffect
         torrentLoading = true
-        runCatching { withContext(Dispatchers.IO) { EnginePipeClient().getTaskTorrentFiles(task.id) } }
+        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.getTaskTorrentFiles(task.id) } }
             .onSuccess { torrentFiles = it.files }
             .onFailure { torrentNotice = describeTaskActionFailure(it, "读取 BT 文件清单失败") }
         torrentLoading = false
@@ -3784,7 +3784,7 @@ private fun HarvestDialog(
                     DialogPrimary(if (torrentBusy) "正在保存…" else "保存文件选择", !torrentBusy && task.status != "进行中" && torrentFiles.any { it.selected }) {
                         torrentBusy = true; torrentNotice = ""
                         detailScope.launch {
-                            runCatching { withContext(Dispatchers.IO) { EnginePipeClient().setTaskTorrentFiles(task.id, torrentFiles) } }
+                            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.setTaskTorrentFiles(task.id, torrentFiles) } }
                                 .onSuccess { torrentFiles = it.files; torrentNotice = "文件选择已保存，将在开始或恢复时生效" }
                                 .onFailure { torrentNotice = describeTaskActionFailure(it, "保存文件选择失败") }
                             torrentBusy = false

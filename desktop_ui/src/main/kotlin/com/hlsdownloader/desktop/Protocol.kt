@@ -337,9 +337,8 @@ data class EngineSettingsDto(
     @SerialName("default_cookie_configured") val defaultCookieConfigured: Boolean = false,
 )
 
-class EnginePipeClient(
-    private val pipePath: String = System.getProperty("hls.engine.pipe") ?: CORE_PIPE,
-) {
+object EnginePipeClient {
+    private val pipePath: String = System.getProperty("hls.engine.pipe") ?: CORE_PIPE
     fun snapshotState(): EngineSnapshot = session { connection ->
         val response = connection.request(request("snapshot"))
         response.requireType("snapshot", "读取任务失败")
@@ -851,98 +850,96 @@ class EnginePipeClient(
 
     private fun filenameFromUrl(url: String) = url.substringBefore('?').substringBefore('#').substringAfterLast('/').ifBlank { "download" }
 
-    companion object {
-        @Volatile private var engineProcess: Process? = null
-        @Volatile private var presenterProcess: Process? = null
-        const val MAX_FRAME = 4 * 1024 * 1024
-        private const val MAX_IDLE_CONNECTIONS = 4
-        private const val MAX_IDLE_MILLIS = 60_000L
-        private val requestIds = AtomicLong(100)
-        private val pools = ConcurrentHashMap<String, ConnectionPool>()
-        private fun nextRequestId() = requestIds.incrementAndGet()
-        private fun poolFor(pipePath: String): ConnectionPool = pools.computeIfAbsent(pipePath) { ConnectionPool() }
+    @Volatile private var engineProcess: Process? = null
+    @Volatile private var presenterProcess: Process? = null
+    const val MAX_FRAME = 4 * 1024 * 1024
+    private const val MAX_IDLE_CONNECTIONS = 4
+    private const val MAX_IDLE_MILLIS = 60_000L
+    private val requestIds = AtomicLong(100)
+    private val pools = ConcurrentHashMap<String, ConnectionPool>()
+    private fun nextRequestId() = requestIds.incrementAndGet()
+    private fun poolFor(pipePath: String): ConnectionPool = pools.computeIfAbsent(pipePath) { ConnectionPool() }
 
-        fun isCurlCommand(value: String): Boolean =
-            value.trimStart().lineSequence().firstOrNull().orEmpty()
-                .trimStart().let { it.startsWith("curl ", true) || it.startsWith("curl.exe ", true) }
+    fun isCurlCommand(value: String): Boolean =
+        value.trimStart().lineSequence().firstOrNull().orEmpty()
+            .trimStart().let { it.startsWith("curl ", true) || it.startsWith("curl.exe ", true) }
 
-        fun recognizeResourceKind(url: String): String {
-            val path = url.substringBefore('?').substringBefore('#').lowercase()
-            return when {
-                url.startsWith("magnet:", true) || path.endsWith(".torrent") -> "torrent"
-                path.endsWith(".m3u8") -> "hls"
-                path.endsWith(".mpd") -> "dash"
-                url.startsWith("sftp:", true) -> "sftp"
-                url.startsWith("ftp:", true) -> "ftp"
-                else -> "file"
-            }
+    fun recognizeResourceKind(url: String): String {
+        val path = url.substringBefore('?').substringBefore('#').lowercase()
+        return when {
+            url.startsWith("magnet:", true) || path.endsWith(".torrent") -> "torrent"
+            path.endsWith(".m3u8") -> "hls"
+            path.endsWith(".mpd") -> "dash"
+            url.startsWith("sftp:", true) -> "sftp"
+            url.startsWith("ftp:", true) -> "ftp"
+            else -> "file"
         }
+    }
 
-        fun normalizeDownloadUrl(value: String): String {
-            val url = value.trim()
-            require(url.isNotEmpty()) { "下载链接不能为空" }
-            require(url.none(Char::isISOControl)) { "下载链接包含无效控制字符" }
-            val localTorrent = url.substringBefore('?').substringBefore('#').endsWith(".torrent", true)
-            require(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("ftp://", true) || url.startsWith("sftp://", true) || url.startsWith("magnet:", true) || localTorrent) { "不支持的下载链接格式" }
-            if (!url.startsWith("magnet:", true) && !localTorrent) {
-                require(runCatching { URI(url) }.getOrNull()?.host?.isNotBlank() == true) { "下载链接缺少有效主机名" }
-            }
-            return url
+    fun normalizeDownloadUrl(value: String): String {
+        val url = value.trim()
+        require(url.isNotEmpty()) { "下载链接不能为空" }
+        require(url.none(Char::isISOControl)) { "下载链接包含无效控制字符" }
+        val localTorrent = url.substringBefore('?').substringBefore('#').endsWith(".torrent", true)
+        require(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("ftp://", true) || url.startsWith("sftp://", true) || url.startsWith("magnet:", true) || localTorrent) { "不支持的下载链接格式" }
+        if (!url.startsWith("magnet:", true) && !localTorrent) {
+            require(runCatching { URI(url) }.getOrNull()?.host?.isNotBlank() == true) { "下载链接缺少有效主机名" }
         }
+        return url
+    }
 
-        fun normalizeHttpUrl(value: String): String {
-            val url = value.trim()
-            require(url.isNotEmpty()) { "网页地址不能为空" }
-            require(url.none(Char::isISOControl)) { "网页地址包含无效控制字符" }
-            require(url.startsWith("http://", true) || url.startsWith("https://", true)) { "页面抓取仅支持 HTTP 或 HTTPS 地址" }
-            require(runCatching { URI(url) }.getOrNull()?.host?.isNotBlank() == true) { "网页地址缺少有效主机名" }
-            return url
-        }
+    fun normalizeHttpUrl(value: String): String {
+        val url = value.trim()
+        require(url.isNotEmpty()) { "网页地址不能为空" }
+        require(url.none(Char::isISOControl)) { "网页地址包含无效控制字符" }
+        require(url.startsWith("http://", true) || url.startsWith("https://", true)) { "页面抓取仅支持 HTTP 或 HTTPS 地址" }
+        require(runCatching { URI(url) }.getOrNull()?.host?.isNotBlank() == true) { "网页地址缺少有效主机名" }
+        return url
+    }
 
-        fun normalizeHandoffFilename(value: String): String {
-            val filename = value.trim()
-            require(filename.isNotEmpty()) { "文件名不能为空" }
-            require(filename.length <= 240) { "文件名过长" }
-            require(filename.none(Char::isISOControl)) { "文件名包含无效控制字符" }
-            require('/' !in filename && '\\' !in filename && filename != "." && filename != "..") { "文件名不能包含路径" }
-            return filename
-        }
+    fun normalizeHandoffFilename(value: String): String {
+        val filename = value.trim()
+        require(filename.isNotEmpty()) { "文件名不能为空" }
+        require(filename.length <= 240) { "文件名过长" }
+        require(filename.none(Char::isISOControl)) { "文件名包含无效控制字符" }
+        require('/' !in filename && '\\' !in filename && filename != "." && filename != "..") { "文件名不能包含路径" }
+        return filename
+    }
 
-        @Synchronized
-        fun ensureStarted(): Boolean {
-            if (engineProcess?.isAlive == true) return true
-            val working = File(System.getProperty("user.dir"))
-            val configured = System.getenv("HLS_ENGINE_PATH")?.takeIf(String::isNotBlank)?.let(::File)
-            val packaged = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let { File(it, "HLSDownloaderEngine.exe") }
-            val candidate = listOfNotNull(
-                configured, packaged, File(working, "HLSDownloaderEngine.exe"), File(working, "app/resources/HLSDownloaderEngine.exe"),
-                working.parentFile?.let { File(it, "HLSDownloaderEngine.exe") }, working.parentFile?.let { File(it, "app/resources/HLSDownloaderEngine.exe") },
-            ).firstOrNull(File::isFile) ?: return false
-            engineProcess = ProcessBuilder(candidate.absolutePath)
-                .directory(candidate.parentFile)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
-            return true
-        }
+    @Synchronized
+    fun ensureStarted(): Boolean {
+        if (engineProcess?.isAlive == true) return true
+        val working = File(System.getProperty("user.dir"))
+        val configured = System.getenv("HLS_ENGINE_PATH")?.takeIf(String::isNotBlank)?.let(::File)
+        val packaged = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let { File(it, "HLSDownloaderEngine.exe") }
+        val candidate = listOfNotNull(
+            configured, packaged, File(working, "HLSDownloaderEngine.exe"), File(working, "app/resources/HLSDownloaderEngine.exe"),
+            working.parentFile?.let { File(it, "HLSDownloaderEngine.exe") }, working.parentFile?.let { File(it, "app/resources/HLSDownloaderEngine.exe") },
+        ).firstOrNull(File::isFile) ?: return false
+        engineProcess = ProcessBuilder(candidate.absolutePath)
+            .directory(candidate.parentFile)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        return true
+    }
 
-        @Synchronized
-        fun ensurePresenterStarted(): Boolean {
-            if (presenterProcess?.isAlive == true) return true
-            val working = File(System.getProperty("user.dir"))
-            val configured = System.getenv("HLS_PRESENTER_PATH")?.takeIf(String::isNotBlank)?.let(::File)
-            val packaged = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let { File(it, "HLSDownloaderPresenter.exe") }
-            val candidate = listOfNotNull(
-                configured, packaged, File(working, "HLSDownloaderPresenter.exe"), File(working, "app/resources/HLSDownloaderPresenter.exe"),
-                working.parentFile?.let { File(it, "HLSDownloaderPresenter.exe") }, working.parentFile?.let { File(it, "app/resources/HLSDownloaderPresenter.exe") },
-            ).firstOrNull(File::isFile) ?: return false
-            presenterProcess = ProcessBuilder(candidate.absolutePath)
-                .directory(candidate.parentFile)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
-            return true
-        }
+    @Synchronized
+    fun ensurePresenterStarted(): Boolean {
+        if (presenterProcess?.isAlive == true) return true
+        val working = File(System.getProperty("user.dir"))
+        val configured = System.getenv("HLS_PRESENTER_PATH")?.takeIf(String::isNotBlank)?.let(::File)
+        val packaged = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let { File(it, "HLSDownloaderPresenter.exe") }
+        val candidate = listOfNotNull(
+            configured, packaged, File(working, "HLSDownloaderPresenter.exe"), File(working, "app/resources/HLSDownloaderPresenter.exe"),
+            working.parentFile?.let { File(it, "HLSDownloaderPresenter.exe") }, working.parentFile?.let { File(it, "app/resources/HLSDownloaderPresenter.exe") },
+        ).firstOrNull(File::isFile) ?: return false
+        presenterProcess = ProcessBuilder(candidate.absolutePath)
+            .directory(candidate.parentFile)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        return true
     }
 }
 
