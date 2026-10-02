@@ -119,8 +119,8 @@ function Set-MsiExecutableAction(
     $escapedCondition = $Condition.Replace("'", "''")
     Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$Action'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$Action'"
-    # Type 1042 runs the installed engine from the deferred execution script.
-    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',1042,'$SourceFile','$escapedArguments')"
+    # Type 18 runs the installed engine synchronously as the installing user.
+    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',18,'$SourceFile','$escapedArguments')"
     Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$Action','$escapedCondition',$Sequence)"
 }
 
@@ -284,10 +284,10 @@ try {
     }
     if (
         [int]$verifiedRegisterSequence -ne $registerSequence -or
-        [int]$verifiedRegisterType -ne 1042 -or
+        [int]$verifiedRegisterType -ne 18 -or
         $verifiedRegisterTarget -ne '--register-native-host' -or
         [int]$verifiedUnregisterSequence -ne $unregisterSequence -or
-        [int]$verifiedUnregisterType -ne 1042 -or
+        [int]$verifiedUnregisterType -ne 18 -or
         $verifiedUnregisterTarget -ne '--unregister-native-host'
     ) {
         throw 'MSI Native Host registration action verification failed.'
