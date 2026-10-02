@@ -137,35 +137,6 @@ function Set-MsiRegistryDefaultValue(
     Invoke-MsiNonQuery "INSERT INTO ``Registry`` (``Registry``,``Root``,``Key``,``Name``,``Value``,``Component_``) VALUES ('$Id',1,'$escapedKey',NULL,'$escapedValue','$Component')"
 }
 
-function Find-MsiRegistryRows([int]$Limit) {
-    $localView = $database.GetType().InvokeMember(
-        'OpenView', 'InvokeMethod', $null, $database, @('SELECT `Registry`,`Key`,`Component_` FROM `Registry`')
-    )
-    $rows = @()
-    try {
-        $localView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $localView, $null) | Out-Null
-        while ($true) {
-            $record = $localView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $localView, $null)
-            if ($null -eq $record) { break }
-            try {
-                $id = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
-                $key = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 2)
-                $component = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 3)
-                if ($key -like 'Software\HLS Downloader\HLSDownloader\*' -and $component -like 'cfile*') {
-                    $rows += ,@($id, $component)
-                    if ($rows.Count -ge $Limit) { break }
-                }
-            } finally {
-                [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null
-            }
-        }
-    } finally {
-        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($localView) | Out-Null
-    }
-    return $rows
-}
-
-
 try {
     $installer = New-Object -ComObject WindowsInstaller.Installer
     # 1 is the transacted database mode. Commit happens only after all gates pass.
@@ -189,6 +160,11 @@ try {
     $engineComponent = Invoke-MsiStringQuery "SELECT ``Component_`` FROM ``File`` WHERE ``File``='$engineFile'"
     if ([String]::IsNullOrWhiteSpace($engineComponent)) {
         throw 'MSI does not expose the HLSDownloaderEngine.exe component for Native Host registry ownership.'
+    }
+    $engineDirectory = Invoke-MsiStringQuery "SELECT ``Directory_`` FROM ``Component`` WHERE ``Component``='$engineComponent'"
+    $engineFeature = Invoke-MsiStringQuery "SELECT ``Feature_`` FROM ``FeatureComponents`` WHERE ``Component_``='$engineComponent'"
+    if ([String]::IsNullOrWhiteSpace($engineDirectory) -or [String]::IsNullOrWhiteSpace($engineFeature)) {
+        throw 'MSI does not expose the Engine directory and feature for Native Host registry components.'
     }
     Invoke-MsiNonQuery "UPDATE ``Property`` SET ``Value``='$ProductCode' WHERE ``Property``='ProductCode'"
     if ($null -eq $upgradableAttributes) {
@@ -251,20 +227,24 @@ try {
         Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$legacyAction'"
     }
     Set-MsiExecutableAction 'V7PrepareNativeHostManifests' $engineFile '--prepare-native-host-manifests' 'NOT REMOVE~="ALL"' $prepareSequence
-    $nativeHostRows = Find-MsiRegistryRows 7
-    if ($nativeHostRows.Count -lt 7) {
-        throw "MSI does not contain seven reusable per-user registry rows for Native Host registration: found $($nativeHostRows.Count)."
-    }
+    # 注册表 KeyPath 有独立组件身份，不能复用 jpackage 文件组件的 ProductCode 标记。
     $nativeHostRegistry = @(
-        @($nativeHostRows[0][0], 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', $nativeHostRows[0][1]),
-        @($nativeHostRows[1][0], 'Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', $nativeHostRows[1][1]),
-        @($nativeHostRows[2][0], 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', $nativeHostRows[2][1]),
-        @($nativeHostRows[3][0], 'Software\Chromium\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', $nativeHostRows[3][1]),
-        @($nativeHostRows[4][0], 'Software\Vivaldi\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', $nativeHostRows[4][1]),
-        @($nativeHostRows[5][0], 'Software\Opera Software\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', $nativeHostRows[5][1]),
-        @($nativeHostRows[6][0], 'Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.firefox.json', $nativeHostRows[6][1])
+        @('V7NativeHostChromeRegistry', 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostChromeComponent', '{6BF61D0C-7529-43F4-A2B7-BBB3E3C80CEF}'),
+        @('V7NativeHostEdgeRegistry', 'Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostEdgeComponent', '{AED8CD3B-B3B3-4C1C-9D58-89D060BAFE74}'),
+        @('V7NativeHostBraveRegistry', 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostBraveComponent', '{029F523B-B739-42C7-9C10-7DDE1EE9271E}'),
+        @('V7NativeHostChromiumRegistry', 'Software\Chromium\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostChromiumComponent', '{E76B4E01-E843-4F7A-AEA7-B4C772E9A51E}'),
+        @('V7NativeHostVivaldiRegistry', 'Software\Vivaldi\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostVivaldiComponent', '{8295FF3A-BA30-48CD-803D-5E1D8B62BE20}'),
+        @('V7NativeHostOperaRegistry', 'Software\Opera Software\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostOperaComponent', '{4F53DE7E-5F3B-4FA4-9237-87B4D47DDC4B}'),
+        @('V7NativeHostFirefoxRegistry', 'Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.firefox.json', 'V7NativeHostFirefoxComponent', '{DF9D4E93-8729-4D1B-B79D-981434488DA9}')
     )
     foreach ($entry in $nativeHostRegistry) {
+        $id = $entry[0]
+        $component = $entry[3]
+        $componentGuid = $entry[4]
+        Invoke-MsiNonQuery "DELETE FROM ``FeatureComponents`` WHERE ``Component_``='$component'"
+        Invoke-MsiNonQuery "DELETE FROM ``Component`` WHERE ``Component``='$component'"
+        Invoke-MsiNonQuery "INSERT INTO ``Component`` (``Component``,``ComponentId``,``Directory_``,``Attributes``,``KeyPath``) VALUES ('$component','$componentGuid','$engineDirectory',260,'$id')"
+        Invoke-MsiNonQuery "INSERT INTO ``FeatureComponents`` (``Feature_``,``Component_``) VALUES ('$engineFeature','$component')"
         Set-MsiRegistryDefaultValue $entry[0] $entry[1] $entry[2] $entry[3]
     }
 
@@ -331,6 +311,14 @@ try {
             $verifiedComponent -ne $entry[3]
         ) {
             throw "MSI Native Host registry verification failed for $id."
+        }
+        $component = $entry[3]
+        $verifiedComponentGuid = Invoke-MsiStringQuery "SELECT ``ComponentId`` FROM ``Component`` WHERE ``Component``='$component'"
+        $verifiedAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Component`` WHERE ``Component``='$component'"
+        $verifiedKeyPath = Invoke-MsiStringQuery "SELECT ``KeyPath`` FROM ``Component`` WHERE ``Component``='$component'"
+        $verifiedFeature = Invoke-MsiStringQuery "SELECT ``Feature_`` FROM ``FeatureComponents`` WHERE ``Component_``='$component'"
+        if ($verifiedComponentGuid -ne $entry[4] -or [int]$verifiedAttributes -ne 260 -or $verifiedKeyPath -ne $id -or $verifiedFeature -ne $engineFeature) {
+            throw "MSI Native Host component verification failed for $component."
         }
     }
 } finally {
