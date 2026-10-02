@@ -115,7 +115,7 @@ fn main() -> ExitCode {
         return ExitCode::from(hls_native_shell::run_player_process() as u8);
     }
     if args.iter().any(|arg| arg == "--register-native-host") {
-        return native_host_registration(false);
+        return native_host_registration(false, native_host_user_sid(&args));
     }
     if args
         .iter()
@@ -124,7 +124,7 @@ fn main() -> ExitCode {
         return native_host_manifest_preparation();
     }
     if args.iter().any(|arg| arg == "--unregister-native-host") {
-        return native_host_registration(true);
+        return native_host_registration(true, native_host_user_sid(&args));
     }
     if args.iter().any(|arg| arg == "--shutdown") {
         return match shutdown_core() {
@@ -219,7 +219,13 @@ fn native_host_manifest_preparation() -> ExitCode {
     }
 }
 
-fn native_host_registration(unregister: bool) -> ExitCode {
+fn native_host_user_sid(args: &[String]) -> Option<&str> {
+    args.iter()
+        .find_map(|arg| arg.strip_prefix("--user-sid="))
+        .filter(|sid| sid.starts_with("S-1-") && sid.len() < 184)
+}
+
+fn native_host_registration(unregister: bool, user_sid: Option<&str>) -> ExitCode {
     let engine = match std::env::current_exe() {
         Ok(path) => path,
         Err(error) => {
@@ -228,9 +234,9 @@ fn native_host_registration(unregister: bool) -> ExitCode {
         }
     };
     let result = if unregister {
-        hls_native_shell::unregister_packaged_native_host(&engine)
+        hls_native_shell::unregister_packaged_native_host_for_sid(&engine, user_sid)
     } else {
-        hls_native_shell::register_packaged_native_host(&engine)
+        hls_native_shell::register_packaged_native_host_for_sid(&engine, user_sid)
     };
     match result {
         Ok(count) => {

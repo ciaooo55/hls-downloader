@@ -113,14 +113,15 @@ function Set-MsiExecutableAction(
     [string]$SourceFile,
     [string]$Arguments,
     [string]$Condition,
-    [int]$Sequence
+    [int]$Sequence,
+    [int]$Type = 1042
 ) {
     $escapedArguments = $Arguments.Replace("'", "''")
     $escapedCondition = $Condition.Replace("'", "''")
     Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$Action'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$Action'"
-    # Type 18 runs the installed engine synchronously as the installing user.
-    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',18,'$SourceFile','$escapedArguments')"
+    # Type 1042 runs the installed engine from the deferred execution script.
+    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$Action',$Type,'$SourceFile','$escapedArguments')"
     Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$Action','$escapedCondition',$Sequence)"
 }
 
@@ -132,8 +133,35 @@ function Set-MsiRegistryDefaultValue(
 ) {
     $escapedKey = $Key.Replace("'", "''")
     $escapedValue = $Value.Replace("'", "''")
-    Invoke-MsiNonQuery "DELETE FROM ``Registry`` WHERE ``Registry``='$Id'"
-    Invoke-MsiNonQuery "INSERT INTO ``Registry`` (``Registry``,``Root``,``Key``,``Name``,``Value``,``Component_``) VALUES ('$Id',1,'$escapedKey',NULL,'$escapedValue','$Component')"
+    Invoke-MsiNonQuery "UPDATE ``Registry`` SET ``Root``=1,``Key``='$escapedKey',``Name``=NULL,``Value``='$escapedValue',``Component_``='$Component' WHERE ``Registry``='$Id'"
+}
+
+function Find-MsiRegistryRows([int]$Limit) {
+    $localView = $database.GetType().InvokeMember(
+        'OpenView', 'InvokeMethod', $null, $database, @('SELECT `Registry`,`Key`,`Component_` FROM `Registry`')
+    )
+    $rows = @()
+    try {
+        $localView.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $localView, $null) | Out-Null
+        while ($true) {
+            $record = $localView.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $localView, $null)
+            if ($null -eq $record) { break }
+            try {
+                $id = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+                $key = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 2)
+                $component = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 3)
+                if ($key -like 'Software\HLS Downloader\HLSDownloader\*' -and $component -like 'cfile*') {
+                    $rows += ,@($id, $component)
+                    if ($rows.Count -ge $Limit) { break }
+                }
+            } finally {
+                [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null
+            }
+        }
+    } finally {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($localView) | Out-Null
+    }
+    return $rows
 }
 
 try {
@@ -212,7 +240,7 @@ try {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
     }
 
-    $registerSequence = [int]$installFiles + 10
+    $registerSequence = [int]$finalize - 10
     $unregisterSequence = [int]$removeFiles - 10
     if ($registerSequence -ge [int]$finalize -or $unregisterSequence -le [int]$initialize) {
         throw 'MSI does not provide legal Native Host registration action slots.'
@@ -221,19 +249,31 @@ try {
         Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$legacyAction'"
         Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$legacyAction'"
     }
-    Set-MsiExecutableAction 'V7RegisterNativeHost' $engineFile '--register-native-host' 'NOT REMOVE~="ALL"' $registerSequence
-    Set-MsiExecutableAction 'V7UnregisterNativeHost' $engineFile '--unregister-native-host' 'REMOVE~="ALL"' $unregisterSequence
+    Set-MsiExecutableAction 'V7RegisterNativeHost' $engineFile '--register-native-host --user-sid=[UserSID]' 'NOT REMOVE~="ALL"' $registerSequence
+    Set-MsiExecutableAction 'V7UnregisterNativeHost' $engineFile '--unregister-native-host --user-sid=[UserSID]' 'REMOVE~="ALL"' $unregisterSequence
+    foreach ($legacyId in @('V7NativeHostChrome','V7NativeHostEdge','V7NativeHostBrave','V7NativeHostChromium','V7NativeHostVivaldi','V7NativeHostOpera','V7NativeHostFirefox')) {
+        $legacyComponent = Invoke-MsiStringQuery "SELECT ``Component_`` FROM ``Registry`` WHERE ``Registry``='$legacyId'"
+        Invoke-MsiNonQuery "DELETE FROM ``Registry`` WHERE ``Registry``='$legacyId'"
+        if (-not [String]::IsNullOrWhiteSpace($legacyComponent)) {
+            Invoke-MsiNonQuery "DELETE FROM ``FeatureComponents`` WHERE ``Component_``='$legacyComponent'"
+            Invoke-MsiNonQuery "DELETE FROM ``Component`` WHERE ``Component``='$legacyComponent'"
+        }
+    }
+    $nativeHostRows = Find-MsiRegistryRows 7
+    if ($nativeHostRows.Count -lt 7) {
+        throw "MSI does not contain seven reusable per-user registry rows for Native Host registration: found $($nativeHostRows.Count)."
+    }
     $nativeHostRegistry = @(
-        @('V7NativeHostChrome', 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
-        @('V7NativeHostEdge', 'Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
-        @('V7NativeHostBrave', 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
-        @('V7NativeHostChromium', 'Software\Chromium\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
-        @('V7NativeHostVivaldi', 'Software\Vivaldi\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
-        @('V7NativeHostOpera', 'Software\Opera Software\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
-        @('V7NativeHostFirefox', 'Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.firefox.json')
+        @($nativeHostRows[0][0], $nativeHostRows[0][1], 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @($nativeHostRows[1][0], $nativeHostRows[1][1], 'Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @($nativeHostRows[2][0], $nativeHostRows[2][1], 'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @($nativeHostRows[3][0], $nativeHostRows[3][1], 'Software\Chromium\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @($nativeHostRows[4][0], $nativeHostRows[4][1], 'Software\Vivaldi\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @($nativeHostRows[5][0], $nativeHostRows[5][1], 'Software\Opera Software\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json'),
+        @($nativeHostRows[6][0], $nativeHostRows[6][1], 'Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.firefox.json')
     )
     foreach ($entry in $nativeHostRegistry) {
-        Set-MsiRegistryDefaultValue $entry[0] $entry[1] $entry[2] $engineComponent
+        Set-MsiRegistryDefaultValue $entry[0] $entry[2] $entry[3] $entry[1]
     }
 
     $database.GetType().InvokeMember(
@@ -284,11 +324,11 @@ try {
     }
     if (
         [int]$verifiedRegisterSequence -ne $registerSequence -or
-        [int]$verifiedRegisterType -ne 18 -or
-        $verifiedRegisterTarget -ne '--register-native-host' -or
+        [int]$verifiedRegisterType -ne 1042 -or
+        $verifiedRegisterTarget -ne '--register-native-host --user-sid=[UserSID]' -or
         [int]$verifiedUnregisterSequence -ne $unregisterSequence -or
-        [int]$verifiedUnregisterType -ne 18 -or
-        $verifiedUnregisterTarget -ne '--unregister-native-host'
+        [int]$verifiedUnregisterType -ne 1042 -or
+        $verifiedUnregisterTarget -ne '--unregister-native-host --user-sid=[UserSID]'
     ) {
         throw 'MSI Native Host registration action verification failed.'
     }
@@ -300,9 +340,9 @@ try {
         $verifiedComponent = Invoke-MsiStringQuery "SELECT ``Component_`` FROM ``Registry`` WHERE ``Registry``='$id'"
         if (
             [int]$verifiedRoot -ne 1 -or
-            $verifiedKey -ne $entry[1] -or
-            $verifiedValue -ne $entry[2] -or
-            $verifiedComponent -ne $engineComponent
+            $verifiedKey -ne $entry[2] -or
+            $verifiedValue -ne $entry[3] -or
+            $verifiedComponent -ne $entry[1]
         ) {
             throw "MSI Native Host registry verification failed for $id."
         }

@@ -156,7 +156,8 @@ pub use native_host::run as run_native_host;
 #[cfg(feature = "full-core")]
 pub use native_host_registration::{
     prepare_packaged_native_host_manifests, register_packaged_native_host,
-    unregister_packaged_native_host,
+    register_packaged_native_host_for_sid, unregister_packaged_native_host,
+    unregister_packaged_native_host_for_sid,
 };
 #[cfg(feature = "full-core")]
 pub use ole_drag::{begin_file_drag, completed_file_drag, hdrop_bytes};

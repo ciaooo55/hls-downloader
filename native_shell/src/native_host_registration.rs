@@ -208,19 +208,20 @@ fn registration_entries(paths: &ManifestPaths) -> Vec<RegistrationEntry> {
 #[cfg(windows)]
 use crate::win_reg::{registry_error, wide};
 #[cfg(windows)]
-fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
+fn set_default_value_for_sid(key: &str, value: &Path, user_sid: Option<&str>) -> Result<(), String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, HKEY_USERS, KEY_SET_VALUE,
         KEY_WOW64_64KEY, REG_OPTION_NON_VOLATILE, REG_SZ,
     };
 
-    let key_wide = wide(key);
+    let full_key = user_sid.map_or_else(|| key.to_string(), |sid| format!(r"{sid}\{key}"));
+    let key_wide = wide(&full_key);
     let value_wide = wide(&value.to_string_lossy());
     let mut handle = null_mut();
     let create = unsafe {
         RegCreateKeyExW(
-            HKEY_CURRENT_USER,
+            user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
             key_wide.as_ptr(),
             0,
             null(),
@@ -232,7 +233,7 @@ fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
         )
     };
     if create != 0 {
-        return Err(registry_error(&format!("create HKCU\\{key}"), create));
+        return Err(registry_error(&format!("create Native Host registry {full_key}"), create));
     }
     let bytes = unsafe {
         std::slice::from_raw_parts(
@@ -254,24 +255,25 @@ fn set_default_value(key: &str, value: &Path) -> Result<(), String> {
         RegCloseKey(handle);
     }
     if set != 0 {
-        return Err(registry_error(&format!("set HKCU\\{key}"), set));
+        return Err(registry_error(&format!("set Native Host registry {full_key}"), set));
     }
     Ok(())
 }
 
 #[cfg(windows)]
-fn default_value(key: &str) -> Result<Option<PathBuf>, String> {
+fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<PathBuf>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows_sys::Win32::System::Registry::{
-        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY,
+        RegGetValueW, HKEY_CURRENT_USER, HKEY_USERS, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY,
     };
 
-    let key_wide = wide(key);
+    let full_key = user_sid.map_or_else(|| key.to_string(), |sid| format!(r"{sid}\{key}"));
+    let key_wide = wide(&full_key);
     let mut bytes = 0u32;
     let size_result = unsafe {
         RegGetValueW(
-            HKEY_CURRENT_USER,
+            user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
             key_wide.as_ptr(),
             null(),
             RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
@@ -284,12 +286,12 @@ fn default_value(key: &str) -> Result<Option<PathBuf>, String> {
         return Ok(None);
     }
     if size_result != 0 {
-        return Err(registry_error(&format!("read HKCU\\{key}"), size_result));
+        return Err(registry_error(&format!("read Native Host registry {full_key}"), size_result));
     }
     let mut buffer = vec![0u16; (bytes as usize).div_ceil(std::mem::size_of::<u16>())];
     let read_result = unsafe {
         RegGetValueW(
-            HKEY_CURRENT_USER,
+            user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
             key_wide.as_ptr(),
             null(),
             RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
@@ -299,7 +301,7 @@ fn default_value(key: &str) -> Result<Option<PathBuf>, String> {
         )
     };
     if read_result != 0 {
-        return Err(registry_error(&format!("read HKCU\\{key}"), read_result));
+        return Err(registry_error(&format!("read Native Host registry {full_key}"), read_result));
     }
     while buffer.last() == Some(&0) {
         buffer.pop();
@@ -345,21 +347,23 @@ fn delete_owned_key(
     key: &str,
     host: &Path,
     allowlist_field: &str,
+    user_sid: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegDeleteTreeW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_ALL_ACCESS,
+        RegCloseKey, RegDeleteTreeW, RegOpenKeyExW, HKEY_CURRENT_USER, HKEY_USERS, KEY_ALL_ACCESS,
         KEY_WOW64_64KEY,
     };
 
-    let Some(current) = default_value(key)? else {
+    let Some(current) = default_value_for_sid(key, user_sid)? else {
         return Ok(None);
     };
     if !manifest_is_owned(&current, host, allowlist_field) {
         return Ok(None);
     }
-    let key_wide = wide(key);
+    let full_key = user_sid.map_or_else(|| key.to_string(), |sid| format!(r"{sid}\{key}"));
+    let key_wide = wide(&full_key);
     // 注册是钉在 64 位视图里写的（set_default_value），删除也必须落在同一个
     // 视图：RegDeleteTreeW 用的是句柄自己的视图，32 位引擎进程的默认视图是
     // Wow6432Node，直接拿 HKEY_CURRENT_USER 删会留下一条指向我们的注册，
@@ -367,7 +371,7 @@ fn delete_owned_key(
     let mut view = null_mut();
     let open = unsafe {
         RegOpenKeyExW(
-            HKEY_CURRENT_USER,
+            user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
             null(),
             0,
             KEY_WOW64_64KEY | KEY_ALL_ACCESS,
@@ -375,14 +379,14 @@ fn delete_owned_key(
         )
     };
     if open != 0 {
-        return Err(registry_error("open HKCU 64-bit view", open));
+        return Err(registry_error("open Native Host registry 64-bit view", open));
     }
     let result = unsafe { RegDeleteTreeW(view, key_wide.as_ptr()) };
     unsafe {
         RegCloseKey(view);
     }
     if result != 0 && result != ERROR_FILE_NOT_FOUND {
-        return Err(registry_error(&format!("delete HKCU\\{key}"), result));
+        return Err(registry_error(&format!("delete Native Host registry {full_key}"), result));
     }
     Ok(Some(current))
 }
@@ -410,12 +414,19 @@ fn cleanup_owned_manifests(
 }
 
 pub fn register_packaged_native_host(engine: &Path) -> Result<usize, String> {
+    register_packaged_native_host_for_sid(engine, None)
+}
+
+pub fn register_packaged_native_host_for_sid(
+    engine: &Path,
+    user_sid: Option<&str>,
+) -> Result<usize, String> {
     let (_, manifests) = prepare_manifests(engine)?;
     let entries = registration_entries(&manifests);
     #[cfg(windows)]
     {
         for entry in &entries {
-            set_default_value(&entry.key, &entry.manifest)?;
+            set_default_value_for_sid(&entry.key, &entry.manifest, user_sid)?;
         }
         Ok(entries.len())
     }
@@ -432,6 +443,13 @@ pub fn prepare_packaged_native_host_manifests(engine: &Path) -> Result<usize, St
 }
 
 pub fn unregister_packaged_native_host(engine: &Path) -> Result<usize, String> {
+    unregister_packaged_native_host_for_sid(engine, None)
+}
+
+pub fn unregister_packaged_native_host_for_sid(
+    engine: &Path,
+    user_sid: Option<&str>,
+) -> Result<usize, String> {
     let host = expected_host(engine, false)?;
     let preferred = manifest_paths(
         engine
@@ -452,7 +470,7 @@ pub fn unregister_packaged_native_host(engine: &Path) -> Result<usize, String> {
     let removed_keys = {
         let mut removed = 0;
         for entry in &entries {
-            if let Some(current) = delete_owned_key(&entry.key, &host, entry.allowlist_field)? {
+            if let Some(current) = delete_owned_key(&entry.key, &host, entry.allowlist_field, user_sid)? {
                 candidates.push((current, entry.allowlist_field));
                 removed += 1;
             }
