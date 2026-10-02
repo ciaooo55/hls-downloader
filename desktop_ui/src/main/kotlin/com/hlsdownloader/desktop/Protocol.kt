@@ -44,13 +44,6 @@ object Product {
 }
 
 @Serializable
-data class CoreHello(
-    val type: String = "hello",
-    val protocol: String = CORE_PROTOCOL,
-    val version: Int = 1,
-)
-
-@Serializable
 data class TaskDto(
     @SerialName("task_id") val id: String,
     val filename: String,

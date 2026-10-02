@@ -50,7 +50,7 @@ These are release infrastructure and governance prerequisites. A missing prerequ
 
 The exact-SHA model means the releaseable unit is the **final frozen main SHA**, not "the product code before some later docs commits". Any commit that moves `main` creates a new prospective release SHA and requires fresh exact-SHA prerequisite conclusions. Concurrency cancellation of an older SHA after a newer push is therefore expected and safe.
 
-Operational consequence: once the project is preparing a formal release, coordination-only changes should be accumulated on branches and merged deliberately. After the final reviewed merge, explicitly dispatch candidate packaging from `main` and stop moving `main` until that run and the three required push workflows finish for the same SHA and the formal release dispatch either completes or is abandoned.
+Operational consequence: complete and review changes on the sole local `main` before freezing the release SHA. Push only with explicit operator authorization, then explicitly dispatch candidate packaging from `main` and stop moving `main` until that run and the three required push workflows finish for the same SHA and the formal release dispatch either completes or is abandoned. Do not create additional branches or worktrees.
 
 ## Draft and publication boundary
 

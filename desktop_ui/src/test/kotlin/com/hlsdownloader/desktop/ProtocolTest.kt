@@ -58,11 +58,6 @@ class ProtocolTest {
             EnginePipeClient.normalizeDownloadUrl("javascript:alert(1)")
         }
     }
-    @Test fun helloKeepsCoreCompatibility() {
-        val encoded = protocolJson.encodeToString(CoreHello())
-        assertTrue(encoded.contains("hls-downloader-v7-core"))
-        assertEquals(1, protocolJson.decodeFromString<CoreHello>(encoded).version)
-    }
     @Test fun productCopyDoesNotExposeInternalNames() {
         assertEquals("7.0.2", Product.version)
         assertEquals("下载引擎 · 已连接", Product.engineConnected)

@@ -36,8 +36,6 @@ const dynamicContextMenus = browser.contextMenus as typeof browser.contextMenus 
 }
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
 const clickIntentStore = new ClickIntentStore(browser.storage.session, CLICK_INTENT_STORAGE_KEY)
-let browserFallbacks: Array<{ url: string, at: number }> = []
-const MAX_BROWSER_FALLBACKS = 128
 // Images, stylesheets, scripts and fonts can dominate busy pages but cannot
 // become a replayable browser download or adaptive media request. Keeping
 // them out of the request-chain store avoids copying headers twice for every
@@ -1131,17 +1129,6 @@ async function waitForClickIntent(
   return undefined
 }
 
-function consumeBrowserFallback(url: string): boolean {
-  const now = Date.now()
-  browserFallbacks = browserFallbacks
-    .filter(item => now - item.at <= 7000)
-    .slice(0, MAX_BROWSER_FALLBACKS)
-  const index = browserFallbacks.findIndex(item => item.url === url)
-  if (index < 0) return false
-  browserFallbacks.splice(index, 1)
-  return true
-}
-
 async function installContextMenus(attempt = 0): Promise<void> {
   try {
     await browser.contextMenus.removeAll()
@@ -1156,21 +1143,6 @@ async function installContextMenus(attempt = 0): Promise<void> {
     // once after the registry is released instead of silently losing all items.
     console.warn('HLS Downloader context menu install delayed', error)
     if (attempt < 3) setTimeout(() => { void installContextMenus(attempt + 1) }, 250 * (attempt + 1))
-  }
-}
-
-async function startBrowserFallback(url: string, filename = ''): Promise<number> {
-  revealBrowserDownload()
-  const now = Date.now()
-  browserFallbacks = browserFallbacks
-    .filter(item => now - item.at <= 7000)
-    .slice(0, MAX_BROWSER_FALLBACKS - 1)
-  browserFallbacks.unshift({ url, at: now })
-  try {
-    return await browser.downloads.download({ url, ...(filename ? { filename } : {}) })
-  } catch (error) {
-    consumeBrowserFallback(url)
-    throw error
   }
 }
 
@@ -1447,10 +1419,6 @@ export default defineBackground(() => {
     const originalRequest = downloadRequestItem(item, blobSource)
     const creatingExtension = String((item as any).byExtensionId || '')
     if (creatingExtension && creatingExtension !== browser.runtime.id) return
-    if (consumeBrowserFallback(originalRequest.url)) {
-      revealBrowserDownload()
-      return
-    }
     console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
     // Once a handoff may own the transfer, finally must leave the durable
@@ -1761,33 +1729,6 @@ export default defineBackground(() => {
         && resource.evidence.includes('text_selection')
       void downloadNow(resource, undefined, { allowUnverified: explicitSelection })
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
-      return true
-    }
-    if (message?.type === 'download' || message?.type === 'offer') {
-      const resource = {
-        ...message.resource,
-        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url || '',
-        tabId: message.resource.tabId ?? sender.tab?.id,
-        frameId: message.resource.frameId ?? sender.frameId,
-      }
-      const fromPage = /^https?:\/\//i.test(String(sender.url || ''))
-      const request = fromPage || message.type === 'offer' ? offer(resource) : downloadNow(resource)
-      void request
-        .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
-      return true
-    }
-    if (message?.type === 'handoff-status') {
-      void handoffStatus(String(message.handoffId || message.handoff_id || ''))
-        .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
-      return true
-    }
-    if (message?.type === 'browser-download') {
-      const url = String(message.url || '')
-      void startBrowserFallback(url, String(message.filename || ''))
-        .then(downloadId => sendResponse({ ok: true, downloadId }))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true
     }

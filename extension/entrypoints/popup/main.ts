@@ -59,7 +59,6 @@ function icon(name: string, label = '') {
   if (label) node.setAttribute('aria-label', label)
   return node
 }
-const LEGACY_PENDING_HANDOFF_STORAGE_KEY = 'popup-pending-handoffs-v1'
 
 function resourceKindLabel(item: MediaResource) {
   if (item.kind === 'hls') return 'HLS'
@@ -636,10 +635,6 @@ async function main() {
       if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
     }
   }
-  // Explicit popup downloads no longer create a second desktop confirmation.
-  // Remove pending UI state left by 3.x/early 7.0 builds so reopening the
-  // popup cannot resurrect a stale “等待确认” button for two minutes.
-  void browser.storage.session.remove(LEGACY_PENDING_HANDOFF_STORAGE_KEY).catch(() => undefined)
   refreshButtons()
   renderList()
   document.documentElement.dataset.popupReady = 'ready'

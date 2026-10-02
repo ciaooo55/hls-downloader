@@ -229,7 +229,6 @@ internal fun Surface(
     color: Color = Color.Transparent,
     contentColor: Color = Color.Unspecified,
     shadowElevation: Dp = 0.dp,
-    tonalElevation: Dp = 0.dp,
     border: BorderStroke? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -821,7 +820,6 @@ internal fun DropdownMenu(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(Radius.md),
     containerColor: Color = dialogSurface,
-    tonalElevation: Dp = 0.dp,
     shadowElevation: Dp = 7.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {

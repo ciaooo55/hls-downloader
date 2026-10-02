@@ -896,6 +896,7 @@ mod tests {
     use super::*;
     use crate::PersistentCore;
 
+    #[cfg(windows)]
     #[test]
     fn settings_import_is_atomic_when_default_cookie_decode_fails() {
         let dir = std::env::temp_dir().join(format!(

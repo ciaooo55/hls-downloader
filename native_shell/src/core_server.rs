@@ -848,6 +848,7 @@ mod tests {
         server.shutdown();
     }
 
+    #[cfg(windows)]
     #[test]
     fn default_cookie_is_write_only_over_the_ui_protocol() {
         let server = CoreServer::in_memory().unwrap();

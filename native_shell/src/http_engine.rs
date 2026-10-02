@@ -17,12 +17,6 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const EXIT_OK: i32 = 0;
-pub const EXIT_ERROR: i32 = 1;
-pub const EXIT_PAUSE: i32 = 20;
-pub const EXIT_CANCEL: i32 = 21;
-pub const EXIT_RANGE_UNSUPPORTED: i32 = 30;
-
 const WRITE_BATCH: usize = 256 * 1024;
 const DURABLE_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
@@ -178,17 +172,6 @@ pub struct HttpRunReport {
     pub mirrors: Vec<HttpMirrorReport>,
 }
 
-impl EngineError {
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            Self::Pause => EXIT_PAUSE,
-            Self::Cancel => EXIT_CANCEL,
-            Self::RangeUnsupported(_) => EXIT_RANGE_UNSUPPORTED,
-            Self::Failed(_) => EXIT_ERROR,
-        }
-    }
-}
-
 impl std::fmt::Display for EngineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -198,11 +181,6 @@ impl std::fmt::Display for EngineError {
             Self::Failed(message) => write!(formatter, "{message}"),
         }
     }
-}
-
-pub fn load_job(path: &Path) -> Result<Job, EngineError> {
-    let text = fs::read_to_string(path).map_err(|err| EngineError::Failed(err.to_string()))?;
-    serde_json::from_str(&text).map_err(|err| EngineError::Failed(err.to_string()))
 }
 
 pub fn read_control(path: &Path) -> Control {
@@ -215,53 +193,16 @@ pub fn read_control(path: &Path) -> Control {
 }
 
 pub fn write_progress(path: &Path, downloaded: u64, total: u64, speed: f64, status: &str) {
-    write_progress_status(path, downloaded, total, speed, status, None, None);
-}
-
-pub fn write_progress_status(
-    path: &Path,
-    downloaded: u64,
-    total: u64,
-    speed: f64,
-    status: &str,
-    code: Option<i32>,
-    error: Option<&str>,
-) {
-    let mut payload = serde_json::json!({
+    let payload = serde_json::json!({
         "downloaded": downloaded,
         "total": total,
         "speed": speed,
         "status": status,
     });
-    if let Some(code) = code {
-        payload["code"] = serde_json::json!(code);
-    }
-    if let Some(error) = error {
-        payload["error"] = serde_json::json!(error);
-    }
     let tmp = path.with_extension("json.tmp");
     if fs::write(&tmp, payload.to_string()).is_ok() {
         let _ = fs::rename(tmp, path);
     }
-}
-
-fn last_progress_bytes(path: &Path) -> (u64, u64) {
-    let Ok(text) = fs::read_to_string(path) else {
-        return (0, 0);
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (0, 0);
-    };
-    (
-        value
-            .get("downloaded")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
-        value
-            .get("total")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
-    )
 }
 
 fn completed_ranges_path(job: &Job) -> PathBuf {
@@ -494,58 +435,6 @@ fn record_completed_range(
     list.push((start, end));
     *list = normalize_ranges(std::mem::take(&mut *list));
     save_completed_ranges(job, &list)
-}
-
-fn report_terminal(job: &Job, error: &EngineError) {
-    let (downloaded, total) = last_progress_bytes(&job.progress);
-    let status = match error {
-        EngineError::Pause => "paused",
-        EngineError::Cancel => "canceled",
-        EngineError::RangeUnsupported(_) => "error",
-        EngineError::Failed(_) => "error",
-    };
-    write_progress_status(
-        &job.progress,
-        downloaded,
-        total,
-        0.0,
-        status,
-        Some(error.exit_code()),
-        Some(&error.to_string()),
-    );
-}
-
-/// Run a job and always leave a terminal progress JSON (pause/cancel/error too).
-/// `--job` and the resident supervisor share this so Python can wait without a child process.
-pub fn finish_job(job: &Job) -> Result<(), EngineError> {
-    match run_job(job) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            report_terminal(job, &error);
-            Err(error)
-        }
-    }
-}
-
-pub fn run_queued_job(job_path: &Path, progress_path: Option<&Path>) {
-    match load_job(job_path) {
-        Ok(job) => {
-            let _ = finish_job(&job);
-        }
-        Err(error) => {
-            let fallback = job_path.with_file_name("native-engine.progress.json");
-            let progress = progress_path.unwrap_or(fallback.as_path());
-            write_progress_status(
-                progress,
-                0,
-                0,
-                0.0,
-                "error",
-                Some(error.exit_code()),
-                Some(&error.to_string()),
-            );
-        }
-    }
 }
 
 const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
@@ -3532,7 +3421,7 @@ mod tests {
         let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
         fs::write(&job.control, "pause").unwrap();
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_PAUSE);
+        assert!(matches!(&err, EngineError::Pause));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -3543,22 +3432,7 @@ mod tests {
         let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
         fs::write(&job.control, "cancel").unwrap();
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_CANCEL);
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn finish_job_writes_terminal_progress_code() {
-        let body: &'static [u8] = b"0123456789";
-        let url = serve_body(body);
-        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
-        fs::write(&job.control, "cancel").unwrap();
-        let err = finish_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_CANCEL);
-        let payload: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&job.progress).unwrap()).unwrap();
-        assert_eq!(payload["status"], "canceled");
-        assert_eq!(payload["code"], EXIT_CANCEL);
+        assert!(matches!(&err, EngineError::Cancel));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -3824,7 +3698,7 @@ mod tests {
         let url = serve_206_without_range(body);
         let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        assert!(matches!(&err, EngineError::RangeUnsupported(_)));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -3834,7 +3708,7 @@ mod tests {
         let url = serve_206_wrong_range(body);
         let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        assert!(matches!(&err, EngineError::RangeUnsupported(_)));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -3844,7 +3718,7 @@ mod tests {
         let url = serve_206_wrong_total(body);
         let (job, dir) = temp_job(&url, false, body.len() as u64, 3);
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        assert!(matches!(&err, EngineError::RangeUnsupported(_)));
         assert!(err.to_string().contains("Content-Range total"));
         let _ = fs::remove_dir_all(dir);
     }
@@ -3883,7 +3757,7 @@ mod tests {
         let url = serve_chunked(body);
         let (job, dir) = temp_job(&url, true, 0, 1);
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_ERROR);
+        assert!(matches!(&err, EngineError::Failed(_)));
         assert!(err.to_string().contains("chunked"));
         assert!(!job.output.exists());
         let _ = fs::remove_dir_all(dir);
@@ -4315,7 +4189,7 @@ mod tests {
         let url = serve_empty_ranges(body.len(), Arc::clone(&attempts));
         let (job, dir) = temp_job(&url, false, body.len() as u64, 1);
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_ERROR);
+        assert!(matches!(&err, EngineError::Failed(_)));
         assert!(err.to_string().contains("made no progress"));
         assert_eq!(attempts.load(Ordering::SeqCst), MAX_RANGE_ATTEMPTS as usize);
         let _ = fs::remove_dir_all(dir);
@@ -4605,7 +4479,7 @@ mod tests {
         )
         .unwrap();
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        assert!(matches!(&err, EngineError::RangeUnsupported(_)));
         let output = fs::read(&job.output).unwrap();
         // download_ranges 会先 set_len(total) 预分配，所以文件长度就是 total；
         // 关键是已保留前缀未被 200 整包覆盖，其余部分仍是零填充。
@@ -4635,7 +4509,7 @@ mod tests {
         )
         .unwrap();
         let err = run_job(&job).unwrap_err();
-        assert_eq!(err.exit_code(), EXIT_RANGE_UNSUPPORTED);
+        assert!(matches!(&err, EngineError::RangeUnsupported(_)));
         let output = fs::read(&job.output).unwrap();
         assert_eq!(&output[..prefix.len()], prefix);
         assert_ne!(

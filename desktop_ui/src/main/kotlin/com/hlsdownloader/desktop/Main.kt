@@ -2944,7 +2944,7 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
                             var dragY by remember { mutableFloatStateOf(0f) }
                             Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(28.dp).padding(5.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } })
                         } else if (!columns.compact) Spacer(Modifier.width(28.dp))
-                        Box(Modifier.width(42.dp)) { IconButton(onClick = { if (!isSelected) select(false, false); overflowOpen = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, tonalElevation = 0.dp, shadowElevation = Elevation.e2) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
+                        Box(Modifier.width(42.dp)) { IconButton(onClick = { if (!isSelected) select(false, false); overflowOpen = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
                     }
                 }
             }

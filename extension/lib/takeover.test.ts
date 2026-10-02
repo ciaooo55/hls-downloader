@@ -17,7 +17,6 @@ import {
   canResumeBrowserDownload,
   desktopTaskReadiness,
   desktopAcceptedHandoff,
-  handoffStatusLabel,
   handoffTerminalStatus,
 } from './takeover'
 
@@ -101,18 +100,13 @@ describe('browser download takeover helpers', () => {
     })).toBe(true)
   })
 
-  it('maps terminal handoff statuses for popup recovery', () => {
+  it('distinguishes terminal handoff statuses from reconnectable observations', () => {
     expect(handoffTerminalStatus('pending')).toBe(false)
     expect(handoffTerminalStatus('accepting')).toBe(false)
     expect(handoffTerminalStatus('accepted')).toBe(true)
-    expect(handoffStatusLabel('accepted')).toBe('已加入')
-    expect(handoffStatusLabel('canceled')).toBe('已取消')
-    expect(handoffStatusLabel('expired')).toBe('已过期')
-    expect(handoffStatusLabel('failed')).toBe('失败')
     // connection_lost is a local transient observation; the desktop may
     // reconnect and report the real accepted/rejected state afterwards.
     expect(handoffTerminalStatus('connection_lost')).toBe(false)
-    expect(handoffStatusLabel('connection_lost')).toBe('连接中断')
   })
 
   it('keeps Chromium fallback until the desktop transfer proves progress', () => {

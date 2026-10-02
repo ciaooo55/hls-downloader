@@ -1,7 +1,6 @@
 package com.hlsdownloader.desktop
 
 import java.io.File
-import java.awt.event.KeyEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -101,17 +100,6 @@ class UiTestApiTest {
         assertTrue(source.contains("belongsToWindow(active, window)"))
         assertTrue(source.contains("current = current.owner"))
         assertFalse(source.contains("private fun focusWindow() {\n        onEventThread {\n            window.toFront()"))
-    }
-
-    @Test
-    fun url_characters_have_deterministic_robot_key_strokes() {
-        assertEquals(RobotKey(KeyEvent.VK_H), robotKeyForChar('h'))
-        assertEquals(RobotKey(KeyEvent.VK_H, true), robotKeyForChar('H'))
-        assertEquals(RobotKey(KeyEvent.VK_SEMICOLON, true), robotKeyForChar(':'))
-        assertEquals(RobotKey(KeyEvent.VK_SLASH), robotKeyForChar('/'))
-        assertEquals(RobotKey(KeyEvent.VK_SLASH, true), robotKeyForChar('?'))
-        assertEquals(RobotKey(KeyEvent.VK_7, true), robotKeyForChar('&'))
-        assertNull(robotKeyForChar('中'))
     }
 
     @Test

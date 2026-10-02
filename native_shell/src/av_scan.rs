@@ -392,11 +392,14 @@ mod tests {
                 path.to_string_lossy().into_owned()
             ]
         );
-        assert!(validate_custom_command(r"C:\Windows\explorer.exe {file}").is_err());
         assert!(validate_custom_command("%COMSPEC% /c calc {file}").is_err());
-        let rejected = scan_file(&path, r"C:\Windows\explorer.exe {file}");
-        assert_eq!(rejected.state, "error");
-        assert!(rejected.detail.contains("拒绝执行"));
+        #[cfg(windows)]
+        {
+            assert!(validate_custom_command(r"C:\Windows\explorer.exe {file}").is_err());
+            let rejected = scan_file(&path, r"C:\Windows\explorer.exe {file}");
+            assert_eq!(rejected.state, "error");
+            assert!(rejected.detail.contains("拒绝执行"));
+        }
         let _ = std::fs::remove_file(path);
     }
 

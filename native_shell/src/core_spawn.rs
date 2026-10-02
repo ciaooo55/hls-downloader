@@ -42,7 +42,6 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| "HLSDownloaderEngine.exe is not next to the desktop UI".to_string())?;
     let mut command = Command::new(&executable);
     command.current_dir(root);
-    command.env("HLS_STARTED_BY_V7_PRESENTER", "1");
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::null());
     command.stderr(std::process::Stdio::null());

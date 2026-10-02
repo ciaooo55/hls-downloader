@@ -85,25 +85,3 @@ export function desktopAcceptedHandoff(response: unknown): boolean {
 export function handoffTerminalStatus(status?: string): boolean {
   return ['accepted', 'canceled', 'rejected', 'expired', 'failed'].includes(status || '')
 }
-
-export function handoffStatusLabel(status?: string): string {
-  switch (status) {
-    case 'accepted':
-      return '已加入'
-    case 'canceled':
-    case 'rejected':
-      return '已取消'
-    case 'expired':
-      return '已过期'
-    case 'failed':
-      return '失败'
-    case 'accepting':
-      return '确认中'
-    case 'pending':
-      return '等待确认'
-    case 'connection_lost':
-      return '连接中断'
-    default:
-      return status || '待确认'
-  }
-}

@@ -1183,6 +1183,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn real_msi_identity_is_verified_when_fixture_is_configured() {
         let Some(path) = std::env::var_os("HLS_TEST_UPDATE_MSI").map(PathBuf::from) else {

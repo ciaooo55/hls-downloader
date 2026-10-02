@@ -31,8 +31,6 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -392,12 +390,10 @@ internal fun Modifier.reportControlBounds(name: String): Modifier {
     DisposableEffect(name) {
         onDispose { runCatching { UiTestState.clearControlBounds(name) } }
     }
-    val bounds = remember { mutableStateOf<IntArray?>(null) }
     return this.then(
         Modifier.onGloballyPositioned { coordinates ->
             val origin = coordinates.positionInWindow()
             val size = coordinates.size
-            bounds.value = intArrayOf(origin.x.toInt(), origin.y.toInt(), (origin.x + size.width).toInt(), (origin.y + size.height).toInt())
             runCatching {
                 UiTestState.reportControlBounds(
                     name,
@@ -857,52 +853,6 @@ internal class UiTestApi private constructor(
             println("UI_TEST_API=http://127.0.0.1:${api.port}")
             return api
         }
-    }
-}
-
-internal data class RobotKey(val code: Int, val shift: Boolean = false)
-
-internal fun robotKeyForChar(char: Char): RobotKey? = when {
-    char in 'a'..'z' -> RobotKey(KeyEvent.getExtendedKeyCodeForChar(char.code))
-    char in 'A'..'Z' -> RobotKey(KeyEvent.getExtendedKeyCodeForChar(char.code), true)
-    char in '0'..'9' -> RobotKey(KeyEvent.getExtendedKeyCodeForChar(char.code))
-    else -> when (char) {
-        ' ' -> RobotKey(KeyEvent.VK_SPACE)
-        '\n' -> RobotKey(KeyEvent.VK_ENTER)
-        '\t' -> RobotKey(KeyEvent.VK_TAB)
-        '.' -> RobotKey(KeyEvent.VK_PERIOD)
-        ',' -> RobotKey(KeyEvent.VK_COMMA)
-        '/' -> RobotKey(KeyEvent.VK_SLASH)
-        '\\' -> RobotKey(KeyEvent.VK_BACK_SLASH)
-        '-' -> RobotKey(KeyEvent.VK_MINUS)
-        '_' -> RobotKey(KeyEvent.VK_MINUS, true)
-        '=' -> RobotKey(KeyEvent.VK_EQUALS)
-        '+' -> RobotKey(KeyEvent.VK_EQUALS, true)
-        ':' -> RobotKey(KeyEvent.VK_SEMICOLON, true)
-        ';' -> RobotKey(KeyEvent.VK_SEMICOLON)
-        '?' -> RobotKey(KeyEvent.VK_SLASH, true)
-        '&' -> RobotKey(KeyEvent.VK_7, true)
-        '%' -> RobotKey(KeyEvent.VK_5, true)
-        '#' -> RobotKey(KeyEvent.VK_3, true)
-        '@' -> RobotKey(KeyEvent.VK_2, true)
-        '!' -> RobotKey(KeyEvent.VK_1, true)
-        '$' -> RobotKey(KeyEvent.VK_4, true)
-        '^' -> RobotKey(KeyEvent.VK_6, true)
-        '*' -> RobotKey(KeyEvent.VK_8, true)
-        '(' -> RobotKey(KeyEvent.VK_9, true)
-        ')' -> RobotKey(KeyEvent.VK_0, true)
-        '[' -> RobotKey(KeyEvent.VK_OPEN_BRACKET)
-        ']' -> RobotKey(KeyEvent.VK_CLOSE_BRACKET)
-        '{' -> RobotKey(KeyEvent.VK_OPEN_BRACKET, true)
-        '}' -> RobotKey(KeyEvent.VK_CLOSE_BRACKET, true)
-        '\'' -> RobotKey(KeyEvent.VK_QUOTE)
-        '"' -> RobotKey(KeyEvent.VK_QUOTE, true)
-        '<' -> RobotKey(KeyEvent.VK_COMMA, true)
-        '>' -> RobotKey(KeyEvent.VK_PERIOD, true)
-        '|' -> RobotKey(KeyEvent.VK_BACK_SLASH, true)
-        '`' -> RobotKey(KeyEvent.VK_BACK_QUOTE)
-        '~' -> RobotKey(KeyEvent.VK_BACK_QUOTE, true)
-        else -> null
     }
 }
 

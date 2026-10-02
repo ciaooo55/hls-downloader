@@ -21,11 +21,6 @@ describe('explicit extension download flow', () => {
     expect(background).toContain('}, 30_000)')
   })
 
-  it('keeps automatic browser takeover on the confirmation route', () => {
-    expect(background).toContain("message?.type === 'download' || message?.type === 'offer'")
-    expect(background).toContain('const request = fromPage || message.type === \'offer\' ? offer(resource) : downloadNow(resource)')
-  })
-
   it('bounds popup and in-page waits instead of leaving controls stuck', () => {
     expect(content).toContain("10_000, '下载器响应超时，请重试'")
     expect(popup).toContain("10_000,")

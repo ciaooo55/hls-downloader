@@ -8,7 +8,7 @@ This document records the project-specific policy derived from HLS-C004. It is n
 
 Examples: SSH/SFTP libraries, database/runtime libraries, cryptography or transport components.
 
-A security-bearing update should be handled promptly. If the update changes a public API, do not merge a raw bot PR simply because it contains a security fix. Create a narrow project-owned compatibility PR that carries the fixed dependency and demonstrates that the affected trust/behavior contract still holds.
+A security-bearing update should be handled promptly. If the update changes a public API, review and adapt it on local `main` while preserving the affected trust/behavior contract. Do not create a dependency-update branch or PR; remote synchronization requires explicit operator authorization.
 
 Repository precedent: Dependabot PR #20 proposed `russh` 0.63.2, which included security fixes and a breaking host-key callback API. The project closed the raw update and merged PR #36, which adapted the SFTP TOFU handler to `PublicKeyOrCertificate` while continuing to fingerprint the underlying public key.
 
@@ -66,11 +66,11 @@ An empty Dependabot queue is a valid healthy state. Do not create speculative ma
 
 1. verify that prior security-bearing updates actually reached current manifests;
 2. record intentionally deferred majors and their reopen triggers;
-3. keep Dependabot scheduled for supported ecosystems;
+3. keep the security audit workflows active while Dependabot version-update PRs remain paused;
 4. let a future advisory, required feature, or new bot PR reopen the affected dependency decision.
 
 ## Automation boundary
 
-The current Dependabot configuration groups routine minor/patch changes for Cargo, Gradle and extension tooling while still surfacing ecosystem updates weekly. Major updates require the compatibility review described above. GitHub Actions updates may be grouped, but the repository must retain exact-SHA action pins after acceptance.
+The current Dependabot configuration sets `open-pull-requests-limit: 0` for supported ecosystems. Review dependency updates on local `main`; retain the security audit workflows. Major updates require the compatibility review described above, and GitHub Actions must retain exact-SHA action pins after acceptance.
 
 This policy deliberately separates dependency hygiene from release pressure: dependency work may improve the release, but version freshness alone is never evidence that the release is safer.

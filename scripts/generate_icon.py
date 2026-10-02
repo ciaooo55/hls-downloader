@@ -5,7 +5,6 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSET_DIR = ROOT / "assets"
-FRONTEND_PUBLIC = ROOT / "frontend" / "public"
 EXTENSION_PUBLIC = ROOT / "extension" / "public"
 CANVAS_SIZE = 1024
 EXTENSION_ICON_SIZES = (16, 32, 48, 128)
@@ -46,13 +45,11 @@ def build_icon() -> Image.Image:
 
 def main() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    FRONTEND_PUBLIC.mkdir(parents=True, exist_ok=True)
     EXTENSION_PUBLIC.mkdir(parents=True, exist_ok=True)
 
     source = build_icon()
     png = source.resize((512, 512), Image.Resampling.LANCZOS)
     png.save(ASSET_DIR / "app-icon.png", optimize=True)
-    png.save(FRONTEND_PUBLIC / "app-icon.png", optimize=True)
     png.save(EXTENSION_PUBLIC / "icon.png", optimize=True)
     for size in EXTENSION_ICON_SIZES:
         sized = source.resize((size, size), Image.Resampling.LANCZOS)

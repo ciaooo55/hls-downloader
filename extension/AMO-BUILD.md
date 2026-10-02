@@ -25,7 +25,7 @@ pnpm exec web-ext lint --source-dir .output/firefox-mv3
 The unpacked extension is written to `.output/firefox-mv3`. To create the upload
 ZIP, run `pnpm run zip:firefox`. WXT places the archive in `.output`.
 
-The project uses WXT 0.20.27, TypeScript 5.8.3 and pnpm's public npm registry.
+Dependencies are installed from pnpm's public npm registry.
 The popup and in-page controls use browser DOM APIs rather than a remote UI
 runtime. Exact direct and transitive dependency versions are recorded in
 `pnpm-lock.yaml`.
