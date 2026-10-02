@@ -52,7 +52,7 @@ if (-not [String]::IsNullOrWhiteSpace($FirefoxSources)) {
     [void](Copy-ReleaseAsset $source "HLSDownloader-Extension-$version-Firefox-Sources.zip")
 }
 
-foreach ($name in @('FEATURE-PARITY.json', 'ARTIFACT-MANIFEST.json', 'AUTHENTICODE-SIGNATURES.json')) {
+foreach ($name in @('FEATURE-PARITY.json', 'ARTIFACT-MANIFEST.json')) {
     $source = if ($name -eq 'FEATURE-PARITY.json') { Join-Path $packageRoot $name } elseif ($name -eq 'ARTIFACT-MANIFEST.json') { $manifestFullPath } else { Join-Path $packageRoot $name }
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Required release metadata is missing: $source" }
     [void](Copy-ReleaseAsset $source $name)
@@ -76,7 +76,7 @@ HLS Downloader $version
 Source commit: $currentCommit
 Source tree: $currentTree
 
-This release was built from one frozen source commit. Browser, performance, installer-upgrade and rollback gates are recorded in RELEASE-EVIDENCE.json and the evidence ZIP. Windows release binaries are Authenticode signed and timestamped; AUTHENTICODE-SIGNATURES.json records the signer used by the release runner. Verify every downloaded file against SHA256SUMS.txt before redistribution.
+This release was built from one frozen source commit. Browser, performance, browser media-push, installer-upgrade and rollback gates are recorded in RELEASE-EVIDENCE.json and the evidence ZIP. Windows release binaries are unsigned, as requested by the operator. Install updates manually; the automatic updater requires a trusted signature. Verify every downloaded file against SHA256SUMS.txt before redistribution.
 "@
 [IO.File]::WriteAllText($notesPath, $notes.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
 

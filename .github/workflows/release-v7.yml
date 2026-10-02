@@ -29,33 +29,31 @@ permissions:
 
 jobs:
   release:
-    name: Verify, sign and stage v7 release
+    name: Verify and stage unsigned v7 release
     runs-on: [self-hosted, Windows, X64, hls-release]
     timeout-minutes: 180
     environment: v7-release
+    defaults:
+      run:
+        working-directory: 'A:\Ubuntu\测试\hls-downloader'
     env:
-      HLS_V7_SIGN_CERT_THUMBPRINT: ${{ secrets.HLS_V7_SIGN_CERT_THUMBPRINT }}
-      HLS_V7_SIGN_CERT_STORE: ${{ vars.HLS_V7_SIGN_CERT_STORE }}
-      HLS_V7_TIMESTAMP_URL: ${{ vars.HLS_V7_TIMESTAMP_URL }}
       HLS_V7_TVBOX_EXPECTED_HOST: ${{ vars.HLS_V7_TVBOX_EXPECTED_HOST }}
       HLS_V7_EDGE_BINARY: ${{ inputs.edge_binary }}
       HLS_V7_FIREFOX_BINARY: ${{ inputs.firefox_binary }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check out frozen source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
       - name: Refuse non-main or stale release source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') { throw 'Formal release requires workflow_dispatch.' }
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Formal release must be dispatched from main, got $env:GITHUB_REF" }
+          if ((git branch --show-current).Trim() -ne 'main') { throw 'Local release source must be on main.' }
+          if (git status --porcelain) { throw 'Local release source must be clean.' }
           $head = (git rev-parse HEAD).Trim()
           $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
-          if ($head -ne $remoteMain) { throw "Release source is not current main: HEAD=$head main=$remoteMain" }
+          if ($head -ne $env:GITHUB_SHA -or $head -ne $remoteMain) { throw "Release source identity mismatch: HEAD=$head dispatch=$env:GITHUB_SHA main=$remoteMain" }
           $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
           $version = [string]$feature.product_version
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid product version: $version" }
@@ -92,9 +90,6 @@ jobs:
             }
           }
           "HLS_V7_RELEASE_MODE=$releaseMode" >> $env:GITHUB_ENV
-          if ([String]::IsNullOrWhiteSpace($env:HLS_V7_SIGN_CERT_THUMBPRINT)) { throw 'HLS_V7_SIGN_CERT_THUMBPRINT secret is required for a formal release.' }
-          if (-not $env:HLS_V7_SIGN_CERT_STORE) { "HLS_V7_SIGN_CERT_STORE=CurrentUser" >> $env:GITHUB_ENV }
-          if (-not $env:HLS_V7_TIMESTAMP_URL) { "HLS_V7_TIMESTAMP_URL=http://timestamp.digicert.com" >> $env:GITHUB_ENV }
           "HLS_V7_VERSION=$version" >> $env:GITHUB_ENV
           "HLS_V7_TAG=$tag" >> $env:GITHUB_ENV
           $cacheRoot = Join-Path $env:RUNNER_TEMP "hls-v7-release-$head"
@@ -183,7 +178,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $head = (git rev-parse HEAD).Trim()
           $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
-          if ($head -ne $remoteMain) { throw "main moved while release gates were running: HEAD=$head main=$remoteMain" }
+          if ($head -ne $env:GITHUB_SHA -or $head -ne $remoteMain) { throw "Source changed while release gates were running: HEAD=$head dispatch=$env:GITHUB_SHA main=$remoteMain" }
 
       - name: Build formal package from the same evidence
         shell: pwsh
@@ -192,15 +187,6 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
           & .\scripts\build-v7.ps1 -Task package
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Authenticode sign and verify formal Windows artifacts
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & .\scripts\finalize-v7-signed-package.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & .\scripts\verify-v7-authenticode.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Firefox store source bundle
@@ -228,7 +214,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: HLSDownloader-${{ env.HLS_V7_VERSION }}-formal-${{ github.sha }}
-          path: artifacts/v7-productization/release-staging/**
+          path: 'A:/Ubuntu/测试/hls-downloader/artifacts/v7-productization/release-staging/**'
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
@@ -240,12 +226,16 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $head = (git rev-parse HEAD).Trim()
           $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
-          if ($head -ne $remoteMain) { throw 'main moved before tag creation; refusing stale release.' }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ($head -ne $env:GITHUB_SHA -or $head -ne $remoteMain) { throw 'Source changed before tag creation; refusing stale release.' }
           if ($env:HLS_V7_RELEASE_MODE -eq 'fresh') {
-            git tag -a $env:HLS_V7_TAG -m "HLS Downloader $env:HLS_V7_VERSION" $head
-            git push origin $env:HLS_V7_TAG
+            git -c 'user.name=github-actions[bot]' -c 'user.email=41898282+github-actions[bot]@users.noreply.github.com' tag -a $env:HLS_V7_TAG -m "HLS Downloader $env:HLS_V7_VERSION" $head
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $env:HLS_V7_GIT_AUTH_HEADER = 'AUTHORIZATION: basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("x-access-token:$env:GH_TOKEN"))
+            try {
+              git --config-env=http.https://github.com/.extraheader=HLS_V7_GIT_AUTH_HEADER push origin $env:HLS_V7_TAG
+            } finally {
+              Remove-Item Env:\HLS_V7_GIT_AUTH_HEADER
+            }
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } elseif ($env:HLS_V7_RELEASE_MODE -notin @('tag-only', 'draft')) {
             throw "Unknown release resume mode: $env:HLS_V7_RELEASE_MODE"

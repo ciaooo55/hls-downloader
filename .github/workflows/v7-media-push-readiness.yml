@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       edge_binary:
-        description: Optional absolute Edge path on the hls-release runner
+        description: Optional absolute Edge path on the hls-readiness runner
         required: false
         type: string
         default: ''
       firefox_binary:
-        description: Optional absolute Firefox path on the hls-release runner
+        description: Optional absolute Firefox path on the hls-readiness runner
         required: false
         type: string
         default: ''
@@ -25,28 +25,29 @@ permissions:
 jobs:
   validate:
     name: Validate installed-browser media push before release readiness
-    runs-on: [self-hosted, Windows, X64, hls-release]
+    runs-on: [self-hosted, Windows, X64, hls-readiness]
     timeout-minutes: 120
     environment: v7-release
+    defaults:
+      run:
+        working-directory: 'A:\Ubuntu\测试\hls-downloader'
     env:
       HLS_V7_TVBOX_EXPECTED_HOST: ${{ vars.HLS_V7_TVBOX_EXPECTED_HOST }}
       HLS_V7_EDGE_BINARY: ${{ inputs.edge_binary }}
       HLS_V7_FIREFOX_BINARY: ${{ inputs.firefox_binary }}
     steps:
-      - name: Check out prospective main source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
       - name: Refuse non-main or stale readiness source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') { throw 'Readiness validation requires workflow_dispatch.' }
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Readiness validation must be dispatched from main, got $env:GITHUB_REF" }
+          if ((git branch --show-current).Trim() -ne 'main') { throw 'Local readiness source must be on main.' }
+          if (git status --porcelain) { throw 'Local readiness source must be clean.' }
           $head = (git rev-parse HEAD).Trim()
           $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
-          if ($head -ne $remoteMain) { throw "Readiness source is not current main: HEAD=$head main=$remoteMain" }
+          if ($head -ne $env:GITHUB_SHA -or $head -ne $remoteMain) { throw "Readiness source identity mismatch: HEAD=$head dispatch=$env:GITHUB_SHA main=$remoteMain" }
           if ([String]::IsNullOrWhiteSpace($env:HLS_V7_TVBOX_EXPECTED_HOST)) {
             throw 'v7-release environment must configure HLS_V7_TVBOX_EXPECTED_HOST; real LAN validation never skips.'
           }
@@ -157,7 +158,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $head = (git rev-parse HEAD).Trim()
           $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
-          if ($head -ne $remoteMain) { throw "main moved during readiness validation: HEAD=$head main=$remoteMain" }
+          if ($head -ne $env:GITHUB_SHA -or $head -ne $remoteMain) { throw "Source changed during readiness validation: HEAD=$head dispatch=$env:GITHUB_SHA main=$remoteMain" }
 
       - name: Write readiness attestation
         shell: pwsh
@@ -237,8 +238,8 @@ jobs:
         with:
           name: HLSDownloader-v7-media-push-readiness-${{ github.sha }}
           path: |
-            artifacts/v7-productization/candidate/ARTIFACT-MANIFEST.json
-            artifacts/v7-productization/release-evidence/browser-media-push/*.json
+            A:/Ubuntu/测试/hls-downloader/artifacts/v7-productization/candidate/ARTIFACT-MANIFEST.json
+            A:/Ubuntu/测试/hls-downloader/artifacts/v7-productization/release-evidence/browser-media-push/*.json
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

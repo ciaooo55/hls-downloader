@@ -2,6 +2,8 @@
 
 This document is the durable architecture-level output of HLS-C003. It distinguishes repository-enforced release contracts from prerequisites that deliberately live outside the repository.
 
+The operator's 2026-10-02 instruction supersedes the earlier code-signing prerequisite: current formal Windows packages are unsigned, with no code-signed variant. Certificates, signing tools and timestamp services are not required for this release. Unsigned packages require manual installation; runtime automatic-update signature and signer-trust checks remain enforced.
+
 ## Source-enforced release chain
 
 The formal v7 release path is one frozen-source pipeline:
@@ -9,12 +11,12 @@ The formal v7 release path is one frozen-source pipeline:
 1. Dispatch only from current `main`.
 2. Resolve the canonical product version from `artifacts/v7-productization/feature-parity.json`.
 3. Require successful exact-SHA conclusions for the canonical workflow paths: `workflow_dispatch` for `v7 Candidate Package`, and `push` for `v7 CI`, `Maintenance Security`, and `Rust Security`. Both readiness and formal release use the same assertion script.
-4. Run on the dedicated Windows x64 `hls-release` runner and verify the fixed `E:\h` lifecycle environment.
+4. Run on an on-demand ephemeral self-hosted Windows x64 `hls-release` runner and verify the fixed `E:\h` lifecycle environment. Readiness uses `hls-readiness`. Both workflows use only the clean local `main` in `A:\Ubuntu\测试\hls-downloader`, perform no checkout, and require local HEAD, dispatch SHA and remote `main` to match.
 5. Build a candidate from that same source SHA.
 6. Produce browser, performance, browser media-push (real TVBox device selection), MSI upgrade, and forced-rollback evidence from that candidate manifest.
 7. Reconfirm that remote `main` has not moved.
 8. Build the formal package from the same evidence.
-9. Authenticode-sign and timestamp the public Windows artifacts, then verify trust.
+9. Retain unsigned public Windows artifacts according to the operator's 2026-10-02 instruction and identify manual installation in the release notes.
 10. Stage the source bundle, SBOM/evidence, release assets and checksums.
 11. Create or resume only an annotated tag/draft release proven to belong to the same frozen commit.
 12. Verify uploaded asset byte sizes and SHA-256 digests before publication.
@@ -34,13 +36,11 @@ Release evidence generation does not violate the clean-worktree gate. Repository
 
 The following inputs must **not** be manufactured or relaxed by repository code merely to make a release pass:
 
-- self-hosted Windows x64 runner with the `hls-release` label;
+- on-demand ephemeral self-hosted Windows x64 runner with `hls-release` for publication or `hls-readiness` for readiness evidence;
+- sole clean source directory `A:\Ubuntu\测试\hls-downloader` prepared at the dispatched `main` SHA, without workflow checkout;
 - physical/logical `E:` volume supporting the fixed `E:\h` lifecycle test;
 - Edge and Firefox installations for real browser evidence;
-- Windows SDK `signtool.exe` or an explicitly supplied signing tool;
-- trusted code-signing certificate and private key in the selected Windows certificate store;
-- signing thumbprint/environment configuration without storing private key material in Git;
-- network connectivity to pinned tool downloads, GitHub and the timestamp endpoint;
+- network connectivity to pinned tool downloads and GitHub;
 - protected `v7-release` environment and operator approval controls;
 - final operator choice to publish after draft asset verification.
 
@@ -68,4 +68,4 @@ Root `AGENTS.md` now follows the same tracked metadata contract: v7.0.2 is the a
 
 HLS-C008 reconciled the current-facing release, install and branch guidance to v7.0.2, and HLS-C015 reconciles the remaining live root `AGENTS.md` active-version/readiness instruction. Historical v7.0.1 candidates, measurements, hashes and migration evidence may remain when they are clearly labeled historical.
 
-After those reconciliations there is no known current-facing v7.0.1 release-governance wording being carried as an intentional open item. Future documentation drift should be treated as a new reproducible task. Documentation alignment itself never authorizes `release_ready=true`, a formal dispatch, signing, tagging or publication.
+After those reconciliations there is no known current-facing v7.0.1 release-governance wording being carried as an intentional open item. Future documentation drift should be treated as a new reproducible task. Documentation alignment itself never authorizes `release_ready=true`, a formal dispatch, tagging or publication.

@@ -2,20 +2,22 @@
 
 HLS-C009 closes the gap between formal release signing and runtime automatic-update acceptance.
 
+On 2026-10-02 the operator requested unsigned formal Windows packages because no certificate is available, with no code-signed variant. Code-signing configuration is therefore not a prerequisite for the current publication workflow. This does not relax automatic-update acceptance: unsigned packages must be installed manually, and the updater continues to reject unsigned or untrusted payloads.
+
 ## Threat boundary
 
 Before HLS-C009, automatic update already fails closed on GitHub release-asset ownership, reported size, SHA-256 digest, Windows `WinVerifyTrust`, MSI `ProductName`, exact `ProductVersion`, stable `UpgradeCode`, and per-user installation context. Those checks still allow an unrelated Windows-trusted code-signing certificate to satisfy the Authenticode layer if network-side release metadata is also compromised.
 
-Formal publication is stricter: `HLS_V7_SIGN_CERT_THUMBPRINT` selects the signing certificate and the formal verification path requires that exact signer. HLS-C009 carries that identity into the installed updater helper so automatic installation accepts only the project release signer or a deliberately versioned rollover identity.
+For signed builds, `HLS_V7_SIGN_CERT_THUMBPRINT` selects the primary signer identity embedded in the installed updater helper. HLS-C009 restricts automatic installation to that project signer or a deliberately versioned rollover identity. The current unsigned publication workflow does not supply a signing identity or claim automatic-upgrade support.
 
 ## Local identity sources
 
 The updater helper uses two local sources only:
 
-1. **Primary formal signer.** `HLS_V7_SIGN_CERT_THUMBPRINT` is read with Rust `option_env!` and embedded when `HLSDownloaderUpdater.exe` is compiled. The formal release job already requires this secret before building. A hosted development/candidate build without the formal signer therefore cannot silently authorize automatic installation.
+1. **Primary compiled signer.** `HLS_V7_SIGN_CERT_THUMBPRINT` is read with Rust `option_env!` and embedded when `HLSDownloaderUpdater.exe` is compiled. The current unsigned formal release does not require this secret. A build without a primary signer rejects automatic installation, including payloads signed by a rollover identity.
 2. **Versioned rollover set.** `artifacts/v7-productization/update-signer-trust.json` is compiled into the helper. Network release JSON, asset metadata, release notes, or URLs cannot add a signer.
 
-The identity is the normalized 40-hex SHA-1 thumbprint of the already-verified Authenticode leaf certificate. SHA-1 is used here only as the Windows certificate identity used by the existing formal signing contract; file integrity remains SHA-256 and Authenticode chain validation remains `WinVerifyTrust`.
+The identity is the normalized 40-hex SHA-1 thumbprint of the already-verified Authenticode leaf certificate. SHA-1 is used here only as the Windows certificate identity for signed automatic-update payloads; file integrity remains SHA-256 and Authenticode chain validation remains `WinVerifyTrust`.
 
 ## Runtime order
 
@@ -33,7 +35,7 @@ Missing formal signer identity, malformed local trust data, missing WinTrust pro
 
 ## Deliberate certificate rotation
 
-Rotation is a two-phase source-controlled operation.
+If signed automatic-update releases are authorized in the future, certificate rotation remains a two-phase source-controlled operation. It is not required to publish the current unsigned packages.
 
 ### Phase A — bridge release
 
@@ -72,4 +74,4 @@ A rollover entry is an object with `thumbprint` and non-empty `reason`. The pars
 
 Windows CI must compile and run the updater-helper tests. Pure authorization tests cover primary acceptance, rollover acceptance, unrelated-signer rejection, missing formal signer, malformed/duplicate rollover data and MSI argument extraction. A Windows-only test additionally proves that the real WinTrust signer-extraction path rejects an unsigned payload.
 
-The existing SHA-256, MSI identity, WinVerifyTrust, formal signing and timestamp verification remain in force. HLS-C009 adds signer ownership; it does not replace those gates.
+The existing SHA-256, MSI identity, WinVerifyTrust and compiled signer-ownership checks remain in force for automatic updates. Current formal publication stages unsigned assets without a signing or timestamp gate; publishing them does not authorize the updater to install them automatically.

@@ -9,7 +9,8 @@
 - 唯一权威功能/版本合同：`artifacts/v7-productization/feature-parity.json`。
 - 当前 `product_version=7.0.2`、`release_ready=false`、`audit_state=v7_0_2_iteration_in_progress`。
 - candidate 可以在 `release_ready=false` 时构建以收集实机证据；formal `package` 仍要求 canonical completeness、clean worktree、当前 release evidence 和 `release_ready=true`。
-- 正式 GitHub 发布还必须由 `.github/workflows/release-v7.yml` 在专用 self-hosted Windows x64 `hls-release` runner 上，对冻结 `main` SHA 执行 exact-SHA prerequisite、真实浏览器/性能/MSI/rollback、签名/时间戳、Draft asset digest 与显式 publish 授权。
+- 正式 GitHub 发布由 `.github/workflows/release-v7.yml` 在按需启动的 ephemeral self-hosted Windows x64 `hls-release` runner 上，对冻结 `main` SHA 执行 exact-SHA prerequisite、真实浏览器/TVBox/性能/MSI/rollback、Draft asset digest 与显式 publish 授权。readiness 标签为 `hls-readiness`；两个工作流只用 `A:\Ubuntu\测试\hls-downloader` 的干净本地 `main`，不执行 checkout。
+- 操作者于 2026-10-02 明确要求正式 Windows 包采用 unsigned，不提供代码签名版；签名证书、私钥、工具和时间戳不再是本次发布前置条件。自动更新仍要求有效签名与受信 signer，因此 unsigned 包只能手动安装更新。
 - 最新公开可下载测试包为 `v7.0.2-candidate.1`（远程标签提交 `74f8473`，早于当前 `main`）；其文件名、manifest、provenance 和 SHA-256 不可当作当前 7.0.2 SHA 的证据。
 
 ## 历史已通过（v7.0.1 阶段基线）
@@ -114,7 +115,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\record-v7-rele
 3. 当前 candidate Engine、Native Host、Compose 满足 formal performance thresholds。
 4. 公开 `v7.0.0` MSI 作为不可变升级基线，在固定 `E:\h` 生命周期环境升级到**当前 canonical candidate version**并验证应用进程恢复。
 5. 注入失败的 candidate MSI 副本证明 rollback 不破坏旧 ProductCode、Engine、数据与注册。
-6. formal Windows 资产由项目受信 signer 完成 Authenticode + RFC3161 timestamp，并验证 signer identity/trust。
+6. formal Windows 资产按操作者 2026-10-02 要求保持 unsigned，发布说明明确手动安装更新；自动更新签名与 signer 信任安全校验继续存在，不接受 unsigned 包。
 7. formal workflow 在上传 Draft Release 后逐项核对 GitHub asset size 和 SHA-256 digest，并且只有显式 `publish=true` 才发布 Latest。
 
 版本标签由 formal workflow 从 canonical `product_version` 动态得到；当前 canonical 是 `7.0.2`，但本文不授权创建该 tag/Release，也不授权把 `release_ready` 改成 true。

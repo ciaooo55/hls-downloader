@@ -8,6 +8,7 @@
 
 - canonical 产品版本：`7.0.2`。
 - canonical `release_ready=false`，因此**当前没有正式发布授权**，正式 `package` 必须继续 fail closed。
+- 操作者于 2026-10-02 要求正式 Windows 包采用 unsigned，不提供代码签名版；证书、签名工具和时间戳不是发布前置条件。unsigned 包需手动安装更新，自动更新签名与 signer 信任校验继续保留。
 - HLS-C009/C010/C011 已分别收紧自动更新 signer、Core TCP loopback 和跨 origin replay header 边界；这些安全修复不会自动把 `release_ready` 改成 true。
 - `v7.0.0` 的已发布标签、Release 和资产保持不变；公开 `v7.0.2-candidate.1` 与历史 `v7.0.1-candidate.1` 也保持原样。
 
@@ -21,8 +22,8 @@
    - `Rust Security` (`.github/workflows/rust-security.yml`)
 3. 只有在 canonical 验证结果确实满足正式发布条件后，才能通过单独、可审查的源码变更把 `release_ready` 改为 true；本说明本身不授权该变更。
 4. 冻结新的 ready SHA，并再次等待它自己的四个精确 SHA 工作流（三个 push，候选包为 main 上手动 workflow_dispatch）成功。任何 `main` 移动都会使之前的正式发布候选失效。
-5. 由受保护 `v7-release` environment 中的授权操作者，在专用 self-hosted Windows x64 `hls-release` runner 上 dispatch `.github/workflows/release-v7.yml`。不要用普通 hosted runner 替代正式发布机。
-6. 正式 workflow 会在同一冻结 SHA 上重新构建 candidate，运行 browser/performance/installer/rollback 门禁，重新确认 `main` 未移动，再构建 formal package、执行 Authenticode 签名/时间戳验证、生成 SBOM/发布证据、创建或恢复 annotated tag + Draft Release，并逐项验证上传资产的 size/SHA-256 digest。
+5. 由受保护 `v7-release` environment 中的授权操作者，按需启动 ephemeral self-hosted Windows x64 `hls-release` runner 并 dispatch `.github/workflows/release-v7.yml`；readiness runner 标签为 `hls-readiness`。两个工作流都仅使用 `A:\Ubuntu\测试\hls-downloader` 的干净本地 `main`，不执行 checkout，并核对本地 HEAD、dispatch SHA 与远端 `main` 一致。
+6. 正式 workflow 会在同一冻结 SHA 上重新构建 candidate，运行 browser/performance/browser_media_push/installer/rollback 门禁，重新确认 `main` 未移动，再构建 unsigned formal package、生成 SBOM/发布证据、创建或恢复 annotated tag + Draft Release，并逐项验证上传资产的 size/SHA-256 digest。
 7. 首次验证可保持 dispatch 的 `publish=false`，让通过 digest 校验的 Release 保持 Draft；只有明确授权发布时才使用 `publish=true`。已有 draft 的安全重试仍必须绑定同一 annotated tag 和同一冻结 commit。
 
 ## 本地 candidate 的用途
@@ -41,7 +42,7 @@ candidate 要求 canonical feature contract、`blocked=0` 和干净 worktree，�
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-v7.ps1 -Task package
 ```
 
-普通本地执行不能替代 formal workflow 的 exact-SHA 工作流检查、冻结 `main` 复核、专用 `E:\h` 生命周期环境、真实浏览器、签名私钥/证书、时间戳和 GitHub Draft digest 验证。
+普通本地执行不能替代 formal workflow 的 exact-SHA 工作流检查、冻结 `main` 复核、专用 `E:\h` 生命周期环境、真实浏览器/TVBox 和 GitHub Draft digest 验证。
 
 ## 失败处理
 
