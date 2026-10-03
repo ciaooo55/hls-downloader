@@ -651,6 +651,10 @@ fun main() {
             onExternalDropConsumed = { droppedPaths = emptyList() },
             onAttention = {
                 EventQueue.invokeLater {
+                    // Tray restore must reverse hideToTray() before focus/raise.
+                    // A hidden Compose window can keep receiving native focus calls
+                    // while remaining absent from the screen and accessibility tree.
+                    window.isVisible = true
                     window.isMinimized = false
                     val previousAlwaysOnTop = window.isAlwaysOnTop
                     window.isAlwaysOnTop = true
