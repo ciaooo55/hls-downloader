@@ -1929,27 +1929,33 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "执行电源动作失败")) }
         }
     }) }
-    playerSession?.takeIf { it.active }?.let { signal -> PlayerSessionHud(signal, playerControlBusy) { action ->
-        if (!playerControlBusy) scope.launch {
-            playerControlBusy = true
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.playerControl(action) } }
-                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "播放器控制失败")) }
-            playerControlBusy = false
+    if (playerSession?.active == true || castSession?.active == true) {
+        Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, -46), properties = PopupProperties(focusable = false)) {
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                castSession?.takeIf { it.active }?.let { signal -> CastSessionHud(signal, tasks.firstOrNull { it.id == signal.taskId }, castControlBusy, onCopy = { value ->
+                    runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(value), null) }
+                        .onSuccess { notice = UiSignal.Notice("success", "播放地址已复制") }
+                        .onFailure { notice = UiSignal.Notice("error", "复制播放地址失败") }
+                }) { action, seconds ->
+                    if (!castControlBusy) scope.launch {
+                        castControlBusy = true
+                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.controlCast(action, seconds) } }
+                            .onSuccess { if (action == "stop") castSession = null }
+                            .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "投屏控制失败")) }
+                        castControlBusy = false
+                    }
+                } }
+                playerSession?.takeIf { it.active }?.let { signal -> PlayerSessionHud(signal, playerControlBusy) { action ->
+                    if (!playerControlBusy) scope.launch {
+                        playerControlBusy = true
+                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.playerControl(action) } }
+                            .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "播放器控制失败")) }
+                        playerControlBusy = false
+                    }
+                } }
+            }
         }
-    } }
-    castSession?.takeIf { it.active }?.let { signal -> CastSessionHud(signal, tasks.firstOrNull { it.id == signal.taskId }, castControlBusy, playerSession?.active == true, onCopy = { value ->
-        runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(value), null) }
-            .onSuccess { notice = UiSignal.Notice("success", "播放地址已复制") }
-            .onFailure { notice = UiSignal.Notice("error", "复制播放地址失败") }
-    }) { action, seconds ->
-        if (!castControlBusy) scope.launch {
-            castControlBusy = true
-            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.controlCast(action, seconds) } }
-                .onSuccess { if (action == "stop") castSession = null }
-                .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "投屏控制失败")) }
-            castControlBusy = false
-        }
-    } }
+    }
     destructiveRequest?.let { request -> DestructiveConfirmDialog(request, { destructiveRequest = null }) {
         destructiveRequest = null
         scope.launch {
@@ -4631,7 +4637,6 @@ private fun HarvestResultDialog(
     var scrubPosition by remember(signal.positionSeconds) { mutableFloatStateOf(signal.positionSeconds.toFloat()) }
     var audioMenu by remember { mutableStateOf(false) }
     var subtitleMenu by remember { mutableStateOf(false) }
-    Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, -46), properties = PopupProperties(focusable = false)) {
         Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(1.dp, border), modifier = Modifier.width(430.dp)) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4691,17 +4696,15 @@ private fun HarvestResultDialog(
                 }
             }
         }
-    }
 }
 
 private fun formatPlayerSpeed(speed: Double) = if (kotlin.math.abs(speed - speed.toInt()) < 0.01) "${speed.toInt()}x" else "${"%.2f".format(java.util.Locale.ROOT, speed).trimEnd('0')}x"
 private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAUSED" -> "已暂停"; "FULLSCREEN" -> "全屏播放"; "PIP" -> "画中画"; "STOPPED" -> "已停止"; else -> "正在播放" }
 
-@Composable private fun CastSessionHud(signal: UiSignal.Cast, task: DownloadTask?, busy: Boolean, raised: Boolean, onCopy: (String) -> Unit, onAction: (String, Long) -> Unit) {
+@Composable private fun CastSessionHud(signal: UiSignal.Cast, task: DownloadTask?, busy: Boolean, onCopy: (String) -> Unit, onAction: (String, Long) -> Unit) {
     var scrubPosition by remember(signal.positionSeconds) { mutableFloatStateOf(signal.positionSeconds.toFloat()) }
     val offline = signal.status.equals("OFFLINE", true)
     val controllable = signal.supportedActions.contains("play") && !offline
-    Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, if (raised) -190 else -46), properties = PopupProperties(focusable = false)) {
         Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(1.dp, border), modifier = Modifier.width(420.dp)) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4742,7 +4745,6 @@ private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAU
                 }
             }
         }
-    }
 }
 
 private fun formatClock(seconds: Long): String {
