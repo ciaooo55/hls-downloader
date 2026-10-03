@@ -3,6 +3,7 @@ package com.hlsdownloader.desktop
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.awt.EventQueue
+import java.awt.Frame
 import java.awt.KeyboardFocusManager
 import java.awt.Point
 import java.awt.Rectangle
@@ -612,6 +613,14 @@ internal class UiTestApi private constructor(
     private fun <T> withFocusedWindow(block: () -> T): T {
         val previousAlwaysOnTop = onEventThread {
             val previous = window.isAlwaysOnTop
+            // A resident workbench may be hidden in the tray or minimized when
+            // the test API receives its first real Robot action. Restore the
+            // native window before calculating coordinates or requesting focus;
+            // otherwise AWT can keep it at the hidden sentinel position.
+            window.isVisible = true
+            if (window is Frame) {
+                window.extendedState = window.extendedState and Frame.ICONIFIED.inv()
+            }
             window.setAlwaysOnTop(true)
             val active = KeyboardFocusManager.getCurrentKeyboardFocusManager().activeWindow
             if (!belongsToWindow(active, window)) {
