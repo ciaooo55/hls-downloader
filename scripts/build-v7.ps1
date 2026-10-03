@@ -359,9 +359,13 @@ if ($isPackage) {
         $env:PATH = Join-Path $env:WINDIR 'System32'
         foreach ($tool in $requiredMediaTools) {
             $toolPath = Join-Path $resources $tool
-            $check = Start-Process -FilePath $toolPath -ArgumentList '-version' -WorkingDirectory $mediaToolCheckRoot -WindowStyle Hidden -PassThru `
-                -RedirectStandardOutput (Join-Path $mediaToolCheckRoot "$tool.stdout.log") `
-                -RedirectStandardError (Join-Path $mediaToolCheckRoot "$tool.stderr.log")
+            $checkInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $checkInfo.FileName = $toolPath
+            $checkInfo.Arguments = '-version'
+            $checkInfo.WorkingDirectory = $mediaToolCheckRoot
+            $checkInfo.UseShellExecute = $false
+            $checkInfo.CreateNoWindow = $true
+            $check = [System.Diagnostics.Process]::Start($checkInfo)
             if (-not $check.WaitForExit(15000)) {
                 $check.Kill()
                 throw "Packaged $tool did not finish its isolated -version check; use a complete static ffmpeg/ffprobe binary set."
