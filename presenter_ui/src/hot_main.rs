@@ -947,11 +947,22 @@ fn event_loop(
 }
 
 fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
-    client
-        .load_handoffs()
-        .unwrap_or_default()
+    let encoded = match client.load_handoffs() {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            trace(&format!("恢复浏览器接管请求失败: {error}"));
+            return VecDeque::new();
+        }
+    };
+    encoded
         .into_iter()
-        .filter_map(|encoded| serde_json::from_str::<PersistedHandoff>(&encoded).ok())
+        .filter_map(|encoded| match serde_json::from_str::<PersistedHandoff>(&encoded) {
+            Ok(handoff) => Some(handoff),
+            Err(error) => {
+                trace(&format!("忽略损坏的持久化接管请求: {error}"));
+                None
+            }
+        })
         .filter(|handoff| handoff.status == "pending" && handoff.presentation != "fallback")
         .map(|handoff| handoff.offer)
         .fold(VecDeque::new(), |mut pending, offer| {

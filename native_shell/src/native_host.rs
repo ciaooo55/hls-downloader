@@ -5,8 +5,8 @@
 //! handoff offers. No HTTP request or Python process is required on this path.
 
 use crate::{
-    CoreCommand, CoreEvent, CoreIpcClient, CredentialVault, MediaPushRequest, ResourceKind,
-    ResourceOffer, TaskSnapshot, TaskSpec, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
+    CoreCommand, CoreEvent, CoreIpcClient, CredentialVault, EventEnvelope, MediaPushRequest,
+    ResourceKind, ResourceOffer, TaskSnapshot, TaskSpec, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -328,8 +328,35 @@ impl NativeHostSession {
         if !request_id.is_empty() && request_id.len() <= 160 {
             self.request_ids.insert(request_id.to_string(), id.clone());
         }
-        self.handoffs.insert(id.clone(), handoff);
-        self.core.handle(CoreCommand::OfferResource { offer })?;
+        self.handoffs.insert(id.clone(), handoff.clone());
+        if let Err(error) = self.core.handle(CoreCommand::OfferResource { offer }) {
+            self.handoffs.remove(&id);
+            if !request_id.is_empty() {
+                self.request_ids.remove(request_id);
+            }
+            let mut failed = handoff;
+            failed.status = "failed".into();
+            failed.presentation = "failed".into();
+            // Keep a non-pending tombstone so a restart cannot resurrect this
+            // offer, while clearing the request id prevents a failed attempt
+            // from poisoning a later retry with the same browser request id.
+            failed.request_id.clear();
+            let mut rollback_error = self.persist_handoff(&failed).err();
+            if let Some(credential_ref) = owned_credential_ref.as_deref() {
+                if let Err(delete_error) = self.core.delete_credential(credential_ref) {
+                    rollback_error = Some(match rollback_error {
+                        Some(previous) => format!("{previous}; {delete_error}"),
+                        None => delete_error,
+                    });
+                }
+            }
+            return match rollback_error {
+                None => Err(error),
+                Some(rollback_error) => Err(format!(
+                    "{error}; browser handoff rollback failed: {rollback_error}"
+                )),
+            };
+        }
         let response = self
             .handoffs
             .get(&id)
@@ -365,10 +392,11 @@ impl NativeHostSession {
             },
             owned_credential_ref,
         )?;
-        let _ = self.core.handle(CoreCommand::TaskAction {
+        let events = self.core.handle(CoreCommand::TaskAction {
             task_id: snapshot.task_id.clone(),
             action: "start".into(),
-        });
+        })?;
+        ensure_task_started(&events, &snapshot.task_id)?;
         Ok(json!({"ok": true, "task": snapshot, "activated": true}))
     }
 
@@ -808,6 +836,19 @@ fn attach_request_id(response: Value, request_id: String) -> Value {
     Value::Object(object)
 }
 
+fn ensure_task_started(events: &[EventEnvelope], task_id: &str) -> Result<(), String> {
+    for envelope in events {
+        match &envelope.event {
+            CoreEvent::Error { code, message } => {
+                return Err(format!("启动下载失败 [{code}]: {message}"));
+            }
+            CoreEvent::TaskUpdated { snapshot } if snapshot.task_id == task_id => return Ok(()),
+            _ => {}
+        }
+    }
+    Err("Rust Core 未确认下载已启动".into())
+}
+
 fn resource_payload(message: &Value) -> Result<&Map<String, Value>, String> {
     message
         .get("resource")
@@ -1180,6 +1221,34 @@ mod tests {
         assert_eq!(response["task"]["resource_kind"], "hls");
         assert_eq!(session.core.local().tasks().len(), 1);
         assert_eq!(session.core.local().store().load_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn browser_download_reports_core_start_errors_instead_of_false_success() {
+        let error = ensure_task_started(
+            &[EventEnvelope {
+                sequence: 1,
+                event: CoreEvent::Error {
+                    code: "illegal_task_action".into(),
+                    message: "任务当前状态不允许操作: start".into(),
+                },
+            }],
+            "task-1",
+        )
+        .unwrap_err();
+        assert!(error.contains("illegal_task_action"), "{error}");
+        assert!(error.contains("不允许操作"), "{error}");
+
+        let mut snapshot = TaskSnapshot::default();
+        snapshot.task_id = "task-1".into();
+        assert!(ensure_task_started(
+            &[EventEnvelope {
+                sequence: 2,
+                event: CoreEvent::TaskUpdated { snapshot },
+            }],
+            "task-1",
+        )
+        .is_ok());
     }
 
     #[test]

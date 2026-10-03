@@ -118,9 +118,10 @@ impl CoreServer {
             return Ok((default_core_bind()?, worker));
         }
         let bind = default_core_bind()?;
-        let listener = TcpListener::bind(bind)
-            .or_else(|_| TcpListener::bind("127.0.0.1:0"))
-            .map_err(|error| format!("bind v7 Core: {error}"))?;
+        // TCP loopback clients deliberately use the same configured endpoint.
+        // Falling back to an ephemeral port would make the Core appear healthy
+        // while every client keeps retrying the original address.
+        let listener = TcpListener::bind(bind).map_err(|error| format!("bind v7 Core: {error}"))?;
         let addr = listener
             .local_addr()
             .map_err(|error| format!("v7 Core local addr: {error}"))?;
