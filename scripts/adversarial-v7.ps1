@@ -27,8 +27,6 @@ $env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
-# Legacy read-only tool location from earlier installs; tools are not project content.
-if(-not $jdkRoot -and (Test-Path 'E:\HLSDownloaderBuildCache\jdk-21\bin\java.exe')){ $jdkRoot = 'E:\HLSDownloaderBuildCache\jdk-21' }
 if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
 $env:JAVA_HOME = $jdkRoot
 $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
@@ -36,7 +34,7 @@ $pythonExe = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } elseif ($pythonComma
 if ([String]::IsNullOrWhiteSpace($pythonExe)) {
     throw 'python.exe was not found on PATH. Install Python, or set HLS_V7_PYTHON to the interpreter this gate should use.'
 }
-$reportDirectory = Join-Path $repo 'artifacts\v7-implementation\adversarial'
+$reportDirectory = Join-Path $repo 'artifacts\v7-productization\adversarial'
 $reportPath = Join-Path $reportDirectory 'latest.json'
 $completedGates = [System.Collections.Generic.List[string]]::new()
 $result = 'failed'

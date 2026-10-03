@@ -2580,14 +2580,6 @@ impl CoreCoordinator {
                     } else {
                         "finished".to_string()
                     };
-                    let _ = core.handle(CoreCommand::UpdateProgress {
-                        task_id: task_id.clone(),
-                        downloaded_bytes: downloaded,
-                        total_bytes: total,
-                        speed_bytes_per_sec: 0,
-                        stage: stage.clone(),
-                        status: status.into(),
-                    });
                     if status == "failed" {
                         let (url, has_credential_ref) = core
                             .task_spec(&task_id)
@@ -2603,6 +2595,15 @@ impl CoreCoordinator {
                                 has_credential_ref,
                             ),
                         );
+                    } else {
+                        let _ = core.handle(CoreCommand::UpdateProgress {
+                            task_id: task_id.clone(),
+                            downloaded_bytes: downloaded,
+                            total_bytes: total,
+                            speed_bytes_per_sec: 0,
+                            stage: stage.clone(),
+                            status: status.into(),
+                        });
                     }
                     eprintln!("v7 task {task_id} {status}: {error}");
                 });
@@ -3375,7 +3376,7 @@ fn complete_payload(
     if let Some(expected) = spec.expected_size {
         let actual = fs::metadata(payload).map(|meta| meta.len()).unwrap_or(0);
         if actual != expected {
-            mark_progress(core, task_id, actual, Some(expected), "size", "failed")?;
+            mark_progress(core, task_id, actual, Some(expected), "size", "checking")?;
             return Err(format!("size mismatch: expected {expected}, got {actual}"));
         }
     }
@@ -3395,7 +3396,7 @@ fn complete_payload(
                         result.verified,
                     )?;
                 if !result.verified {
-                    mark_progress(core, task_id, 0, None, "checksum", "failed")?;
+                    mark_progress(core, task_id, 0, None, "checksum", "checking")?;
                     return Err(format!(
                         "checksum mismatch: expected {}, got {}",
                         result.expected, result.actual
@@ -3404,7 +3405,7 @@ fn complete_payload(
             }
             Ok(None) => {}
             Err(error) => {
-                mark_progress(core, task_id, 0, None, "checksum", "failed")?;
+                mark_progress(core, task_id, 0, None, "checksum", "checking")?;
                 return Err(error);
             }
         }
@@ -3446,11 +3447,11 @@ fn complete_payload(
         // 威胁"冒充"查过了"。这一条不受 fail_on_threat 影响：那个开关只决定
         // "发现威胁时是否阻止"，不决定"扫描状态未知时是否放行"。
         if result.state == "error" {
-            mark_progress(core, task_id, 0, None, "av_scan", "failed")?;
+            mark_progress(core, task_id, 0, None, "av_scan", "checking")?;
             return Err(format!("av_scan_error: {}", result.detail));
         }
         if result.state == "threat" && fail_on_threat {
-            mark_progress(core, task_id, 0, None, "av_scan", "failed")?;
+            mark_progress(core, task_id, 0, None, "av_scan", "checking")?;
             return Err(format!("av_threat: {}", result.detail));
         }
     }

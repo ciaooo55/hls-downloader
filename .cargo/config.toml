@@ -1,7 +1,6 @@
 [build]
-# Keep build output inside the repository; override with CARGO_TARGET_DIR for an
-# external ASCII-safe cache when needed.
-target-dir = "target"
+# 直接调用 Cargo 与项目构建脚本使用同一个仓库内输出目录。
+target-dir = ".tool-cache/build-cache/cargo-target"
 
 [env]
 CARGO_INCREMENTAL = "1"

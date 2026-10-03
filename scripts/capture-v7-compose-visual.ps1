@@ -170,8 +170,7 @@ foreach ($size in $Sizes) {
                     -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
                 $health = Wait-Health -Seconds $TimeoutSeconds
                 if (-not $health) {
-                    $err = if (Test-Path -LiteralPath $stderrPath) { [IO.File]::ReadAllText($stderrPath, [Text.Encoding]::UTF8) } else { '' }
-                    throw "test API did not become healthy within $TimeoutSeconds seconds. $err"
+                    throw "test API did not become healthy within $TimeoutSeconds seconds. See stderr log: $stderrPath"
                 }
                 if ($ParkPointerActive) {
                     if (-not (Invoke-ParkPointer -Base $base -Header $header -X $ParkPointerX -Y $ParkPointerY)) {

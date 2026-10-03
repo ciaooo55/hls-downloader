@@ -11,7 +11,7 @@ version = "7.0.2"
 // Build output defaults inside the repository. The canonical build script injects
 // an ASCII drive alias through HLS_COMPOSE_BUILD_DIR without relocating the files.
 val hlsBuildDir = providers.environmentVariable("HLS_COMPOSE_BUILD_DIR")
-    .orElse("build")
+    .orElse("../.tool-cache/build-cache/compose-build")
 layout.buildDirectory.set(file(hlsBuildDir))
 
 // Keep the packaged product on the conservative software renderer by default.

@@ -45,7 +45,7 @@ $legacyPaths = @(
     'E:\HLSDownloaderBuildCache\compose-reconciled.png',
     'E:\HLSDownloaderBuildCache\compose-workbench.png'
 )
-$reportRootPath = if([String]::IsNullOrWhiteSpace($ReportRoot)) { Join-Path $repo 'artifacts\v7-implementation' } else { $ReportRoot }
+$reportRootPath = if([String]::IsNullOrWhiteSpace($ReportRoot)) { Join-Path $repo 'artifacts\v7-productization\cleanup' } else { $ReportRoot }
 $reportRootPath = [IO.Path]::GetFullPath($reportRootPath)
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $archive = Join-Path $ArchiveRoot "pre-v7-$stamp"
@@ -124,7 +124,6 @@ if ($NativeHostSmokeOnly) {
             'extension\.output',
             'extension\.wxt',
             'extension\node_modules',
-            'artifacts\v7-implementation',
             'artifacts\v7-productization\fixtures',
             'artifacts\v7-productization\installed',
             'artifacts\v7-productization\package',

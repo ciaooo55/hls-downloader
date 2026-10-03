@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$artifacts = Join-Path $repo 'artifacts\v7-msi-lifecycle'
+$artifacts = Join-Path $repo 'artifacts\v7-productization\msi-lifecycle'
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
 $started = (Get-Date).ToUniversalTime().ToString('o')
 $steps = New-Object Collections.ArrayList
