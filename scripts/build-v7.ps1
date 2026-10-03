@@ -326,11 +326,23 @@ if ($isPackage) {
     $requiredMediaTools = @('ffmpeg.exe', 'ffprobe.exe')
     $ffmpegRoot = $env:HLS_V7_FFMPEG_DIR
     if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
-        $ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
-        if ($ffmpegCommand) { $ffmpegRoot = Split-Path $ffmpegCommand.Source -Parent }
+        $cachedMediaTools = Get-ChildItem -LiteralPath $cacheRoot -Directory -Filter 'ffmpeg-*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Where-Object {
+                $bin = Join-Path $_.FullName 'bin'
+                (Test-Path -LiteralPath (Join-Path $bin 'ffmpeg.exe') -PathType Leaf) -and
+                    (Test-Path -LiteralPath (Join-Path $bin 'ffprobe.exe') -PathType Leaf)
+            } |
+            Select-Object -First 1
+        if ($cachedMediaTools) {
+            $ffmpegRoot = Join-Path $cachedMediaTools.FullName 'bin'
+        } else {
+            $ffmpegCommand = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+            if ($ffmpegCommand) { $ffmpegRoot = Split-Path $ffmpegCommand.Source -Parent }
+        }
     }
     if ([String]::IsNullOrWhiteSpace($ffmpegRoot)) {
-        throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR or ffmpeg.exe on PATH; packaged ffmpeg and ffprobe must come from the same verified media-tool directory.'
+        throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR, a complete ffmpeg-*/bin directory in the build cache, or ffmpeg.exe on PATH; packaged ffmpeg and ffprobe must come from the same verified media-tool directory.'
     }
     $ffmpegRoot = [IO.Path]::GetFullPath($ffmpegRoot)
     $missingMediaTools = @($requiredMediaTools | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ffmpegRoot $_) -PathType Leaf) })
@@ -339,6 +351,30 @@ if ($isPackage) {
     }
     foreach ($tool in $requiredMediaTools) {
         Copy-Item -LiteralPath (Join-Path $ffmpegRoot $tool) -Destination (Join-Path $resources $tool) -Force
+    }
+    $mediaToolCheckRoot = Join-Path $packageStagingRoot '.media-tool-check'
+    New-Item -ItemType Directory -Force -Path $mediaToolCheckRoot | Out-Null
+    $originalPath = $env:PATH
+    try {
+        $env:PATH = Join-Path $env:WINDIR 'System32'
+        foreach ($tool in $requiredMediaTools) {
+            $toolPath = Join-Path $resources $tool
+            $check = Start-Process -FilePath $toolPath -ArgumentList '-version' -WorkingDirectory $mediaToolCheckRoot -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $mediaToolCheckRoot "$tool.stdout.log") `
+                -RedirectStandardError (Join-Path $mediaToolCheckRoot "$tool.stderr.log")
+            if (-not $check.WaitForExit(15000)) {
+                $check.Kill()
+                throw "Packaged $tool did not finish its isolated -version check; use a complete static ffmpeg/ffprobe binary set."
+            }
+            if ($check.ExitCode -ne 0) {
+                throw "Packaged $tool failed its isolated -version check with exit $($check.ExitCode); use a complete static ffmpeg/ffprobe binary set."
+            }
+        }
+    } catch {
+        throw "Packaged media tool validation failed; use complete static ffmpeg/ffprobe binaries: $($_.Exception.Message)"
+    } finally {
+        $env:PATH = $originalPath
+        Remove-Item -LiteralPath $mediaToolCheckRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     Copy-CurlImpersonate $resources
     Copy-LibMpv $resources
