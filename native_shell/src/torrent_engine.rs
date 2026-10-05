@@ -780,6 +780,7 @@ fn download_swarm(
             &options.selection_path,
         ) {
             Ok(len) => return Ok(len),
+            Err(error) if matches!(error.as_str(), "paused" | "canceled") => return Err(error),
             Err(error) => last = error,
         }
         for addr in extra {
@@ -787,9 +788,7 @@ fn download_swarm(
                 peers.push(addr);
             }
         }
-        if fs::read_to_string(control).unwrap_or_default().trim() != "run" {
-            return Err(fs::read_to_string(control).unwrap_or_else(|_| "paused".into()));
-        }
+        check_torrent_control(control)?;
     }
     Err(last)
 }
@@ -1437,9 +1436,7 @@ fn download_from_peer_ex_with_telemetry(
         'pieces: for index in pending {
             if !unchoked {
                 while !unchoked {
-                    if !control_is_running(control) {
-                        return Err("paused".into());
-                    }
+                    check_torrent_control(control)?;
                     if !piece_is_selected(meta, index, selection_path) {
                         continue 'pieces;
                     }
@@ -1457,9 +1454,7 @@ fn download_from_peer_ex_with_telemetry(
                     }
                 }
             }
-            if !control_is_running(control) {
-                return Err("paused".into());
-            }
+            check_torrent_control(control)?;
             if peer_availability_known && !peer_pieces[index] {
                 continue 'pieces;
             }
@@ -1470,9 +1465,7 @@ fn download_from_peer_ex_with_telemetry(
             let mut filled = 0;
             while filled < len {
                 while !unchoked {
-                    if !control_is_running(control) {
-                        return Err("paused".into());
-                    }
+                    check_torrent_control(control)?;
                     if !piece_is_selected(meta, index, selection_path) {
                         continue 'pieces;
                     }
@@ -1499,9 +1492,9 @@ fn download_from_peer_ex_with_telemetry(
                 payload.extend_from_slice(&(block as u32).to_be_bytes());
                 send_message(&mut stream, 6, &payload)?;
                 loop {
-                    if !control_is_running(control) {
+                    if let Err(error) = check_torrent_control(control) {
                         let _ = send_message(&mut stream, 8, &payload);
-                        return Err("paused".into());
+                        return Err(error);
                     }
                     if !piece_is_selected(meta, index, selection_path) {
                         let _ = send_message(&mut stream, 8, &payload);
@@ -1667,8 +1660,15 @@ fn send_message(stream: &mut std::net::TcpStream, id: u8, payload: &[u8]) -> Res
     stream.write_all(payload).map_err(|error| error.to_string())
 }
 
-fn control_is_running(control: &Path) -> bool {
-    fs::read_to_string(control).unwrap_or_default().trim() == "run"
+fn check_torrent_control(control: &Path) -> Result<(), String> {
+    let command =
+        fs::read_to_string(control).map_err(|error| format!("read BT task control: {error}"))?;
+    match command.trim() {
+        "pause" => Err("paused".into()),
+        "cancel" => Err("canceled".into()),
+        // 控制文件写入时的瞬时空内容不代表用户请求暂停。
+        _ => Ok(()),
+    }
 }
 
 struct PeerMessageReader {
@@ -2985,5 +2985,87 @@ mod tests {
         assert_eq!(&written[4..], b"bbbb");
         server.join().unwrap();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn swarm_pause_and_cancel_interrupt_inflight_requests_with_distinct_results() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        for (command, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-v7-swarm-control-{}-{command}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let output = root.join("payload.bin");
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let peer = listener.local_addr().unwrap();
+            let (requested_tx, requested_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut handshake = [0u8; 68];
+                stream.read_exact(&mut handshake).unwrap();
+                stream.write_all(&handshake).unwrap();
+                stream.write_all(&1u32.to_be_bytes()).unwrap();
+                stream.write_all(&[1]).unwrap();
+                loop {
+                    let mut header = [0u8; 4];
+                    stream.read_exact(&mut header).unwrap();
+                    let mut message = vec![0; u32::from_be_bytes(header) as usize];
+                    stream.read_exact(&mut message).unwrap();
+                    match message.first() {
+                        Some(&6) => requested_tx.send(()).unwrap(),
+                        Some(&8) => {
+                            assert_eq!(message.len(), 13);
+                            assert_eq!(be32(&message[1..5]), 0);
+                            assert_eq!(be32(&message[5..9]), 0);
+                            assert_eq!(be32(&message[9..13]), 4);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            let meta = TorrentMeta {
+                name: "interrupted".into(),
+                magnet: false,
+                web_seeds: Vec::new(),
+                info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+                // 显式 Peer 夹具不使用默认公网 tracker。
+                announce: vec!["fixture://peer-hint".into()],
+                hint_peers: vec![peer.to_string()],
+                piece_length: 4,
+                pieces: vec![crate::crypto_lite::sha1(b"data")],
+                length: 4,
+                files: Vec::new(),
+            };
+            let worker_control = control.clone();
+            let worker = std::thread::spawn(move || {
+                download_swarm(
+                    &meta,
+                    &output,
+                    &worker_control,
+                    &std::collections::HashMap::new(),
+                    "",
+                    TorrentOptions {
+                        enable_dht: false,
+                        ..Default::default()
+                    },
+                    &mut |_| {},
+                )
+            });
+            requested_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            fs::write(&control, command).unwrap();
+            assert_eq!(worker.join().unwrap().unwrap_err(), expected);
+            server.join().unwrap();
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }

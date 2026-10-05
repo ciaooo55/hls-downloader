@@ -4662,6 +4662,32 @@ fn push_task_tvbox(
     })
 }
 
+fn prepend_configured_tvbox(devices: &mut Vec<crate::CastDeviceInfo>, configured_endpoint: &str) {
+    let endpoint = configured_endpoint.trim().trim_end_matches('/').to_string();
+    if endpoint.is_empty()
+        || devices.iter().any(|device| {
+            device.service_type.eq_ignore_ascii_case("tvbox")
+                && device
+                    .control_url
+                    .trim()
+                    .trim_end_matches('/')
+                    .eq_ignore_ascii_case(&endpoint)
+        })
+    {
+        return;
+    }
+    devices.insert(
+        0,
+        crate::CastDeviceInfo {
+            id: "tvbox:configured".into(),
+            label: format!("TVBox · {endpoint}"),
+            location: endpoint.clone(),
+            control_url: endpoint,
+            service_type: "tvbox".into(),
+        },
+    );
+}
+
 fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventEnvelope>, String> {
     let timeout = Duration::from_millis(2500);
     #[cfg(test)]
@@ -4683,18 +4709,7 @@ fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventE
             .lock()
             .and_then(|core| core.store().setting_string("tvbox_endpoint", ""))
         {
-            if !endpoint.trim().is_empty() {
-                devices.insert(
-                    0,
-                    crate::CastDeviceInfo {
-                        id: "tvbox:configured".into(),
-                        label: format!("TVBox · {endpoint}"),
-                        location: endpoint.clone(),
-                        control_url: endpoint,
-                        service_type: "tvbox".into(),
-                    },
-                );
-            }
+            prepend_configured_tvbox(&mut devices, &endpoint);
         }
     }
     let message = if devices.is_empty() {
@@ -7220,6 +7235,27 @@ mod tests {
             envelope.event,
             crate::CoreEvent::CastDevices { .. } | crate::CoreEvent::Error { .. }
         )));
+    }
+
+    #[test]
+    fn configured_tvbox_is_preferred_without_duplicating_scan_result() {
+        let configured = "http://192.168.2.11:9978/";
+        let mut devices = vec![crate::CastDeviceInfo {
+            id: "tvbox:http://192.168.2.11:9978".into(),
+            label: "TVBox / 影视盒子".into(),
+            location: "http://192.168.2.11:9978".into(),
+            control_url: "http://192.168.2.11:9978".into(),
+            service_type: "tvbox".into(),
+        }];
+        prepend_configured_tvbox(&mut devices, configured);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].control_url, "http://192.168.2.11:9978");
+
+        let mut empty = Vec::new();
+        prepend_configured_tvbox(&mut empty, configured);
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].id, "tvbox:configured");
+        assert_eq!(empty[0].control_url, "http://192.168.2.11:9978");
     }
 
     #[test]

@@ -208,7 +208,11 @@ fn registration_entries(paths: &ManifestPaths) -> Vec<RegistrationEntry> {
 #[cfg(windows)]
 use crate::win_reg::{registry_error, wide};
 #[cfg(windows)]
-fn set_default_value_for_sid(key: &str, value: &Path, user_sid: Option<&str>) -> Result<(), String> {
+fn set_default_value_for_sid(
+    key: &str,
+    value: &Path,
+    user_sid: Option<&str>,
+) -> Result<(), String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, HKEY_USERS, KEY_SET_VALUE,
@@ -233,7 +237,10 @@ fn set_default_value_for_sid(key: &str, value: &Path, user_sid: Option<&str>) ->
         )
     };
     if create != 0 {
-        return Err(registry_error(&format!("create Native Host registry {full_key}"), create));
+        return Err(registry_error(
+            &format!("create Native Host registry {full_key}"),
+            create,
+        ));
     }
     let bytes = unsafe {
         std::slice::from_raw_parts(
@@ -255,7 +262,10 @@ fn set_default_value_for_sid(key: &str, value: &Path, user_sid: Option<&str>) ->
         RegCloseKey(handle);
     }
     if set != 0 {
-        return Err(registry_error(&format!("set Native Host registry {full_key}"), set));
+        return Err(registry_error(
+            &format!("set Native Host registry {full_key}"),
+            set,
+        ));
     }
     Ok(())
 }
@@ -286,7 +296,10 @@ fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<Pat
         return Ok(None);
     }
     if size_result != 0 {
-        return Err(registry_error(&format!("read Native Host registry {full_key}"), size_result));
+        return Err(registry_error(
+            &format!("read Native Host registry {full_key}"),
+            size_result,
+        ));
     }
     let mut buffer = vec![0u16; (bytes as usize).div_ceil(std::mem::size_of::<u16>())];
     let read_result = unsafe {
@@ -301,7 +314,10 @@ fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<Pat
         )
     };
     if read_result != 0 {
-        return Err(registry_error(&format!("read Native Host registry {full_key}"), read_result));
+        return Err(registry_error(
+            &format!("read Native Host registry {full_key}"),
+            read_result,
+        ));
     }
     while buffer.last() == Some(&0) {
         buffer.pop();
@@ -379,14 +395,20 @@ fn delete_owned_key(
         )
     };
     if open != 0 {
-        return Err(registry_error("open Native Host registry 64-bit view", open));
+        return Err(registry_error(
+            "open Native Host registry 64-bit view",
+            open,
+        ));
     }
     let result = unsafe { RegDeleteTreeW(view, key_wide.as_ptr()) };
     unsafe {
         RegCloseKey(view);
     }
     if result != 0 && result != ERROR_FILE_NOT_FOUND {
-        return Err(registry_error(&format!("delete Native Host registry {full_key}"), result));
+        return Err(registry_error(
+            &format!("delete Native Host registry {full_key}"),
+            result,
+        ));
     }
     Ok(Some(current))
 }
@@ -470,7 +492,9 @@ pub fn unregister_packaged_native_host_for_sid(
     let removed_keys = {
         let mut removed = 0;
         for entry in &entries {
-            if let Some(current) = delete_owned_key(&entry.key, &host, entry.allowlist_field, user_sid)? {
+            if let Some(current) =
+                delete_owned_key(&entry.key, &host, entry.allowlist_field, user_sid)?
+            {
                 candidates.push((current, entry.allowlist_field));
                 removed += 1;
             }

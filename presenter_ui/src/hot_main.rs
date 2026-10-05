@@ -956,13 +956,15 @@ fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
     };
     encoded
         .into_iter()
-        .filter_map(|encoded| match serde_json::from_str::<PersistedHandoff>(&encoded) {
-            Ok(handoff) => Some(handoff),
-            Err(error) => {
-                trace(&format!("忽略损坏的持久化接管请求: {error}"));
-                None
-            }
-        })
+        .filter_map(
+            |encoded| match serde_json::from_str::<PersistedHandoff>(&encoded) {
+                Ok(handoff) => Some(handoff),
+                Err(error) => {
+                    trace(&format!("忽略损坏的持久化接管请求: {error}"));
+                    None
+                }
+            },
+        )
         .filter(|handoff| handoff.status == "pending" && handoff.presentation != "fallback")
         .map(|handoff| handoff.offer)
         .fold(VecDeque::new(), |mut pending, offer| {

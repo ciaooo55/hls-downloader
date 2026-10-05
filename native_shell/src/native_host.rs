@@ -1239,8 +1239,10 @@ mod tests {
         assert!(error.contains("illegal_task_action"), "{error}");
         assert!(error.contains("不允许操作"), "{error}");
 
-        let mut snapshot = TaskSnapshot::default();
-        snapshot.task_id = "task-1".into();
+        let snapshot = TaskSnapshot {
+            task_id: "task-1".into(),
+            ..Default::default()
+        };
         assert!(ensure_task_started(
             &[EventEnvelope {
                 sequence: 2,
