@@ -17,26 +17,25 @@ export default defineContentScript({
     const pendingResources: Array<{ url: string; mimeType: string }> = []
     type MediaOwnershipPurpose = 'mse' | 'download'
     const pendingMse: Array<{ blobUrl: string; mediaUrl: string; purpose: MediaOwnershipPurpose }> = []
-    const mseReportTimes = new Map<string, number>()
+    const mseReportTimes = new Map<string, { mediaUrl: string; purpose: MediaOwnershipPurpose; at: number }>()
     const MSE_REPORT_INTERVAL_MS = 300
     const report = (url: unknown, mimeType = '') => {
       if (typeof url !== 'string') return
       if (!shouldReportMediaResponse(url, mimeType)) return
       pendingResources.push({ url, mimeType })
       if (pendingResources.length > 200) pendingResources.shift()
-      window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: { url, mimeType } }))
+      window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify({ url, mimeType }) }))
     }
     const reportMse = (blobUrl: string, mediaUrl: string, purpose: MediaOwnershipPurpose = 'mse') => {
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
-      // LL-HLS players append several audio/video chunks per second. Keep the
-      // exact ownership signal, but do not make each append redraw the page.
+      // 同一个响应的重复 append 可以合并，新片段 URL 必须保留，不能被限频丢掉。
       const now = Date.now()
-      const last = mseReportTimes.get(blobUrl) || 0
-      if (now - last < MSE_REPORT_INTERVAL_MS) return
-      mseReportTimes.set(blobUrl, now)
+      const last = mseReportTimes.get(blobUrl)
+      if (last?.mediaUrl === mediaUrl && last.purpose === purpose && now - last.at < MSE_REPORT_INTERVAL_MS) return
+      mseReportTimes.set(blobUrl, { mediaUrl, purpose, at: now })
       if (mseReportTimes.size > 64) {
         for (const [key, reportedAt] of mseReportTimes) {
-          if (now - reportedAt > 60_000) mseReportTimes.delete(key)
+          if (now - reportedAt.at > 60_000) mseReportTimes.delete(key)
         }
       }
       const existing = pendingMse.findIndex(item => item.blobUrl === blobUrl
@@ -45,7 +44,7 @@ export default defineContentScript({
       pendingMse.push({ blobUrl, mediaUrl, purpose })
       if (pendingMse.length > 48) pendingMse.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', {
-        detail: { blobUrl, mediaUrl, purpose },
+        detail: JSON.stringify({ blobUrl, mediaUrl, purpose }),
       }))
     }
     const inspectManifestResponse = async (response: Response, mimeType: string) => {
@@ -158,8 +157,8 @@ export default defineContentScript({
       // Frozen URL.createObjectURL only disables blob: download correlation.
     }
     window.addEventListener('__hls_downloader_replay__', () => {
-      pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: event })))
-      pendingMse.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
+      pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
+      pendingMse.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
     })
     try {
       const notifyNavigation = () => queueMicrotask(() => {

@@ -15,6 +15,7 @@ import {
   pageResourceKey,
   replayableRequestHeaders,
   resourceFingerprint,
+  selectMediaVariant,
   resourceId,
   playerPlaybackResources,
   resourceMatchesPlaybackSource,
@@ -45,6 +46,18 @@ function resource(overrides: Partial<MediaResource> = {}): MediaResource {
 }
 
 describe('resource rules', () => {
+  it('preserves the adaptive master and distinguishes explicit quality choices', () => {
+    const master = resource({ kind: 'hls', url: 'https://cdn.test/master.m3u8',
+      variants: [{ url: 'https://cdn.test/video/720.m3u8', bandwidth: 2500000, height: 720 }] })
+    const selected = selectMediaVariant(master, master.variants![0])
+    expect(selected).toMatchObject({ url: 'https://cdn.test/video/720.m3u8',
+      manifestUrl: master.url, preferredBandwidth: 2500000, preferredHeight: 720 })
+    const dash = resource({ kind: 'dash', url: 'https://cdn.test/manifest.mpd' })
+    const low = selectMediaVariant(dash, { url: dash.url, bandwidth: 500000, height: 360 })
+    const high = selectMediaVariant(dash, { url: dash.url, bandwidth: 6000000, height: 1080 })
+    expect(resourceFingerprint(low)).not.toBe(resourceFingerprint(high))
+    expect(resourceFingerprint(low)).not.toBe(resourceFingerprint(dash))
+  })
   it('bounds non-finite recognition confidence', () => {
     expect(boundedConfidence(Number.NaN, 0.58)).toBe(0.58)
     expect(boundedConfidence(Number.POSITIVE_INFINITY)).toBe(0)
@@ -369,15 +382,17 @@ describe('resource rules', () => {
       sourceUrls: ['blob:https://site.test/current-player'], startedAt: now,
     }).map(item => item.id)).toEqual(['preloaded', 'late-rendition'])
   })
-  it('uses SourceBuffer path evidence to separate simultaneous MSE players', () => {
+  it('uses parsed SourceBuffer URLs to separate simultaneous MSE players', () => {
     const now = Date.now()
     const first = resource({
       id: 'first', kind: 'hls', inspected: true,
       url: 'https://cdn.test/live/channel-one/master.m3u8', seenAt: now,
+      playbackUrls: ['https://cdn.test/live/channel-one/segment-10.m4s'],
     })
     const second = resource({
       id: 'second', kind: 'hls', inspected: true,
       url: 'https://cdn.test/live/channel-two/master.m3u8', seenAt: now,
+      playbackUrls: ['https://cdn.test/live/channel-two/segment-20.m4s'],
     })
 
     expect(playerPlaybackResources([first, second], {
@@ -390,6 +405,15 @@ describe('resource rules', () => {
       mseResourceUrls: ['https://cdn.test/live/channel-two/segment-20.m4s'],
       startedAt: now,
     }, 2).map(item => item.id)).toEqual(['second'])
+  })
+  it('resolves shared initialization once player-specific segments arrive', () => {
+    const now = Date.now()
+    const first = resource({ id: 'first', kind: 'dash', url: 'https://cdn.test/one.mpd', seenAt: now,
+      playbackUrls: ['https://cdn.test/init.m4s'], playbackPatterns: ['https://cdn.test/one-*.m4s'] })
+    const second = resource({ id: 'second', kind: 'dash', url: 'https://cdn.test/two.mpd', seenAt: now,
+      playbackUrls: ['https://cdn.test/init.m4s'], playbackPatterns: ['https://cdn.test/two-*.m4s'] })
+    expect(playerPlaybackResources([first, second], { sourceUrls: ['blob:https://site.test/player'], startedAt: now,
+      mseResourceUrls: ['https://cdn.test/init.m4s', 'https://cdn.test/two-1.m4s'] }).map(item => item.id)).toEqual(['second'])
   })
   it('binds YouTube-style videoplayback MSE bytes to the playing video', () => {
     const now = Date.now()
@@ -611,15 +635,14 @@ describe('resource rules', () => {
 
     expect(visiblePlaybackResources([unrelated], { sourceUrls: ['blob:https://site.test/player'], startedAt: now })).toEqual([])
   })
-  it('hides ambiguous adaptive manifests when simultaneous MSE players are active', () => {
+  it('requires byte provenance before assigning a manifest to an MSE player', () => {
     const now = Date.now()
     const manifest = resource({
       id: 'manifest', kind: 'hls', url: 'https://cdn.test/current/master.m3u8', seenAt: now,
     })
     const blobPlayback = { sourceUrls: ['blob:https://site.test/player-a'], startedAt: now }
 
-    expect(playerPlaybackResources([manifest], blobPlayback, 1).map(item => item.id)).toEqual(['manifest'])
-    expect(playerPlaybackResources([manifest], blobPlayback, 2)).toEqual([])
+    expect(playerPlaybackResources([manifest], blobPlayback)).toEqual([])
   })
   it('never places a recent adaptive stream beside a different direct video', () => {
     const now = Date.now()
@@ -629,6 +652,28 @@ describe('resource rules', () => {
     const directPlayback = { sourceUrls: ['https://cdn.test/current/movie.mp4'], startedAt: now }
 
     expect(playerPlaybackResources([manifest], directPlayback, 0)).toEqual([])
+  })
+  it('does not assign an unrelated inspected manifest by CDN folder or request time', () => {
+    const now = Date.now()
+    const unrelated = resource({
+      id: 'unrelated', kind: 'dash', url: 'https://cdn.test/shared/manifest.mpd',
+      inspected: true, playbackPatterns: ['https://cdn.test/shared/ad-*.m4s'], seenAt: now,
+    })
+    expect(playerPlaybackResources([unrelated], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/shared/movie-1.m4s'], startedAt: now,
+    }, 1)).toEqual([])
+  })
+  it('keeps shared-segment ownership ambiguous even when only one player is visible', () => {
+    const now = Date.now()
+    const common = { kind: 'dash' as const, inspected: true, seenAt: now,
+      playbackUrls: ['https://cdn.test/common/init.m4s'] }
+    const first = resource({ ...common, id: 'one', url: 'https://cdn.test/one.mpd' })
+    const second = resource({ ...common, id: 'two', url: 'https://cdn.test/two.mpd' })
+    expect(playerPlaybackResources([first, second], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/common/init.m4s'], startedAt: now,
+    }, 1)).toEqual([])
   })
   it('keeps images and ambiguous dynamic documents in the browser', () => {
     expect(classifyDownload('https://cdn.test/photo.jpg', 'application/octet-stream', 'photo.jpg')).toBeNull()

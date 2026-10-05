@@ -1,4 +1,4 @@
-import { replayableRequestHeaders, type MediaResource } from './resources'
+import { replayableRequestHeaders, type MediaResource, type MediaVariant } from './resources'
 import { readBoundedResponseText } from './boundedResponse'
 
 export type DashManifestFetcher = (url: string, init: RequestInit) => Promise<Response>
@@ -12,6 +12,7 @@ export interface DashInspectionResult {
   bandwidth?: number
   estimatedSize?: number
   quality?: string
+  variants: MediaVariant[]
   playbackUrls: string[]
   playbackPatterns: string[]
 }
@@ -195,23 +196,27 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
   const hints: string[] = []
   const patterns: string[] = []
   const rootDirect = withoutBlocks(rootBody, 'Period')
-  const periodDirect = best ? withoutBlocks(best.periodBody, 'AdaptationSet') : ''
-  const adaptationDirect = best ? withoutBlocks(best.adaptationBody, 'Representation') : ''
-  let mediaBase = baseUrl
-  for (const scope of [rootDirect, periodDirect, adaptationDirect, best?.representationBody || '']) {
-    mediaBase = resolveBase(directBaseUrl(scope), mediaBase)
-  }
-  const remember = (value: string) => {
-    const resolved = resolveHint(value, mediaBase, best?.id)
-    if (resolved && !hints.includes(resolved)) hints.push(resolved)
-  }
-  if (mediaBase !== baseUrl && !mediaBase.endsWith('/')) remember(mediaBase)
-  const templateScopes = [best?.representationBody || '', adaptationDirect, periodDirect, rootDirect]
-  const template = templateScopes.map(directSegmentTemplate).find(Boolean)
-  if (template) {
+  // 播放器会自适应切换到任意画质；归属证据必须覆盖所有 Representation。
+  for (const candidate of video) {
+    const periodDirect = withoutBlocks(candidate.periodBody, 'AdaptationSet')
+    const adaptationDirect = withoutBlocks(candidate.adaptationBody, 'Representation')
+    const scopes = [rootDirect, periodDirect, adaptationDirect, candidate.representationBody]
+    let mediaBase = baseUrl
+    for (const scope of scopes) mediaBase = resolveBase(directBaseUrl(scope), mediaBase)
+    const remember = (value: string) => {
+      const resolved = resolveHint(value, mediaBase, candidate.id)
+      if (resolved && !hints.includes(resolved)) hints.push(resolved)
+    }
+    if (mediaBase !== baseUrl && !mediaBase.endsWith('/')) remember(mediaBase)
+    const template = Object.assign({}, ...scopes.map(scope => directSegmentTemplate(scope) || {}))
     remember(template.initialization || '')
-    const pattern = resolvePattern(template.media || '', mediaBase, best?.id)
+    const pattern = resolvePattern(template.media || '', mediaBase, candidate.id)
     if (pattern && !patterns.includes(pattern)) patterns.push(pattern)
+    const segmentList = [...scopes].reverse().map(scope => blocks(scope, 'SegmentList')[0]).find(Boolean)
+    if (segmentList) {
+      for (const initialization of blocks(segmentList.body, 'Initialization')) remember(initialization.attributes.sourceurl || '')
+      for (const segment of blocks(segmentList.body, 'SegmentURL')) remember(segment.attributes.media || '')
+    }
   }
 
   return {
@@ -223,6 +228,11 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     bandwidth: best?.bandwidth || undefined,
     estimatedSize: estimatedBytes(duration, totalBandwidth),
     quality: best?.height ? `最高 ${best.height}p` : undefined,
+    variants: video.map(candidate => ({
+      url: baseUrl, width: candidate.width || undefined, height: candidate.height || undefined,
+      bandwidth: candidate.bandwidth || undefined,
+      quality: candidate.height ? `${candidate.height}p` : undefined,
+    })).slice(0, 12),
     playbackUrls: hints.slice(0, 48),
     playbackPatterns: patterns.slice(0, 48),
   }

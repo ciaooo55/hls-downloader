@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser'
 import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
-import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
@@ -22,6 +22,16 @@ async function runtimeMessage(message: Record<string, unknown>, retries = 1): Pr
     throw new Error('扩展已更新或后台未连接，请刷新当前网页后重试')
   }
   throw lastError
+}
+
+// Firefox 不允许 MAIN/隔离脚本直接读取对方的对象，桥接数据用 JSON 字符串传递。
+function bridgeDetail(event: Event): Record<string, any> {
+  try {
+    const detail = (event as CustomEvent).detail
+    if (typeof detail !== 'string' || detail.length > 64 * 1024) return {}
+    const parsed = JSON.parse(detail)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch { return {} }
 }
 
 export default defineContentScript({
@@ -72,7 +82,7 @@ export default defineContentScript({
     let contentReady = false
     const earlyResourceListener = (event: Event) => {
       if (contentReady) return
-      const detail = (event as CustomEvent).detail || {}
+      const detail = bridgeDetail(event)
       if (typeof detail.url === 'string') {
         earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType })
         if (classifyResource(detail.url, detail.mimeType)) requestActivation()
@@ -81,7 +91,7 @@ export default defineContentScript({
     }
     const earlyMseListener = (event: Event) => {
       if (contentReady) return
-      const detail = (event as CustomEvent).detail || {}
+      const detail = bridgeDetail(event)
       if (typeof detail.blobUrl === 'string' && typeof detail.mediaUrl === 'string') {
         earlyMseEvents.push({
           blobUrl: detail.blobUrl,
@@ -486,19 +496,13 @@ export default defineContentScript({
           && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
-      const activeMseVideos = videos.filter(({ video, playback }) => Boolean(playback?.sourceUrls.some(source => source.startsWith('blob:')))
-        && (video === activeVideo || !video.paused))
-      // Render beside every real, played video that has its own evidence.  A
-      // blob/MSE source cannot name its manifest; when two MSE players are
-      // active in this frame, page-level manifests are ambiguous and are not
-      // shown beside either player.
+      // 每个播放器独立匹配自己的 currentSrc 或 SourceBuffer 响应，避免串到广告或其他视频。
       videos.forEach(({ video, rect, playback }) => {
         if (!playback) return
         const sourceUrls = playback.sourceUrls
         const candidates = playerPlaybackResources(
           [...resources.values()],
           playback,
-          activeMseVideos.length,
           8,
         )
         const exact = candidates.filter(item => sourceUrls.some(source => resourceMatchesPlaybackSource(item, source)))
@@ -508,7 +512,7 @@ export default defineContentScript({
         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
         const identifying = choices.length === 0
         // playerPlaybackResources already enforces the ambiguity boundary for
-        // blob/MSE (per-SourceBuffer evidence, or a sole active MSE session).
+        // blob/MSE (per-SourceBuffer evidence).
         // Requiring a literal currentSrc match again made a uniquely resolved
         // MSE video open a pointless one-item picker.
         const oneClickChoice = choices.length === 1
@@ -754,18 +758,18 @@ export default defineContentScript({
           select.className = 'hlsd-select quality-select'
           select.setAttribute('aria-label', '选择视频清晰度')
           const automatic = document.createElement('option')
-          automatic.value = resource.url
+          automatic.value = 'auto'
           automatic.textContent = '自动（最高）'
           select.append(automatic)
-          resource.variants.forEach(variant => {
+          resource.variants.forEach((variant, index) => {
             const option = document.createElement('option')
-            option.value = variant.url
+            option.value = String(index)
             option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '线路'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' · ')
             select.append(option)
           })
           select.addEventListener('change', () => {
-            const variant = resource.variants?.find(item => item.url === select.value)
-            selected = variant ? { ...resource, ...variant, url: variant.url, variants: undefined } : resource
+            const variant = resource.variants?.[Number(select.value)]
+            selected = variant ? selectMediaVariant(resource, variant) : resource
             applySendState(selected, button, '下载')
           })
           meta.append(name, kind, resourceUrl, select)
@@ -995,11 +999,11 @@ export default defineContentScript({
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
 
     const handleResourceEvent = (event: Event) => {
-      const detail = (event as CustomEvent).detail || {}
+      const detail = bridgeDetail(event)
       add(detail.url, detail.mimeType)
     }
     const handleMseEvent = (event: Event) => {
-      const detail = (event as CustomEvent).detail || {}
+      const detail = bridgeDetail(event)
       const blobUrl = String(detail.blobUrl || '')
       const mediaUrl = String(detail.mediaUrl || '')
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
@@ -1065,7 +1069,7 @@ export default defineContentScript({
     // script/UI finished mounting (especially fast MSE and preloaded HLS).
     window.dispatchEvent(new Event('__hls_downloader_replay__'))
     earlyResourceEvents.splice(0).forEach(event => add(event.url, event.mimeType))
-    earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: event })))
+    earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
     document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
       mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true, ['current_src'], mediaOwner(media), 0.98))
     })

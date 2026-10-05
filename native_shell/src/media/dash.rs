@@ -208,15 +208,26 @@ pub fn audio_choices(manifest: &DashManifest) -> Vec<crate::StreamVariant> {
 fn select_video(
     representations: &[Representation],
     preferred_bandwidth: u64,
+    preferred_height: u32,
 ) -> Option<&Representation> {
     let videos: Vec<_> = representations
         .iter()
         .filter(|item| is_video(item))
         .collect();
     if preferred_bandwidth > 0 {
-        videos
-            .into_iter()
-            .min_by_key(|item| item.bandwidth.abs_diff(preferred_bandwidth))
+        videos.into_iter().min_by_key(|item| {
+            (
+                item.bandwidth.abs_diff(preferred_bandwidth),
+                item.height.abs_diff(preferred_height),
+            )
+        })
+    } else if preferred_height > 0 {
+        videos.into_iter().min_by_key(|item| {
+            (
+                item.height.abs_diff(preferred_height),
+                std::cmp::Reverse(item.bandwidth),
+            )
+        })
     } else {
         videos.into_iter().max_by_key(|item| item.bandwidth)
     }
@@ -229,6 +240,7 @@ pub fn download_dash_selected(
     task_dir: &Path,
     control: &Path,
     preferred_bandwidth: u64,
+    preferred_height: u32,
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
@@ -249,7 +261,12 @@ pub fn download_dash_selected(
         if multi_period_codec_change(&xml, manifest.period_count) {
             return Err("unsupported multi-period DASH with codec changes".into());
         }
-        let video = select_video(&manifest.representations, preferred_bandwidth).cloned();
+        let video = select_video(
+            &manifest.representations,
+            preferred_bandwidth,
+            preferred_height,
+        )
+        .cloned();
         let audio = select_audio(&manifest.representations, preferred_audio).cloned();
         if video.is_none() && audio.is_none() {
             return Err("DASH has no audio or video representation".into());
@@ -1233,6 +1250,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selected_height_distinguishes_equal_bandwidth_video_tracks() {
+        let xml = r#"<MPD><Period><AdaptationSet mimeType="video/mp4"><Representation id="high" height="720" bandwidth="500000"/><Representation id="low" height="360" bandwidth="500000"/></AdaptationSet></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        assert_eq!(
+            select_video(&parsed.representations, 500000, 360)
+                .unwrap()
+                .id,
+            "low"
+        );
+        assert_eq!(
+            select_video(&parsed.representations, 0, 720).unwrap().id,
+            "high"
+        );
+    }
+
+    #[test]
     fn parses_static_representation_and_segment_list() {
         let xml = r#"<MPD type="static"><Period><AdaptationSet><Representation id="v" bandwidth="2000000" mimeType="video/mp4"><BaseURL>https://cdn.test/v/</BaseURL><SegmentList><SegmentURL media="init.mp4"/><SegmentURL media="1.m4s"/></SegmentList></Representation></AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
@@ -1402,7 +1435,7 @@ mod tests {
                 "https://cdn.test/en-1.vtt".to_string()
             ]
         );
-        assert_eq!(select_video(&parsed.representations, 0).unwrap().id, "v");
+        assert_eq!(select_video(&parsed.representations, 0, 0).unwrap().id, "v");
         assert_eq!(select_audio(&parsed.representations, "").unwrap().id, "a");
         assert_eq!(representation_choices(&parsed).len(), 1);
     }
@@ -1501,7 +1534,7 @@ mod tests {
     fn audio_only_dash_is_selectable() {
         let xml = r#"<MPD type="static"><Period><AdaptationSet mimeType="audio/mp4"><Representation id="a" bandwidth="192000"><SegmentURL media="a.m4s"/></Representation></AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/audio.mpd").unwrap();
-        assert!(select_video(&parsed.representations, 0).is_none());
+        assert!(select_video(&parsed.representations, 0, 0).is_none());
         assert_eq!(select_audio(&parsed.representations, "").unwrap().id, "a");
         let xml = r#"<MPD type="static"><Period><AdaptationSet mimeType="audio/mp4"><Representation id="en" bandwidth="128000" lang="en"><SegmentURL media="en.m4s"/></Representation><Representation id="ja" bandwidth="192000" lang="ja"><SegmentURL media="ja.m4s"/></Representation></AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/audio.mpd").unwrap();

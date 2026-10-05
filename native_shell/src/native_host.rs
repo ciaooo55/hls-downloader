@@ -388,6 +388,15 @@ impl NativeHostSession {
                     .filter(|size| *size > 0),
                 etag: field(payload, "etag"),
                 last_modified: field(payload, "last_modified"),
+                preferred_bandwidth: payload
+                    .get("preferred_bandwidth")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                preferred_height: payload
+                    .get("preferred_height")
+                    .and_then(Value::as_u64)
+                    .and_then(|height| u32::try_from(height).ok())
+                    .unwrap_or(0),
                 ..Default::default()
             },
             owned_credential_ref,
@@ -1212,6 +1221,8 @@ mod tests {
                     "filename": "movie.mp4",
                     "title": "Movie",
                     "resource_kind": "hls",
+                    "preferred_bandwidth": 2_500_000,
+                    "preferred_height": 720,
                     "evidence": ["manifest_mime"],
                     "confidence": 0.99
                 }
@@ -1221,6 +1232,10 @@ mod tests {
         assert_eq!(response["task"]["resource_kind"], "hls");
         assert_eq!(session.core.local().tasks().len(), 1);
         assert_eq!(session.core.local().store().load_tasks().unwrap().len(), 1);
+        let specs = session.core.local().store().load_task_specs().unwrap();
+        assert_eq!(specs[0].1.url, "https://cdn.test/movie.m3u8");
+        assert_eq!(specs[0].1.preferred_bandwidth, 2_500_000);
+        assert_eq!(specs[0].1.preferred_height, 720);
     }
 
     #[test]

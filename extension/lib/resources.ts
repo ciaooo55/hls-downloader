@@ -52,6 +52,10 @@ export interface MediaResource {
   inspected?: boolean
   manifestType?: 'master' | 'media'
   variants?: MediaVariant[]
+  /** Selected adaptive rendition keeps its master for audio/subtitle discovery. */
+  manifestUrl?: string
+  preferredBandwidth?: number
+  preferredHeight?: number
   /** Child rendition playlists owned by a master (audio, subtitles, alternate video). */
   renditionUrls?: string[]
   /** Recent media/init URLs parsed from the manifest for concrete MSE ownership. */
@@ -229,25 +233,6 @@ export interface PlaybackContext {
   mseResourceUrls?: string[]
 }
 
-function msePathAffinity(resourceUrl: string, mediaUrl: string): number {
-  try {
-    const resource = new URL(resourceUrl)
-    const media = new URL(mediaUrl)
-    if (resource.origin !== media.origin) return -1
-    const resourceParts = resource.pathname.split('/').filter(Boolean).slice(0, -1)
-    const mediaParts = media.pathname.split('/').filter(Boolean).slice(0, -1)
-    let common = 0
-    while (
-      common < resourceParts.length
-      && common < mediaParts.length
-      && resourceParts[common] === mediaParts[common]
-    ) common += 1
-    return common
-  } catch {
-    return -1
-  }
-}
-
 function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number {
   const candidates = [resource.url, ...(resource.playbackUrls || [])]
   const exact = Math.max(...candidates.map(candidate => {
@@ -258,7 +243,7 @@ function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number 
       if (resourceFingerprint({ kind: resource.kind, url: candidate })
         === resourceFingerprint({ kind: resource.kind, url: mediaUrl })) return 1_000
     } catch {}
-    return msePathAffinity(candidate, mediaUrl)
+    return -1
   }))
   const pattern = Math.max(-1, ...(resource.playbackPatterns || []).map(candidate => {
     try {
@@ -282,7 +267,6 @@ function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number 
 function mseCorrelatedResources(
   resources: MediaResource[],
   playback: PlaybackContext,
-  limit: number,
 ): MediaResource[] {
   const evidence = playback.mseResourceUrls || []
   if (!evidence.length) return []
@@ -296,18 +280,17 @@ function mseCorrelatedResources(
       // sharing a CDN folder with fragments.
       return item.kind === 'file' && DIRECT_PLAYBACK_EXT.test(item.url)
     })
-    .map(item => ({
-      item,
-      affinity: Math.max(...evidence.map(url => mseEvidenceAffinity(item, url))),
-    }))
-    // A same-origin match alone is not evidence: unrelated players and ads
-    // frequently share one CDN host. File-kind MP4s need an exact/pattern
-    // hit; weak directory affinity would steal a preview sitting next to
-    // the real segments.
-    .filter(entry => entry.item.kind === 'file' ? entry.affinity >= 900 : entry.affinity > 0)
+    .map(item => {
+      const scores = evidence.map(url => mseEvidenceAffinity(item, url))
+      return { item, affinity: Math.max(...scores), matches: scores.filter(score => score >= 900).length }
+    })
+    // 同目录和请求时间不能证明播放器归属；只采用实际追加的响应 URL 或清单片段模式。
+    .filter(entry => entry.affinity >= 900)
   if (!ranked.length) return []
-  const best = Math.max(...ranked.map(entry => entry.affinity))
-  const sorted = ranked
+  const mostMatches = Math.max(...ranked.map(entry => entry.matches))
+  const strongest = ranked.filter(entry => entry.matches === mostMatches)
+  const best = Math.max(...strongest.map(entry => entry.affinity))
+  const sorted = strongest
     .filter(entry => entry.affinity === best)
     .sort((left, right) => resourceRank(right.item) - resourceRank(left.item)
       || right.item.seenAt - left.item.seenAt)
@@ -322,7 +305,7 @@ function mseCorrelatedResources(
     try { key = stableResourceUrl({ url: entry.item.url, kind: 'media' }).href } catch {}
     if (!unique.has(key)) unique.set(key, entry.item)
   }
-  return [...unique.values()].slice(0, limit)
+  return [...unique.values()]
 }
 
 function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
@@ -353,12 +336,23 @@ function hasAdvertSignal(value: string): boolean {
   }
 }
 
-export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'>): string {
+export function selectMediaVariant(resource: MediaResource, variant: MediaVariant): MediaResource {
+  return {
+    ...resource, ...variant, variants: undefined,
+    manifestUrl: resource.kind === 'hls' || resource.kind === 'dash' ? resource.url : undefined,
+    preferredBandwidth: variant.bandwidth || 0,
+    preferredHeight: variant.height || 0,
+  }
+}
+
+export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'> & Partial<Pick<MediaResource, 'preferredBandwidth' | 'preferredHeight'>>): string {
+  const selection = resource.preferredBandwidth || resource.preferredHeight
+    ? `:quality:${resource.preferredBandwidth || 0}:${resource.preferredHeight || 0}` : ''
   try {
     const url = stableResourceUrl(resource)
-    return `${resource.kind}:${url.href}`
+    return `${resource.kind}:${url.href}${selection}`
   } catch {
-    return `${resource.kind}:${resource.url.split('#', 1)[0]}`
+    return `${resource.kind}:${resource.url.split('#', 1)[0]}${selection}`
   }
 }
 
@@ -370,16 +364,20 @@ function stableResourceUrl(resource: Pick<MediaResource, 'url' | 'kind'>): URL {
   // and e occur together, so an ordinary semantic `e` stays meaningful.
   const hasShortLivedSignature = usesShortLivedMediaSignature(resource)
   const adaptiveOrMedia = ['hls', 'dash', 'media'].includes(resource.kind)
-  for (const key of [...url.searchParams.keys()]) {
+  const parameters = new URLSearchParams(url.search)
+  const names: string[] = []
+  parameters.forEach((_value, key) => names.push(key))
+  for (const key of names) {
     if (
       VOLATILE_QUERY.test(key)
       || (adaptiveOrMedia && MEDIA_AUTH_QUERY.test(key))
       || (hasShortLivedSignature && ['s', 'e', '_t'].includes(key.toLowerCase()))
     ) {
-      url.searchParams.delete(key)
+      parameters.delete(key)
     }
   }
-  url.searchParams.sort()
+  parameters.sort()
+  url.search = parameters.toString()
   return url
 }
 
@@ -392,7 +390,8 @@ function stableResourceUrl(resource: Pick<MediaResource, 'url' | 'kind'>): URL {
 export function usesShortLivedMediaSignature(resource: Pick<MediaResource, 'url' | 'kind'>): boolean {
   try {
     const url = new URL(resource.url)
-    const names = new Set([...url.searchParams.keys()].map(key => key.toLowerCase()))
+    const names = new Set<string>()
+    url.searchParams.forEach((_value, key) => names.add(key.toLowerCase()))
     return names.has('s')
       && names.has('e')
       && (['hls', 'dash', 'media'].includes(resource.kind) || DIRECT_PLAYBACK_EXT.test(url.pathname))
@@ -597,33 +596,24 @@ export function visiblePlaybackResources(
 /**
  * Resolve candidates for one concrete HTMLMediaElement playback session.
  *
- * Direct URLs can be fingerprint-matched exactly. A blob/MSE URL intentionally
- * hides the manifest, so an adaptive fallback is only safe while it is the
- * sole active MSE session in that frame. This is deliberately conservative:
- * a missing button is preferable to putting another player's video beside the
- * wrong element.
+ * Direct URLs match currentSrc. Blob/MSE resources must match bytes appended
+ * to that player's SourceBuffer; shared or absent evidence stays unresolved.
  */
 export function playerPlaybackResources(
   resources: MediaResource[],
   playback: PlaybackContext | null,
-  activeMseSessions: number,
   limit = 8,
 ): MediaResource[] {
   const msePlayback = Boolean(playback?.sourceUrls.some(source => source.startsWith('blob:')))
   if (msePlayback && playback) {
-    const correlated = mseCorrelatedResources(resources, playback, limit)
-    if (correlated.length && (activeMseSessions <= 1 || correlated.length === 1)) {
-      return correlated
-    }
+    const correlated = mseCorrelatedResources(resources, playback)
+    return correlated.length === 1 ? correlated.slice(0, limit) : []
   }
   return visiblePlaybackResources(
     resources,
     playback,
     limit,
-    // A concrete http(s) currentSrc must match that exact resource. Adaptive
-    // time-window fallback exists only for blob/MSE, where the browser hides
-    // the manifest URL from the media element.
-    msePlayback && activeMseSessions <= 1,
+    false,
   )
 }
 

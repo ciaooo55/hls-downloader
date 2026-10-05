@@ -18,6 +18,36 @@ const vod = `<?xml version="1.0"?>
 </MPD>`
 
 describe('DASH browser inspection', () => {
+  it('associates lower-quality playback and inherits partial representation templates', () => {
+    const manifest = `<MPD><Period><AdaptationSet contentType="video">
+      <SegmentTemplate initialization="init-$RepresentationID$.m4s" media="high-$Number$.m4s" />
+      <Representation id="high" height="1080" bandwidth="6000000" />
+      <Representation id="low" height="360" bandwidth="500000">
+        <SegmentTemplate media="low-$Number$.m4s" />
+      </Representation>
+    </AdaptationSet></Period></MPD>`
+    const parsed = parseDashManifest(manifest, 'https://cdn.test/movie/manifest.mpd')
+    expect(parsed?.playbackUrls).toEqual([
+      'https://cdn.test/movie/init-high.m4s', 'https://cdn.test/movie/init-low.m4s',
+    ])
+    expect(parsed?.playbackPatterns).toEqual([
+      'https://cdn.test/movie/high-*.m4s', 'https://cdn.test/movie/low-*.m4s',
+    ])
+  })
+  it('records explicit SegmentList media URLs for every representation', () => {
+    const manifest = `<MPD><Period><AdaptationSet contentType="video">
+      <Representation id="high" height="1080"><BaseURL>high/</BaseURL>
+        <SegmentList><Initialization sourceURL="init.m4s" /><SegmentURL media="1.m4s" /></SegmentList>
+      </Representation>
+      <Representation id="low" height="360"><BaseURL>low/</BaseURL>
+        <SegmentList><Initialization sourceURL="init.m4s" /><SegmentURL media="1.m4s" /></SegmentList>
+      </Representation>
+    </AdaptationSet></Period></MPD>`
+    expect(parseDashManifest(manifest, 'https://cdn.test/manifest.mpd')?.playbackUrls).toEqual([
+      'https://cdn.test/high/init.m4s', 'https://cdn.test/high/1.m4s',
+      'https://cdn.test/low/init.m4s', 'https://cdn.test/low/1.m4s',
+    ])
+  })
   it('extracts the best video representation, size and playback hints', () => {
     expect(parseDashManifest(vod, 'https://cdn.test/path/manifest.mpd?token=x')).toMatchObject({
       inspected: true,

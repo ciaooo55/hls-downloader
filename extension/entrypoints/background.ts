@@ -929,6 +929,8 @@ async function resourcePayload(
     size: resource.size || 0,
     source_page_url: pageUrl,
     resource_kind: resource.kind,
+    preferred_bandwidth: resource.preferredBandwidth || 0,
+    preferred_height: resource.preferredHeight || 0,
     referer: sourceIdentity.referer || identity.referer,
     origin: sourceIdentity.origin || identity.origin,
     // This top-level context belongs to the browser URL, not the media URL.
@@ -953,6 +955,10 @@ async function downloadNow(
   chain?: RequestChain,
   options: { allowUnverified?: boolean } = {},
 ) {
+  // 保留主清单的外置音轨/字幕关系，Core 按用户选定的码率和高度选择视频轨。
+  if (resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')) {
+    resource = { ...resource, url: resource.manifestUrl }
+  }
   const key = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
   const active = activeDirectDownloads.get(key)
   if (active) return active

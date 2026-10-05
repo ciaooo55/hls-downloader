@@ -2137,6 +2137,9 @@ impl CoreCoordinator {
             && safe(stored)
             && method(incoming) == method(stored)
             && normalized_headers(incoming) == normalized_headers(stored)
+            && incoming.preferred_bandwidth == stored.preferred_bandwidth
+            && incoming.preferred_height == stored.preferred_height
+            && incoming.preferred_audio == stored.preferred_audio
     }
 
     fn duplicate_of(&self, spec: &TaskSpec) -> Result<Option<(String, String)>, String> {
@@ -2884,6 +2887,7 @@ fn run_task_with_throttle(
             let control = paths.control.clone();
             let progress = paths.progress.clone();
             let bandwidth = spec.preferred_bandwidth;
+            let height = spec.preferred_height;
             let download_subtitles = core
                 .lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?
@@ -2900,6 +2904,7 @@ fn run_task_with_throttle(
                         &task_dir,
                         &control,
                         bandwidth,
+                        height,
                         download_subtitles,
                         &audio_name,
                     )
@@ -5228,6 +5233,19 @@ mod tests {
             &same, &plain
         ));
 
+        let mut changed_quality = same.clone();
+        changed_quality.preferred_bandwidth = 2_500_000;
+        changed_quality.preferred_height = 720;
+        assert!(!CoreCoordinator::duplicate_request_identity_matches(
+            &changed_quality,
+            &plain
+        ));
+        let mut changed_audio = same.clone();
+        changed_audio.preferred_audio = "English".into();
+        assert!(!CoreCoordinator::duplicate_request_identity_matches(
+            &changed_audio,
+            &plain
+        ));
         let mut changed_method = same.clone();
         changed_method.request_method = "HEAD".into();
         assert!(!CoreCoordinator::duplicate_request_identity_matches(

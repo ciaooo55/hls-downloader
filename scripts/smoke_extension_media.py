@@ -1,4 +1,4 @@
-"""Real Edge smoke for content-script media ownership.
+"""Real Edge/Firefox smoke for content-script media ownership.
 
 The test uses an isolated temporary browser profile and local HTTP server. It
 does not require the desktop app and never modifies the user's browser profile.
@@ -51,6 +51,8 @@ PAGE = """<!doctype html>
 const mode = new URL(location.href).searchParams.get('mode') || 'direct';
 document.querySelector('#mode').textContent = mode;
 const mount = document.querySelector('#mount');
+window.mediaOwnership=[];
+window.addEventListener('__hls_downloader_mse__',event=>window.mediaOwnership.push(JSON.parse(event.detail)));
 function video() { const value=document.createElement('video'); value.controls=true; value.autoplay=true; value.muted=true; return value; }
 function append(buffer, bytes) {
   return new Promise((resolve,reject) => { buffer.addEventListener('updateend',resolve,{once:true}); buffer.addEventListener('error',reject,{once:true}); buffer.appendBuffer(bytes); });
@@ -103,13 +105,14 @@ function llHlsVideo() {
     if (source.readyState === 'open') source.endOfStream(); await value.play();
   }, {once:true});
 }
-function dashVideo() {
+function dashVideo(manifest='/dash/manifest.mpd?token=browser-smoke', low=false) {
   const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
   source.addEventListener('sourceopen', async () => {
     const buffer=source.addSourceBuffer('video/mp4; codecs="avc1.64001e"');
-    const response=await fetch('/dash/manifest.mpd?token=browser-smoke'); const text=await response.text();
+    const response=await fetch(manifest); const text=await response.text(); value.dataset.manifest=response.url;
     const xml=new DOMParser().parseFromString(text,'application/xml');
-    const representation=[...xml.querySelectorAll('Representation')].find(item => (item.getAttribute('mimeType')||item.parentElement?.getAttribute('mimeType')||'').startsWith('video/'));
+    const representations=[...xml.querySelectorAll('Representation')].filter(item => (item.getAttribute('mimeType')||item.parentElement?.getAttribute('mimeType')||'').startsWith('video/'));
+    const representation=low ? representations.sort((a,b)=>Number(a.getAttribute('height'))-Number(b.getAttribute('height')))[0] : representations[0];
     const template=representation?.querySelector('SegmentTemplate') || representation?.parentElement?.querySelector('SegmentTemplate');
     const id=representation?.getAttribute('id') || '0'; const start=Number(template?.getAttribute('startNumber')||1);
     const resolve=(pattern,number) => pattern.replace(/\\$RepresentationID\\$/g,id).replace(/\\$Number(?:%0(\\d+)d)?\\$/g,(_all,width)=>String(number).padStart(Number(width||0),'0'));
@@ -117,6 +120,16 @@ function dashVideo() {
     for(let number=start;number<start+4;number++) await appendUrl(buffer,new URL(resolve(template.getAttribute('media'),number),response.url));
     if (source.readyState === 'open') source.endOfStream(); await value.play();
   }, {once:true});
+}
+function unknownDashVideo() {
+  const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
+  source.addEventListener('sourceopen', async () => {
+    const buffer=source.addSourceBuffer('video/mp4; codecs="avc1.64001e"');
+    await fetch('/dash/other.mpd');
+    await appendUrl(buffer,'/dash/init-0.m4s');
+    for(let number=1;number<=4;number++) await appendUrl(buffer,'/dash/chunk-0-'+String(number).padStart(5,'0')+'.m4s');
+    if(source.readyState==='open') source.endOfStream(); await value.play();
+  },{once:true});
 }
 if (mode === 'shadow') {
   const host=document.createElement('section'); mount.append(host);
@@ -136,6 +149,12 @@ if (mode === 'shadow') {
   llHlsVideo();
 } else if (mode === 'dash-mse') {
   dashVideo();
+} else if (mode === 'dash-low-mse') {
+  dashVideo('/dash/low.mpd',true);
+} else if (mode === 'multi-dash-mse') {
+  dashVideo('/dash/one.mpd',true); dashVideo('/dash/two.mpd',true);
+} else if (mode === 'dash-unknown-mse') {
+  unknownDashVideo();
 } else if (mode === 'iframe' || mode === 'cross-iframe') {
   const frame=document.createElement('iframe');
   const host=mode === 'cross-iframe' ? 'localhost' : location.hostname;
@@ -224,6 +243,16 @@ def _make_media(root: Path, ffmpeg: str) -> None:
         "-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
         str(dash / "manifest.mpd"),
     ], check=True, timeout=60, cwd=dash)
+    for name, prefix in [('low',''), ('one','one-'), ('two','two-'), ('other','other-')]:
+        manifest = f'''<MPD type="static" mediaPresentationDuration="PT4S"><Period><AdaptationSet mimeType="video/mp4">
+          <SegmentTemplate initialization="{prefix}init-$RepresentationID$.m4s" media="{prefix}chunk-$RepresentationID$-$Number%05d$.m4s" startNumber="1" />
+          <Representation id="1" width="1920" height="1080" bandwidth="6000000" />
+          <Representation id="0" width="640" height="360" bandwidth="500000" />
+        </AdaptationSet></Period></MPD>'''
+        (dash / f'{name}.mpd').write_text(manifest, encoding='utf-8')
+        if prefix:
+            for original in [dash / 'init-0.m4s', *dash.glob('chunk-0-*.m4s')]:
+                shutil.copy2(original, dash / (prefix + original.name))
     (root / "index.html").write_text(PAGE, encoding="utf-8")
     llhls = root / "llhls"
     llhls.mkdir()
@@ -253,13 +282,14 @@ def _current_frame_overlay_state(driver) -> dict:
           root.querySelectorAll('*').forEach(element => { if (element.shadowRoot) visit(element.shadowRoot); });
         };
         visit(document);
-        const resourceIds=[]; const moreButtons=[]; const panelActions=[];
+        const resourceIds=[]; const moreButtons=[]; const panelActions=[]; const panelResources=[];
         roots.forEach(root => root.querySelectorAll('button.video-download').forEach(button => { labels.push(button.innerText.trim()); resourceIds.push(button.dataset.resourceId || ''); }));
         roots.forEach(root => root.querySelectorAll('button.video-more').forEach(button => moreButtons.push(button.getAttribute('aria-label') || button.title || '')));
         roots.forEach(root => root.querySelectorAll('.item-actions button').forEach(button => panelActions.push(button.innerText.trim())));
+        roots.forEach(root => root.querySelectorAll('.item').forEach(item => panelResources.push(item.innerText)));
         const videos=[];
-        roots.forEach(root => root.querySelectorAll('video').forEach(video => videos.push({paused:video.paused,currentTime:video.currentTime,src:video.currentSrc})));
-        return {marker:document.documentElement.getAttribute('data-hls-downloader-extension'),labels,resourceIds,moreButtons,panelActions,videos};
+        roots.forEach(root => root.querySelectorAll('video').forEach(video => videos.push({paused:video.paused,currentTime:video.currentTime,src:video.currentSrc,manifest:video.dataset.manifest||''})));
+        return {marker:document.documentElement.getAttribute('data-hls-downloader-extension'),labels,resourceIds,moreButtons,panelActions,panelResources,videos,mediaOwnership:window.mediaOwnership||[]};
         """
     )
 
@@ -347,6 +377,7 @@ def run(
     ffmpeg: str,
     driver_path: Path | None = None,
     binary_path: Path | None = None,
+    modes: list[str] | None = None,
 ) -> list[dict]:
     if browser_name == "edge" and not (extension / "manifest.json").is_file():
         raise RuntimeError(f"Chromium 扩展未构建: {extension}")
@@ -401,10 +432,10 @@ def run(
                 service = FirefoxService(executable_path=str(driver_path)) if driver_path else FirefoxService()
                 driver = webdriver.Firefox(service=service, options=options)
                 driver.install_addon(str(resolved_addon), temporary=True)
-            for mode in (
+            for mode in modes or (
                 "direct", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
                 "ad-direct", "spa", "mse", "mse-sliced", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
-                "empty-video-src",
+                "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
             ):
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")
                 if mode == "empty-video-src":
@@ -416,9 +447,9 @@ def run(
                 state: dict = {}
                 while time.monotonic() < deadline:
                     state = _overlay_state(driver)
-                    expected = 2 if mode == "multi-mse" else 1
+                    expected = 2 if mode in {"multi-mse", "multi-dash-mse"} else 1
                     playing = sum(float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) == expected
-                    actionable = state.get("labels", []).count("下载视频") == expected
+                    actionable = state.get("labels", []).count("下载视频") == (0 if mode == "dash-unknown-mse" else expected)
                     expected_player = "main" if mode == "ad-direct" else "spa-two" if mode == "spa" else ""
                     main_ready = not expected_player or any(
                         f"player={expected_player}" in str(item.get("src") or "")
@@ -439,9 +470,17 @@ def run(
                     raise AssertionError(f"{mode}: 子 frame content script 未就绪: {state}")
                 if state.get("browserErrors"):
                     raise AssertionError(f"{mode}: 页面或扩展产生浏览器错误: {state}")
-                expected = 2 if mode == "multi-mse" else 1
+                expected = 2 if mode in {"multi-mse", "multi-dash-mse"} else 1
                 if sum(float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) != expected:
                     raise AssertionError(f"{mode}: 视频没有开始播放: {state}")
+                if mode == "dash-unknown-mse":
+                    time.sleep(1)
+                    state = _overlay_state(driver)
+                    state["mode"] = mode
+                    results[-1] = state
+                    if "下载视频" in state.get("labels", []) or any(state.get("resourceIds", [])):
+                        raise AssertionError(f"{mode}: 无关清单被误绑定到播放器: {state}")
+                    continue
                 if "下载视频" not in state.get("labels", []):
                     raise AssertionError(f"{mode}: 当前播放器没有得到唯一一键资源: {state}")
                 if mode == "direct":
@@ -465,10 +504,14 @@ def run(
                     main_url = next((item["src"] for item in state["videos"] if "player=spa-two" in item.get("src", "")), "")
                     if state.get("resourceIds") != [_resource_id(main_url)]:
                         raise AssertionError(f"{mode}: pushState 后按钮仍绑定旧资源: {state}")
-                if mode == "multi-mse":
+                if mode in {"multi-mse", "multi-dash-mse"}:
                     resource_ids = [value for value in state.get("resourceIds", []) if value]
                     if len(resource_ids) != 2 or len(set(resource_ids)) != 2:
                         raise AssertionError(f"{mode}: 两个播放器没有绑定两个不同资源: {state}")
+                if mode in {"dash-low-mse", "multi-dash-mse"}:
+                    expected_ids = [_resource_id(item['manifest']) for item in state['videos']]
+                    if sorted(state.get('resourceIds', [])) != sorted(expected_ids):
+                        raise AssertionError(f"{mode}: 低画质播放或同目录双播放器匹配了错误清单: {state}")
         finally:
             if driver is not None:
                 with contextlib.suppress(Exception):
@@ -488,10 +531,12 @@ def main() -> None:
     parser.add_argument("--ffmpeg", default=shutil.which("ffmpeg") or "ffmpeg")
     parser.add_argument("--driver", type=Path, help="可选的匹配版 WebDriver；省略时由 Selenium Manager 查找")
     parser.add_argument("--browser-binary", type=Path, help="可选的浏览器可执行文件路径")
+    parser.add_argument("--mode", action="append", help="只执行指定媒体场景；可重复指定")
     arguments = parser.parse_args()
     print(json.dumps(run(
         arguments.extension.resolve(),
         browser_name=arguments.browser,
+        modes=arguments.mode,
         addon=arguments.addon.resolve() if arguments.addon else None,
         headed=arguments.headed,
         ffmpeg=arguments.ffmpeg,
