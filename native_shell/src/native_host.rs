@@ -308,7 +308,6 @@ impl NativeHostSession {
         offer.handoff_id = id.clone();
         offer.filename = field(payload, "filename");
         offer.title = field(payload, "title");
-        offer.size = payload.get("size").and_then(Value::as_u64).unwrap_or(0);
         let handoff = Handoff {
             id: id.clone(),
             offer: offer.clone(),
@@ -382,10 +381,7 @@ impl NativeHostSession {
                 replay_context_ref: offer.replay_context_ref,
                 concurrency: 8,
                 checksum: None,
-                expected_size: payload
-                    .get("size")
-                    .and_then(Value::as_u64)
-                    .filter(|size| *size > 0),
+                expected_size: (offer.size > 0).then_some(offer.size),
                 etag: field(payload, "etag"),
                 last_modified: field(payload, "last_modified"),
                 preferred_bandwidth: payload
@@ -912,7 +908,15 @@ fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
         filename: field(payload, "filename"),
         title: field(payload, "title"),
         mime_type: field(payload, "mime_type"),
-        size: payload.get("size").and_then(Value::as_u64).unwrap_or(0),
+        // 浏览器捕获的是清单响应长度，不能用它校验下载并合流后的媒体文件。
+        size: if matches!(
+            resource_kind,
+            ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
+        ) {
+            0
+        } else {
+            payload.get("size").and_then(Value::as_u64).unwrap_or(0)
+        },
     })
 }
 
@@ -1236,6 +1240,35 @@ mod tests {
         assert_eq!(specs[0].1.url, "https://cdn.test/movie.m3u8");
         assert_eq!(specs[0].1.preferred_bandwidth, 2_500_000);
         assert_eq!(specs[0].1.preferred_height, 720);
+    }
+
+    #[test]
+    fn manifest_response_length_is_not_the_downloaded_media_length() {
+        for (kind, expected_size) in [
+            ("hls", None),
+            ("dash", None),
+            ("live", None),
+            ("file", Some(336)),
+        ] {
+            for operation in ["download", "offer"] {
+                let mut session = NativeHostSession::in_memory().unwrap();
+                let response = session.dispatch(&json!({
+                    "op": operation,
+                    "resource": {"url": "https://cdn.test/media", "filename": "media.mp4", "resource_kind": kind, "size": 336}
+                })).unwrap();
+                if operation == "offer" {
+                    session.dispatch(&json!({
+                        "op": "accept_handoff", "handoff_id": response["handoff"]["id"], "filename": "media.mp4"
+                    })).unwrap();
+                }
+                let specs = session.core.local().store().load_task_specs().unwrap();
+                assert_eq!(specs.len(), 1);
+                assert_eq!(
+                    specs[0].1.expected_size, expected_size,
+                    "{kind} {operation}"
+                );
+            }
+        }
     }
 
     #[test]
