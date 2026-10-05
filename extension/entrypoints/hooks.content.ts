@@ -285,6 +285,17 @@ export default defineContentScript({
             mseBufferSources.delete(this); mseBufferSources.delete(this.buffer)
           } else if (incoming || previous) rememberMseBufferSource(this, incoming || previous!)
         }
+        const OriginalUint8Array = window.Uint8Array
+        window.Uint8Array = new Proxy(OriginalUint8Array, {
+          construct(target, args, newTarget) {
+            const value = Reflect.construct(target, args, newTarget)
+            const input = args[0]
+            const source = mseBufferSources.get(input) || bufferSources.get(input)
+              || (ArrayBuffer.isView(input) ? mseBufferSources.get(input.buffer) || bufferSources.get(input.buffer) : '')
+            if (source) rememberMseBufferSource(value, source)
+            return value
+          },
+        })
         const getReader = ReadableStream.prototype.getReader
         ReadableStream.prototype.getReader = function (this: ReadableStream<any>, ...args: any[]) {
           const reader = (getReader as any).apply(this, args)

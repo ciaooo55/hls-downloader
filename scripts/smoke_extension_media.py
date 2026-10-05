@@ -93,7 +93,7 @@ function mseWorkerVideo() {
       xhr.onreadystatechange=()=>{if(xhr.readyState===4 && xhr.status===200) resolve(xhr.response);}; xhr.send();
     });
     worker.postMessage({cmd:'demux',instanceNo:0,chunkMeta,data:bytes},[bytes]);
-    const transformed=await output; const combined=new Uint8Array(transformed.length); combined.set(transformed);
+    const transformed=new Uint8Array(await output); const combined=new Uint8Array(transformed.length); combined.set(transformed);
     await append(buffer,combined); worker.terminate();
     if(source.readyState==='open') source.endOfStream(); await value.play();
   },{once:true});
