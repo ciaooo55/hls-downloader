@@ -43,6 +43,9 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
     let mut rest = xml;
     while let Some(start) = rest.find("<Representation") {
         let absolute = xml.len() - rest.len() + start;
+        let period_duration = (!dynamic)
+            .then(|| period_duration_seconds(xml, absolute))
+            .flatten();
         let after = &rest[start..];
         let end = after
             .find("</Representation>")
@@ -83,6 +86,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 &base_url,
                 &id,
                 bandwidth,
+                period_duration,
             ));
         }
         // Only look at the chunks AFTER `<SegmentURL`: chunk 0 is the text
@@ -108,6 +112,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                         &base_url,
                         &id,
                         bandwidth,
+                        period_duration,
                     ));
                 }
                 representations.push(Representation {
@@ -271,6 +276,14 @@ pub fn download_dash_selected(
         if video.is_none() && audio.is_none() {
             return Err("DASH has no audio or video representation".into());
         }
+        if !manifest.dynamic
+            && video
+                .iter()
+                .chain(audio.iter())
+                .any(|item| item.media.is_empty())
+        {
+            return Err("DASH representation produced no media segments".into());
+        }
         let checkpoint = !manifest.dynamic;
         if let Some(video) = video.as_ref() {
             if let Some(init) = &video.init {
@@ -389,7 +402,6 @@ pub fn download_dash_selected(
             write_dash_playlist(task_dir, &files)?;
             return finish_dash(
                 task_dir,
-                files,
                 recorded_audio,
                 recorded_subs,
                 headers,
@@ -418,7 +430,6 @@ pub fn download_dash_selected(
     write_dash_playlist(task_dir, &files)?;
     finish_dash(
         task_dir,
-        files,
         recorded_audio,
         recorded_subs,
         headers,
@@ -430,7 +441,6 @@ pub fn download_dash_selected(
 
 fn finish_dash(
     task_dir: &Path,
-    files: Vec<PathBuf>,
     audio: Option<Representation>,
     subtitles: Vec<Representation>,
     headers: &HashMap<String, String>,
@@ -445,8 +455,7 @@ fn finish_dash(
         }
     }
     let output = task_dir.join("merged.mp4");
-    merge_with_ffmpeg(task_dir, &output)
-        .or_else(|_| crate::media::merge::concat_files(&files, &output))?;
+    merge_with_ffmpeg(task_dir, &output)?;
     let published = if let Some(audio) = audio_merged {
         let muxed = task_dir.join("muxed.mp4");
         crate::media::merge::mux_av(&output, Some(&audio), &[], &muxed)?;
@@ -559,8 +568,7 @@ fn fetch_dash_audio(
     let audio_dir = task_dir.join("audio");
     write_dash_playlist(&audio_dir, &audio_files)?;
     let audio_out = audio_dir.join("merged.m4a");
-    merge_with_ffmpeg(&audio_dir, &audio_out)
-        .or_else(|_| crate::media::merge::concat_files(&audio_files, &audio_out))?;
+    merge_with_ffmpeg(&audio_dir, &audio_out)?;
     Ok(Some(audio_out))
 }
 
@@ -1137,19 +1145,73 @@ fn segment_template_block(block: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+fn period_duration_seconds(xml: &str, at: usize) -> Option<f64> {
+    let start = xml.get(..at)?.rfind("<Period")?;
+    let period = &xml[start..];
+    let opening = &period[..period.find('>')?];
+    if let Some(duration) = attr(opening, "duration") {
+        return parse_duration_seconds(&duration);
+    }
+    let period_start = attr(opening, "start")
+        .and_then(|value| parse_duration_seconds(&value))
+        .unwrap_or(0.0);
+    let after = &period[opening.len()..];
+    let end = if let Some(next) = after.find("<Period") {
+        let next = &after[next..];
+        attr(&next[..next.find('>')?], "start").and_then(|value| parse_duration_seconds(&value))?
+    } else {
+        let root = &xml[xml.find("<MPD")?..];
+        attr(&root[..root.find('>')?], "mediaPresentationDuration")
+            .and_then(|value| parse_duration_seconds(&value))?
+    };
+    let duration = end - period_start;
+    (duration.is_finite() && duration > 0.0).then_some(duration)
+}
+
 fn expand_timeline(
     block: &str,
     template: &str,
     base_url: &str,
     id: &str,
     bandwidth: u64,
+    period_duration: Option<f64>,
 ) -> Vec<String> {
     let start_number = attr(block, "startNumber")
-        .and_then(|value| value.parse().ok())
+        .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1);
     let mut media = Vec::new();
     let mut number = start_number;
     let mut clock = 0u64;
+    // 固定时长模板没有 SegmentTimeline，按 Period 的边界展开，保留最后一个短分片。
+    if !block.contains("<SegmentTimeline") {
+        if let (Some(seconds), Some(duration)) = (
+            period_duration,
+            attr(block, "duration").and_then(|value| value.parse::<u64>().ok()),
+        ) {
+            let timescale = attr(block, "timescale")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(1);
+            let count = (seconds * timescale as f64 / duration as f64).ceil();
+            if duration > 0 && timescale > 0 && count.is_finite() && count <= 1_000_000.0 {
+                let offset = attr(block, "presentationTimeOffset")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                for index in 0..count as u64 {
+                    media.push(resolve(
+                        base_url,
+                        &apply_template(
+                            template,
+                            id,
+                            start_number.saturating_add(index),
+                            offset.saturating_add(index.saturating_mul(duration)),
+                            bandwidth,
+                        ),
+                    ));
+                }
+            }
+        }
+        return media;
+    }
     let mut rest = block;
     while let Some(index) = rest.find("<S") {
         let after = &rest[index + 2..];
@@ -1248,6 +1310,54 @@ fn multi_period_codec_change(xml: &str, period_count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_duration_templates_download_every_video_and_audio_segment() {
+        let xml = r#"<?xml version="1.0"?><MPD type="static" mediaPresentationDuration="PT4.0S"><Period start="PT0S">
+<AdaptationSet contentType="video"><Representation id="low" mimeType="video/mp4" height="180" bandwidth="300000"><SegmentTemplate timescale="1000000" duration="1000000" initialization="init-$RepresentationID$.m4s" media="chunk-$RepresentationID$-$Number%05d$.m4s" startNumber="1"></SegmentTemplate></Representation></AdaptationSet>
+<AdaptationSet contentType="audio"><SegmentTemplate timescale="48000" duration="48000" initialization="init-$RepresentationID$.m4s" media="chunk-$RepresentationID$-$Number%05d$.m4s" startNumber="3"/><Representation id="audio" mimeType="audio/mp4" bandwidth="69000"/></AdaptationSet>
+</Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        for (representation, first) in parsed.representations.iter().zip([1, 3]) {
+            assert_eq!(representation.media.len(), 4);
+            assert_eq!(
+                representation.media,
+                (first..first + 4)
+                    .map(|number| format!(
+                        "https://cdn.test/chunk-{}-{number:05}.m4s",
+                        representation.id
+                    ))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_duration_templates_respect_period_boundaries_and_partial_last_segment() {
+        for period in ["start=\"PT2S\" duration=\"PT2.5S\"", "start=\"PT2S\""] {
+            let xml = format!(
+                r#"<MPD type="static" mediaPresentationDuration="PT4.5S"><Period {period}><AdaptationSet><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="10" timescale="10" presentationTimeOffset="20" media="$Time$.m4s"/></Representation></AdaptationSet></Period></MPD>"#
+            );
+            let parsed = parse_mpd(&xml, "https://cdn.test/manifest.mpd").unwrap();
+            assert_eq!(
+                parsed.representations[0].media,
+                [
+                    "https://cdn.test/20.m4s",
+                    "https://cdn.test/30.m4s",
+                    "https://cdn.test/40.m4s"
+                ]
+            );
+        }
+        let xml = r#"<MPD type="static" mediaPresentationDuration="PT20S"><Period start="PT2S"><AdaptationSet><Representation id="v"><SegmentTemplate duration="1" media="$Number$.m4s"/></Representation></AdaptationSet></Period><Period start="PT4.5S"/></MPD>"#;
+        assert_eq!(
+            parse_mpd(xml, "https://cdn.test/manifest.mpd")
+                .unwrap()
+                .representations[0]
+                .media
+                .len(),
+            3
+        );
+    }
 
     #[test]
     fn selected_height_distinguishes_equal_bandwidth_video_tracks() {
