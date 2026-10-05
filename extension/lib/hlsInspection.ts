@@ -15,6 +15,7 @@ export interface HlsInspectionResult {
   variants: HlsVariant[]
   renditionUrls: string[]
   playbackUrls: string[]
+  playbackUrlHashes: string[]
   width?: number
   height?: number
   bandwidth?: number
@@ -104,6 +105,7 @@ export async function inspectHlsResource(
   let partOnlyLive = info.partOnlyLive
   let duration = live ? undefined : info.duration
   let playbackUrls = info.playbackUrls
+  let playbackUrlHashes = info.playbackUrlHashes
   if (!duration && best) {
     try {
       const mediaResponse = await fetchManifest(best.url)
@@ -115,6 +117,7 @@ export async function inspectHlsResource(
           lowLatencyLive = mediaInfo.lowLatencyLive
           partOnlyLive = mediaInfo.partOnlyLive
           playbackUrls = mediaInfo.playbackUrls
+          playbackUrlHashes = mediaInfo.playbackUrlHashes
           if (live === false) duration = mediaInfo.duration
         }
       }
@@ -135,6 +138,7 @@ export async function inspectHlsResource(
     variants,
     renditionUrls: info.renditionUrls,
     playbackUrls,
+    playbackUrlHashes,
     width: best?.width || resource.width,
     height: best?.height || resource.height,
     bandwidth,

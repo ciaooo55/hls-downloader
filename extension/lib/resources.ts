@@ -60,6 +60,7 @@ export interface MediaResource {
   renditionUrls?: string[]
   /** Recent media/init URLs parsed from the manifest for concrete MSE ownership. */
   playbackUrls?: string[]
+  playbackUrlHashes?: string[]
   /** DASH SegmentTemplate URLs where `*` represents Number/Time/Bandwidth. */
   playbackPatterns?: string[]
   seenAt: number
@@ -234,6 +235,7 @@ export interface PlaybackContext {
 }
 
 function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number {
+  if (resource.playbackUrlHashes?.includes(resourceId(resourceFingerprint({ kind: resource.kind, url: mediaUrl })))) return 1_000
   const candidates = [resource.url, ...(resource.playbackUrls || [])]
   const exact = Math.max(...candidates.map(candidate => {
     try {
@@ -652,6 +654,7 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       variants: newer.variants?.length ? newer.variants : older.variants,
       renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(-24),
       playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(-48),
+      playbackUrlHashes: newer.playbackUrlHashes ?? older.playbackUrlHashes,
       playbackPatterns: [...new Set([...(newer.playbackPatterns || []), ...(older.playbackPatterns || [])])].slice(-48),
       seenAt: Math.max(previous.seenAt || 0, resource.seenAt || 0),
     })
@@ -673,11 +676,13 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
   const refreshedParents = new Map<number, number>()
   const parentPlaybackUrls = new Map<number, string[]>()
   const parentPlaybackPatterns = new Map<number, string[]>()
+  const parentPlaybackHashes = new Map<number, string[]>()
   for (const child of result) {
     const parents = childToParents.get(separateFrames
       ? `${resourceFingerprint(child)}:frame:${frameKey(child)}`
       : resourceFingerprint(child)) || []
     for (const parentIndex of parents) {
+      parentPlaybackHashes.set(parentIndex, [...new Set([...(parentPlaybackHashes.get(parentIndex) || []), ...(child.playbackUrlHashes || [])])])
       refreshedParents.set(parentIndex, Math.max(
         refreshedParents.get(parentIndex) || 0,
         child.seenAt || 0,
@@ -702,11 +707,13 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       ...(item.playbackPatterns || []),
       ...(parentPlaybackPatterns.get(index) || []),
     ])].slice(-48)
+    const playbackUrlHashes = [...new Set([...(item.playbackUrlHashes || []), ...(parentPlaybackHashes.get(index) || [])])]
     return seenAt === item.seenAt
       && playbackUrls.length === (item.playbackUrls || []).length
       && playbackPatterns.length === (item.playbackPatterns || []).length
+      && playbackUrlHashes.length === (item.playbackUrlHashes || []).length
       ? item
-      : { ...item, seenAt, playbackUrls, playbackPatterns }
+      : { ...item, seenAt, playbackUrls, playbackPatterns, playbackUrlHashes }
   })
   const childVariants = new Set<string>()
   for (const item of refreshed) {

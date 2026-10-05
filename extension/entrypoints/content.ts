@@ -206,6 +206,7 @@ export default defineContentScript({
         resource.isLive === true ? 1 : resource.isLive === false ? 0 : '', resource.inspected ? 1 : 0,
         (resource.variants || []).map(variant => `${variant.url}:${variant.width || 0}:${variant.height || 0}:${variant.bandwidth || 0}`).join(','),
         (resource.playbackUrls || []).join(','), (resource.playbackPatterns || []).join(','),
+        (resource.playbackUrlHashes || []).join(','),
       ].join('|'))
       .sort()
       .join('\n')

@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { parseHlsManifest, resourceQuality } from './hlsManifest'
+import { playerPlaybackResources } from './resources'
 
 describe('HLS metadata', () => {
+  it('matches the beginning and seek positions of long VODs using exact manifest membership', () => {
+    const manifest = '#EXTM3U\n' + Array.from({ length: 100 }, (_, index) => `#EXTINF:6,\nsegment-${index}.ts\n`).join('') + '#EXT-X-ENDLIST\n'
+    const info = parseHlsManifest(manifest, 'https://cdn.test/vod/index.m3u8?token=old')
+    const now = Date.now()
+    const resource = { id: 'vod', kind: 'hls' as const, url: 'https://cdn.test/vod/index.m3u8', seenAt: now, ...info }
+    expect(info.playbackUrls).toHaveLength(24)
+    for (const index of [0, 50, 99]) {
+      expect(playerPlaybackResources([resource], { sourceUrls: ['blob:https://site.test/video'], startedAt: now,
+        mseResourceUrls: [`https://cdn.test/vod/segment-${index}.ts?token=new`] }).map(item => item.id)).toEqual(['vod'])
+    }
+    expect(playerPlaybackResources([resource], { sourceUrls: ['blob:https://site.test/video'], startedAt: now,
+      mseResourceUrls: ['https://cdn.test/vod/segment-100.ts'] })).toEqual([])
+  })
   it('extracts variants, resolution and bandwidth from a master playlist', () => {
     const info = parseHlsManifest('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080\n1080p/video.m3u8\n', 'https://cdn.test/master.m3u8')
     expect(info.variants).toEqual([{

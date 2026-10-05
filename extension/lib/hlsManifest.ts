@@ -1,4 +1,5 @@
 import { inheritManifestAccessQuery } from './urlQuery'
+import { resourceFingerprint, resourceId } from './resources'
 
 export interface HlsVariant {
   url: string
@@ -15,6 +16,8 @@ export interface HlsManifestInfo {
   renditionUrls: string[]
   /** Bounded media/init URLs used to associate an MSE SourceBuffer with this playlist. */
   playbackUrls: string[]
+  /** Complete exact ownership without storing every long signed segment URL. */
+  playbackUrlHashes: string[]
   duration?: number
   /** Present only for media playlists; a master cannot determine liveness. */
   isLive?: boolean
@@ -137,6 +140,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     // The tail of a live window is what the player is currently appending.
     // Bounding this also keeps session storage small on long event playlists.
     playbackUrls: playbackUrls.slice(-24),
+    playbackUrlHashes: [...new Set(playbackUrls.map(url => resourceId(resourceFingerprint({ kind: 'hls', url }))))],
     duration: completeDuration && duration > 0 ? duration : undefined,
     isLive,
     lowLatencyLive,
