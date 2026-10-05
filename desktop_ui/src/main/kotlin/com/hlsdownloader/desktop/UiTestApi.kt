@@ -605,7 +605,8 @@ internal class UiTestApi private constructor(
                 "key" -> pressKey(action.key!!, action.modifiers)
                 "type" -> typeText(action.text!!)
             }
-            robot.waitForIdle()
+            // Compose 持续动画会让 Robot 的全局空闲检查等待 10 秒；只等待已注入的 AWT 事件。
+            onEventThread { Unit }
             Thread.sleep(120)
         }
     }
