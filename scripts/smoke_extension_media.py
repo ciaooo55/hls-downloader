@@ -81,6 +81,23 @@ function mseSlicedVideo() {
     if (source.readyState === 'open') source.endOfStream(); await value.play();
   }, {once:true});
 }
+function mseWorkerVideo() {
+  const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
+  source.addEventListener('sourceopen', async () => {
+    const buffer=source.addSourceBuffer('video/mp4; codecs="avc1.64001e, mp4a.40.2"');
+    const worker=new Worker('/media-worker.js');
+    const chunkMeta={level:0,sn:1,id:0,part:-1};
+    const output=new Promise(resolve=>worker.addEventListener('message',event=>resolve(event.data.data.remuxResult.video.data1),{once:true}));
+    const bytes=await new Promise(resolve=>{
+      const xhr=new XMLHttpRequest(); xhr.open('GET','/stream.mp4?channel=worker'); xhr.responseType='arraybuffer';
+      xhr.onreadystatechange=()=>{if(xhr.readyState===4 && xhr.status===200) resolve(xhr.response);}; xhr.send();
+    });
+    worker.postMessage({cmd:'demux',instanceNo:0,chunkMeta,data:bytes},[bytes]);
+    const transformed=new Uint8Array(await output); const combined=new Uint8Array(transformed.length); combined.set(transformed);
+    await append(buffer,combined); worker.terminate();
+    if(source.readyState==='open') source.endOfStream(); await value.play();
+  },{once:true});
+}
 function hlsVideo() {
   const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
   source.addEventListener('sourceopen', async () => {
@@ -141,6 +158,8 @@ if (mode === 'shadow') {
   mseVideo('single');
 } else if (mode === 'mse-sliced') {
   mseSlicedVideo();
+} else if (mode === 'mse-worker') {
+  mseWorkerVideo();
 } else if (mode === 'multi-mse') {
   mseVideo('one'); mseVideo('two');
 } else if (mode === 'hls-mse') {
@@ -253,6 +272,7 @@ def _make_media(root: Path, ffmpeg: str) -> None:
         if prefix:
             for original in [dash / 'init-0.m4s', *dash.glob('chunk-0-*.m4s')]:
                 shutil.copy2(original, dash / (prefix + original.name))
+    (root / "media-worker.js").write_text("onmessage=event=>{const {instanceNo,chunkMeta,data}=event.data;const copied=new Uint8Array(data).slice();postMessage({event:'transmuxComplete',instanceNo,data:{chunkMeta,remuxResult:{video:{data1:copied}}}},[copied.buffer]);};", encoding="utf-8")
     (root / "index.html").write_text(PAGE, encoding="utf-8")
     llhls = root / "llhls"
     llhls.mkdir()
@@ -434,7 +454,7 @@ def run(
                 driver.install_addon(str(resolved_addon), temporary=True)
             for mode in modes or (
                 "direct", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
-                "ad-direct", "spa", "mse", "mse-sliced", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+                "ad-direct", "spa", "mse", "mse-sliced", "mse-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
                 "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
             ):
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")

@@ -1,5 +1,6 @@
 import { copyHttpBufferSource, inheritHttpBufferSource } from '../lib/blobOwnership'
 import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
+import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from '../lib/hlsWorkerOwnership'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -12,6 +13,7 @@ export default defineContentScript({
     // correlation can stay permissive without making unsafe download claims.
     const bufferSources = new WeakMap<object, string>()
     const mseBufferSources = new WeakMap<object, string>()
+    const mixedMseBuffers = new WeakSet<object>()
     const mediaSourceBlobs = new WeakMap<object, string>()
     const sourceBufferOwners = new WeakMap<object, object>()
     const pendingResources: Array<{ url: string; mimeType: string }> = []
@@ -199,6 +201,40 @@ export default defineContentScript({
     // a SourceBuffer. Most pages never use MSE and should pay no hot-path cost.
     const streamSources = new WeakMap<object, string>()
     const readerSources = new WeakMap<object, string>()
+    try {
+      const OriginalWorker = window.Worker
+      window.Worker = class extends OriginalWorker {
+        private mediaSources = new Map<string, string>()
+        constructor(url: string | URL, options?: WorkerOptions) {
+          super(url, options)
+          // 注册在播放器之前；其 message 回调可立即通过微任务追加输出字节。
+          this.addEventListener('message', event => {
+            const key = hlsWorkerChunkKey(event.data)
+            const source = key ? this.mediaSources.get(key) : ''
+            if (!source) return
+            hlsWorkerOutputBuffers(event.data).forEach(value => rememberMseBufferSource(value, source))
+            if (event.data?.event === 'flush') this.mediaSources.delete(key!)
+          })
+        }
+        override postMessage(message: any, transferOrOptions?: Transferable[] | StructuredSerializeOptions) {
+          try {
+            const key = hlsWorkerChunkKey(message)
+            if (message?.cmd === 'demux' && key) {
+              const bytes = message.data
+              const source = mseBufferSources.get(bytes) || bufferSources.get(bytes)
+                || (ArrayBuffer.isView(bytes) ? mseBufferSources.get(bytes.buffer) || bufferSources.get(bytes.buffer) : '')
+              if (source) {
+                this.mediaSources.set(key, source)
+                while (this.mediaSources.size > 128) this.mediaSources.delete(this.mediaSources.keys().next().value!)
+              }
+            }
+          } catch {}
+          super.postMessage(message, transferOrOptions as StructuredSerializeOptions)
+        }
+      }
+    } catch {
+      // Frozen Worker constructors leave network sniffing available.
+    }
     let bytePropagationInstalled = false
     const installBytePropagationHooks = () => {
       if (bytePropagationInstalled) return
@@ -223,6 +259,7 @@ export default defineContentScript({
         }
         const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as {
           slice?: (start?: number, end?: number) => ArrayBufferView
+          set: (source: ArrayLike<number>, offset?: number) => void
         }
         const typedArraySlice = typedArrayPrototype.slice
         if (typeof typedArraySlice === 'function') {
@@ -233,6 +270,20 @@ export default defineContentScript({
             if (source) rememberMseBufferSource(value, source)
             return value
           }
+        }
+        const typedArraySet = typedArrayPrototype.set
+        typedArrayPrototype.set = function (this: ArrayBufferView, source: ArrayLike<number>, offset?: number) {
+          const previous = mseBufferSources.get(this) || bufferSources.get(this)
+            || mseBufferSources.get(this.buffer) || bufferSources.get(this.buffer)
+          const incoming = mseBufferSources.get(source) || bufferSources.get(source)
+            || (ArrayBuffer.isView(source) ? mseBufferSources.get(source.buffer) || bufferSources.get(source.buffer) : '')
+          typedArraySet.call(this, source, offset)
+          // 写入后的缓冲区不能再作为未修改 HTTP 响应用于 Blob 下载。
+          bufferSources.delete(this); bufferSources.delete(this.buffer)
+          if (previous && incoming && previous !== incoming) mixedMseBuffers.add(this.buffer)
+          if (mixedMseBuffers.has(this.buffer)) {
+            mseBufferSources.delete(this); mseBufferSources.delete(this.buffer)
+          } else if (incoming || previous) rememberMseBufferSource(this, incoming || previous!)
         }
         const getReader = ReadableStream.prototype.getReader
         ReadableStream.prototype.getReader = function (this: ReadableStream<any>, ...args: any[]) {
@@ -320,6 +371,23 @@ export default defineContentScript({
     // 并用 WeakMap 记住最近一次请求的 URL 作为 responseURL 的回退。
     const xhrRequestedUrls = new WeakMap<XMLHttpRequest, string>()
     const instrumentedXhrs = new WeakSet<XMLHttpRequest>()
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'response')
+      if (descriptor?.get) {
+        const response = descriptor.get
+        Object.defineProperty(XMLHttpRequest.prototype, 'response', {
+          ...descriptor,
+          get(this: XMLHttpRequest) {
+            const value = response.call(this)
+            // hls.js 在 readyState=4 时就把响应转移到 Worker，load 事件已来不及建立归属。
+            if (value instanceof ArrayBuffer || value instanceof Blob || ArrayBuffer.isView(value)) {
+              rememberBufferSource(value, this.responseURL || xhrRequestedUrls.get(this) || '')
+            }
+            return value
+          },
+        })
+      }
+    } catch {}
     XMLHttpRequest.prototype.open = function (
       method: string,
       url: string | URL,
