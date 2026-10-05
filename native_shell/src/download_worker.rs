@@ -68,13 +68,30 @@ impl TaskPaths {
         } else {
             current_task_dir
         };
-        let final_name = if spec.resource_kind == crate::ResourceKind::Torrent
+        let mut final_name = if spec.resource_kind == crate::ResourceKind::Torrent
             && !spec.torrent_selection.is_empty()
         {
             format!("{}.files", safe_filename(&spec.filename, &spec.url))
         } else {
             safe_filename(&spec.filename, &spec.url)
         };
+        if matches!(
+            spec.resource_kind,
+            crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
+        ) {
+            let extension = Path::new(&final_name)
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            // 合流产物是 MP4，网页标题或清单名称不能直接作为无扩展名的最终文件。
+            if matches!(extension.as_str(), "" | "m3u8" | "m3u" | "mpd") {
+                final_name = Path::new(&final_name)
+                    .with_extension("mp4")
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
         Ok(Self {
             output: task_dir.join("payload.downloading"),
             final_output: root.join(final_name),
@@ -5423,6 +5440,41 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.contains("100"));
+    }
+
+    #[test]
+    fn adaptive_media_output_has_a_playable_filename() {
+        for kind in [ResourceKind::Hls, ResourceKind::Dash, ResourceKind::Live] {
+            for (filename, expected) in [
+                ("网页标题", "网页标题.mp4"),
+                ("episode.M3U8", "episode.mp4"),
+                ("episode.mpd", "episode.mp4"),
+                ("episode.mp4", "episode.mp4"),
+                ("custom.mkv", "custom.mkv"),
+            ] {
+                let spec = TaskSpec {
+                    url: "https://cdn.test/stream".into(),
+                    filename: filename.into(),
+                    resource_kind: kind,
+                    ..Default::default()
+                };
+                let paths = TaskPaths::for_task("media-1", &spec).unwrap();
+                assert_eq!(paths.final_output.file_name().unwrap(), expected);
+                assert!(paths.output.ends_with("payload.downloading"));
+            }
+        }
+        let file = TaskSpec {
+            filename: "无扩展名文件".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            TaskPaths::for_task("file-1", &file)
+                .unwrap()
+                .final_output
+                .file_name()
+                .unwrap(),
+            "无扩展名文件"
+        );
     }
 
     #[test]
