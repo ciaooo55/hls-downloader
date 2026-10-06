@@ -162,7 +162,33 @@ function Add-Type19Failure([string]$Path) {
     $database = $null
     try {
         $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 1))
-        $failureSequence = 1505
+        $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @('SELECT `Action`,`Sequence` FROM `InstallExecuteSequence`'))
+        $sequences = @{}
+        try {
+            $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+            while ($true) {
+                $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+                if ($null -eq $record) { break }
+                try {
+                    $action = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+                    $sequences[$action] = $record.GetType().InvokeMember('IntegerData', 'GetProperty', $null, $record, 2)
+                } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null }
+            }
+        } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null }
+        $failureSequence = [int]$sequences['InstallFinalize'] - 1
+        $executeSequence = if ($sequences.ContainsKey('InstallExecute')) { [int]$sequences['InstallExecute'] } else { $failureSequence - 1 }
+        if ($executeSequence -le [int]$sequences['InstallFiles'] -or
+            $executeSequence -le [int]$sequences['RemoveExistingProducts'] -or
+            $failureSequence -le $executeSequence) {
+            throw 'Rollback injection must follow old-product removal and installation script execution, before final commit.'
+        }
+        # Execute the deferred changes before failing, rather than failing before the upgrade starts.
+        if (-not $sequences.ContainsKey('InstallExecute')) {
+            $sql = "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Sequence``) VALUES ('InstallExecute',$executeSequence)"
+            $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($sql))
+            try { $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null }
+            finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null }
+        }
         foreach ($sql in @(
             "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='V7ForcedRollback'",
             "DELETE FROM ``CustomAction`` WHERE ``Action``='V7ForcedRollback'",

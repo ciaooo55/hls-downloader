@@ -416,6 +416,8 @@ $env:HLS_ENGINE_PATH = $engine
         $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-exe-msi.ps1" -ExePath $exe.FullName -MsiPath $msi.FullName
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
         Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")) -Force
         Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")) -Force
