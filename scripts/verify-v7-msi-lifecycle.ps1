@@ -157,7 +157,7 @@ function Invoke-CheckpointFixture([string]$Mode, [string]$Engine, [string]$Repor
     return [IO.File]::ReadAllText($Report, [Text.Encoding]::UTF8) | ConvertFrom-Json
 }
 
-function Add-Type19Failure([string]$Path) {
+function Add-DeferredFailure([string]$Path) {
     $installer = New-Object -ComObject WindowsInstaller.Installer
     $database = $null
     try {
@@ -176,24 +176,17 @@ function Add-Type19Failure([string]$Path) {
             }
         } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null }
         $failureSequence = [int]$sequences['InstallFinalize'] - 1
-        $executeSequence = if ($sequences.ContainsKey('InstallExecute')) { [int]$sequences['InstallExecute'] } else { $failureSequence - 1 }
-        if ($executeSequence -le [int]$sequences['InstallFiles'] -or
-            $executeSequence -le [int]$sequences['RemoveExistingProducts'] -or
-            $failureSequence -le $executeSequence) {
-            throw 'Rollback injection must follow old-product removal and installation script execution, before final commit.'
+        if ($failureSequence -le [int]$sequences['InstallFiles'] -or
+            $failureSequence -le [int]$sequences['RemoveExistingProducts']) {
+            throw 'Rollback injection must follow old-product removal and file installation, before final commit.'
         }
-        # Execute the deferred changes before failing, rather than failing before the upgrade starts.
-        if (-not $sequences.ContainsKey('InstallExecute')) {
-            $sql = "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Sequence``) VALUES ('InstallExecute',$executeSequence)"
-            $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($sql))
-            try { $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null }
-            finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null }
-        }
+        # Fail inside the deferred script after file and registration changes have executed.
+        $failureCommand = '"[SystemFolder]cmd.exe" /d /c exit /b 1'
         foreach ($sql in @(
             "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='V7ForcedRollback'",
             "DELETE FROM ``CustomAction`` WHERE ``Action``='V7ForcedRollback'",
-            "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('V7ForcedRollback',19,'','Injected lifecycle rollback failure')",
-            "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('V7ForcedRollback','NOT Installed',$failureSequence)"
+            "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('V7ForcedRollback',1058,'TARGETDIR','$failureCommand')",
+            "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('V7ForcedRollback','NOT Installed AND NOT REMOVE~=""ALL""',$failureSequence)"
         )) {
             $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($sql))
             try { $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null }
@@ -294,7 +287,7 @@ try {
         Add-Step 'old-application-checkpointed' ($LASTEXITCODE -eq 0) $LASTEXITCODE
         $rollbackMsi = Join-Path $artifacts "HLSDownloader-$expectedCandidateVersion-forced-rollback.msi"
         Copy-Item -LiteralPath $candidate -Destination $rollbackMsi -Force
-        Add-Type19Failure $rollbackMsi
+        Add-DeferredFailure $rollbackMsi
         Add-Step 'candidate-original-unchanged' (((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $candidateHash) $candidateHash
         $exit = Invoke-Msi @('/i', $rollbackMsi, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'failure-rollback.log')
         Add-Step 'forced-failure-exit' ($exit -eq 1603) $exit

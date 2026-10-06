@@ -8,12 +8,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ProductCode = ([guid]::Parse($ProductCode)).ToString('B').ToUpperInvariant()
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $resolved = (Resolve-Path -LiteralPath $MsiPath).Path
 $beforeHash = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash
 $installer = $null
 $database = $null
 $view = $null
+$summaryInfo = $null
 
 function Invoke-MsiScalarQuery([string]$Sql) {
     $localView = $database.GetType().InvokeMember(
@@ -143,6 +145,11 @@ try {
     $database = $installer.GetType().InvokeMember(
         'OpenDatabase', 'InvokeMethod', $null, $installer, @($resolved, 1)
     )
+    # Installation rollback writes protected Windows Installer registration keys.
+    $summaryInfo = $database.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $database, 1)
+    $wordCount = $summaryInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $summaryInfo, 15)
+    $summaryInfo.GetType().InvokeMember('Property', 'SetProperty', $null, $summaryInfo, @(15, ([int]$wordCount -band (-bnot 8)))) | Out-Null
+    $summaryInfo.GetType().InvokeMember('Persist', 'InvokeMethod', $null, $summaryInfo, $null) | Out-Null
     $current = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $originalProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
     $upgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
@@ -226,7 +233,9 @@ try {
         Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$legacyAction'"
         Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$legacyAction'"
     }
-    Set-MsiExecutableAction 'V7PrepareNativeHostManifests' $engineFile '--prepare-native-host-manifests' 'NOT REMOVE~="ALL"' $prepareSequence
+    # An installed-file action is valid only when its component is scheduled locally.
+    $prepareCondition = 'NOT REMOVE~="ALL" AND $' + $engineComponent + '=3'
+    Set-MsiExecutableAction 'V7PrepareNativeHostManifests' $engineFile '--prepare-native-host-manifests' $prepareCondition $prepareSequence
     # 注册表 KeyPath 有独立组件身份，不能复用 jpackage 文件组件的 ProductCode 标记。
     $nativeHostRegistry = @(
         @('V7NativeHostChromeRegistry', 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostChromeComponent', '{6BF61D0C-7529-43F4-A2B7-BBB3E3C80CEF}'),
@@ -252,6 +261,10 @@ try {
         'Commit', 'InvokeMethod', $null, $database, $null
     ) | Out-Null
 } finally {
+    if ($null -ne $summaryInfo) {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($summaryInfo) | Out-Null
+        $summaryInfo = $null
+    }
     if ($null -ne $view) {
         [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
     }
@@ -272,12 +285,16 @@ try {
         'OpenDatabase', 'InvokeMethod', $null, $verifyInstaller, @($resolved, 0)
     )
     $database = $verifyDatabase
+    $summaryInfo = $verifyDatabase.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $verifyDatabase, 0)
+    $verifiedWordCount = $summaryInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $summaryInfo, 15)
+    if (([int]$verifiedWordCount -band 8) -ne 0) { throw 'MSI must request installation privileges for protected rollback registration.' }
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $verifiedProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
     $verifiedUpgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
     $verifiedPrepareSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
+    $verifiedPrepareCondition = Invoke-MsiStringQuery "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
     if ($verifiedInstallDirSearch -ne $installDirSearch) {
         throw 'MSI maintenance install-directory search verification failed.'
@@ -294,7 +311,8 @@ try {
     if (
         [int]$verifiedPrepareSequence -ne $prepareSequence -or
         [int]$verifiedPrepareType -ne 1042 -or
-        $verifiedPrepareTarget -ne '--prepare-native-host-manifests'
+        $verifiedPrepareTarget -ne '--prepare-native-host-manifests' -or
+        $verifiedPrepareCondition -ne $prepareCondition
     ) {
         throw 'MSI Native Host registration action verification failed.'
     }
@@ -323,6 +341,10 @@ try {
     }
 } finally {
     $database = $null
+    if ($null -ne $summaryInfo) {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($summaryInfo) | Out-Null
+        $summaryInfo = $null
+    }
     if ($null -ne $verifyDatabase) {
         [Runtime.InteropServices.Marshal]::FinalReleaseComObject($verifyDatabase) | Out-Null
     }
@@ -335,6 +357,7 @@ try {
     msi = $resolved
     original_product_code = $originalProductCode
     verified_product_code = $verifiedProductCode
+    verified_word_count = [int]$verifiedWordCount
     original_sequence = [int]$current
     verified_sequence = [int]$verified
     install_initialize_sequence = [int]$initialize
