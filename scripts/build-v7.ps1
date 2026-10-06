@@ -414,6 +414,10 @@ $env:HLS_ENGINE_PATH = $engine
         if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
         $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
         $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
+        $repackedMsi = Join-Path $artifactRoot '.HLSDownloader-repacked.msi'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\repack-v7-msi.ps1" -MsiPath $msi.FullName -OutMsiPath $repackedMsi -WixRoot (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'wix311')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Move-Item -LiteralPath $repackedMsi -Destination $msi.FullName -Force
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-exe-msi.ps1" -ExePath $exe.FullName -MsiPath $msi.FullName
