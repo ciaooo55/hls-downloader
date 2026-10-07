@@ -28,7 +28,7 @@ $previousDataDir = $env:HLS_V7_DATA_DIR
 $previousDownloadDir = $env:HLS_V7_DOWNLOAD_DIR
 Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
 
-$expectedInstallDir = [IO.Path]::GetFullPath((Join-Path $repo '.tool-cache\test-tmp\msi-lifecycle')).TrimEnd('\', '/')
+$expectedInstallDir = [IO.Path]::GetFullPath((Join-Path $repo ('.tool-cache\test-tmp\msi-lifecycle-' + $Scenario.ToLowerInvariant()))).TrimEnd('\', '/')
 if ([String]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = $expectedInstallDir }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
 if (-not [String]::Equals($InstallDir, $expectedInstallDir, [StringComparison]::OrdinalIgnoreCase)) {
@@ -70,7 +70,8 @@ function Get-MsiProperty([string]$Path, [string]$Property) {
 
 function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
     $allArguments = @($Arguments) + @('/norestart', 'REBOOT=ReallySuppress', '/l*v', $LogPath)
-    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $allArguments -Wait -PassThru
+    $quotedArguments = @($allArguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } })
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $quotedArguments -Wait -PassThru
     return [int]$process.ExitCode
 }
 
@@ -325,7 +326,7 @@ try {
     Add-Step 'uninstall-exit' ($uninstallExit -in @(0, 3010, 1641)) $uninstallExit
     Add-Step 'product-unregistered' ($null -eq (Get-InstalledProduct $upgradeCode)) $installedProductCode
     $installedProductCode = $null
-    $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_version = $expectedCandidateVersion; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; old_msi_sha256 = $oldHash; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
+    $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; source_commit = [string]$manifest.source_commit; source_tree = [string]$manifest.source_tree; candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant(); candidate_msi_sha256 = $candidateHash; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_version = $expectedCandidateVersion; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; old_msi_sha256 = $oldHash; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
 } catch {
     $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'failed'; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); error = $_.Exception.Message; steps = $steps }
 } finally {

@@ -86,3 +86,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+      - name: Verify real MSI upgrade and failure rollback on isolated Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:HLS_V7_PYTHON = (Get-Command python.exe -ErrorAction Stop).Source
+          foreach ($scenario in @('Upgrade', 'FailureRollback')) {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
+            if ($LASTEXITCODE -ne 0) { throw "MSI lifecycle failed: $scenario" }
+          }
+
+      - name: Upload MSI lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-msi-lifecycle-${{ github.sha }}
+          path: artifacts/v7-productization/msi-lifecycle/**
+          if-no-files-found: error
+          retention-days: 14

@@ -83,6 +83,8 @@ def responses(executable: Path, environment: dict[str, str]) -> tuple[list[dict[
             if len(result) == 1:
                 first_response_ms = (time.perf_counter() - started) * 1000
         return result, first_response_ms, (time.perf_counter() - started) * 1000, list(diagnostics)
+    except Exception as error:
+        raise RuntimeError(f"Native Host response failed: {error}; startup diagnostics: {diagnostics}") from error
     finally:
         process.stdin.close()
         try:

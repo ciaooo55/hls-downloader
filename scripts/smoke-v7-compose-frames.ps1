@@ -42,6 +42,9 @@ $env:HLS_UI_AUDIT_WIDTH = [string]$Width
 $env:HLS_UI_AUDIT_HEIGHT = [string]$Height
 $env:HLS_UI_FRAME_REPORT = $ReportPath
 $env:HLS_V6_SKIP_MIGRATE = '1'
+$previousDataDir = $env:HLS_V7_DATA_DIR
+$frameDataRoot = Join-Path $repo ('.tool-cache\test-tmp\compose-frame-' + [guid]::NewGuid().ToString('N'))
+$env:HLS_V7_DATA_DIR = Join-Path $frameDataRoot 'data'
 
 $existingAppIds = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq 'java.exe' -and $_.CommandLine -like '*com.hlsdownloader.desktop.MainKt*'
@@ -102,4 +105,6 @@ try {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
         Wait-Process -Id $process.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
     }
+    $env:HLS_V7_DATA_DIR = $previousDataDir
+    if (Test-Path -LiteralPath $frameDataRoot) { Remove-Item -LiteralPath $frameDataRoot -Recurse -Force }
 }

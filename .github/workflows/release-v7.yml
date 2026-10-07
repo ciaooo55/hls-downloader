@@ -131,8 +131,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          corepack enable
-          corepack prepare pnpm@11.7.0 --activate
+          $pnpmRoot = Join-Path $env:HLS_V7_BUILD_CACHE 'pnpm-cli'
+          npm.cmd install --prefix $pnpmRoot --ignore-scripts --no-audit --no-fund pnpm@11.7.0
+          $env:PATH = "$pnpmRoot;$env:PATH"
+          $pnpmRoot >> $env:GITHUB_PATH
           if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
 
       - name: Bootstrap pinned JDK
@@ -155,20 +157,21 @@ jobs:
           "HLS_V7_FFMPEG_DIR=$mediaDir" >> $env:GITHUB_ENV
           "HLS_V7_PYTHON=$((Get-Command python.exe -ErrorAction Stop).Source)" >> $env:GITHUB_ENV
 
-      - name: Build frozen candidate
+      - name: Receive frozen candidate and isolated MSI lifecycle evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
-          & .\scripts\build-v7.ps1 -Task candidate
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $output = @(& .\scripts\receive-v7-candidate.ps1 -Repository $env:GITHUB_REPOSITORY)
+          $receipt = $output[-1] | ConvertFrom-Json
+          "HLS_V7_CANDIDATE_MANIFEST=$($receipt.candidate_manifest)" >> $env:GITHUB_ENV
+          "HLS_V7_MSI_EVIDENCE=$($receipt.msi_evidence)" >> $env:GITHUB_ENV
 
       - name: Run browser, performance, browser media-push, installer and rollback gates
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\invoke-v7-release-gates.ps1
+          & .\scripts\invoke-v7-release-gates.ps1 -CandidateManifestPath $env:HLS_V7_CANDIDATE_MANIFEST -MsiEvidenceRoot $env:HLS_V7_MSI_EVIDENCE
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Reconfirm frozen main before formal package

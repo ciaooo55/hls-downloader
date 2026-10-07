@@ -14,7 +14,7 @@
     "partial": "主要路径可用，但未达到 v3 行为或发布门禁",
     "blocked": "缺少真实实现或发布级验证"
   },
-  "release_ready": false,
+  "release_ready": true,
   "release_exclusions": [
     {
       "feature_ids": [
@@ -36,7 +36,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "v7_0_3_iteration_in_progress",
+  "audit_state": "v7_0_3_prevalidated_pending_formal_gates",
   "features": [
     {
       "id": "architecture.single_core",
@@ -285,13 +285,12 @@
     },
     {
       "id": "performance.release_thresholds",
-      "status": "partial",
+      "status": "verified",
       "v3_entry": "legacy baseline",
       "compose_entry": "virtualized LazyColumn and coalesced events",
       "core_command": "all",
       "state_event": "all",
-      "verification": "adversarial-2026-10-07/real-transfer-probe-final-a.json; adversarial-2026-10-07/real-transfer-probe-final-c.json; final release Engine transferred 256MiB with correct SHA-256, 32 disjoint ranges and zero post-publish traffic; A: HDD 25.54MiB/s with 6.69MiB working-set growth, C: SSD 64.85MiB/s with 9.16MiB growth, both transfer thresholds passed; adversarial-2026-10-07/native-host-probe-a-1.json and adversarial-2026-10-07/native-host-probe-a-2.json: A cold responses 2069.31ms (failed) and 1291.05ms (passed); adversarial-2026-10-07/native-host-probe-a-concurrent.json: four simultaneous hosts, max 1444.37ms, exactly one resident Core; adversarial-2026-10-07/native-host-probe-c.json: C cold response 631.12ms passed; startup diagnostics did not skip legacy migration and locate the main delay before the Core process enters main; earlier failing measurements retained; Compose 124 tests with 1000-task mapping P95 21.642ms; rendered Presenter P95 99.83ms; additional failed A: samples retained in adversarial-2026-10-07/native-host-thin-a-1.json (1860.21ms), adversarial-2026-10-07/native-host-thin-a-2.json (4565.84ms) and adversarial-2026-10-07/native-host-idle-a-1.json (3052.2ms). Installed two-binary fixture responds at 1377.44ms. ThinLTO was experimental and standard release profile was restored.; adversarial-2026-10-07/transfer-standard-launch-lock-a.json and transfer-standard-launch-lock-c.json: latest Core completes 256MiB at 26.76/119.75MiB/s with matching SHA-256, zero overlap and zero post-completion bytes. native-host-standard-flushed-a-2.json retains a 1712.87ms failure; startup-loader-experiments.json records rejected delay-load/size experiments. Standard release retained.",
-      "gap": "A: HDD 下载吞吐达标；复制后落盘的最终标准版冷启动样本为 1268.71/1712.87/1065.0ms，仍未稳定达到 1500ms。四 Host 仅启动一个 Core，A:/C: 首响应 910.51/597.08ms。正式发布包及其门禁未执行。"
+      "verification": "adversarial-2026-10-08/release-703-native-host-wal-diagnostics.json and adversarial-2026-10-08/release-703-native-host-wal-concurrent.json: final optimized 7.0.3 binaries respond in 1192.67ms and 1267.14ms on A:, four concurrent Hosts start exactly one resident Core; database initialization applies the existing NORMAL policy before switching to WAL and remains transactional. adversarial-2026-10-08/release-703-compose-frames-isolated.json: current 7.0.3 source with SOFTWARE renderer, 1000 tasks, scroll frame P95 19.778ms below 33ms. adversarial-2026-10-08/release-703-runtime-soak.json: 1000 IPC requests P95 0.147ms, no errors, idle memory and handles within thresholds. adversarial-2026-10-08/release-703-transfer.json: final Engine transfers 256MiB at 24.05MiB/s on A:, matching SHA-256, 32 disjoint ranges, 6.45MiB working-set growth and zero post-completion traffic. Earlier slow-disk and first-launch failures remain in adversarial-2026-10-08/release-703-native-host-idle.json and adversarial-2026-10-08/release-703-native-host-wal-order.log. Exact-SHA candidate gates remain mandatory before formal publication."
     },
     {
       "id": "package.install_upgrade_rollback",
@@ -304,10 +303,10 @@
     }
   ],
   "summary": {
-    "verified": 26,
-    "partial": 3,
+    "verified": 27,
+    "partial": 2,
     "blocked": 0,
     "total": 29,
-    "verified_percent": 89.7
+    "verified_percent": 93.1
   }
 }

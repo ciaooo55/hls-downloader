@@ -532,11 +532,12 @@ impl CoreStore {
     }
 
     fn initialize(&mut self) -> Result<(), String> {
+        // 先应用既定同步策略，避免首次切换 WAL 时沿用 SQLite 默认 FULL 产生额外慢盘同步。
         self.connection
             .execute_batch(
                 "PRAGMA foreign_keys = ON;\
-                 PRAGMA journal_mode = WAL;\
-                 PRAGMA synchronous = NORMAL;",
+                 PRAGMA synchronous = NORMAL;\
+                 PRAGMA journal_mode = WAL;",
             )
             .map_err(|error| format!("initialize Core pragmas: {error}"))?;
         // 建表、索引和版本标记一次提交，避免慢盘上的逐表提交及失败后的半初始化状态。

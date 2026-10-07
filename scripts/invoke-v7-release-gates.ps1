@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$CandidateManifestPath = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json',
+    [string]$MsiEvidenceRoot = '',
     [string]$EdgeBinary = $env:HLS_V7_EDGE_BINARY,
     [string]$FirefoxBinary = $env:HLS_V7_FIREFOX_BINARY,
     [string]$EdgeDriver = $env:HLS_V7_EDGE_DRIVER,
@@ -98,11 +99,14 @@ if ($exclusions.gates -contains 'browser_media_push') {
     Invoke-Gate 'browser_media_push' ($mediaPushParts -join ' ') "candidate MSI installed registration + real Edge/Firefox TVBox path; expected receiver=$env:HLS_V7_TVBOX_EXPECTED_HOST"
 }
 
-$upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath)"
-Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI in an isolated repository-local directory; checkpoint/process recovery"
+$lifecycleScript = if ($MsiEvidenceRoot) { 'verify-v7-received-msi.ps1' } else { 'verify-v7-msi-lifecycle.ps1' }
+$evidenceArgument = if ($MsiEvidenceRoot) { " -EvidenceRoot $(Quote-PS $MsiEvidenceRoot)" } else { '' }
+$location = if ($MsiEvidenceRoot) { 'authenticated GitHub-hosted isolated Windows execution; verified against exact candidate SHA-256' } else { 'local isolated Windows execution' }
+$upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot $lifecycleScript)) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath)$evidenceArgument"
+Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI; checkpoint/process recovery; $location"
 
-$rollbackCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario FailureRollback -CandidateManifestPath $(Quote-PS $manifestFullPath)"
-Invoke-Gate 'rollback' $rollbackCommand 'candidate MSI failure injection in an isolated repository-local directory; v7.0.0 product/data/registration preserved'
+$rollbackCommand = "& $(Quote-PS (Join-Path $PSScriptRoot $lifecycleScript)) -Scenario FailureRollback -CandidateManifestPath $(Quote-PS $manifestFullPath)$evidenceArgument"
+Invoke-Gate 'rollback' $rollbackCommand "candidate MSI failure injection; v7.0.0 product/data/registration preserved; $location"
 
 $aggregate = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
 $evidence = Get-Content -LiteralPath $aggregate -Raw -Encoding UTF8 | ConvertFrom-Json
