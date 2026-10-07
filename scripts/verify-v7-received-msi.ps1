@@ -20,7 +20,7 @@ if ($receipt.source_commit -ne $manifest.source_commit -or $receipt.source_tree 
     throw 'Received MSI lifecycle evidence does not match the candidate and authenticated receipt.'
 }
 $required = @('install-old-exit', 'old-product-registered', 'real-task-checkpoint-created', 'uninstall-exit', 'product-unregistered')
-$required += if ($Scenario -eq 'Upgrade') { @('upgrade-exit', 'product-upgraded', 'task-restored-and-resumed', 'registration-present', 'shortcuts-present', 'application-process-restarted') } else { @('forced-failure-exit', 'old-product-code-preserved', 'old-engine-preserved', 'database-bytes-preserved', 'task-and-data-preserved', 'registration-preserved', 'old-application-launches') }
+$required += if ($Scenario -eq 'Upgrade') { @('upgrade-exit', 'product-upgraded', 'task-restored-and-resumed', 'resumed-file-sha256', 'registration-present', 'shortcuts-present', 'application-process-restarted') } else { @('forced-failure-exit', 'old-product-code-preserved', 'old-engine-preserved', 'database-bytes-preserved', 'task-and-data-preserved', 'registration-preserved', 'old-application-launches') }
 foreach ($name in $required) {
     $step = @($report.steps | Where-Object name -eq $name)
     if ($step.Count -ne 1 -or $step[0].passed -ne $true) { throw "Missing or failed lifecycle assertion: $name" }

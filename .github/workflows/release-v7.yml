@@ -132,9 +132,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $pnpmRoot = Join-Path $env:HLS_V7_BUILD_CACHE 'pnpm-cli'
+          $env:npm_config_cache = Join-Path $env:HLS_V7_BUILD_CACHE 'npm-cache'
           npm.cmd install --prefix $pnpmRoot --ignore-scripts --no-audit --no-fund pnpm@11.7.0
-          $env:PATH = "$pnpmRoot;$env:PATH"
-          $pnpmRoot >> $env:GITHUB_PATH
+          $pnpmBin = Join-Path $pnpmRoot 'node_modules\.bin'
+          $env:PATH = "$pnpmBin;$env:PATH"
+          $pnpmBin >> $env:GITHUB_PATH
           if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
 
       - name: Bootstrap pinned JDK
@@ -293,5 +295,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          & .\scripts\shutdown-running.ps1 -InstallDir 'E:\h'
+          foreach ($root in @('artifacts\v7-productization\candidate-browser\portable\HLSDownloader', 'artifacts\v7-productization\performance\candidate-runtime\HLSDownloader')) {
+            & .\scripts\shutdown-running.ps1 -InstallDir (Join-Path (Get-Location).Path $root) -IncludeNativeHost
+          }
           exit 0

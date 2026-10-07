@@ -12,7 +12,7 @@ try {
     $manifest = @{ source_commit = 'a' * 40; source_tree = 'b' * 40; product_version = '7.0.3'; artifacts = @{ msi = @{ path = 'fixture.msi'; sha256 = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant() } } }
     Write-Json $manifestPath $manifest
     Write-Json (Join-Path $root 'RECEIPT.json') @{ source_commit = $manifest.source_commit; source_tree = $manifest.source_tree; run_url = 'fixture-only' }
-    $names = @('install-old-exit', 'old-product-registered', 'real-task-checkpoint-created', 'uninstall-exit', 'product-unregistered', 'upgrade-exit', 'product-upgraded', 'task-restored-and-resumed', 'registration-present', 'shortcuts-present', 'application-process-restarted')
+    $names = @('install-old-exit', 'old-product-registered', 'real-task-checkpoint-created', 'uninstall-exit', 'product-unregistered', 'upgrade-exit', 'product-upgraded', 'task-restored-and-resumed', 'resumed-file-sha256', 'registration-present', 'shortcuts-present', 'application-process-restarted')
     $report = @{ schema = 1; scenario = 'Upgrade'; status = 'passed'; source_commit = $manifest.source_commit; source_tree = $manifest.source_tree; candidate_version = $manifest.product_version; candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant(); candidate_msi_sha256 = $manifest.artifacts.msi.sha256; steps = @($names | ForEach-Object { @{ name = $_; passed = $true } }) }
     $reportPath = Join-Path $evidence 'upgrade.json'
     Write-Json $reportPath $report

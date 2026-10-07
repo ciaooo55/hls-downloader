@@ -151,6 +151,8 @@ def main() -> int:
         "HLS_V6_SKIP_MIGRATE": "1",
     })
     engine = subprocess.Popen([str(args.engine)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    output_sha256 = None
+    expected_sha256 = None
     try:
         ipc = connect(args.core_port)
         if args.mode == "create-pause":
@@ -180,6 +182,11 @@ def main() -> int:
                 task = wait_task(ipc, task_id, lambda item: item.get("status") in {"completed", "failed"}, 210)
                 if task.get("status") != "completed":
                     raise RuntimeError(f"resumed task did not complete: {task}")
+                output = downloads / "fixture.bin"
+                expected_sha256 = hashlib.sha256(BLOCK * (PAYLOAD_SIZE // len(BLOCK))).hexdigest()
+                output_sha256 = file_hash(output)
+                if output.stat().st_size != PAYLOAD_SIZE or output_sha256 != expected_sha256:
+                    raise RuntimeError("resumed file size or SHA-256 differs from the fixture")
         engine.terminate()
         engine.wait(timeout=10)
         database = data / "data.db"
@@ -187,7 +194,8 @@ def main() -> int:
             raise RuntimeError(f"Core database is missing: {database}")
         report = {"schema": 1, "mode": args.mode, "task_id": task_id, "status": task["status"],
                   "downloaded_bytes": int(task["downloaded_bytes"]), "active_workers": int(task["active_workers"]),
-                  "data_db": str(database), "data_db_sha256": file_hash(database), "engine_pid": engine.pid}
+                  "data_db": str(database), "data_db_sha256": file_hash(database), "engine_pid": engine.pid,
+                  "file_sha256": output_sha256, "expected_sha256": expected_sha256}
         args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, separators=(",", ":")))
         return 0

@@ -292,6 +292,10 @@ try {
             [int64]$checkpointAfter.downloaded_bytes -ge [int64]$checkpointBefore.downloaded_bytes -and
             $checkpointAfter.status -eq 'completed'
         ) $checkpointAfter
+        Add-Step 'resumed-file-sha256' (
+            [string]$checkpointAfter.file_sha256 -match '^[0-9a-f]{64}$' -and
+            $checkpointAfter.file_sha256 -eq $checkpointAfter.expected_sha256
+        ) $checkpointAfter
         Add-Step 'registration-present' (@(Get-RegistrationState).Count -gt 0) (Get-RegistrationState)
         Add-Step 'shortcuts-present' (@(Get-ShortcutState).Count -gt 0) (Get-ShortcutState)
         $installedProductCode = $afterProduct.product_code
