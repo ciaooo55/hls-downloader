@@ -87,6 +87,15 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      - name: Verify packaged portable upgrade and rollback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Get-Content artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $archive = Join-Path 'artifacts\v7-productization\candidate' ([string]$manifest.artifacts.portable.path)
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\smoke-v7-portable-upgrade.ps1 -ArchivePath $archive
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged portable upgrade/rollback failed.' }
+
       - name: Verify real MSI upgrade and failure rollback on isolated Windows
         shell: pwsh
         run: |

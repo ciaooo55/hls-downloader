@@ -76,6 +76,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $portable 'scripts') | Out-Null
     New-Item -ItemType File -Force -Path (Join-Path $portable 'portable') | Out-Null
     Copy-Item -LiteralPath (Join-Path $repo 'scripts\upgrade-v7-portable.ps1') -Destination (Join-Path $portable 'scripts\upgrade-v7-portable.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $repo 'scripts\V7HashFunctions.ps1') -Destination (Join-Path $portable 'scripts\V7HashFunctions.ps1') -Force
     $portableExtensions = Join-Path $portable 'extensions'
     New-Item -ItemType Directory -Force -Path $portableExtensions | Out-Null
     $packagedExtensions = Join-Path $appImage 'app\resources\extensions'
