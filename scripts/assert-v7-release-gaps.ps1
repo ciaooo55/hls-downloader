@@ -21,6 +21,8 @@ try {
     throw "Feature parity matrix is not valid JSON: $($_.Exception.Message)"
 }
 $features = @($feature.features)
+Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
+$exclusions = Get-V7ReleaseExclusions $feature
 if ($null -eq $feature -or $null -eq $feature.features -or $features.Count -eq 0) {
     # A manifest with no features at all must never look like "no gaps": an empty
     # set trivially satisfies the filter below and would emit passed=true.  Note
@@ -33,7 +35,8 @@ $gaps = @(
     @($feature.features) |
         Where-Object {
             $_.PSObject.Properties.Name -contains 'gap' -and
-            -not [String]::IsNullOrWhiteSpace([string]$_.gap)
+            -not [String]::IsNullOrWhiteSpace([string]$_.gap) -and
+            $exclusions.features -notcontains $_.id
         } |
         ForEach-Object {
             [pscustomobject]@{

@@ -28,6 +28,7 @@ import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
 import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
 import { contextMenuCapabilities } from '../lib/contextMenuActions'
+import { installSubtitleBackground } from '../lib/subtitleBackground'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const dynamicContextMenus = browser.contextMenus as typeof browser.contextMenus & {
@@ -1333,6 +1334,8 @@ export default defineBackground(() => {
     browser.storage.local,
     message => native(message),
   )
+  const subtitleBridge = new NativeBridge(() => browser.runtime.connectNative(HOST) as unknown as NativePortLike, 20_000)
+  installSubtitleBackground(async request => subtitleBridge.request({ op: 'subtitle', request, client_id: await browserClientId() }))
   void hydrateHandoffTracker().then(() => pollTrackedHandoffs()).catch(() => undefined)
   // A suspended worker may have left paused downloads waiting on a handoff;
   // storage.local survives suspension and browser restart, so finish that work right away.

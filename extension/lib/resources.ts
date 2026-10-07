@@ -58,6 +58,7 @@ export interface MediaResource {
   preferredHeight?: number
   /** Child rendition playlists owned by a master (audio, subtitles, alternate video). */
   renditionUrls?: string[]
+  audioTracks?: MediaAudioTrack[]
   /** Recent media/init URLs parsed from the manifest for concrete MSE ownership. */
   playbackUrls?: string[]
   playbackUrlHashes?: string[]
@@ -65,6 +66,8 @@ export interface MediaResource {
   playbackPatterns?: string[]
   seenAt: number
 }
+
+export interface MediaAudioTrack { label: string; language: string; url?: string; default?: boolean }
 
 export function boundedConfidence(value: unknown, fallback = 0): number {
   const numeric = Number(value)

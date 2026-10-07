@@ -5,6 +5,8 @@ import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from '../lib/hlsWorkerOwner
 export default defineContentScript({
   matches: ['<all_urls>'],
   allFrames: true,
+  matchAboutBlank: true,
+  matchOriginAsFallback: true,
   world: 'MAIN',
   runAt: 'document_start',
   main() {

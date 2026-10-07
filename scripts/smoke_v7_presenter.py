@@ -191,7 +191,9 @@ def visible_handoff_smoke(
     engine_source: Path,
     require_latency: bool = True,
 ) -> dict[str, object]:
-    root = Path(tempfile.mkdtemp(prefix="hls-v7-presenter-visible-"))
+    temp_root = Path(__file__).resolve().parents[1] / ".tool-cache" / "test-tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="hls-v7-presenter-visible-", dir=temp_root))
     presenter = root / "HLSDownloaderPresenter.exe"
     host = root / "HLSDownloaderNativeHost.exe"
     engine = root / "HLSDownloaderEngine.exe"

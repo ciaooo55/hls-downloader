@@ -27,7 +27,10 @@ try {
     & (Join-Path $WixRoot 'candle.exe') $wxs -o $wixobj -nologo -ext (Join-Path $WixRoot 'WixUtilExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX candle failed: $LASTEXITCODE" }
     $built = Join-Path $work 'repacked.msi'
-    & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
+    # jpackage emits RemoveExistingProducts before the final lifecycle patch
+    # moves it to 1510. Suppress that transient ICE27 finding here; the patch
+    # script verifies the persisted sequence after repacking.
+    & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -sice:ICE27 -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX light failed: $LASTEXITCODE" }
     Copy-Item -LiteralPath $built -Destination $out -Force
     [ordered]@{ input = $msi; output = $out; size = (Get-Item -LiteralPath $out).Length; repacked = $true } | ConvertTo-Json

@@ -10,7 +10,7 @@ import java.nio.file.Path
  *
  * 只记宽高、不记坐标：换显示器时旧坐标可能落在屏幕外，而宽高只要夹进当前屏幕的可用范围就一定安全。
  *
- * 存放在 `%LOCALAPPDATA%\HLSDownloader\`，与实例锁同一目录。
+ * 与工作台实例锁存放在同一配置目录；portable 模式使用程序目录内的 data/ui。
  * 审计夹具模式（设置了 `HLS_UI_AUDIT_WIDTH` / `HLS_UI_AUDIT_HEIGHT`）下既不读也不写——
  * 否则截图尺寸会被历史记录污染，同一夹具在不同机器上出图不一致。
  */
@@ -21,9 +21,7 @@ internal object WindowGeometryStore {
     private const val DEFAULT_HEIGHT = 820
 
     private val file: Path by lazy {
-        val root = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)?.let(Path::of)
-            ?: Path.of(System.getProperty("user.home"), "AppData", "Local")
-        root.resolve("HLSDownloader").resolve("window-geometry.properties")
+        WorkbenchPaths.uiDirectory.resolve("window-geometry.properties")
     }
 
     /** 返回可直接交给 `rememberWindowState` 的宽高，已夹进 [MIN_*, 屏幕可用范围]。 */

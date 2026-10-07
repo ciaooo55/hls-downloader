@@ -16,14 +16,8 @@ $portable = [IO.Path]::GetFullPath((Join-Path (Split-Path $manifestPath) ([strin
 if ((Get-FileHash $portable -Algorithm SHA256).Hash.ToLowerInvariant() -ne ([string]$manifest.artifacts.portable.sha256).ToLowerInvariant()) { throw 'Candidate Portable SHA-256 mismatch.' }
 Remove-Item $runtime -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $runtime | Out-Null
-# 门禁必须测量产品本身，而不是仓库所在卷的写入速度。进程级 $env:TEMP 一律保留在真实
-# 系统临时卷上：本机实测仓库卷写入吞吐约为系统盘的 1/8（A: 10.88 vs C: 81.06 MiB/s），
-# 而传输夹具的 256MiB 暂存经 tempfile 默认目录跟随进程 TEMP，落在哪个卷直接决定
-# 传输分项测到的是磁盘还是传输引擎。同理，冷启动若用仓库卷的全新 stage 路径，测到的
-# 会是杀毒扫描/预取缺失的系统开销，也不是产品启动耗时。
-$systemTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
-if ([string]::IsNullOrWhiteSpace($systemTemp)) { $systemTemp = [Environment]::GetEnvironmentVariable('TEMP', 'Machine') }
-if ([string]::IsNullOrWhiteSpace($systemTemp)) { $systemTemp = Join-Path $env:LOCALAPPDATA 'Temp' }
+# 实测运行目录所在磁盘的完整用户耗时；不另在系统盘暂存以掩盖慢盘表现。
+$systemTemp = Join-Path $repo '.tool-cache\test-tmp'
 $env:TEMP = $systemTemp; $env:TMP = $systemTemp
 $stageRoot = Join-Path $systemTemp 'hls-v7-performance-stage'
 New-Item -ItemType Directory -Force $stageRoot | Out-Null

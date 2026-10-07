@@ -88,6 +88,8 @@ mod startup;
 #[cfg(feature = "full-core")]
 mod store;
 #[cfg(feature = "full-core")]
+mod subtitle_translate;
+#[cfg(feature = "full-core")]
 mod task_export;
 #[cfg(feature = "full-core")]
 mod torrent_engine;

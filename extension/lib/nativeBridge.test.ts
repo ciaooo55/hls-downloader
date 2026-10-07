@@ -16,6 +16,25 @@ class FakePort implements NativePortLike {
 }
 
 describe('persistent native bridge', () => {
+  it('keeps subtitle PCM on the same host while an earlier poll is pending', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const poll = bridge.request({ op: 'subtitle', request: { action: 'poll' } })
+    const audio = bridge.request({ op: 'subtitle', request: { action: 'audio', audio: 'pcm' } })
+    const pending = [poll, audio]
+    try {
+      expect(port.posted.map(message => (message.request as Record<string, unknown>).action)).toEqual(['poll'])
+      port.onMessage.emit({ ok: true, events: [], __request_id: port.posted[0].__request_id })
+      await expect(poll).resolves.toMatchObject({ events: [] })
+      expect(port.posted.map(message => (message.request as Record<string, unknown>).action)).toEqual(['poll', 'audio'])
+      port.onMessage.emit({ ok: true, accepted: 'pcm', __request_id: port.posted[1].__request_id })
+      await expect(audio).resolves.toMatchObject({ accepted: 'pcm' })
+    } finally {
+      bridge.close()
+      await Promise.allSettled(pending)
+    }
+  })
+
   it('reuses one native port and serializes requests', async () => {
     const port = new FakePort()
     const connect = vi.fn(() => port)

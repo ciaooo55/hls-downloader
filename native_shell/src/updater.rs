@@ -650,15 +650,106 @@ fn parse_helper_args(args: impl IntoIterator<Item = OsString>) -> Result<HelperA
 
 fn run_msiexec(path: &Path, log_path: &Path) -> Result<i32, String> {
     run_installer_with(
-        || {
-            let status = std::process::Command::new("msiexec.exe")
-                .args(msiexec_args(path, log_path))
-                .status()
-                .map_err(|error| format!("运行覆盖安装失败: {error}"))?;
-            Ok(status.code().unwrap_or(-1))
-        },
+        || run_msiexec_once(&msiexec_args(path, log_path)),
         || std::thread::sleep(Duration::from_secs(10)),
     )
+}
+
+#[cfg(windows)]
+fn run_msiexec_once(args: &[OsString]) -> Result<i32, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_CANCELLED, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let mut directory = [0u16; 260];
+    let length =
+        unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) } as usize;
+    if length == 0 || length >= directory.len() {
+        return Err("无法定位系统 Windows Installer".into());
+    }
+    let mut executable = directory[..length].to_vec();
+    executable.extend("\\msiexec.exe\0".encode_utf16());
+    let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+    let mut parameters = Vec::new();
+    for argument in args {
+        if !parameters.is_empty() {
+            parameters.push(b' ' as u16);
+        }
+        // Installer 的开关不能加引号；仅包含空白的已验证文件路径需要引用。
+        let wide: Vec<u16> = argument.encode_wide().collect();
+        let quoted = wide
+            .iter()
+            .any(|ch| *ch == b' ' as u16 || *ch == b'\t' as u16);
+        if quoted {
+            parameters.push(b'"' as u16);
+        }
+        parameters.extend(wide);
+        if quoted {
+            parameters.push(b'"' as u16);
+        }
+    }
+    parameters.push(0);
+    let com = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+    let result = (|| {
+        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = executable.as_ptr();
+        info.lpParameters = parameters.as_ptr();
+        info.nShow = SW_SHOWNORMAL;
+        // 只提升 Installer，更新助手及重启后的工作台仍以原用户权限运行。
+        if unsafe { ShellExecuteExW(&mut info) } == 0 {
+            let error = unsafe { GetLastError() };
+            return if error == ERROR_CANCELLED {
+                Ok(1602)
+            } else {
+                Err(format!("启动升级安装失败（Windows {error}）"))
+            };
+        }
+        if info.hProcess.is_null() {
+            return Err("Windows Installer 未返回安装进程".into());
+        }
+        let wait = unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
+        let mut exit = 0;
+        let read =
+            wait == WAIT_OBJECT_0 && unsafe { GetExitCodeProcess(info.hProcess, &mut exit) } != 0;
+        unsafe { CloseHandle(info.hProcess) };
+        if !read {
+            return Err("无法读取 Windows Installer 安装结果".into());
+        }
+        Ok(exit as i32)
+    })();
+    if com >= 0 {
+        unsafe { CoUninitialize() };
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn run_msiexec_once(args: &[OsString]) -> Result<i32, String> {
+    let status = std::process::Command::new("msiexec.exe")
+        .args(args)
+        .status()
+        .map_err(|error| format!("运行覆盖安装失败: {error}"))?;
+    Ok(status.code().unwrap_or(-1))
 }
 
 fn run_installer_with(
@@ -677,6 +768,7 @@ fn run_installer_with(
 
 fn installer_exit_status(exit_code: i32) -> (&'static str, &'static str) {
     match exit_code {
+        1602 => ("failed", "已取消升级安装，原版本将重新启动"),
         0 => ("success", "HLS Downloader 已完成覆盖升级"),
         3010 | 1641 => ("success", "覆盖升级已完成，Windows 稍后需要重新启动"),
         1618 => ("failed", "另一项 Windows 安装仍在进行，请稍后重试"),
@@ -1004,6 +1096,27 @@ mod tests {
         assert!(args.contains(&"/norestart".into()));
         assert!(args.contains(&"REBOOT=ReallySuppress".into()));
         assert_eq!(args.last().unwrap(), &log.display().to_string());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires interactive Windows UAC approval"]
+    fn elevated_installer_returns_the_real_exit_code() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
+            MsiQueryProductStateW, INSTALLSTATE_UNKNOWN,
+        };
+        let product = OsString::from("{68FD814E-9C02-44F9-996D-0C0712157452}");
+        let wide: Vec<u16> = product.encode_wide().chain(Some(0)).collect();
+        assert_eq!(
+            unsafe { MsiQueryProductStateW(wide.as_ptr()) },
+            INSTALLSTATE_UNKNOWN
+        );
+        // 未安装的产品只返回 1605，不会改动现有产品；同时覆盖 UAC、参数和进程等待。
+        assert_eq!(
+            run_msiexec_once(&["/x".into(), product, "/qn".into(), "/norestart".into()]).unwrap(),
+            1605
+        );
     }
 
     #[cfg(windows)]

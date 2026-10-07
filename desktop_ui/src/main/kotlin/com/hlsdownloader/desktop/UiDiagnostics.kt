@@ -70,13 +70,7 @@ internal object UiDiagnostics {
     fun logsDirectory(): Path = logPath().parent
 
     private fun logPath(): Path {
-        val configured = System.getenv("HLS_V7_DATA_DIR")?.takeIf(String::isNotBlank)
-        val root = configured?.let(Path::of) ?: Path.of(
-            System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home"),
-            "HLS Downloader",
-            "v7",
-        )
-        return root.toAbsolutePath().normalize().resolve("logs").resolve("workbench.jsonl")
+        return WorkbenchPaths.dataDirectory.resolve("logs").resolve("workbench.jsonl")
     }
 
     private fun clean(value: String, limit: Int): String = value

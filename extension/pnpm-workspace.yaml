@@ -1,9 +1,14 @@
 # image-size 2.0.3 and 2.0.4 contain the parser-loop fixes; 2.0.4 is selected
 # as the latest patched release. Both were published within the age cutoff on
 # 2026-09-14, so this single narrow exception is required until they age out.
+storeDir: ../.tool-cache/build-cache/pnpm-store
 overrides:
   image-size: 2.0.4
   adm-zip: 0.6.1
+  brace-expansion@1: 1.1.21
+  fast-uri@3: 3.1.8
+  source-map-js: 1.2.2
+  shell-quote: 1.12.0
 onlyBuiltDependencies:
   - esbuild
   - spawn-sync
@@ -12,3 +17,5 @@ allowBuilds:
   spawn-sync: true
 minimumReleaseAgeExclude:
   - image-size@2.0.4
+patchedDependencies:
+  node-forge@1.4.0: patches/node-forge@1.4.0.patch

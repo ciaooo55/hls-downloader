@@ -4,7 +4,6 @@ import java.nio.channels.FileChannel
 import java.nio.channels.FileLock
 import java.nio.channels.OverlappingFileLockException
 import java.nio.file.Files
-import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
 internal class WorkbenchInstanceLock private constructor(
@@ -21,10 +20,7 @@ internal class WorkbenchInstanceLock private constructor(
 
     companion object {
         fun acquire(): WorkbenchInstanceLock? {
-            val root = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)
-                ?.let(Path::of)
-                ?: Path.of(System.getProperty("user.home"), "AppData", "Local")
-            val lockFile = root.resolve("HLSDownloader").resolve("workbench.lock")
+            val lockFile = WorkbenchPaths.uiDirectory.resolve("workbench.lock")
             Files.createDirectories(lockFile.parent)
             val channel = FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
             val lock = try {

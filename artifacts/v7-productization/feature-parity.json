@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "product_version": "7.0.2",
+  "product_version": "7.0.3",
   "generated_from": {
     "v3": "git:v3.0.39",
     "v5": "git:v5.0.13",
@@ -15,7 +15,19 @@
     "blocked": "缺少真实实现或发布级验证"
   },
   "release_ready": false,
-  "audit_state": "v7_0_2_iteration_in_progress",
+  "release_exclusions": [
+    {
+      "feature_ids": ["media.cast_dlna_chromecast", "media.tvbox_push", "media.cast_and_player_concurrency", "browser.media_push_device_selection"],
+      "gate_ids": ["browser_media_push"],
+      "reason": "用户明确要求跳过真实投屏和 TVBox 接收端验收；保留功能，但不将此次未执行的实机验证算作通过。"
+    },
+    {
+      "feature_ids": ["browser.online_subtitle_translation"],
+      "gate_ids": [],
+      "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
+    }
+  ],
+  "audit_state": "v7_0_3_iteration_in_progress",
   "features": [
     {
       "id": "architecture.single_core",
@@ -24,7 +36,7 @@
       "compose_entry": "EnginePipeClient snapshot/events",
       "core_command": "hello/list_tasks/wait_events",
       "state_event": "ready/task_created/task_updated/task_progress",
-      "verification": "scripts/adversarial-v7.ps1 architecture boundary"
+      "verification": "scripts/adversarial-v7.ps1 architecture boundary; adversarial-2026-10-07/native-host-before-launch-lock-c.json reproduced four Core process creations; native-host-standard-flushed-a-concurrent.json and native-host-standard-flushed-c-concurrent.json each verify one creation and one resident Core for four concurrent Hosts after the launch mutex fix."
     },
     {
       "id": "workbench.geometry",
@@ -204,7 +216,7 @@
       "compose_entry": "UpdateDialog/UpdatePreparedDialog",
       "core_command": "check_update/download_update/install_update",
       "state_event": "update_available/update_current/update_ready/update_install_started/update_install_result/error:update_failed",
-      "verification": "GitHub API asset size/digest contract; MSI-only streamed .part download and atomic publish; Windows Installer Property-table verification for ProductName/ProductVersion/UpgradeCode/per-user context; independent temp-copied Rust updater helper; active-task pause and durable checkpoint before Core exit; real msiexec wait and 0/3010/1641/1603/1618 handling; UTF-8 result handoff and workbench restart on success/failure; silent startup and 24-hour checks; Rust updater/contract tests; Compose protocol tests; UI test API update-prepared screenshot at 1024x600"
+      "verification": "GitHub API asset size/digest contract; MSI-only streamed .part download and atomic publish; Windows Installer Property-table verification for ProductName/ProductVersion/UpgradeCode/per-user context; independent temp-copied Rust updater helper; active-task pause and durable checkpoint before Core exit; real msiexec wait and 0/3010/1641/1603/1618 handling; UTF-8 result handoff and workbench restart on success/failure; silent startup and 24-hour checks; Rust updater/contract tests; Compose protocol tests; UI test API update-prepared screenshot at 1024x600; adversarial-2026-10-07/updater-corrected-tests.log: 14 focused tests; adversarial-2026-10-07/updater-uac-corrected-smoke.log: real ShellExecuteExW runas test returns 1605 from an uninstalled fixture product. Installer alone is elevated; cancelled UAC maps to 1602 and restarts the original workbench. Earlier invalid switch-quoting failure (1639) is retained in updater-uac-smoke.log."
     },
     {
       "id": "browser.request_context_replay",
@@ -213,7 +225,7 @@
       "compose_entry": "Settings > 网络 explains automatic browser identity and manual-only fallback headers",
       "core_command": "offer_resource/create_task",
       "state_event": "handoff_offered/task_created/error",
-      "verification": "extension resources/requestChain tests; Native Host DPAPI replay context; browser_page_identity_is_fallback_and_exact_origin_context_wins; replay_json_does_not_send_base_request_headers_to_unscoped_cross_origin_child; exact_scoped_context_clears_base_identity_and_restores_target_headers; cross_origin_redirect_does_not_forward_cookie; extension 48 files/344 tests"
+      "verification": "extension resources/requestChain tests; Native Host DPAPI replay context; browser_page_identity_is_fallback_and_exact_origin_context_wins; replay_json_does_not_send_base_request_headers_to_unscoped_cross_origin_child; exact_scoped_context_clears_base_identity_and_restores_target_headers; cross_origin_redirect_does_not_forward_cookie; extension 48 files/344 tests; adversarial-2026-10-07/media-active-regression-edge.log and adversarial-2026-10-07/media-active-regression-firefox.log: 20 controlled scenarios per browser, including srcdoc and selecting the active source; adversarial-2026-10-07/public-media-active-edge.json and adversarial-2026-10-07/public-media-active-firefox.json: exact HLS.js, DASH.js and MDN media URL identification; adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: production extension request replay completes 32MiB with matching SHA-256.; adversarial-2026-10-07/public-download-standard-launch-lock.json: latest standard Core completes public HTTPS WebM with matching 554058 bytes and SHA-256."
     },
     {
       "id": "browser.takeover_and_recovery",
@@ -232,7 +244,7 @@
       "core_command": "request_media_push/resolve_media_push/discover_cast_devices/share_media",
       "state_event": "media_push_requested/media_push_resolved/cast_devices/cast_session/error",
       "verification": "Native Host request-id test; Core persistence/resolution test; Compose requested/resolved event tests and completion Toast; extension polling contract",
-      "gap": "最终安装包仍需在真实浏览器注册和局域网设备上做实机门禁"
+      "gap": "真实投屏/TVBox 和局域网设备验收按用户要求排除；不将其计为本轮通过。"
     },
     {
       "id": "browser.hot_confirmation_process",
@@ -241,7 +253,17 @@
       "compose_entry": "Compose HandoffDialog fallback",
       "core_command": "present_handoff",
       "state_event": "handoff_offered",
-      "verification": "production Edge takeover passed; real isolated Engine -> Native Host -> rendered presenter smoke; renderer-ready prewarm; 3 consecutive runs/60 offers had end-to-end maxima 45.35/48.22/42.65 ms; forced Native Host+Core restart recovered without restarting presenter and completed at P95 47.59 ms / max 48.91 ms"
+      "verification": "production Edge takeover passed; real isolated Engine -> Native Host -> rendered presenter smoke; renderer-ready prewarm; 3 consecutive runs/60 offers had end-to-end maxima 45.35/48.22/42.65 ms; forced Native Host+Core restart recovered without restarting presenter and completed at P95 47.59 ms / max 48.91 ms; adversarial-2026-10-07/download-takeover-final.json: real Edge popup/excluded site/disabled takeover/accept/reject/failed-task fallback/disconnect retry, five resumed browser files SHA-256 verified; adversarial-2026-10-07/presenter-live.log: 20 steady samples P95 99.83ms, pending handoff restored after Presenter crash and Core/Native Host restart"
+    },
+    {
+      "id": "browser.online_subtitle_translation",
+      "status": "partial",
+      "v3_entry": "新增在线字幕功能，参考实时音频协议与语句配对",
+      "compose_entry": "现有 WXT 插件弹窗与网页播放器字幕按钮；凭据由常驻 Rust Core 持有",
+      "core_command": "subtitle configuration/configure/start/audio/reset/poll/stop",
+      "state_event": "CorePipeResponse::Subtitle / subtitle-state",
+      "verification": "adversarial-2026-10-07/validation.json; adversarial-2026-10-07/core-probe-final-tests.log; adversarial-2026-10-07/extension-subtitle-pcm-clock-tests.log; adversarial-2026-10-07/extension-subtitle-pcm-clock-build.log; adversarial-2026-10-07/subtitle-prefetch-probe-edge.json; adversarial-2026-10-07/subtitle-prefetch-probe-firefox.json; extension 358 tests/50 files and Chromium/Firefox builds passed; Core 521 non-cast tests and 2 integration tests passed, including 6 subtitle tests with real loopback WebSocket; real Edge and Firefox pretranslation each passed 19 checks against a fixture Core using real AudioWorklet PCM and Native Host forwarding; paused main player stays unchanged, PCM timeline stays continuous through a 1.1s main-thread stall, future captions remain hidden, 30s pretranslation window stops, cached cue navigation/seek/rate/offset/site/page/global controls and provider/reset failure/retry passed; authenticated cloud translation was not invoked; adversarial-2026-10-07/subtitle-fallback-final-edge.json and adversarial-2026-10-07/subtitle-element-final-firefox.json passed on the release Native Host; adversarial-2026-10-07/subtitle-shadow-final-ssd-edge.json: final Host, nested Shadow DOM prefetch 20 checks; adversarial-2026-10-07/subtitle-shadow-final-retry-firefox.json: nested Shadow DOM element capture 15 checks; adversarial-2026-10-07/full-app-local-validation-final/installed-app.json verifies final installed extension default auto-to-zh and real installed subtitle configuration IPC.; adversarial-2026-10-07/subtitle-launch-lock-edge.json and subtitle-launch-lock-firefox.json: latest standard-release Native Host passes 20 prefetch and 15 realtime nested-Shadow-DOM checks; provider is a fixture and cloud quality is excluded.",
+      "gap": "真实百炼云端准确率和延迟按用户决定暂不验收；投屏验收也排除。独立 HTTP(S) 点播音轨最多预取 30 秒；MSE/blob、DRM、无法独立读取的跨域资源及明确选中的备用音轨使用实时采集并显示原因。云端能力未标记为实测完成。"
     },
     {
       "id": "accessibility.automation",
@@ -254,12 +276,13 @@
     },
     {
       "id": "performance.release_thresholds",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "legacy baseline",
       "compose_entry": "virtualized LazyColumn and coalesced events",
       "core_command": "all",
       "state_event": "all",
-      "verification": "real-transfer-latest.json: 96 MiB SHA-correct Range transfer, 93.62 MiB/s, 3.50 MiB working-set growth, zero overlapping/requested extra/post-publish bytes; real 1024x600 Compose LazyColumn with 1000 stable tasks passed the latest 180-frame continuous-scroll run at P95 30.995 ms; current 30-second idle soak ended at 11.797 MiB with -0.012 MiB growth and 0% CPU; 1000 IPC requests passed at P95 0.376 ms with zero errors and no handle growth; Native Host thresholds passed"
+      "verification": "adversarial-2026-10-07/real-transfer-probe-final-a.json; adversarial-2026-10-07/real-transfer-probe-final-c.json; final release Engine transferred 256MiB with correct SHA-256, 32 disjoint ranges and zero post-publish traffic; A: HDD 25.54MiB/s with 6.69MiB working-set growth, C: SSD 64.85MiB/s with 9.16MiB growth, both transfer thresholds passed; adversarial-2026-10-07/native-host-probe-a-1.json and adversarial-2026-10-07/native-host-probe-a-2.json: A cold responses 2069.31ms (failed) and 1291.05ms (passed); adversarial-2026-10-07/native-host-probe-a-concurrent.json: four simultaneous hosts, max 1444.37ms, exactly one resident Core; adversarial-2026-10-07/native-host-probe-c.json: C cold response 631.12ms passed; startup diagnostics did not skip legacy migration and locate the main delay before the Core process enters main; earlier failing measurements retained; Compose 124 tests with 1000-task mapping P95 21.642ms; rendered Presenter P95 99.83ms; additional failed A: samples retained in adversarial-2026-10-07/native-host-thin-a-1.json (1860.21ms), adversarial-2026-10-07/native-host-thin-a-2.json (4565.84ms) and adversarial-2026-10-07/native-host-idle-a-1.json (3052.2ms). Installed two-binary fixture responds at 1377.44ms. ThinLTO was experimental and standard release profile was restored.; adversarial-2026-10-07/transfer-standard-launch-lock-a.json and transfer-standard-launch-lock-c.json: latest Core completes 256MiB at 26.76/119.75MiB/s with matching SHA-256, zero overlap and zero post-completion bytes. native-host-standard-flushed-a-2.json retains a 1712.87ms failure; startup-loader-experiments.json records rejected delay-load/size experiments. Standard release retained.",
+      "gap": "A: HDD 下载吞吐达标；复制后落盘的最终标准版冷启动样本为 1268.71/1712.87/1065.0ms，仍未稳定达到 1500ms。四 Host 仅启动一个 Core，A:/C: 首响应 910.51/597.08ms。正式发布包及其门禁未执行。"
     },
     {
       "id": "package.install_upgrade_rollback",
@@ -268,14 +291,14 @@
       "compose_entry": "build-v7 preview packaging",
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
-      "verification": "isolated MSI lifecycle on Windows 11: 0.0.1 first install returned 0; active 512 MiB task checkpointed at 184156160 bytes and reopened paused after 7.0.0 cover upgrade; ProductName HLSDownloader, ProductVersion 7.0.0, fixed UpgradeCode, per-user ALLUSERS absent and Updater present; installed Engine SHA-256 matched the packaged Release Engine; real Windows Installer transaction contention returned 1618 and the next install returned 0; injected 7.0.1 Type-19 failure returned 1603 while preserving 7.0.0 ProductCode and Engine SHA-256 after RemoveExistingProducts was moved after InstallFinalize; installed workbench started Release Core and Presenter, Core remained resident after UI exit; uninstall returned 0 and removed registration, install root and shortcuts; both Windows PowerShell 5.1 and PowerShell 7 verified the idempotent MSI sequence gate"
+      "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks."
     }
   ],
   "summary": {
-    "verified": 27,
-    "partial": 1,
+    "verified": 26,
+    "partial": 3,
     "blocked": 0,
-    "total": 28,
-    "verified_percent": 96.4
+    "total": 29,
+    "verified_percent": 89.7
   }
 }

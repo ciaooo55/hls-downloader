@@ -52,6 +52,8 @@ if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
     throw "Canonical feature parity matrix is missing: $path"
 }
 $json = [IO.File]::ReadAllText($path, $utf8NoBom) | ConvertFrom-Json
+Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
+$exclusions = Get-V7ReleaseExclusions $json
 $errors = New-Object 'System.Collections.Generic.List[string]'
 
 if ([int]$json.schema -ne 1) {
@@ -213,6 +215,7 @@ $canonicalFeatureIds = @(
     'browser.takeover_and_recovery',
     'browser.media_push_device_selection',
     'browser.hot_confirmation_process',
+    'browser.online_subtitle_translation',
     'accessibility.automation',
     'performance.release_thresholds',
     'package.install_upgrade_rollback'
@@ -253,8 +256,8 @@ if ($PackageTier -eq 'formal') {
     }
 }
 if ($RequireCanonicalComplete) {
-    if ($features.Count -ne 28 -or $verified.Count -ne 28) {
-        $errors.Add("Canonical feature parity must be complete: expected 28/28 verified, got $($verified.Count)/$($features.Count).")
+    if ($features.Count -ne $canonicalFeatureIds.Count -or @($features | Where-Object { $_.status -ne 'verified' -and $exclusions.features -notcontains $_.id }).Count -ne 0) {
+        $errors.Add("Canonical feature parity must be complete: expected $($canonicalFeatureIds.Count)/$($canonicalFeatureIds.Count) verified, got $($verified.Count)/$($features.Count).")
     }
 }
 if ($RequireNoBlocked -and $blocked.Count -ne 0) {
@@ -265,8 +268,8 @@ if ($RequireReleaseReady) {
     if ($json.release_ready -ne $true) {
         $errors.Add('release_ready must be true before formal packaging.')
     }
-    if ($verified.Count -ne $features.Count) {
-        $incomplete = @($features | Where-Object status -ne 'verified' | ForEach-Object { "$($_.id)=$($_.status)" })
+    if (@($features | Where-Object { $_.status -ne 'verified' -and $exclusions.features -notcontains $_.id }).Count -ne 0) {
+        $incomplete = @($features | Where-Object { $_.status -ne 'verified' -and $exclusions.features -notcontains $_.id } | ForEach-Object { "$($_.id)=$($_.status)" })
         $errors.Add("Unverified features: $($incomplete -join ', ')")
     }
 }
@@ -408,7 +411,8 @@ if ($RequireReleaseReady) {
             } elseif ($gate.exit_status -isnot [int] -and $gate.exit_status -isnot [long]) {
                 $errors.Add("Release gate '$gateId' exit_status must be an integer.")
             }
-            if ([string]$gate.result -ne 'passed' -or [int]$gate.exit_status -ne 0) {
+            $excludedGate = $exclusions.gates -contains $gateId -and [string]$gate.result -eq 'excluded' -and [string]$gate.input -eq $exclusions.reasons[$gateId]
+            if (([string]$gate.result -ne 'passed' -and -not $excludedGate) -or [int]$gate.exit_status -ne 0) {
                 $errors.Add("Release gate '$gateId' did not pass with exit status 0.")
             }
             if ([string]$gate.candidate_artifact_manifest_sha256 -notmatch '^[0-9a-fA-F]{64}$' -or

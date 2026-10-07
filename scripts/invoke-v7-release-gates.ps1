@@ -12,6 +12,8 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $manifestFullPath = if ([IO.Path]::IsPathRooted($CandidateManifestPath)) { [IO.Path]::GetFullPath($CandidateManifestPath) } else { [IO.Path]::GetFullPath((Join-Path $repo $CandidateManifestPath)) }
 if (-not (Test-Path -LiteralPath $manifestFullPath -PathType Leaf)) { throw "Candidate manifest is missing: $manifestFullPath" }
 $manifest = Get-Content -LiteralPath $manifestFullPath -Raw -Encoding UTF8 | ConvertFrom-Json
+Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
+$exclusions = Get-V7ReleaseExclusions (Get-Content (Join-Path $repo 'artifacts\v7-productization\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
 $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'candidate' -or [string]$manifest.source_commit -ne $currentCommit -or [string]$manifest.source_tree -ne $currentTree) {
@@ -19,7 +21,6 @@ if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'candidat
 }
 & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'assert-v7-release-gaps.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Formal release gap assertion failed.' }
-if (-not (Test-Path -LiteralPath 'E:\' -PathType Container)) { throw 'The formal release runner must provide the E: volume used by the MSI lifecycle gate.' }
 
 function Resolve-Browser([string]$Explicit, [string[]]$Defaults, [string]$Label) {
     if (-not [String]::IsNullOrWhiteSpace($Explicit)) {
@@ -90,16 +91,21 @@ $mediaPushParts.Add('-Python'); $mediaPushParts.Add((Quote-PS $python))
 $mediaPushParts.Add('-Ffmpeg'); $mediaPushParts.Add((Quote-PS $ffmpeg))
 Add-OptionalArgument $mediaPushParts '-EdgeDriver' $EdgeDriver
 Add-OptionalArgument $mediaPushParts '-FirefoxDriver' $FirefoxDriver
-Invoke-Gate 'browser_media_push' ($mediaPushParts -join ' ') "candidate MSI installed registration + real Edge/Firefox TVBox path; expected receiver=$env:HLS_V7_TVBOX_EXPECTED_HOST"
+if ($exclusions.gates -contains 'browser_media_push') {
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'record-v7-release-gate.ps1') -GateId 'browser_media_push' -Command 'Not executed: user excluded real casting' -GateInput $exclusions.reasons['browser_media_push'] -CandidateManifestPath $manifestFullPath -Exclude
+    if ($LASTEXITCODE -ne 0) { throw 'Recording the media-push exclusion failed.' }
+} else {
+    Invoke-Gate 'browser_media_push' ($mediaPushParts -join ' ') "candidate MSI installed registration + real Edge/Firefox TVBox path; expected receiver=$env:HLS_V7_TVBOX_EXPECTED_HOST"
+}
 
-$upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath) -InstallDir 'E:\h'"
-Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI at E:\h; checkpoint/process recovery"
+$upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath)"
+Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI in an isolated repository-local directory; checkpoint/process recovery"
 
-$rollbackCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario FailureRollback -CandidateManifestPath $(Quote-PS $manifestFullPath) -InstallDir 'E:\h'"
-Invoke-Gate 'rollback' $rollbackCommand 'candidate MSI Type-19 failure injection at E:\h; v7.0.0 product/data/registration preserved'
+$rollbackCommand = "& $(Quote-PS (Join-Path $PSScriptRoot 'verify-v7-msi-lifecycle.ps1')) -Scenario FailureRollback -CandidateManifestPath $(Quote-PS $manifestFullPath)"
+Invoke-Gate 'rollback' $rollbackCommand 'candidate MSI failure injection in an isolated repository-local directory; v7.0.0 product/data/registration preserved'
 
 $aggregate = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
 $evidence = Get-Content -LiteralPath $aggregate -Raw -Encoding UTF8 | ConvertFrom-Json
-$passed = @($evidence.gates | Where-Object { $_.result -eq 'passed' -and [int]$_.exit_status -eq 0 })
-if (@($evidence.gates).Count -ne 5 -or $passed.Count -ne 5) { throw 'All five release gates were not recorded as passed.' }
+$passed = @($evidence.gates | Where-Object { ($_.result -eq 'passed' -or $_.result -eq 'excluded' -and $exclusions.gates -contains $_.id) -and [int]$_.exit_status -eq 0 })
+if (@($evidence.gates).Count -ne 5 -or $passed.Count -ne 5) { throw 'A required release gate failed or is missing.' }
 Write-Output ([ordered]@{ schema = 1; passed = $true; product_version = [string]$manifest.product_version; source_commit = $currentCommit; gates = @($evidence.gates | ForEach-Object { $_.id }) } | ConvertTo-Json -Compress)

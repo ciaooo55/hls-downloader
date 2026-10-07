@@ -8,6 +8,7 @@ import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel }
 import { withDeadline } from '../../lib/asyncDeadline'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
 import { formatBytes, formatDuration } from '../../lib/format'
+import { mountSubtitlePopup } from '../../lib/subtitlePopup'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -570,6 +571,9 @@ async function main() {
     || [...windowTabs].reverse().find(candidate => /^https?:\/\//i.test(candidate.url || ''))
     || windowTabs.find(candidate => candidate.active)
   const pageUrl = tab?.url || ''
+  const subtitlePanel = el('section')
+  mainEl.insertBefore(subtitlePanel, section)
+  mountSubtitlePopup(subtitlePanel, tab?.id)
   host = normalizeHost(pageUrl)
   const canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
   rescanPage = async () => {

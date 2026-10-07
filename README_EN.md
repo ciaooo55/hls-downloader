@@ -45,7 +45,9 @@ Release bundles may include Windows x64 **EXE / MSI / Portable ZIP** packages to
 | Display | 1024×600 minimum; the UI follows the system DPI scaling |
 
 > [!NOTE]
-> `main` currently tracks the **7.0.2** source line. Public installers are published through Releases; builds marked `candidate` or `pre-release` should be treated as test builds.
+> `main` currently tracks the **7.0.3** source line. Public installers are published through Releases; builds marked `candidate` or `pre-release` should be treated as test builds.
+
+Online subtitles can be enabled from the player button or extension popup. Global, site and page rules, source/target languages (auto to Chinese by default), timing offset and next-caption seeking are available. Independently readable on-demand audio can be translated up to 30 seconds ahead. Configure a DashScope workspace and API key in the extension before starting; the desktop Core encrypts the key at rest.
 
 ## ✨ Why HLS Downloader
 

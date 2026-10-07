@@ -16,6 +16,7 @@ pub struct CoreServer {
     notify: Arc<(Mutex<u64>, Condvar)>,
     stop: Arc<AtomicBool>,
     torrent_probe_active: Arc<AtomicBool>,
+    subtitles: Arc<crate::subtitle_translate::SubtitleService>,
 }
 
 impl CoreServer {
@@ -28,9 +29,23 @@ impl CoreServer {
     }
 
     pub fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
+        let started = std::time::Instant::now();
+        let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
+        let mark = |stage: &str| {
+            if profile {
+                eprintln!(
+                    "core_store_startup stage={stage} elapsed_us={}",
+                    started.elapsed().as_micros()
+                );
+            }
+        };
         let coordinator = CoreCoordinator::new(PersistentCore::open(path)?);
+        mark("database_open");
         bootstrap_store(&coordinator)?;
-        Self::from_coordinator(coordinator)
+        mark("bootstrap");
+        let server = Self::from_coordinator(coordinator)?;
+        mark("recovery_watchers");
+        Ok(server)
     }
 
     pub fn in_memory() -> Result<Self, String> {
@@ -49,6 +64,7 @@ impl CoreServer {
             notify: Arc::new((Mutex::new(sequence), Condvar::new())),
             stop,
             torrent_probe_active: Arc::new(AtomicBool::new(false)),
+            subtitles: Arc::new(crate::subtitle_translate::SubtitleService::default()),
         })
     }
 
@@ -61,6 +77,7 @@ impl CoreServer {
     }
 
     pub fn shutdown(&self) {
+        self.subtitles.stop_all();
         self.stop.store(true, Ordering::SeqCst);
         self.notify.1.notify_all();
     }
@@ -139,7 +156,29 @@ impl CoreServer {
         let notify = Arc::clone(&self.notify);
         let stop = Arc::clone(&self.stop);
         let torrent_probe_active = Arc::clone(&self.torrent_probe_active);
+        let subtitles = Arc::clone(&self.subtitles);
         Arc::new(move |request| {
+            if matches!(
+                &request,
+                CorePipeRequest::Command {
+                    command: CoreCommand::Shutdown,
+                    ..
+                }
+            ) {
+                subtitles.stop_all();
+            }
+            if let CorePipeRequest::Subtitle {
+                request_id,
+                request,
+            } = request
+            {
+                return CorePipeResponse::Subtitle {
+                    request_id,
+                    result: subtitles
+                        .dispatch(&coordinator, &request)
+                        .unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})),
+                };
+            }
             dispatch(&coordinator, &notify, &stop, &torrent_probe_active, request)
         })
     }
@@ -187,6 +226,11 @@ fn dispatch(
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
+        CorePipeRequest::Subtitle { request_id, .. } => CorePipeResponse::Error {
+            request_id: Some(request_id),
+            code: "subtitle_unavailable".into(),
+            message: "字幕服务尚未初始化".into(),
+        },
         CorePipeRequest::Hello { protocol, version } => {
             if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION {
                 CorePipeResponse::Hello {
@@ -319,6 +363,7 @@ fn dispatch(
                 "control_cast",
                 "set_default_cookie",
                 "set_site_rule_credential",
+                "subtitle",
             ]
             .into_iter()
             .map(str::to_string)

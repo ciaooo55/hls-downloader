@@ -533,11 +533,20 @@ impl CoreStore {
 
     fn initialize(&mut self) -> Result<(), String> {
         self.connection
-            .execute_batch(&format!(
+            .execute_batch(
                 "PRAGMA foreign_keys = ON;\
                  PRAGMA journal_mode = WAL;\
-                 PRAGMA synchronous = NORMAL;\
-                 CREATE TABLE IF NOT EXISTS tasks (\
+                 PRAGMA synchronous = NORMAL;",
+            )
+            .map_err(|error| format!("initialize Core pragmas: {error}"))?;
+        // 建表、索引和版本标记一次提交，避免慢盘上的逐表提交及失败后的半初始化状态。
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| format!("begin Core schema initialization: {error}"))?;
+        transaction
+            .execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS tasks (\
                    task_id TEXT PRIMARY KEY,\
                    snapshot_json TEXT NOT NULL,\
                    created_at_ms INTEGER NOT NULL,\
@@ -597,7 +606,10 @@ impl CoreStore {
                  CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);\
                  PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"
             ))
-            .map_err(|error| format!("initialize Core schema: {error}"))
+            .map_err(|error| format!("initialize Core schema: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("commit Core schema: {error}"))
     }
 }
 
@@ -789,6 +801,29 @@ mod tests {
         store.set_setting("minimum_bytes", 42_u64).unwrap();
         assert!(!store.setting_bool("takeover_enabled", true).unwrap());
         assert_eq!(store.setting_u64("minimum_bytes", 0).unwrap(), 42);
+    }
+
+    #[test]
+    fn schema_failure_rolls_back_tables_and_version() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE tasks (wrong_column TEXT);")
+            .unwrap();
+        let mut store = CoreStore {
+            connection,
+            path: None,
+        };
+        assert!(store.initialize().is_err());
+        assert_eq!(store.schema_version().unwrap(), 0);
+        let tables: i64 = store
+            .connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='task_specs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
     }
 
     #[test]

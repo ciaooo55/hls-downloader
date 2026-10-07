@@ -219,7 +219,7 @@ jobs:
         working-directory: desktop_ui
         run: |
           $ErrorActionPreference = 'Stop'
-          $launcherConfig = Get-ChildItem -LiteralPath 'build\compose\binaries\main\app' -Filter 'HLSDownloader.cfg' -Recurse -File | Select-Object -First 1
+          $launcherConfig = Get-ChildItem -LiteralPath '..\.tool-cache\build-cache\compose-build\compose\binaries\main\app' -Filter 'HLSDownloader.cfg' -Recurse -File | Select-Object -First 1
           if (-not $launcherConfig) { throw 'Compose launcher configuration is missing from createDistributable output.' }
           $config = Get-Content -LiteralPath $launcherConfig.FullName -Raw -Encoding UTF8
           foreach ($required in @(

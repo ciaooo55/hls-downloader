@@ -15,6 +15,50 @@ static KEEP_PRESENTER_MUTEX: OnceLock<isize> = OnceLock::new();
 static KEEP_LOCK: OnceLock<File> = OnceLock::new();
 static KEEP_PRESENTER_LOCK: OnceLock<File> = OnceLock::new();
 
+#[cfg(all(windows, feature = "full-core"))]
+pub(crate) struct CoreLaunchGuard(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(all(windows, feature = "full-core"))]
+impl Drop for CoreLaunchGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::System::Threading::ReleaseMutex(self.0);
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "full-core"))]
+pub(crate) fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+
+    // Core 的实例锁在进程进入 main 后才建立；浏览器必须在启动进程前协调，避免同时加载多个 Core。
+    let name = session_mutex_name("Local\\HLSDownloader.v7.launch");
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        return Err(format!("create Core launch mutex: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    let wait = unsafe { WaitForSingleObject(handle, 10_000) };
+    if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+        return Ok(CoreLaunchGuard(handle));
+    }
+    let error = if wait == WAIT_TIMEOUT {
+        "等待其他浏览器启动 Core 超时，请重试".to_string()
+    } else {
+        format!(
+            "wait for Core launch mutex: status={wait}, {}",
+            std::io::Error::last_os_error()
+        )
+    };
+    unsafe { CloseHandle(handle) };
+    Err(error)
+}
+
 /// Produces the duplicate-instance error text. The engine binary treats this
 /// marker as a normal exit, so every duplicate-instance path must go through
 /// this constructor instead of hand-writing the message.
@@ -62,11 +106,32 @@ pub fn claim_v7_presenter_instance() -> Result<(), String> {
 }
 
 #[cfg(windows)]
+fn session_mutex_name(base: &str) -> Vec<u16> {
+    let isolated_profile = std::env::var_os("HLS_V7_DATA_DIR").is_some_and(|v| !v.is_empty())
+        && ["HLS_V7_PIPE", "HLS_V7_CORE_BIND"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty()));
+    let name = if isolated_profile {
+        // 显式独立数据目录与 IPC 用于隔离运行；同一数据库仍由文件锁保护。
+        let profile = crate::default_v7_database_path()
+            .to_string_lossy()
+            .to_lowercase();
+        let hash = profile.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+        format!("{base}.profile-{hash:016x}")
+    } else {
+        base.to_string()
+    };
+    name.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
 fn claim_session_mutex() -> Result<(), String> {
     use std::ptr::null;
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name: Vec<u16> = "Local\\HLSDownloader.v7\0".encode_utf16().collect();
+    let name = session_mutex_name("Local\\HLSDownloader.v7");
     let handle = unsafe { CreateMutexW(null(), 1, name.as_ptr()) };
     if handle.is_null() {
         return Err(format!("CreateMutexW failed: {}", unsafe {
@@ -85,9 +150,7 @@ fn claim_presenter_session_mutex() -> Result<(), String> {
     use std::ptr::null;
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name: Vec<u16> = "Local\\HLSDownloader.v7.presenter\0"
-        .encode_utf16()
-        .collect();
+    let name = session_mutex_name("Local\\HLSDownloader.v7.presenter");
     let handle = unsafe { CreateMutexW(null(), 1, name.as_ptr()) };
     if handle.is_null() {
         return Err(format!("CreateMutexW presenter failed: {}", unsafe {

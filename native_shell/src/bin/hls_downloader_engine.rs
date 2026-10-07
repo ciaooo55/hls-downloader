@@ -110,6 +110,17 @@ fn shutdown_core() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    let started = std::time::Instant::now();
+    let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
+    let mark = |stage: &str| {
+        if profile {
+            eprintln!(
+                "core_startup stage={stage} elapsed_us={}",
+                started.elapsed().as_micros()
+            );
+        }
+    };
+    mark("entry");
     let args = std::env::args().collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "--player-process") {
         return ExitCode::from(hls_native_shell::run_player_process() as u8);
@@ -164,6 +175,7 @@ fn main() -> ExitCode {
                 }
             }
         }
+        mark("registration");
         if let Err(error) = hls_native_shell::claim_v7_instance() {
             if hls_native_shell::is_already_running_error(&error) {
                 return ExitCode::SUCCESS;
@@ -171,6 +183,7 @@ fn main() -> ExitCode {
             eprintln!("download engine instance startup failed: {error}");
             return ExitCode::from(1);
         }
+        mark("instance_lock");
         let server = match hls_native_shell::CoreServer::open_default() {
             Ok(server) => server,
             Err(error) => {
@@ -178,9 +191,12 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        mark("store_ready");
         start_resident_tray();
+        mark("tray");
         match server.bind_local() {
             Ok((address, worker)) => {
+                mark("ipc_ready");
                 eprintln!("download engine listening on {address}");
                 match worker.join() {
                     Ok(Ok(())) => ExitCode::SUCCESS,

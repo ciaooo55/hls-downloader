@@ -146,7 +146,11 @@ try {
         'OpenDatabase', 'InvokeMethod', $null, $installer, @($resolved, 1)
     )
     # Installation rollback writes protected Windows Installer registration keys.
-    $summaryInfo = $database.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $database, 1)
+    $summaryInfo = $database.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $database, 2)
+    $originalPackageCode = $summaryInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $summaryInfo, 9)
+    # 数据库已修改，包身份必须更新，否则 Installer 可能继续使用缓存的旧包。
+    $packageCode = [guid]::NewGuid().ToString('B').ToUpperInvariant()
+    $summaryInfo.GetType().InvokeMember('Property', 'SetProperty', $null, $summaryInfo, @(9, $packageCode)) | Out-Null
     $wordCount = $summaryInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $summaryInfo, 15)
     $summaryInfo.GetType().InvokeMember('Property', 'SetProperty', $null, $summaryInfo, @(15, ([int]$wordCount -band (-bnot 8)))) | Out-Null
     $summaryInfo.GetType().InvokeMember('Persist', 'InvokeMethod', $null, $summaryInfo, $null) | Out-Null
@@ -224,6 +228,20 @@ try {
     if ([int]$current -ne $target) {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
     }
+    # 标准用户能安装 per-user MSI，但旧产品的注册回滚写入受保护的 Installer 键。
+    # 必须在移除旧产品前拒绝未提升权限的升级，不能只依赖 SummaryInfo 标志。
+    $privilegeAction = 'V7RequireUpgradePrivileges'
+    $privilegeCondition = 'JP_UPGRADABLE_FOUND AND NOT Privileged'
+    $privilegeMessage = 'Please run this upgrade as administrator so Windows Installer can safely restore the previous version if installation fails.'
+    $privilegeSequence = [int]$initialize - 10
+    $relatedSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='FindRelatedProducts'"
+    if ($null -eq $relatedSequence -or $privilegeSequence -le [int]$relatedSequence) {
+        throw 'MSI does not provide an upgrade privilege check before InstallInitialize.'
+    }
+    Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$privilegeAction'"
+    Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$privilegeAction'"
+    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Target``) VALUES ('$privilegeAction',19,'$privilegeMessage')"
+    Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$privilegeAction','$privilegeCondition',$privilegeSequence)"
 
     $prepareSequence = [int]$installFiles + 10
     if ($prepareSequence -ge [int]$finalize) {
@@ -287,6 +305,10 @@ try {
     $database = $verifyDatabase
     $summaryInfo = $verifyDatabase.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $verifyDatabase, 0)
     $verifiedWordCount = $summaryInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $summaryInfo, 15)
+    $verifiedPackageCode = $summaryInfo.GetType().InvokeMember('Property', 'GetProperty', $null, $summaryInfo, 9)
+    if ($verifiedPackageCode -ne $packageCode -or $verifiedPackageCode -eq $originalPackageCode) {
+        throw 'MSI PackageCode verification failed after database changes.'
+    }
     if (([int]$verifiedWordCount -band 8) -ne 0) { throw 'MSI must request installation privileges for protected rollback registration.' }
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
     $verifiedProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
@@ -295,6 +317,12 @@ try {
     $verifiedPrepareType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareCondition = Invoke-MsiStringQuery "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7PrepareNativeHostManifests'"
+    $verifiedPrivilegeSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='$privilegeAction'"
+    $verifiedPrivilegeCondition = Invoke-MsiStringQuery "SELECT ``Condition`` FROM ``InstallExecuteSequence`` WHERE ``Action``='$privilegeAction'"
+    $verifiedPrivilegeType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='$privilegeAction'"
+    if ([int]$verifiedPrivilegeSequence -ne $privilegeSequence -or $verifiedPrivilegeCondition -ne $privilegeCondition -or [int]$verifiedPrivilegeType -ne 19) {
+        throw 'MSI upgrade privilege guard verification failed.'
+    }
     $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
     if ($verifiedInstallDirSearch -ne $installDirSearch) {
         throw 'MSI maintenance install-directory search verification failed.'
@@ -357,10 +385,13 @@ try {
     msi = $resolved
     original_product_code = $originalProductCode
     verified_product_code = $verifiedProductCode
+    original_package_code = $originalPackageCode
+    verified_package_code = $verifiedPackageCode
     verified_word_count = [int]$verifiedWordCount
     original_sequence = [int]$current
     verified_sequence = [int]$verified
     install_initialize_sequence = [int]$initialize
+    upgrade_privilege_sequence = [int]$verifiedPrivilegeSequence
     install_files_sequence = [int]$installFiles
     install_finalize_sequence = [int]$finalize
     native_host_engine_file = $engineFile

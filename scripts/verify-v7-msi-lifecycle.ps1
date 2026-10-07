@@ -10,7 +10,7 @@ param(
     [string]$OldMsiPath = '',
     [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.0/HLSDownloader-7.0.0-Windows-x64.msi',
     [string]$OldMsiSha256 = 'ec5d26ea9fbb698ebdccb0b1bdfb9058c386883698e925f2fa2a7de74007d9d9',
-    [string]$InstallDir = 'E:\h',
+    [string]$InstallDir = '',
     [string]$CheckpointPath = '',
     [string]$ReportPath = ''
 )
@@ -28,10 +28,14 @@ $previousDataDir = $env:HLS_V7_DATA_DIR
 $previousDownloadDir = $env:HLS_V7_DOWNLOAD_DIR
 Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
 
-$expectedInstallDir = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
+$expectedInstallDir = [IO.Path]::GetFullPath((Join-Path $repo '.tool-cache\test-tmp\msi-lifecycle')).TrimEnd('\', '/')
+if ([String]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = $expectedInstallDir }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
 if (-not [String]::Equals($InstallDir, $expectedInstallDir, [StringComparison]::OrdinalIgnoreCase)) {
     throw "MSI lifecycle install directory must be exactly ${expectedInstallDir}: $InstallDir"
+}
+if (Test-Path -LiteralPath $InstallDir) {
+    throw "MSI lifecycle requires an absent test directory; existing data will not be overwritten: $InstallDir"
 }
 
 function Add-Step([string]$Name, [bool]$Passed, $Actual) {
@@ -160,8 +164,13 @@ function Invoke-CheckpointFixture([string]$Mode, [string]$Engine, [string]$Repor
 function Add-DeferredFailure([string]$Path) {
     $installer = New-Object -ComObject WindowsInstaller.Installer
     $database = $null
+    $summary = $null
     try {
         $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 1))
+        # 故障注入改变了 MSI，不能与原候选包共用 Installer 缓存身份。
+        $summary = $database.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $database, 1)
+        $summary.GetType().InvokeMember('Property', 'SetProperty', $null, $summary, @(9, [guid]::NewGuid().ToString('B').ToUpperInvariant())) | Out-Null
+        $summary.GetType().InvokeMember('Persist', 'InvokeMethod', $null, $summary, $null) | Out-Null
         $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @('SELECT `Action`,`Sequence` FROM `InstallExecuteSequence`'))
         $sequences = @{}
         try {
@@ -194,6 +203,7 @@ function Add-DeferredFailure([string]$Path) {
         }
         $database.GetType().InvokeMember('Commit', 'InvokeMethod', $null, $database, $null) | Out-Null
     } finally {
+        if ($null -ne $summary) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) | Out-Null }
         if ($null -ne $database) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) | Out-Null }
         [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null
     }
@@ -229,6 +239,9 @@ try {
     $candidateVersion = Get-MsiProperty $candidate 'ProductVersion'
     $upgradeCode = Get-MsiProperty $candidate 'UpgradeCode'
     $candidateProductCode = Get-MsiProperty $candidate 'ProductCode'
+    if ($null -ne (Get-InstalledProduct $upgradeCode)) {
+        throw 'MSI lifecycle requires an isolated Windows test environment with no existing product in this upgrade family.'
+    }
     $oldProductCode = Get-MsiProperty $old 'ProductCode'
     Add-Step 'candidate-manifest-version' (([string]$manifest.product_version) -eq $expectedCandidateVersion) ([string]$manifest.product_version)
     [void](Assert-V7CandidateMsiVersion -ExpectedVersion $expectedCandidateVersion -MsiProductVersion $candidateVersion)

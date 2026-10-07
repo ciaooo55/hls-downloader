@@ -6,7 +6,7 @@ plugins {
     kotlin("plugin.serialization") version "2.4.20"
 }
 group = "com.hlsdownloader"
-version = "7.0.2"
+version = "7.0.3"
 // jlink consumes an argument file; keep generated paths ASCII-safe on zh-CN Windows.
 // Build output defaults inside the repository. The canonical build script injects
 // an ASCII drive alias through HLS_COMPOSE_BUILD_DIR without relocating the files.
@@ -61,8 +61,8 @@ compose.desktop { application {
         appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
         targetFormats(TargetFormat.Msi, TargetFormat.Exe)
         packageName = "HLSDownloader"
-        packageVersion = "7.0.2"
-        description = "HLS Downloader 7.0.2"
+        packageVersion = "7.0.3"
+        description = "HLS Downloader 7.0.3"
         vendor = "HLS Downloader"
         windows {
             menuGroup = "HLS Downloader"

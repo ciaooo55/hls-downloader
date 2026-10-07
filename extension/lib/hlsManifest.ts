@@ -1,5 +1,5 @@
 import { inheritManifestAccessQuery } from './urlQuery'
-import { resourceFingerprint, resourceId } from './resources'
+import { resourceFingerprint, resourceId, type MediaAudioTrack } from './resources'
 
 export interface HlsVariant {
   url: string
@@ -14,6 +14,7 @@ export interface HlsManifestInfo {
   variants: HlsVariant[]
   /** Alternate audio/video/subtitle playlists owned by this master. */
   renditionUrls: string[]
+  audioTracks: MediaAudioTrack[]
   /** Bounded media/init URLs used to associate an MSE SourceBuffer with this playlist. */
   playbackUrls: string[]
   /** Complete exact ownership without storing every long signed segment URL. */
@@ -54,6 +55,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   const variants: HlsVariant[] = []
   const renditionUrls: string[] = []
+  const audioTracks: MediaAudioTrack[] = []
   const playbackUrls: string[] = []
   const rememberPlaybackUrl = (value: string) => {
     if (!value) return
@@ -69,12 +71,19 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
     if (line.startsWith('#EXT-X-MEDIA:')) {
-      const uri = attribute(line.slice('#EXT-X-MEDIA:'.length), 'URI')
+      const attributes = line.slice('#EXT-X-MEDIA:'.length)
+      const uri = attribute(attributes, 'URI')
+      let trackUrl: string | undefined
       if (uri) {
         try {
           const resolved = inheritManifestAccessQuery(baseUrl, new URL(uri, baseUrl).href)
+          trackUrl = resolved
           if (!renditionUrls.includes(resolved)) renditionUrls.push(resolved)
         } catch {}
+      }
+      if (attribute(attributes, 'TYPE') === 'AUDIO' && audioTracks.length < 24) {
+        audioTracks.push({ label: attribute(attributes, 'NAME') || attribute(attributes, 'LANGUAGE') || '音轨',
+          language: attribute(attributes, 'LANGUAGE'), url: trackUrl, default: attribute(attributes, 'DEFAULT') === 'YES' })
       }
     }
     if (line.startsWith('#EXTINF:')) {
@@ -137,6 +146,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
   return {
     variants,
     renditionUrls: renditionUrls.slice(0, 24),
+    audioTracks,
     // The tail of a live window is what the player is currently appending.
     // Bounding this also keeps session storage small on long event playlists.
     playbackUrls: playbackUrls.slice(-24),

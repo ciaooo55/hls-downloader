@@ -73,6 +73,19 @@ article:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--borde
 .empty-retry .hlsd-icon { width: 13px; height: 13px; color: var(--primary); }
 .send-error { margin: 8px 10px 0; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--red) 10%, var(--surface)); color: var(--red-ink); font-size: 11px; }
 footer { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: auto; height: 34px; padding: 0 10px; border-top: 1px solid var(--border); background: var(--surface); color: var(--faint); font-size: 11px; white-space: nowrap; }
+.subtitle-panel { flex: none; max-height: 310px; overflow: auto; margin: 8px 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12px; }
+.subtitle-heading { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.subtitle-heading span, .subtitle-panel small { color: var(--muted); }
+.subtitle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.subtitle-panel label { display: inline-flex; align-items: center; gap: 4px; }
+.subtitle-panel select, .subtitle-panel input:not([type=checkbox]) { max-width: 100%; border: 1px solid var(--control-border); border-radius: 5px; padding: 5px; background: var(--surface-2); color: var(--text); font: inherit; }
+.subtitle-panel input[type=number] { width: 62px; }
+.subtitle-player { flex: 1; min-width: 150px; }
+.subtitle-panel small { display: block; font-size: 11px; line-height: 1.5; }
+.subtitle-panel details { margin-top: 8px; }
+.subtitle-panel summary { cursor: pointer; }
+.subtitle-provider { display: grid; gap: 6px; margin-top: 8px; }
+.subtitle-error { color: var(--red-ink); margin: 6px 0; white-space: pre-wrap; }
 .restore-site-prompts { overflow: hidden; max-width: 116px; padding: 0; border: 0; background: transparent; color: var(--primary); cursor: pointer; font: inherit; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease; }
 .restore-site-prompts:hover { color: var(--primary-hover); text-decoration: underline; }
 .restore-site-prompts:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }

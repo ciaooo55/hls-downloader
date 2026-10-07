@@ -6,6 +6,7 @@ import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normal
 import { withDeadline } from '../lib/asyncDeadline'
 import { selectedDownloadUrls } from '../lib/selectionLinks'
 import { formatBytes, formatDuration } from '../lib/format'
+import { installSubtitleContent } from '../lib/subtitleContent'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
   let lastError: unknown
@@ -37,11 +38,16 @@ function bridgeDetail(event: Event): Record<string, any> {
 export default defineContentScript({
   matches: ['<all_urls>'],
   allFrames: true,
+  matchAboutBlank: true,
+  matchOriginAsFallback: true,
+  // 媒体或其他子资源迟迟未完成时，网页操作入口仍应在 DOM 就绪后出现。
+  runAt: 'document_end',
   // All overlay/theme CSS is constructed below inside the isolated root. `ui`
   // makes WXT fetch a generated content.css even when no CSS bundle exists,
   // producing one denied chrome-extension request on every page.
   cssInjectionMode: 'manual',
   async main(ctx) {
+    const discoverSubtitlePlayers = installSubtitleContent(ctx)
     const pendingResourceWrites = new Set<Promise<unknown>>()
     const eventVideo = (event: Event): HTMLVideoElement | null => {
       const path = typeof event.composedPath === 'function' ? event.composedPath() : []
@@ -146,11 +152,14 @@ export default defineContentScript({
       if (activationRoots.has(root)) return
       activationRoots.add(root)
       activationMediaRoots.push(root)
+      discoverSubtitlePlayers(root)
       root.addEventListener('play', rememberPendingPlayback, true)
       root.addEventListener('playing', rememberPendingPlayback, true)
       if (root.querySelector('video,audio,source[src]')) {
         requestActivation()
       }
+      // 启动前创建的嵌套 ShadowRoot 不会重放 attachShadow/play 事件，需逐层发现。
+      if (root instanceof ShadowRoot) discoverActivationShadowRoots(root)
     }
     const earlyShadowListener = (event: Event) => {
       const host = event.composedPath().find(value => value instanceof Element) as Element | undefined
@@ -838,6 +847,10 @@ export default defineContentScript({
       // fallback, or a watch-page URL written into src="" / src="this page".
       const currentIsDocumentFallback = /^https?:\/\//i.test(current)
         && isSameDocumentPlaybackFallback(current, location.href)
+      // 多个 <source> 是格式候选；浏览器选定后仅当前资源属于这个播放实例。
+      if (/^https?:\/\//i.test(current) && !currentIsDocumentFallback && media.readyState >= 1) {
+        return [{ url: current, mimeType: declared.find(source => source.url === current)?.mimeType || '' }]
+      }
       return [
         ...(current && !currentIsDocumentFallback ? [{ url: current, mimeType: '' }] : []),
         ...declared,
@@ -933,6 +946,7 @@ export default defineContentScript({
       if (observedMediaRoots.has(root)) return
       observedMediaRoots.add(root)
       const discover = (node: ParentNode | Element) => {
+        discoverSubtitlePlayers(node)
         if (node instanceof HTMLVideoElement) trackVideo(node)
         node.querySelectorAll<HTMLVideoElement>('video').forEach(trackVideo)
         const inspect = (element: Element) => {

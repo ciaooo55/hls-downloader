@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -18,6 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const WRITE_BATCH: usize = 256 * 1024;
+const FILE_WRITE_BUFFER: usize = 1024 * 1024;
 const DURABLE_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
 const ADAPTIVE_INITIAL_CONNECTIONS: usize = 2;
@@ -422,19 +423,18 @@ fn save_completed_ranges(job: &Job, ranges: &[(u64, u64)]) -> Result<(), EngineE
         .map_err(|err| EngineErrorCode::Failed(format!("checkpoint replace failed: {err}")))
 }
 
-fn record_completed_range(
-    job: &Job,
-    completed: &Mutex<Vec<(u64, u64)>>,
-    start: u64,
-    end: u64,
-) -> Result<(), EngineErrorCode> {
-    let mut list = completed.lock().unwrap_or_else(|err| err.into_inner());
-    if range_covered(&list, start, end) {
-        return Ok(());
+struct RangeCheckpoints {
+    durable: Mutex<Vec<(u64, u64)>>,
+    pending: Mutex<Vec<(u64, u64)>>,
+}
+
+impl RangeCheckpoints {
+    fn new(durable: Vec<(u64, u64)>) -> Self {
+        Self {
+            durable: Mutex::new(durable),
+            pending: Mutex::new(Vec::new()),
+        }
     }
-    list.push((start, end));
-    *list = normalize_ranges(std::mem::take(&mut *list));
-    save_completed_ranges(job, &list)
 }
 
 const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
@@ -1064,7 +1064,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let fresh_start = !output_existed && loaded.is_empty() && job.resume_from == 0;
     let scheduler = Arc::new(RangeScheduler::new(pending.to_vec(), workers));
     let downloaded = Arc::new(AtomicU64::new(already));
-    let completed = Arc::new(Mutex::new(loaded));
+    let completed = Arc::new(RangeCheckpoints::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
     let stop = Arc::new(AtomicBool::new(false));
     let started = Instant::now();
@@ -1230,7 +1230,7 @@ impl AdaptiveConnectionController {
             return false;
         }
         let successes = self.successful_ranges.fetch_add(1, Ordering::AcqRel) + 1;
-        if successes < desired {
+        if successes < desired.max(2) {
             return false;
         }
         if self
@@ -1294,7 +1294,12 @@ impl RangeScheduler {
         let index = pending
             .iter()
             .enumerate()
-            .max_by_key(|(_, item)| item.end.saturating_sub(item.start))
+            .max_by_key(|(_, item)| {
+                (
+                    item.end.saturating_sub(item.start),
+                    std::cmp::Reverse(item.start),
+                )
+            })
             .map(|(index, _)| index)?;
         let range = pending.swap_remove(index);
         drop(pending);
@@ -1323,6 +1328,13 @@ impl RangeScheduler {
 
     fn note_congestion(&self) {
         self.connections.note_congestion();
+    }
+
+    fn note_storage_latency(&self, elapsed: Duration) {
+        // 落盘长时间阻塞时增加连接只会增加随机写和 fsync 争用。
+        if elapsed >= Duration::from_millis(250) {
+            self.note_congestion();
+        }
     }
 
     fn complete(&self, id: u64) {
@@ -1382,13 +1394,13 @@ fn range_worker(
     job: &Job,
     scheduler: Arc<RangeScheduler>,
     downloaded: Arc<AtomicU64>,
-    completed: Arc<Mutex<Vec<(u64, u64)>>>,
+    completed: Arc<RangeCheckpoints>,
     failed: Arc<Mutex<Option<EngineErrorCode>>>,
     stop: Arc<AtomicBool>,
     // 本次下载是否从零开始（无已保留片段、无续传偏移），含义见 fetch_range。
     fresh: bool,
 ) {
-    let Ok(mut file) = OpenOptions::new().read(true).write(true).open(&job.output) else {
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(&job.output) else {
         let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
         if slot.is_none() {
             *slot = Some(EngineErrorCode::Failed("open payload failed".into()));
@@ -1396,6 +1408,7 @@ fn range_worker(
         stop.store(true, Ordering::SeqCst);
         return;
     };
+    let mut file = BufWriter::with_capacity(FILE_WRITE_BUFFER, file);
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
@@ -1437,15 +1450,7 @@ fn range_worker(
         );
         scheduler.complete(active.id);
         match result {
-            Ok((start, end)) => {
-                if let Err(error) = record_completed_range(job, &completed, start, end) {
-                    let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
-                    if slot.is_none() {
-                        *slot = Some(error);
-                    }
-                    stop.store(true, Ordering::SeqCst);
-                    return;
-                }
+            Ok(_) => {
                 scheduler.note_success();
             }
             Err(error) => {
@@ -1462,19 +1467,60 @@ fn range_worker(
 
 fn persist_range_progress(
     job: &Job,
-    file: &mut File,
-    completed: &Mutex<Vec<(u64, u64)>>,
+    file: &mut BufWriter<File>,
+    completed: &RangeCheckpoints,
     start: u64,
     cursor: u64,
-) -> Result<(), EngineErrorCode> {
+) -> Result<Duration, EngineErrorCode> {
     if cursor <= start {
-        return Ok(());
+        return Ok(Duration::ZERO);
     }
+    let started = Instant::now();
     file.flush()
         .map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
-    file.sync_data()
+    completed
+        .pending
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push((start, cursor - 1));
+    // 各 worker 必须先 flush 再登记。合并同时到达的检查点，所有调用方仍等落盘及续传记录成功。
+    if !cfg!(test) {
+        thread::sleep(Duration::from_millis(2));
+    }
+    let mut durable = completed
+        .durable
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    if range_covered(&durable, start, cursor - 1) {
+        completed
+            .pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|(start, end)| !range_covered(&durable, *start, *end));
+        return Ok(Duration::ZERO);
+    }
+    let pending = normalize_ranges(std::mem::take(
+        &mut *completed
+            .pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()),
+    ));
+    if !range_covered(&pending, start, cursor - 1) {
+        return Err(EngineErrorCode::Failed(
+            "range checkpoint did not commit".into(),
+        ));
+    }
+    file.get_ref()
+        .sync_data()
         .map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
-    record_completed_range(job, completed, start, cursor.saturating_sub(1))
+    let next = normalize_ranges(durable.iter().copied().chain(pending).collect());
+    save_completed_ranges(job, &next)?;
+    *durable = next;
+    let elapsed = started.elapsed();
+    if std::env::var_os("HLS_HTTP_IO_PROFILE").is_some() {
+        eprintln!("http_checkpoint_us={}", elapsed.as_micros());
+    }
+    Ok(elapsed)
 }
 
 fn wait_before_range_retry(job: &Job, failed_attempts: u32) -> Result<(), EngineErrorCode> {
@@ -1506,15 +1552,15 @@ fn retryable_http_status(status: u16) -> bool {
 
 fn fetch_range(
     job: &Job,
-    file: &mut File,
+    file: &mut BufWriter<File>,
     progress: &Arc<Mutex<ActiveProgress>>,
     downloaded: &AtomicU64,
-    completed: &Mutex<Vec<(u64, u64)>>,
+    completed: &RangeCheckpoints,
     scheduler: &RangeScheduler,
     // 本次下载是否从零开始（没有已保留片段、没有续传偏移）。只有为真时，
     // 服务器返回 200 才能被解释为"不支持 Range"而不是"资源身份已变"。
     fresh: bool,
-) -> Result<(u64, u64), EngineErrorCode> {
+) -> Result<(), EngineErrorCode> {
     let start = progress
         .lock()
         .unwrap_or_else(|err| err.into_inner())
@@ -1527,7 +1573,7 @@ fn fetch_range(
             (state.cursor, state.stop)
         };
         if cursor > target_end {
-            return Ok((start, cursor.saturating_sub(1)));
+            return Ok(());
         }
         let request_start = cursor;
         let range = format!("bytes={cursor}-{target_end}");
@@ -1603,17 +1649,22 @@ fn fetch_range(
         }
         let mut buffer = vec![0u8; WRITE_BATCH];
         let mut read_error = None;
+        let mut last_control = Instant::now() - Duration::from_millis(50);
         loop {
-            match read_control(&job.control) {
-                Control::Pause => {
-                    persist_range_progress(job, file, completed, start, cursor)?;
-                    return Err(EngineErrorCode::Pause);
+            // 网络 read 的实际块往往远小于 WRITE_BATCH，不能每次 read 都重新打开控制文件。
+            if last_control.elapsed() >= Duration::from_millis(50) {
+                last_control = Instant::now();
+                match read_control(&job.control) {
+                    Control::Pause => {
+                        persist_range_progress(job, file, completed, start, cursor)?;
+                        return Err(EngineErrorCode::Pause);
+                    }
+                    Control::Cancel => {
+                        persist_range_progress(job, file, completed, start, cursor)?;
+                        return Err(EngineErrorCode::Cancel);
+                    }
+                    Control::Run => {}
                 }
-                Control::Cancel => {
-                    persist_range_progress(job, file, completed, start, cursor)?;
-                    return Err(EngineErrorCode::Cancel);
-                }
-                Control::Run => {}
             }
             let count = match reader.read(&mut buffer) {
                 Ok(count) => count,
@@ -1640,7 +1691,9 @@ fn fetch_range(
             drop(state);
             downloaded.fetch_add(take as u64, Ordering::SeqCst);
             if cursor.saturating_sub(durable_cursor) >= DURABLE_CHECKPOINT_BYTES {
-                persist_range_progress(job, file, completed, start, cursor)?;
+                scheduler.note_storage_latency(persist_range_progress(
+                    job, file, completed, start, cursor,
+                )?);
                 durable_cursor = cursor;
             }
             if cursor > current_stop {
@@ -1650,9 +1703,11 @@ fn fetch_range(
         let current_stop = progress.lock().unwrap_or_else(|err| err.into_inner()).stop;
         if cursor > current_stop {
             if durable_cursor != cursor {
-                persist_range_progress(job, file, completed, start, cursor)?;
+                scheduler.note_storage_latency(persist_range_progress(
+                    job, file, completed, start, cursor,
+                )?);
             }
-            return Ok((start, cursor.saturating_sub(1)));
+            return Ok(());
         }
         persist_range_progress(job, file, completed, start, cursor)?;
         durable_cursor = cursor;
@@ -4222,11 +4277,49 @@ mod tests {
         let body: &'static [u8] = b"durable-partial-range";
         let url = serve_body(body);
         let (job, dir) = temp_job(&url, false, body.len() as u64, 1);
-        let mut file = File::create(&job.output).unwrap();
+        let mut file =
+            BufWriter::with_capacity(FILE_WRITE_BUFFER, File::create(&job.output).unwrap());
         file.write_all(&body[..8]).unwrap();
-        let completed = Mutex::new(Vec::new());
+        let completed = RangeCheckpoints::new(Vec::new());
         persist_range_progress(&job, &mut file, &completed, 0, 8).unwrap();
         assert_eq!(load_completed_ranges(&job), Some(vec![(0, 7)]));
+        assert_eq!(fs::read(&job.output).unwrap(), body[..8]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn concurrent_checkpoint_prefixes_commit_together_and_failed_commit_stays_untrusted() {
+        let body = b"two-range-prefix";
+        let (job, dir) = temp_job("http://127.0.0.1/fixture", false, body.len() as u64, 2);
+        let mut first = BufWriter::new(File::create(&job.output).unwrap());
+        let mut second = BufWriter::new(OpenOptions::new().write(true).open(&job.output).unwrap());
+        first.write_all(&body[..8]).unwrap();
+        second.seek(SeekFrom::Start(8)).unwrap();
+        second.write_all(&body[8..]).unwrap();
+        second.flush().unwrap();
+        let checkpoints = RangeCheckpoints::new(Vec::new());
+        checkpoints
+            .pending
+            .lock()
+            .unwrap()
+            .push((8, body.len() as u64 - 1));
+        persist_range_progress(&job, &mut first, &checkpoints, 0, 8).unwrap();
+        assert_eq!(
+            load_completed_ranges(&job),
+            Some(vec![(0, body.len() as u64 - 1)])
+        );
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        persist_range_progress(&job, &mut second, &checkpoints, 8, body.len() as u64).unwrap();
+        assert!(checkpoints.pending.lock().unwrap().is_empty());
+
+        fs::remove_file(completed_ranges_path(&job)).unwrap();
+        fs::create_dir(completed_ranges_path(&job)).unwrap();
+        let failed = RangeCheckpoints::new(Vec::new());
+        assert!(persist_range_progress(&job, &mut first, &failed, 0, 8).is_err());
+        assert!(failed.durable.lock().unwrap().is_empty());
+        assert!(load_completed_ranges(&job).is_none());
+        drop(first);
+        drop(second);
         let _ = fs::remove_dir_all(dir);
     }
 

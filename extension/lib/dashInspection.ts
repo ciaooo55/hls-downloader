@@ -1,9 +1,10 @@
-import { replayableRequestHeaders, type MediaResource, type MediaVariant } from './resources'
+import { replayableRequestHeaders, type MediaResource, type MediaVariant, type MediaAudioTrack } from './resources'
 import { readBoundedResponseText } from './boundedResponse'
 
 export type DashManifestFetcher = (url: string, init: RequestInit) => Promise<Response>
 
 export interface DashInspectionResult {
+  audioTracks: MediaAudioTrack[]
   inspected: true
   isLive: boolean
   duration?: number
@@ -156,10 +157,14 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
 
   const video: DashCandidate[] = []
   const audioBandwidth: number[] = []
+  const audioTracks: MediaAudioTrack[] = []
   for (const period of periods) {
     for (const adaptationBlock of blocks(period.body, 'AdaptationSet')) {
       const adaptation = adaptationBlock.attributes
       const kind = `${adaptation.contenttype || ''} ${adaptation.mimetype || ''}`.toLowerCase()
+      if (kind.includes('audio') && audioTracks.length < 24) {
+        audioTracks.push({ label: adaptation.label || adaptation.lang || adaptation.id || '音轨', language: adaptation.lang || '' })
+      }
       const representations = blocks(adaptationBlock.body, 'Representation')
       const candidates = representations.length
         ? representations.map(representation => ({
@@ -221,6 +226,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
 
   return {
     inspected: true,
+    audioTracks,
     isLive,
     duration: duration || undefined,
     width: best?.width || undefined,

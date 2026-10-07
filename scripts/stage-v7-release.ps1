@@ -76,7 +76,7 @@ HLS Downloader $version
 Source commit: $currentCommit
 Source tree: $currentTree
 
-This release was built from one frozen source commit. Browser, performance, browser media-push, installer-upgrade and rollback gates are recorded in RELEASE-EVIDENCE.json and the evidence ZIP. Windows release binaries are unsigned, as requested by the operator. Install updates manually; the automatic updater requires a trusted signature. Verify every downloaded file against SHA256SUMS.txt before redistribution.
+This release was built from one frozen source commit. Executed gates and explicit user exclusions are recorded separately in RELEASE-EVIDENCE.json and FEATURE-PARITY.json. Real casting/TVBox and account-dependent cloud subtitle quality were excluded by the operator; their exclusion is not a passed test. Windows release binaries are unsigned. Install updates manually; the automatic updater requires a trusted signature. Verify every downloaded file against SHA256SUMS.txt before redistribution.
 "@
 [IO.File]::WriteAllText($notesPath, $notes.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
 

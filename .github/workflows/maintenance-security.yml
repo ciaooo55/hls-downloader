@@ -45,7 +45,11 @@ jobs:
       - name: Reject high or critical dependency advisories
         working-directory: extension
         shell: pwsh
-        run: pnpm audit --audit-level=high
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $audit = @(& pnpm audit --json)
+          $audit | node ../scripts/verify-extension-security.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Firefox extension
         working-directory: extension

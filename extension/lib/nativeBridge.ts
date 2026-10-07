@@ -147,6 +147,8 @@ export class NativeBridge {
 
   private requestPriority(message: Record<string, unknown>): number {
     const operation = String(message.op || '')
+    // 字幕使用独立连接且 poll 不阻塞；PCM 不能抢占它，否则每次轮询都会重启 Host。
+    if (operation === 'subtitle') return 30
     if (new Set(['offer', 'download', 'activate', 'media_push', 'set_takeover_settings']).has(operation)) return 30
     if (new Set(['handoff_status', 'media_push_status']).has(operation)) return 20
     if (operation === 'wait_handoff') return 10

@@ -27,6 +27,9 @@ internal fun openFirefoxAddonPage(): Boolean =
     runCatching { ProcessBuilder("explorer.exe", FIREFOX_ADDON_URL).start() }.isSuccess
 
 private fun locateChromiumExtension(): Path? {
+    val resources = System.getProperty("compose.application.resources.dir")?.takeIf(String::isNotBlank)?.let(Path::of)
+    resources?.parent?.parent?.resolve("extensions")?.resolve("Chromium")
+        ?.takeIf(::isCurrentChromiumExtension)?.let { return it }
     val desktop = FileSystemView.getFileSystemView().homeDirectory.toPath()
     val working = File(System.getProperty("user.dir")).toPath()
     return listOf(
@@ -39,11 +42,7 @@ private fun locateChromiumExtension(): Path? {
 private fun extractChromiumExtension(): Path {
     val archive = chromiumArchives().firstOrNull(Files::isRegularFile)
         ?: error("安装目录和桌面都没有 HLS Downloader ${Product.version} Chromium 插件包")
-    val root = Path.of(
-        System.getenv("LOCALAPPDATA") ?: System.getProperty("user.home"),
-        "HLS Downloader",
-        "browser-extension",
-    )
+    val root = WorkbenchPaths.uiDirectory.resolve("browser-extension")
     Files.createDirectories(root)
     val stamp = "${Files.size(archive)}-${Files.getLastModifiedTime(archive).toMillis()}"
     val target = root.resolve("Chromium-${Product.version}-$stamp")

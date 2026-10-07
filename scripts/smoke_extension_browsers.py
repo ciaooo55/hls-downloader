@@ -287,7 +287,23 @@ def _find_chromium_binary(configured: str | None) -> Path:
     raise RuntimeError("Chrome/Edge binary not found; pass --chrome-binary")
 
 
-def _stop_process_tree(process: subprocess.Popen[object]) -> None:
+def _stop_process_tree(process: subprocess.Popen[object], profile: Path | None = None) -> None:
+    if profile is not None:
+        import psutil
+        # Edge 可重启自身并退出启动进程；只按本次独立 profile 清理，避免留下浏览器和文件锁。
+        profile_argument = f"--user-data-dir={profile.resolve()}"
+        isolated = []
+        for candidate in psutil.process_iter(["cmdline"]):
+            if profile_argument not in (candidate.info["cmdline"] or []): continue
+            try:
+                isolated.extend(candidate.children(recursive=True))
+                isolated.append(candidate)
+            except psutil.NoSuchProcess: pass
+        for candidate in isolated:
+            try: candidate.kill()
+            except psutil.NoSuchProcess: pass
+        _, alive = psutil.wait_procs(isolated, timeout=5)
+        if alive: raise RuntimeError("isolated browser processes did not exit")
     if process.poll() is not None:
         return
     if os.name == "nt":
@@ -653,7 +669,7 @@ def _exercise_chrome(
             time.sleep(0.15)
         raise RuntimeError(f"Chromium content script or popup first-paint contract did not pass: {diagnostics}")
     finally:
-        _stop_process_tree(process)
+        _stop_process_tree(process, profile)
 
 
 def _zip_firefox_extension(extension_dir: Path, destination: Path) -> None:
@@ -669,6 +685,7 @@ def _exercise_firefox(
     binary: str | None,
     driver_path: str | None,
     temp_root: Path,
+    log: Path | None = None,
 ) -> None:
     addon = temp_root / "hls-downloader-smoke.xpi"
     _zip_firefox_extension(extension_dir, addon)
@@ -682,7 +699,11 @@ def _exercise_firefox(
     options.set_preference("media.autoplay.allow-muted", True)
     if binary:
         options.binary_location = binary
-    service = FirefoxService(executable_path=driver_path) if driver_path else FirefoxService()
+    if log:
+        log.parent.mkdir(parents=True, exist_ok=True)
+    service = FirefoxService(executable_path=driver_path,
+        service_args=["--profile-root", str(temp_root), "--log", "debug"],
+        log_output=str(log) if log else subprocess.DEVNULL)
     with webdriver.Firefox(service=service, options=options) as driver:
         driver.install_addon(str(addon), temporary=True)
         driver.set_page_load_timeout(20)
@@ -713,13 +734,16 @@ def main() -> int:
     parser.add_argument("--chrome-binary")
     parser.add_argument("--firefox-binary")
     parser.add_argument("--firefox-driver")
+    parser.add_argument("--firefox-log", type=Path)
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
 
     output = args.extension_output.resolve()
     chrome = _require_build(output / "chrome-mv3", "Chrome")
     firefox = _require_build(output / "firefox-mv3", "Firefox")
-    with tempfile.TemporaryDirectory(prefix="hls-downloader-extension-smoke-") as temp_dir:
+    staging = Path(__file__).resolve().parents[1] / ".tool-cache" / "test-tmp"
+    staging.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="hls-downloader-extension-smoke-", dir=staging) as temp_dir:
         temp_root = Path(temp_dir)
         try:
             with _loopback_page() as page_url:
@@ -740,6 +764,7 @@ def main() -> int:
                         args.firefox_binary,
                         args.firefox_driver,
                         temp_root,
+                        args.firefox_log.resolve() if args.firefox_log else None,
                     )
         finally:
             # Selenium normally removes profiles itself. This also handles a

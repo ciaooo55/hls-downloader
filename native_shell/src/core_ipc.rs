@@ -132,6 +132,10 @@ pub enum CorePipeRequest {
     LoadHandoffs {
         request_id: u64,
     },
+    Subtitle {
+        request_id: u64,
+        request: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -298,6 +302,10 @@ pub enum CorePipeResponse {
     Handoffs {
         request_id: u64,
         items: Vec<String>,
+    },
+    Subtitle {
+        request_id: u64,
+        result: Value,
     },
     Error {
         request_id: Option<u64>,

@@ -161,13 +161,38 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--stage-root", type=Path)
+    parser.add_argument("--storage-only", action="store_true", help="measure sequential durable disk writes without HTTP/Core")
+    parser.add_argument("--profile-io", action="store_true", help="retain checkpoint latency diagnostics")
     args = parser.parse_args()
     if os.name != "nt":
         raise RuntimeError("this performance fixture measures a Windows Engine process")
     if not args.engine.is_file():
         raise FileNotFoundError(args.engine)
+    if args.storage_only:
+        stage_root = args.stage_root or Path(tempfile.gettempdir())
+        with tempfile.TemporaryDirectory(prefix='hls-v7-storage-', dir=stage_root) as temporary:
+            output = Path(temporary)/'fixture.bin'
+            started = time.perf_counter()
+            with output.open('wb', buffering=0) as stream:
+                for offset in range(0, PAYLOAD_SIZE, len(PATTERN)):
+                    stream.write(PATTERN)
+                os.fsync(stream.fileno())
+            elapsed = time.perf_counter()-started
+            digest = hashlib.sha256(output.read_bytes()).hexdigest()
+            if digest != expected_sha256():
+                raise RuntimeError('storage baseline SHA-256 mismatch')
+            report = {'schema':1, 'kind':'sequential durable storage baseline', 'stage_volume':output.drive.upper(),
+                'payload_bytes':PAYLOAD_SIZE, 'elapsed_ms':round(elapsed*1000,2),
+                'throughput_mib_s':round(256/elapsed,2), 'sha256':digest}
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
+            print(json.dumps(report))
+        return 0
 
-    root = Path(tempfile.mkdtemp(prefix="hls-v7-transfer-performance-"))
+    temp_root = args.stage_root.resolve() if args.stage_root else Path(__file__).resolve().parents[1] / ".tool-cache" / "test-tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="hls-v7-transfer-performance-", dir=temp_root))
     engine_path = root / "HLSDownloaderEngine.exe"
     shutil.copy2(args.engine, engine_path)
     state = FixtureState()
@@ -183,9 +208,12 @@ def main() -> int:
             "HLS_V7_DOWNLOAD_DIR": str(root / "downloads"),
             "HLS_V7_CORE_TCP": "1",
             "HLS_V7_CORE_BIND": f"127.0.0.1:{core_port}",
+            "HLS_V7_PIPE": rf"\\.\pipe\HLSTransferSmoke-{os.getpid()}-{core_port}",
             "HLS_V6_SKIP_MIGRATE": "1",
         }
     )
+    if args.profile_io:
+        environment['HLS_HTTP_IO_PROFILE'] = '1'
     engine = subprocess.Popen(
         [str(engine_path)],
         env=environment,
@@ -283,6 +311,7 @@ def main() -> int:
         unique_requested_bytes = covered.count(1)
         result = {
             "schema": 1,
+            "stage_volume": str(root.resolve().drive).upper(),
             "payload_bytes": PAYLOAD_SIZE,
             "elapsed_ms": round(elapsed * 1000, 2),
             "throughput_mib_s": round(throughput_mib_s, 2),
@@ -316,6 +345,16 @@ def main() -> int:
         if not result["passed"]:
             raise RuntimeError("real transfer performance thresholds failed")
         return 0
+    except Exception:
+        if engine.poll() is None: engine.terminate()
+        try:
+            _, engine_stderr = engine.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            engine.kill()
+            _, engine_stderr = engine.communicate(timeout=5)
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.with_suffix('.engine.log').write_bytes(engine_stderr or b'')
+        raise
     finally:
         origin.shutdown()
         origin.server_close()
@@ -326,6 +365,8 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 engine.kill()
                 engine.wait(timeout=5)
+        if args.profile_io and engine.stderr and not engine.stderr.closed:
+            args.report.with_suffix('.engine.log').write_bytes(engine.stderr.read() or b'')
         shutil.rmtree(root, ignore_errors=True)
 
 

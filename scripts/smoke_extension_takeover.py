@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -94,14 +95,16 @@ class _DownloadHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         remaining = end - start + 1
+        offset = start % len(FILE_CHUNK)
         try:
             while remaining > 0:
-                chunk = FILE_CHUNK[: min(remaining, len(FILE_CHUNK))]
+                chunk = FILE_CHUNK[offset : offset + min(remaining, len(FILE_CHUNK) - offset)]
                 self.wfile.write(chunk)
                 self.wfile.flush()
                 remaining -= len(chunk)
+                offset = 0
                 time.sleep(0.008)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
 
@@ -225,7 +228,7 @@ func main() {{
 
 @contextlib.contextmanager
 def _registered_host(manifest: Path, browser_family: str):
-    vendor = "Google\\Chrome" if browser_family == "chrome" else "Microsoft\\Edge"
+    vendor = {"chrome": "Google\\Chrome", "edge": "Microsoft\\Edge", "firefox": "Mozilla"}[browser_family]
     key_path = f"Software\\{vendor}\\NativeMessagingHosts\\{HOST_NAME}"
     existed = True
     old_value: tuple[Any, int] | None = None
@@ -352,6 +355,10 @@ def _assert_browser_completed(driver, inspector: str, suffix: str) -> dict[str, 
             and item.get("state") == "complete"
             and int(item.get("bytesReceived") or 0) == FILE_SIZE
         ):
+            output = Path(str(item.get("filename", "")))
+            expected = hashlib.sha256(FILE_CHUNK * (FILE_SIZE // len(FILE_CHUNK))).hexdigest()
+            if not output.is_file() or hashlib.sha256(output.read_bytes()).hexdigest() != expected:
+                raise AssertionError(f"浏览器完成的 {suffix} 内容 SHA-256 不符：{output}")
             return item
         time.sleep(0.1)
     raise AssertionError(f"浏览器没有恢复并完成 {suffix}：{item!r}")
@@ -405,10 +412,13 @@ def run(
     browser_family: str,
     go: str,
     driver_path: Path | None = None,
+    report: Path | None = None,
 ) -> dict[str, Any]:
     if not (extension / "manifest.json").is_file():
         raise RuntimeError(f"Chromium 扩展未构建：{extension}")
-    with tempfile.TemporaryDirectory(prefix="hls-takeover-smoke-") as temporary:
+    temp_root = Path(__file__).resolve().parents[1] / ".tool-cache" / "test-tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="hls-takeover-smoke-", dir=temp_root) as temporary:
         root = Path(temporary)
         host, host_log = _build_fake_host(root, go)
         manifest = root / "native-host.json"
@@ -542,7 +552,7 @@ def run(
 
                 offers_before = len([event for event in _host_events(host_log) if event.get("op") == "offer"])
                 _click_download(driver, page, "excluded")
-                _assert_browser_completed(driver, inspector, "excluded.bin")
+                excluded = _assert_browser_completed(driver, inspector, "excluded.bin")
                 offers_after = len([event for event in _host_events(host_log) if event.get("op") == "offer"])
                 if offers_after != offers_before:
                     raise AssertionError("排除本站后仍把文件发送给桌面端")
@@ -596,7 +606,7 @@ def run(
                     )
                     raise AssertionError(f"{error}; popup={diagnostic}") from error
                 _click_download(driver, page, "disabled")
-                _assert_browser_completed(driver, inspector, "disabled.bin")
+                disabled = _assert_browser_completed(driver, inspector, "disabled.bin")
                 if any(
                     event.get("op") == "offer" and "disabled.bin" in str(event.get("url", ""))
                     for event in _host_events(host_log)
@@ -656,14 +666,42 @@ def run(
                 if len(disconnect_events) < 2:
                     raise AssertionError(f"Native Host 断线重试不足：{disconnect_events}")
 
-                return {
+                result = {
+                    "passed": True,
                     "sitePopupTab": site_popup_tab,
+                    "excludedCompletedBytes": excluded.get("bytesReceived"),
+                    "disabledCompletedBytes": disabled.get("bytesReceived"),
                     "acceptPausedBytes": paused.get("bytesReceived"),
                     "fallbackCompletedBytes": fallback.get("bytesReceived"),
                     "rejectCompletedBytes": rejected.get("bytesReceived"),
                     "disconnectCompletedBytes": disconnected.get("bytesReceived"),
                     "nativeEvents": len(_host_events(host_log)),
+                    "browserFileSha256Verified": ["excluded.bin", "disabled.bin", "fallback.bin", "reject.bin", "disconnect.bin"],
                 }
+                if report:
+                    report.parent.mkdir(parents=True, exist_ok=True)
+                    report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                return result
+        except Exception as error:
+            if report:
+                diagnostic: dict[str, Any] = {"error": str(error), "nativeEvents": _host_events(host_log)}
+                if driver is not None:
+                    with contextlib.suppress(Exception):
+                        diagnostic["downloads"] = _download_items(driver, inspector)
+                        diagnostic["extension"] = _extension_call(
+                            driver, "chrome.storage.local.get(null, value => done({value, buttons:"
+                            "[...document.querySelectorAll('button')].map(button => ({text:button.innerText,disabled:button.disabled}))}));",
+                        )
+                    with contextlib.suppress(Exception):
+                        diagnostic["targets"] = _debug_targets(driver)
+                    with contextlib.suppress(Exception):
+                        driver.switch_to.window(page)
+                        diagnostic["page"] = driver.execute_script(
+                            "return {url:location.href,html:document.body.innerHTML,ready:document.readyState}"
+                        )
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text(json.dumps(diagnostic, ensure_ascii=False, indent=2), encoding="utf-8")
+            raise
         finally:
             if driver is not None:
                 with contextlib.suppress(Exception):
@@ -680,6 +718,7 @@ def main() -> int:
     parser.add_argument("--browser-binary", type=Path, required=True)
     parser.add_argument("--driver", type=Path)
     parser.add_argument("--go", default=shutil.which("go") or "go")
+    parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     result = run(
         args.extension.resolve(),
@@ -687,6 +726,7 @@ def main() -> int:
         args.browser,
         args.go,
         args.driver.resolve() if args.driver else None,
+        args.report.resolve() if args.report else None,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print("Production extension takeover smoke passed.")

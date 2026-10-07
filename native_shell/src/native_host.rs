@@ -238,11 +238,36 @@ impl NativeHostSession {
                 | "push_to_tv"
                 | "media_push"
                 | "media_push_status"
+                | "subtitle"
         ) {
             return Err(format!("不支持的 Native Messaging 操作: {operation}"));
         }
 
         match operation {
+            "subtitle" => {
+                let mut request = message.get("request").cloned().unwrap_or(json!({}));
+                if !request.is_object() {
+                    return Err("字幕请求必须是对象".into());
+                }
+                request["owner"] = json!(message
+                    .get("client_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""));
+                match &mut self.core {
+                    HostCore::Remote(client) => {
+                        match client.request(&crate::CorePipeRequest::Subtitle {
+                            request_id: 1,
+                            request,
+                        })? {
+                            crate::CorePipeResponse::Subtitle { result, .. } => Ok(result),
+                            crate::CorePipeResponse::Error { message, .. } => Err(message),
+                            _ => Err("桌面端不支持在线字幕，请更新 HLS Downloader".into()),
+                        }
+                    }
+                    #[cfg(test)]
+                    HostCore::Local(_) => Err("字幕服务需要常驻 Core".into()),
+                }
+            }
             "ping" => self.ping(),
             "activate" => {
                 self.core.handle(CoreCommand::OpenMain)?;
@@ -724,12 +749,18 @@ impl NativeHostSession {
 }
 
 /// Native Messaging may be the first product process after sign-in. Start the
-/// packaged Core only after the normal pipe connection has failed; the engine's
-/// single-instance lock resolves concurrent browser host launches.
+/// packaged Core only after the normal pipe connection has failed.
 fn connect_or_start_core() -> Result<CoreIpcClient, String> {
-    match CoreIpcClient::connect_existing(Duration::from_millis(100)) {
+    // 未运行时尽快启动；首次启动协调持续到 IPC 就绪，启动后的完整重试仍保留。
+    match CoreIpcClient::connect_existing(Duration::from_millis(10)) {
         Ok(client) => Ok(client),
         Err(first_error) => {
+            #[cfg(windows)]
+            let _launch = crate::instance::lock_core_launch()?;
+            // 等待启动锁时，另一个 Host 可能已经使 Core 就绪。
+            if let Ok(client) = CoreIpcClient::connect_existing(Duration::from_millis(10)) {
+                return Ok(client);
+            }
             let root = crate::install_root()
                 .ok_or_else(|| format!("v7 Core unavailable: {first_error}"))?;
             crate::spawn_core(&root).map_err(|error| {
@@ -797,6 +828,11 @@ impl Handoff {
 }
 
 pub fn run() -> i32 {
+    let started = std::time::Instant::now();
+    let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
+    if profile {
+        eprintln!("native_host_startup stage=entry elapsed_us=0");
+    }
     let mut session = match NativeHostSession::open_default() {
         Ok(session) => session,
         Err(error) => {
@@ -804,6 +840,12 @@ pub fn run() -> i32 {
             return 1;
         }
     };
+    if profile {
+        eprintln!(
+            "native_host_startup stage=session_ready elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     loop {
@@ -1092,17 +1134,6 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    // `NEXT_HANDOFF` 是进程级共享计数器（handoff id / credential ref / media-push id 共用），
-    // 凡是断言它「绝对值没有推进」的测试必须彼此串行，否则并行执行时会被其他测试推进而假失败。
-    // 持锁即隔离该全局计数器，同时保留「无谓消耗序号」这一回归防护语义。
-    static NEXT_HANDOFF_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn lock_next_handoff() -> std::sync::MutexGuard<'static, ()> {
-        NEXT_HANDOFF_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     #[test]
     fn rejects_unknown_operations_before_dispatch() {
         let mut session = NativeHostSession::in_memory().unwrap();
@@ -1303,7 +1334,6 @@ mod tests {
 
     #[test]
     fn offer_is_idempotent_for_the_extension_request_id() {
-        let _guard = lock_next_handoff();
         let mut session = NativeHostSession::in_memory().unwrap();
         let request = json!({
             "op": "offer",
@@ -1315,7 +1345,7 @@ mod tests {
             }
         });
         let first = session.dispatch(&request).unwrap();
-        let sequence_after_first = NEXT_HANDOFF.load(Ordering::Relaxed);
+        let persisted_after_first = session.core.load_handoffs().unwrap();
         let retry = json!({
             "op": "offer",
             "resource": {
@@ -1329,7 +1359,7 @@ mod tests {
         let second = session.dispatch(&retry).unwrap();
         assert_eq!(first["handoff"]["id"], second["handoff"]["id"]);
         assert_eq!(session.handoffs.len(), 1);
-        assert_eq!(NEXT_HANDOFF.load(Ordering::Relaxed), sequence_after_first);
+        assert_eq!(session.core.load_handoffs().unwrap(), persisted_after_first);
     }
 
     #[test]
@@ -1633,9 +1663,8 @@ mod tests {
 
     #[test]
     fn browser_offer_rejects_javascript_and_file_urls() {
-        let _guard = lock_next_handoff();
         let mut session = NativeHostSession::in_memory().unwrap();
-        let sequence_before_invalid = NEXT_HANDOFF.load(Ordering::Relaxed);
+        let sequence_before_invalid = session.core.local().latest_sequence();
         let javascript = session
             .dispatch(&json!({
                 "op": "offer",
@@ -1656,10 +1685,6 @@ mod tests {
             }))
             .unwrap_err();
         assert!(invalid_download.contains("不受支持"));
-        assert_eq!(
-            NEXT_HANDOFF.load(Ordering::Relaxed),
-            sequence_before_invalid
-        );
         let file = session
             .dispatch(&json!({
                 "op": "offer",
@@ -1688,5 +1713,13 @@ mod tests {
             }))
             .unwrap_err();
         assert!(msdt.contains("不受支持"));
+        // 只检查当前会话的副作用；其他测试可以并行生成自己的交接序号。
+        assert!(session.handoffs.is_empty());
+        assert!(session.core.load_handoffs().unwrap().is_empty());
+        assert!(session.core.snapshot_tasks().unwrap().is_empty());
+        assert_eq!(
+            session.core.local().latest_sequence(),
+            sequence_before_invalid
+        );
     }
 }

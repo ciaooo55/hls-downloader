@@ -38,21 +38,40 @@ pub fn install_root() -> Option<PathBuf> {
 }
 
 pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
+    let started = std::time::Instant::now();
+    let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
     let executable = locate_core_executable(root)
         .ok_or_else(|| "HLSDownloaderEngine.exe is not next to the desktop UI".to_string())?;
     let mut command = Command::new(&executable);
     command.current_dir(root);
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::null());
-    command.stderr(std::process::Stdio::null());
+    // 冷启动诊断只输出阶段与耗时；继承 Native Host 的 stderr，避免污染协议 stdout。
+    command.stderr(if profile {
+        std::process::Stdio::inherit()
+    } else {
+        std::process::Stdio::null()
+    });
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
+    if profile {
+        eprintln!(
+            "core_spawn stage=before_spawn elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
     command
         .spawn()
         .map_err(|err| format!("Unable to start download core: {err}"))?;
+    if profile {
+        eprintln!(
+            "core_spawn stage=spawn_return elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
     Ok(executable)
 }
 

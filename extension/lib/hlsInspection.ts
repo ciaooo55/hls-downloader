@@ -1,5 +1,5 @@
 import { parseHlsManifest, resourceQuality, type HlsVariant } from './hlsManifest'
-import { replayableRequestHeaders, type MediaResource } from './resources'
+import { replayableRequestHeaders, type MediaResource, type MediaAudioTrack } from './resources'
 import { readBoundedResponseText } from './boundedResponse'
 
 export type ManifestFetcher = (url: string, init: RequestInit) => Promise<Response>
@@ -14,6 +14,7 @@ export interface HlsInspectionResult {
   duration?: number
   variants: HlsVariant[]
   renditionUrls: string[]
+  audioTracks: MediaAudioTrack[]
   playbackUrls: string[]
   playbackUrlHashes: string[]
   width?: number
@@ -137,6 +138,7 @@ export async function inspectHlsResource(
     duration,
     variants,
     renditionUrls: info.renditionUrls,
+    audioTracks: info.audioTracks,
     playbackUrls,
     playbackUrlHashes,
     width: best?.width || resource.width,

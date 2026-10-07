@@ -92,7 +92,7 @@ jobs:
           "HLS_V7_RELEASE_MODE=$releaseMode" >> $env:GITHUB_ENV
           "HLS_V7_VERSION=$version" >> $env:GITHUB_ENV
           "HLS_V7_TAG=$tag" >> $env:GITHUB_ENV
-          $cacheRoot = Join-Path $env:RUNNER_TEMP "hls-v7-release-$head"
+          $cacheRoot = Join-Path (Get-Location).Path '.tool-cache\build-cache'
           "HLS_V7_BUILD_CACHE=$cacheRoot" >> $env:GITHUB_ENV
           "HLS_V7_JAVA_HOME=$(Join-Path $cacheRoot 'jdk-21')" >> $env:GITHUB_ENV
 
@@ -112,7 +112,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') { throw 'Formal v7 release requires Windows x64.' }
-          if (-not (Test-Path -LiteralPath 'E:\' -PathType Container)) { throw 'Formal v7 release runner must provide E: for the fixed E:\h lifecycle gate.' }
           Get-Command git.exe, python.exe, go.exe, gh.exe -ErrorAction Stop | Out-Null
           python.exe -c "import yaml"
           if ($LASTEXITCODE -ne 0) { throw 'Release runner Python must provide PyYAML for deterministic SBOM generation.' }

@@ -2534,6 +2534,10 @@ mod tests {
                         }
                     }
                 }
+                // HTTP 客户端可能先建立连接再放弃；空连接不是一次未授权请求。
+                if request.is_empty() {
+                    continue;
+                }
                 let target = request
                     .lines()
                     .next()
@@ -2656,7 +2660,7 @@ mod tests {
         assert_eq!(
             log.iter().filter(|entry| entry.ends_with("|false")).count(),
             1,
-            "only the explicit unauthenticated probe may be rejected"
+            "only the explicit unauthenticated probe may be rejected: {log:?}"
         );
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap();
@@ -2707,6 +2711,10 @@ mod tests {
                             }
                         }
                     }
+                }
+                // HTTP 客户端可能先建立连接再放弃；空连接不是一次未授权请求。
+                if request.is_empty() {
+                    continue;
                 }
                 let target = request
                     .lines()
@@ -2866,7 +2874,7 @@ mod tests {
         assert_eq!(
             log.iter().filter(|entry| entry.ends_with("|false")).count(),
             1,
-            "only the explicit unauthenticated probe may be rejected"
+            "only the explicit unauthenticated probe may be rejected: {log:?}"
         );
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap();

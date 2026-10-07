@@ -53,7 +53,7 @@ document.querySelector('#mode').textContent = mode;
 const mount = document.querySelector('#mount');
 window.mediaOwnership=[];
 window.addEventListener('__hls_downloader_mse__',event=>window.mediaOwnership.push(JSON.parse(event.detail)));
-function video() { const value=document.createElement('video'); value.controls=true; value.autoplay=true; value.muted=true; return value; }
+function video() { const value=document.createElement('video'); value.controls=true; value.autoplay=true; value.muted=true; value.loop=true; return value; }
 function append(buffer, bytes) {
   return new Promise((resolve,reject) => { buffer.addEventListener('updateend',resolve,{once:true}); buffer.addEventListener('error',reject,{once:true}); buffer.appendBuffer(bytes); });
 }
@@ -148,7 +148,15 @@ function unknownDashVideo() {
     if(source.readyState==='open') source.endOfStream(); await value.play();
   },{once:true});
 }
-if (mode === 'shadow') {
+if (mode === 'dual-source') {
+  const value=video();
+  for (const name of ['chosen','unused']) { const source=document.createElement('source');source.src='/stream.mp4?player='+name;source.type='video/mp4';value.append(source); }
+  mount.append(value);
+} else if (mode === 'srcdoc') {
+  const frame=document.createElement('iframe');
+  frame.srcdoc='<video controls autoplay muted loop width="640" height="360" src="'+location.origin+'/stream.mp4?player=srcdoc"></video>';
+  mount.append(frame);
+} else if (mode === 'shadow') {
   const host=document.createElement('section'); mount.append(host);
   const root=host.attachShadow({mode:'open'}); const value=video(); value.src='/stream.mp4?player=shadow'; root.append(value);
 } else if (mode === 'dynamic-shadow') {
@@ -405,7 +413,9 @@ def run(
         raise RuntimeError(f"Firefox 临时扩展包不存在: {addon}")
     if browser_name == "firefox" and addon is None and not (extension / "manifest.json").is_file():
         raise RuntimeError(f"Firefox 扩展未构建: {extension}")
-    with tempfile.TemporaryDirectory(prefix="hls-extension-smoke-") as temporary:
+    temp_root = Path(__file__).resolve().parents[1] / '.tool-cache' / 'test-tmp'
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="hls-extension-smoke-", dir=temp_root) as temporary:
         root = Path(temporary)
         media_root = root / "site"
         profile = root / "profile"
@@ -453,7 +463,7 @@ def run(
                 driver = webdriver.Firefox(service=service, options=options)
                 driver.install_addon(str(resolved_addon), temporary=True)
             for mode in modes or (
-                "direct", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
+                "direct", "dual-source", "srcdoc", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
                 "ad-direct", "spa", "mse", "mse-sliced", "mse-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
                 "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
             ):
@@ -468,14 +478,14 @@ def run(
                 while time.monotonic() < deadline:
                     state = _overlay_state(driver)
                     expected = 2 if mode in {"multi-mse", "multi-dash-mse"} else 1
-                    playing = sum(float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) == expected
+                    playing = sum(not item.get("paused") and float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) == expected
                     actionable = state.get("labels", []).count("下载视频") == (0 if mode == "dash-unknown-mse" else expected)
                     expected_player = "main" if mode == "ad-direct" else "spa-two" if mode == "spa" else ""
                     main_ready = not expected_player or any(
                         f"player={expected_player}" in str(item.get("src") or "")
                         for item in state.get("videos", [])
                     )
-                    expected_frames = 2 if mode in {"iframe", "cross-iframe"} else 1
+                    expected_frames = 2 if mode in {"iframe", "cross-iframe", "srcdoc"} else 1
                     frames_ready = state.get("frameMarkers", []).count("1") == expected_frames
                     if state.get("marker") == "1" and frames_ready and playing and actionable and main_ready:
                         break
@@ -485,7 +495,7 @@ def run(
                 results.append(state)
                 if state.get("marker") != "1":
                     raise AssertionError(f"{mode}: content script 未就绪: {state}")
-                expected_frames = 2 if mode in {"iframe", "cross-iframe"} else 1
+                expected_frames = 2 if mode in {"iframe", "cross-iframe", "srcdoc"} else 1
                 if state.get("frameMarkers", []).count("1") != expected_frames:
                     raise AssertionError(f"{mode}: 子 frame content script 未就绪: {state}")
                 if state.get("browserErrors"):
@@ -503,6 +513,9 @@ def run(
                     continue
                 if "下载视频" not in state.get("labels", []):
                     raise AssertionError(f"{mode}: 当前播放器没有得到唯一一键资源: {state}")
+                if mode in {'dual-source','srcdoc'}:
+                    if state.get('resourceIds') != [_resource_id(state['videos'][0]['src'])]:
+                        raise AssertionError(f'{mode}: 按钮未绑定浏览器当前选定的资源: {state}')
                 if mode == "direct":
                     if not state.get("moreButtons"):
                         raise AssertionError(f"{mode}: 单资源播放器没有显示投屏/推送更多操作入口: {state}")

@@ -23,6 +23,8 @@ function attribute(element: Element | undefined, name: string): string {
 export default defineContentScript({
   matches: ['<all_urls>'],
   allFrames: true,
+  matchAboutBlank: true,
+  matchOriginAsFallback: true,
   runAt: 'document_start',
   main() {
     let lastIntent = { key: '', at: 0 }
