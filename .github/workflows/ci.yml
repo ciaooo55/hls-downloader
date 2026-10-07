@@ -178,7 +178,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $presenter = Get-Item -LiteralPath 'target\debug\hls-downloader-presenter.exe'
+          $presenter = Get-Item -LiteralPath '.tool-cache\build-cache\cargo-target\debug\hls-downloader-presenter.exe'
           $version = $presenter.VersionInfo
           if ($version.OriginalFilename -ne 'HLSDownloaderPresenter.exe') {
             throw "Presenter OriginalFilename is incorrect: $($version.OriginalFilename)"

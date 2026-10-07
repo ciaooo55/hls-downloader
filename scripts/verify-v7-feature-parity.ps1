@@ -157,6 +157,7 @@ $citedArtifactCount = 0
 $resolvedArtifactCount = 0
 $unresolvedArtifacts = New-Object 'System.Collections.Generic.List[string]'
 foreach ($feature in $features) {
+    if ($exclusions.features -contains $feature.id) { continue }
     $citedInThisFeature = @{}
     foreach ($match in [regex]::Matches([string]$feature.verification, $citedArtifactPattern)) {
         $cited = $match.Value.Replace('\\', '/')

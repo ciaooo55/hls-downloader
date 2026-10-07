@@ -816,6 +816,8 @@ mod tests {
     }
 
     #[test]
+    // tungstenite 握手回调的错误类型由库固定为 HTTP Response，无法在调用处装箱。
+    #[allow(clippy::result_large_err)]
     fn websocket_pcm_translation_and_seek_reset_use_real_transport() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

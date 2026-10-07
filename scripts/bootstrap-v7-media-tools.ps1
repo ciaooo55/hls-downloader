@@ -14,19 +14,13 @@ $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) {
     Join-Path $repo '.tool-cache\build-cache'
 }
 
-# 说明：本固定方式已被证明会腐烂，务必读这段再改。
-# 上游 BtbN 只保留最近约 5 个 autobuild 发布，所以「固定到某个 autobuild 日期」
-# 必然随时间失效：原先固定的 autobuild-2026-09-06-13-06 已被上游删除，资产返回
-# 404，导致 bootstrap、本地候选打包与 package-v7-candidate CI 同时失败。
-# 2026-09-20 重新固定到当前仍存在的 autobuild-2026-09-19-13-11 静态 win64-gpl 构建
-# （FFmpeg 9.0.1 → 9.0.2，同为不带独立 DLL 集的静态构建），并记录实测 SHA-256。
-# 供应链属性不变：仍为「固定版本 + 固定摘要 + 下载后校验」。
-# 若日后再遇 404，按同样流程重新固定并在此注明原因与日期。
-$ffmpegRelease = 'autobuild-2026-09-19-13-11'
-$ffmpegArchiveName = 'ffmpeg-n9.0.2-win64-gpl-9.0.zip'
+# BtbN 每月最后一次构建保留两年，日常构建只保留 14 天。
+# 使用月末固定构建及摘要，避免清洁 CI 随日常资产删除而立即失效。
+$ffmpegRelease = 'autobuild-2026-09-30-13-08'
+$ffmpegArchiveName = 'ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0.zip'
 $ffmpegArchiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ffmpegRelease/$ffmpegArchiveName"
-$ffmpegSha256 = '44083538105b4e64d439f9e67bd875bd264b4271239c808b2acea09773ad1aa3'
-$toolRoot = Join-Path $cacheRoot 'ffmpeg-n9.0.2-win64-gpl-9.0'
+$ffmpegSha256 = 'a0e45723c72141975f51d8666302e614711745f3102b704ca3f82c897a58d278'
+$toolRoot = Join-Path $cacheRoot 'ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-9.0'
 $downloadsRoot = Join-Path $cacheRoot 'downloads'
 $archivePath = Join-Path $downloadsRoot $ffmpegArchiveName
 
@@ -61,7 +55,7 @@ if (Test-Path -LiteralPath $archivePath) {
 
 if (-not (Test-Path -LiteralPath $archivePath)) {
     Write-Host "Downloading pinned FFmpeg asset $ffmpegArchiveName..."
-    Invoke-WebRequest -UseBasicParsing -Uri $ffmpegArchiveUrl -OutFile $archivePath
+    Invoke-WebRequest -UseBasicParsing -Uri $ffmpegArchiveUrl -OutFile $archivePath -TimeoutSec 180
 }
 
 $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()

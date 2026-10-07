@@ -17,12 +17,21 @@
   "release_ready": false,
   "release_exclusions": [
     {
-      "feature_ids": ["media.cast_dlna_chromecast", "media.tvbox_push", "media.cast_and_player_concurrency", "browser.media_push_device_selection"],
-      "gate_ids": ["browser_media_push"],
+      "feature_ids": [
+        "media.cast_dlna_chromecast",
+        "media.tvbox_push",
+        "media.cast_and_player_concurrency",
+        "browser.media_push_device_selection"
+      ],
+      "gate_ids": [
+        "browser_media_push"
+      ],
       "reason": "用户明确要求跳过真实投屏和 TVBox 接收端验收；保留功能，但不将此次未执行的实机验证算作通过。"
     },
     {
-      "feature_ids": ["browser.online_subtitle_translation"],
+      "feature_ids": [
+        "browser.online_subtitle_translation"
+      ],
       "gate_ids": [],
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
@@ -45,7 +54,7 @@
       "compose_entry": "AppShell/DesktopToolbar/Sidebar/TaskTable/ConnectionStatus",
       "core_command": "list_tasks",
       "state_event": "task snapshots",
-      "verification": "ResponsiveLayoutTest; task-row secondary-click menu; explicit protocol/file-suffix metadata; one aggregate progress track; visual/compose-foundation-main-light.png; visual/compose-foundation-cast-dark-1024x600-125-fixed.png"
+      "verification": "ResponsiveLayoutTest; task-row secondary-click menu; explicit protocol/file-suffix metadata; one aggregate progress track; adversarial-2026-10-08/portable-workbench.png; ResponsiveLayoutTest"
     },
     {
       "id": "workbench.foundation_component_architecture",
@@ -63,7 +72,7 @@
       "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
       "core_command": "task_action/reorder_queue/place_queue",
       "state_event": "task_updated",
-      "verification": "desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; ui-api/selection-audit"
+      "verification": "desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest"
     },
     {
       "id": "tasks.named_queue_profiles",
@@ -81,7 +90,7 @@
       "compose_entry": "TaskDetailsDialog live task lookup",
       "core_command": "get_task_log/task_action speed/refresh_task_request",
       "state_event": "task_progress/task_log/toast",
-      "verification": "Rust refreshed URL transfer test; structured HTTP/local failure classification, persistent failure snapshot and retry reset tests; Cookie-aware request refresh vault test; Compose failure presentation and redacted diagnostic tests; live 404 retry verified HTTP 404/code/stage/attempt/hint and clipboard output in ui-api/v3-full-audit/task-failure; v7 snapshot now persists checksum algorithm/actual/verified, AV state/engine/detail, per-mirror active/skipped/failed/range state, BT discovered Peer/confirmed Seed telemetry and truthful zero upload telemetry; Compose detail presents all fields; legacy string mirror snapshots remain readable; reader-thread BT control loop checks cancellation and file-selection changes every 100 ms, sends cancel for in-flight deselected blocks, and rejects late or malformed Piece messages; the Core coordinator loopback uses a real tracker/peer connection to switch the selected file in flight, observe Cancel, finish only the retained file and publish only that file; 2026-09-04 v7.0.1 focused dynamic global limit and real BT file-selection checks passed once"
+      "verification": "Rust refreshed URL transfer test; structured HTTP/local failure classification, persistent failure snapshot and retry reset tests; Cookie-aware request refresh vault test; Compose failure presentation and redacted diagnostic tests; live 404 retry verified HTTP 404/code/stage/attempt/hint and clipboard output in TaskFailureUiTest; v7 snapshot now persists checksum algorithm/actual/verified, AV state/engine/detail, per-mirror active/skipped/failed/range state, BT discovered Peer/confirmed Seed telemetry and truthful zero upload telemetry; Compose detail presents all fields; legacy string mirror snapshots remain readable; reader-thread BT control loop checks cancellation and file-selection changes every 100 ms, sends cancel for in-flight deselected blocks, and rejects late or malformed Piece messages; the Core coordinator loopback uses a real tracker/peer connection to switch the selected file in flight, observe Cancel, finish only the retained file and publish only that file; 2026-09-04 v7.0.1 focused dynamic global limit and real BT file-selection checks passed once"
     },
     {
       "id": "tasks.refresh_signed_url",
@@ -108,7 +117,7 @@
       "compose_entry": "ContentHeader import + native desktop drop target",
       "core_command": "import_paths",
       "state_event": "task_created/error",
-      "verification": "desktop_ui DropImportTest; visual/compose-drop-import.png"
+      "verification": "desktop_ui DropImportTest; DropImportTest"
     },
     {
       "id": "export.normalized_task_list",
@@ -171,7 +180,7 @@
       "compose_entry": "局域网播放 + 地址复制",
       "core_command": "cast_task/share_media/control_cast stop",
       "state_event": "cast_session.media_url",
-      "verification": "stopping_cast_revokes_the_active_media_mount; visual/compose-cast-lan-copy.png"
+      "verification": "stopping_cast_revokes_the_active_media_mount; adversarial-2026-10-08/release-703-core-ci.log: 569 Core tests passed including this mount lifecycle test; historical LAN copy screenshot not retained."
     },
     {
       "id": "media.tvbox_push",
@@ -207,7 +216,7 @@
       "compose_entry": "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
       "core_command": "get_settings/set_settings_atomic",
       "state_event": "structured command result/error",
-      "verification": "Typed Core round-trip tests; migration aliases; Core-only DPAPI default Cookie; CIDR allowed-host tests; system-proxy default parity with v3; Compose ten-section UI with native folder pickers, visible independent scrollbar and in-settings LAN scan; SettingsV7Test; ui-api/settings-network-final and ui-api/settings-device-final-complete"
+      "verification": "Typed Core round-trip tests; migration aliases; Core-only DPAPI default Cookie; CIDR allowed-host tests; system-proxy default parity with v3; Compose ten-section UI with native folder pickers, visible independent scrollbar and in-settings LAN scan; SettingsV7Test; SettingsV7Test and SettingsV7Test"
     },
     {
       "id": "updates.confirmed_download",
