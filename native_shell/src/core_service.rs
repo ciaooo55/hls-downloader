@@ -272,6 +272,10 @@ impl PersistentCore {
         self.runtime.latest_sequence()
     }
 
+    pub fn browser_connected(&self) -> bool {
+        self.runtime.browser_connected()
+    }
+
     pub fn events_after(&self, sequence: u64, limit: usize) -> Vec<EventEnvelope> {
         self.runtime.events_after(sequence, limit)
     }

@@ -6,6 +6,7 @@ import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
 import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
 import { withDeadline } from '../../lib/asyncDeadline'
+import { waitForDownloadConfirmation } from '../../lib/downloadConfirmation'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
 import { formatBytes, formatDuration } from '../../lib/format'
 import { mountSubtitlePopup } from '../../lib/subtitlePopup'
@@ -32,10 +33,10 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
 
 // 按钮状态机使用稳定的状态 token，展示文案单独映射；改文案不能破坏状态判断。
-type SendState = 'sending' | 'queued' | 'retry'
+type SendState = 'sending' | 'confirming' | 'queued' | 'retry'
 type PushState = 'working' | 'awaiting' | 'sent' | 'retry'
-const SEND_LABELS: Record<SendState, string> = { sending: '发送中', queued: '已加入', retry: '重试' }
-const SEND_BUSY: ReadonlySet<SendState> = new Set(['sending', 'queued'])
+const SEND_LABELS: Record<SendState, string> = { sending: '发送中', confirming: '等待确认', queued: '已加入', retry: '重试' }
+const SEND_BUSY: ReadonlySet<SendState> = new Set(['sending', 'confirming', 'queued'])
 const TVBOX_PUSH_LABELS: Record<PushState, string> = { working: '推送中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const CAST_PUSH_LABELS: Record<PushState, string> = { working: '投屏中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const PUSH_BUSY: ReadonlySet<PushState> = new Set(['working', 'awaiting', 'sent'])
@@ -127,7 +128,14 @@ async function main() {
   const openBtn = el('button', 'hlsd-button primary')
   openBtn.append(icon('open'), el('span', '', '\u6253\u5f00'))
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
-  openBtn.addEventListener('click', () => void browser.runtime.sendMessage({ type: 'activate' }))
+  openBtn.addEventListener('click', async () => {
+    try {
+      const response = await withDeadline(browser.runtime.sendMessage({ type: 'activate' }), 10_000, '打开主程序超时，请重试')
+      if (!response?.ok) setError(response?.error || '无法打开主程序')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法打开主程序')
+    }
+  })
   const closeBtn = el('button', 'hlsd-button subtle')
   closeBtn.append(icon('close', '\u5173\u95ed'))
   closeBtn.title = '\u5173\u95ed'
@@ -483,6 +491,19 @@ async function main() {
     }
   }
 
+  const confirmDownload = async (item: MediaResource, handoffId: string) => {
+    sending[item.id] = 'confirming'
+    renderList()
+    if (!await waitForDownloadConfirmation(message => browser.runtime.sendMessage(message), handoffId)) {
+      delete sending[item.id]
+      renderList()
+      return
+    }
+    sending[item.id] = 'queued'
+    renderList()
+    setTimeout(() => { delete sending[item.id]; renderList() }, 2_500)
+  }
+
   const send = async (item: MediaResource) => {
     setError('')
     sending[item.id] = 'sending'
@@ -494,9 +515,7 @@ async function main() {
         '下载器响应超时，请重试',
       )
       if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
-      sending[item.id] = 'queued'
-      renderList()
-      setTimeout(() => { delete sending[item.id]; renderList() }, 2_500)
+      await confirmDownload(item, String(response.handoff?.id || ''))
     } catch (reason) {
       sending[item.id] = 'retry'
       setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
@@ -575,6 +594,13 @@ async function main() {
   mainEl.insertBefore(subtitlePanel, section)
   mountSubtitlePopup(subtitlePanel, tab?.id)
   host = normalizeHost(pageUrl)
+  const downloadErrorKey = `download-error:${tab?.id}`
+  void browser.storage.session.get(downloadErrorKey).then(stored => {
+    if (stored[downloadErrorKey]) setError(String(stored[downloadErrorKey]))
+  }).catch(() => undefined)
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === 'session' && changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
+  })
   const canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
   rescanPage = async () => {
     if (!canScanPage || tab?.id == null || resourceState === 'scanning') return
@@ -619,29 +645,46 @@ async function main() {
   suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
   enableBtn.disabled = false
   refreshButtons()
+  const connectionRequest = browser.runtime.sendMessage({ type: 'ping' })
   const [listed, connection] = await Promise.all([
     withDeadline(browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }), 1_500).catch(() => []),
-    withDeadline(browser.runtime.sendMessage({ type: 'ping' }), 1_800).catch(() => ({ reconnecting: true })),
+    withDeadline(connectionRequest, 1_800).catch(() => ({ reconnecting: true })),
   ])
   resources = Array.isArray(listed) ? listed : []
   resourceState = 'ready'
-  const online = Boolean(connection?.ok)
-  statusEl.textContent = engineConnectionLabel(online, Boolean(connection.reconnecting))
-  statusEl.classList.toggle('online', online)
-  const currentExtensionVersion = browser.runtime.getManifest().version
-  const recommendedExtensionVersion = String(connection.recommended_extension_version || '')
-  const extensionReleaseUrl = String(connection.extension_release_url || '')
-  if (extensionNeedsUpgrade(currentExtensionVersion, recommendedExtensionVersion)) {
-    updateNotice.hidden = false
-    updateText.textContent = `插件可升级到版本 ${recommendedExtensionVersion}。商店安装版由浏览器自动更新；开发者模式安装请下载新版后重新加载。`
-    updateButton.hidden = !extensionReleaseUrl
-    updateButton.onclick = () => {
-      if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
+  function showConnection(response: any) {
+    const online = Boolean(response?.ok)
+    statusEl.textContent = engineConnectionLabel(online, Boolean(response?.reconnecting))
+    statusEl.classList.toggle('online', online)
+    const recommendedExtensionVersion = String(response?.recommended_extension_version || '')
+    const extensionReleaseUrl = String(response?.extension_release_url || '')
+    if (extensionNeedsUpgrade(browser.runtime.getManifest().version, recommendedExtensionVersion)) {
+      updateNotice.hidden = false
+      updateText.textContent = `插件可升级到版本 ${recommendedExtensionVersion}。商店安装版由浏览器自动更新；开发者模式安装请下载新版后重新加载。`
+      updateButton.hidden = !extensionReleaseUrl
+      updateButton.onclick = () => {
+        if (extensionReleaseUrl) void browser.tabs.create({ url: extensionReleaseUrl })
+      }
     }
   }
+  showConnection(connection)
+  // 冷启动超过界面等待期限时，仍接收原请求的真实结果，避免一直显示“重连中”。
+  if (connection.reconnecting) void connectionRequest.then(showConnection).catch(() => showConnection({ ok: false }))
   refreshButtons()
   renderList()
   document.documentElement.dataset.popupReady = 'ready'
+  void browser.runtime.sendMessage({ type: 'pending-downloads', tabId: tab?.id }).then(pending => {
+    if (!Array.isArray(pending)) return
+    for (const handoff of pending) {
+      const item = resources.find(resource => resource.id === handoff.resourceId)
+      if (!item || sending[item.id]) continue
+      void confirmDownload(item, String(handoff.id)).catch(reason => {
+        sending[item.id] = 'retry'
+        setError(reason instanceof Error ? reason.message : '无法读取下载确认状态')
+        renderList()
+      })
+    }
+  }).catch(() => undefined)
 }
 
 function renderStartupError(reason: unknown) {

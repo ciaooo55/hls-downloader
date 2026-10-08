@@ -223,10 +223,12 @@ def run(args):
         driver = None
         def evaluate(target, expression):
             if driver is None: return _evaluate(target, expression)
-            driver.switch_to.window(target)
-            result = driver.execute_async_script('const done=arguments[arguments.length-1]; Promise.resolve('+expression+').then(done,error=>done({__error:String(error)}));')
-            if isinstance(result, dict) and '__error' in result: raise RuntimeError(result['__error'])
-            return result
+            # BiDi 在原标签页执行，避免测试把后台弹窗标签激活并干扰播放器。
+            result = driver.script.evaluate(
+                expression='(async()=>JSON.stringify((await ('+expression+')) ?? null))()',
+                target={'context':target}, await_promise=True, user_activation=True)
+            if result.get('type') == 'exception': raise RuntimeError(str(result.get('exceptionDetails')))
+            return json.loads(result['result']['value'])
         def screenshot(target, destination):
             if driver is None: return _capture_screenshot(target, destination)
             driver.switch_to.window(target); driver.save_screenshot(str(destination))
@@ -238,7 +240,9 @@ def run(args):
                     from selenium.webdriver.firefox.options import Options
                     from selenium.webdriver.firefox.service import Service
                     addon = root/'subtitle-smoke.xpi'; _zip_firefox_extension(extension, addon)
-                    options = Options(); options.binary_location = str(browser); options.add_argument('-headless')
+                    options = Options(); options.binary_location = str(browser)
+                    if not args.headed: options.add_argument('-headless')
+                    options.set_capability('webSocketUrl', True)
                     options.set_preference('media.autoplay.default', 0)
                     options.set_preference('media.autoplay.blocking_policy', 0)
                     service = Service(executable_path=args.firefox_driver, env=env,
@@ -290,6 +294,9 @@ def run(args):
                     if args.capture == 'prefetch':
                         evaluate(page,"(()=>{const v=window.testMedia;v.pause();v.currentTime=0;return true})()")
                     wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"settings update did not reenable start")
+                if args.capture != 'prefetch':
+                    # 设置操作切换多个标签后先确认实时采集的播放器仍在播放。
+                    evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:core.audio_frames>=4,"tab audio was not uploaded: "+str(evaluate(popup,"document.querySelector('.subtitle-error')?.textContent")))
                 capture = evaluate(popup, "chrome.storage.session.get('subtitle-sessions').then(v=>Object.values(v['subtitle-sessions']||{})[0]?.capture)")
@@ -329,6 +336,7 @@ def run(args):
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"provider failure did not stop capture session")
                 previous_sessions = len(core.sessions)
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"retry button not enabled")
+                if args.capture != 'prefetch': evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"restart after failure did not capture audio")
                 core.fail_reset = True
@@ -337,6 +345,7 @@ def run(args):
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"reset rejection did not stop native session")
                 previous_sessions = len(core.sessions)
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"reset retry button not enabled")
+                if args.capture != 'prefetch': evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"retry after reset rejection did not capture audio")
                 evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=false;c.dispatchEvent(new Event('change'));return true})()")
@@ -345,6 +354,7 @@ def run(args):
                 previous_sessions = len(core.sessions)
                 evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"global enable did not restore start")
+                if args.capture != 'prefetch': evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"reenable did not restore audio")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"目标语言\"]');c.value='en';c.dispatchEvent(new Event('change'));return true})()")
@@ -391,4 +401,5 @@ if __name__ == "__main__":
     parser.add_argument('--prefetch-fallback', action='store_true')
     parser.add_argument('--player-dom', choices=('document','shadow','dynamic-shadow','nested-shadow'), default='document')
     parser.add_argument('--system-temp', action='store_true')
+    parser.add_argument('--headed', action='store_true')
     print(json.dumps(run(parser.parse_args()),ensure_ascii=False,indent=2))

@@ -121,7 +121,7 @@ data class AvScanStatusDto(
 )
 
 @Serializable data class EventEnvelopeDto(val sequence: Long, val event: JsonObject)
-data class EngineSnapshot(val tasks: List<TaskDto>, val latestSequence: Long)
+data class EngineSnapshot(val tasks: List<TaskDto>, val latestSequence: Long, val browserConnected: Boolean = false)
 data class CommandResult(val requestId: Long, val events: List<EventEnvelopeDto>) {
     fun taskLogLines(): List<String> {
         val event = events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "task_log" }?.event
@@ -338,6 +338,7 @@ object EnginePipeClient {
         EngineSnapshot(
             response["tasks"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(TaskDto.serializer(), it) },
             response["latest_sequence"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+            response["browser_connected"]?.jsonPrimitive?.content == "true",
         )
     }
 

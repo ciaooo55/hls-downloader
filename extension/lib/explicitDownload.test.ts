@@ -1,28 +1,33 @@
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { waitForDownloadConfirmation } from './downloadConfirmation'
 
-const extensionRoot = fileURLToPath(new URL('../', import.meta.url))
-const content = readFileSync(`${extensionRoot}/entrypoints/content.ts`, 'utf8')
-const popup = readFileSync(`${extensionRoot}/entrypoints/popup/main.ts`, 'utf8')
-const background = readFileSync(`${extensionRoot}/entrypoints/background.ts`, 'utf8')
+afterEach(() => vi.useRealTimers())
 
-describe('explicit extension download flow', () => {
-  it('does not ask for a second confirmation after the user clicks Download', () => {
-    expect(content).toContain("type: 'download-now'")
-    expect(popup).toContain("type: 'download-now'")
-    expect(background).toContain("message?.type === 'download-now'")
-    expect(content).not.toContain("setSendState(resource, button, '等待确认'")
-    expect(popup).not.toContain("type: 'handoff-status'")
-    expect(popup).not.toContain('window.setInterval')
-    expect(background).toContain('void downloadNow(resource, undefined, { allowUnverified: true })')
-    expect(background).toContain('activeDirectDownloads.get(key)')
-    expect(background).toContain('}, 30_000)')
+describe('desktop download confirmation', () => {
+  it('keeps waiting until the desktop accepts, then reports acceptance', async () => {
+    vi.useFakeTimers()
+    const send = vi.fn().mockResolvedValueOnce({ ok: true, handoff: { status: 'pending', presentation: 'shown' } })
+      .mockResolvedValueOnce({ ok: true, handoff: { status: 'accepted' } })
+    const result = waitForDownloadConfirmation(send, 'offer-1')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(await result).toBe(true)
   })
 
-  it('bounds popup and in-page waits instead of leaving controls stuck', () => {
-    expect(content).toContain("10_000, '下载器响应超时，请重试'")
-    expect(popup).toContain("10_000,")
-    expect(popup).toContain("1_800")
+  it('returns cancellation without reporting a queued task', async () => {
+    expect(await waitForDownloadConfirmation(async () => ({ ok: true, handoff: { status: 'rejected' } }), 'offer-1')).toBe(false)
+  })
+
+  it('surfaces connection and presentation failures instead of false success', async () => {
+    await expect(waitForDownloadConfirmation(async () => ({ ok: false, error: '引擎断开' }), 'offer-1')).rejects.toThrow('引擎断开')
+    await expect(waitForDownloadConfirmation(async () => ({ ok: true, handoff: { status: 'pending', presentation: 'fallback' } }), 'offer-1')).rejects.toThrow('无法显示下载确认窗口')
+    await expect(waitForDownloadConfirmation(async () => ({ ok: true, handoff: { status: 'expired' } }), 'offer-1')).rejects.toThrow('下载确认已失效')
+  })
+
+  it('releases the button when a desktop confirmation remains unanswered', async () => {
+    vi.useFakeTimers()
+    const result = waitForDownloadConfirmation(async () => ({ ok: true, handoff: { status: 'pending' } }), 'offer-1')
+    const assertion = expect(result).rejects.toThrow('尚未确认下载')
+    await vi.advanceTimersByTimeAsync(126_000)
+    await assertion
   })
 })

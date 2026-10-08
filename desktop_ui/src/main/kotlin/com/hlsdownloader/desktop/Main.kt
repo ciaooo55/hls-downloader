@@ -310,6 +310,9 @@ internal fun batchTaskMenuActions(tasks: List<TaskDto>): List<String> {
     tasks.drop(1).forEach { task -> common.retainAll(taskMenuActions(task).toSet()) }
     return common.distinct()
 }
+internal fun taskStartAction(task: TaskDto): String? =
+    if (task.status.lowercase() in setOf("completed", "done")) null
+    else task.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }
 internal fun workbenchShortcut(ctrl: Boolean, shift: Boolean, keyCode: Int): String? = when {
     ctrl && shift && keyCode == AwtKeyEvent.VK_N -> "batch"
     ctrl && keyCode == AwtKeyEvent.VK_N -> "new"
@@ -1076,6 +1079,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 tasks.clear()
                 tasks += state.tasks.map(::downloadTask)
                 eventSequence = state.latestSequence
+                extensionText = if (state.browserConnected) "浏览器插件 · 已连接" else Product.extensionDisconnected
                 snapshotReady = true
                 engineHasConnected = true
                 engineText = Product.engineConnected
@@ -1355,7 +1359,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 val clipboard = runCatching { withContext(Dispatchers.IO) { Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as? String } }.getOrNull().orEmpty()
                 newTaskUrl = clipboard.trim(); newTaskDialog = true
             }
-        }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> task.source.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
+        }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> taskStartAction(task.source)?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
             settingsEpoch++
             darkMode = !darkMode
             scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("dark_mode", darkMode) } } }
@@ -1392,18 +1396,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     if (action in setOf("delete", "delete_files")) destructiveRequest = DestructiveRequest(action, selected)
                     else if (action == "move_queue") queueAssignTaskIds = selected
                     else if (action in setOf("play", "cast", "push_tvbox")) selected.firstOrNull()?.let { performTaskAction(it, action) }
-                    else scope.launch {
-                        // 同上（与 runTaskActions / launchTaskActions 一致）：靠命令响应里已经带回的
-                        // 事件增量更新，不再 refreshKey++ 拉全量快照。
-                        runCatching { withContext(Dispatchers.IO) { selected.map { EnginePipeClient.taskAction(it, action) } } }
-                            .onSuccess { results ->
-                                results.forEach { result ->
-                                    result.events.forEach { envelope ->
-                                        handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
-                                    }
-                                }
-                            }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it)) }
-                    }
+                    else launchTaskActions(tasks.filter { it.id in selected }.mapNotNull { task ->
+                        val resolved = if (action == "start") taskStartAction(task.source)
+                            else action.takeIf { it in task.source.availableActions }
+                        resolved?.let { task.id to it }
+                    })
                 }
                 TaskTable(
                     visible,
@@ -1954,6 +1951,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "执行电源动作失败")) }
         }
     }) }
+    LaunchedEffect(playerSession?.active) {
+        if (playerSession?.active != true) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            if (!playerControlBusy) {
+                // 首次加载可能尚无元数据，播放期间持续刷新进度和轨道信息。
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.playerControl("status") } }
+                    .onFailure { UiDiagnostics.error("player.status", it) }
+            }
+        }
+    }
     if (playerSession?.active == true || castSession?.active == true) {
         Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, -46), properties = PopupProperties(focusable = false)) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2237,7 +2245,7 @@ internal fun chooseDirectory(initialPath: String = "", title: String = "选择�
         isAcceptAllFileFilterUsed = false
         if (initialPath.isNotBlank()) currentDirectory = java.io.File(initialPath).let { if (it.isDirectory) it else it.parentFile }
     }
-    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.absolutePath else null
+    return if (chooser.showOpenDialog(WorkbenchWindow.awtWindow) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.absolutePath else null
 }
 
 private fun chooseImportPaths(): List<String>? {
@@ -2246,7 +2254,7 @@ private fun chooseImportPaths(): List<String>? {
         isMultiSelectionEnabled = true
         fileFilter = FileNameExtensionFilter("支持的导入文件", "json", "torrent", "metalink", "meta4", "txt", "urls")
     }
-    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFiles.map { it.absolutePath } else null
+    return if (chooser.showOpenDialog(WorkbenchWindow.awtWindow) == JFileChooser.APPROVE_OPTION) chooser.selectedFiles.map { it.absolutePath } else null
 }
 
 private fun chooseExportPath(): java.nio.file.Path? {
@@ -2255,7 +2263,7 @@ private fun chooseExportPath(): java.nio.file.Path? {
         selectedFile = java.io.File("hls-downloader-tasks.json")
         fileFilter = FileNameExtensionFilter("JSON、CSV 或 URL 列表", "json", "csv", "txt")
     }
-    return if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.toPath() else null
+    return if (chooser.showSaveDialog(WorkbenchWindow.awtWindow) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.toPath() else null
 }
 
 private fun chooseMediaPath(): String? {
@@ -2264,7 +2272,7 @@ private fun chooseMediaPath(): String? {
         isMultiSelectionEnabled = false
         fileFilter = FileNameExtensionFilter("视频和音频文件", "mp4", "mkv", "webm", "mov", "avi", "m4v", "mp3", "flac", "wav", "m4a", "aac", "ts", "m3u8")
     }
-    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.absolutePath else null
+    return if (chooser.showOpenDialog(WorkbenchWindow.awtWindow) == JFileChooser.APPROVE_OPTION) chooser.selectedFile.absolutePath else null
 }
 
 private fun exportTaskList(path: java.nio.file.Path, taskIds: List<String>): TaskExportResult {

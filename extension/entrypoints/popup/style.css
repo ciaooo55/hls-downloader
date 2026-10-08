@@ -110,7 +110,7 @@ footer { display: flex; align-items: center; justify-content: center; gap: 8px; 
 .quality-check .hlsd-icon { width: 13px; height: 13px; }
 .resource-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .resource-meta > small { min-width: 0; flex: 1; }
-.copy-link { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 6px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface-2); color: var(--muted); cursor: pointer; font: 500 10px system-ui, sans-serif; white-space: nowrap; transition: border-color .15s ease, color .15s ease, transform .12s ease; }
+.copy-link { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 24px; padding: 0 6px; border: 1px solid var(--control-border); border-radius: 5px; background: var(--surface-2); color: var(--muted); cursor: pointer; font: 500 10px system-ui, sans-serif; white-space: nowrap; transition: border-color .15s ease, color .15s ease, transform .12s ease; }
 .copy-link:hover { border-color: color-mix(in srgb, var(--primary) 50%, var(--control-border)); color: var(--primary-ink); }
 .copy-link:active { transform: scale(.96); }
 .copy-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }

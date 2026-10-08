@@ -306,11 +306,12 @@ fn dispatch(
                 },
             }
         }
-        CorePipeRequest::Snapshot { request_id } => match coordinator.tasks() {
-            Ok(tasks) => CorePipeResponse::Snapshot {
+        CorePipeRequest::Snapshot { request_id } => match coordinator.lock() {
+            Ok(core) => CorePipeResponse::Snapshot {
                 request_id,
-                tasks,
-                latest_sequence: coordinator.latest_sequence().unwrap_or_default(),
+                tasks: core.tasks(),
+                latest_sequence: core.latest_sequence(),
+                browser_connected: core.browser_connected(),
             },
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
@@ -944,13 +945,29 @@ mod tests {
                 request_id,
                 tasks,
                 latest_sequence,
+                browser_connected,
             } => {
                 assert_eq!(request_id, 95);
                 assert_eq!(tasks.len(), 1);
                 assert!(latest_sequence > 0);
+                assert!(!browser_connected);
             }
             other => panic!("unexpected snapshot response: {other:?}"),
         }
+        (server.handler())(CorePipeRequest::Command {
+            request_id: 96,
+            command: CoreCommand::BrowserHello {
+                version: "7.0.3".into(),
+                browser: "Firefox".into(),
+            },
+        });
+        assert!(matches!(
+            (server.handler())(CorePipeRequest::Snapshot { request_id: 97 }),
+            CorePipeResponse::Snapshot {
+                browser_connected: true,
+                ..
+            }
+        ));
         server.shutdown();
     }
 

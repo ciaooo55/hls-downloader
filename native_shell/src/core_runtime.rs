@@ -27,6 +27,7 @@ pub struct CoreRuntime {
     next_task: u64,
     next_handoff: u64,
     sequence: u64,
+    last_browser_hello: Option<std::time::Instant>,
 }
 
 impl CoreRuntime {
@@ -179,6 +180,7 @@ impl CoreRuntime {
             }
             CoreCommand::GetTaskLog { task_id } => self.emit_log(&task_id),
             CoreCommand::BrowserHello { version, browser } => {
+                self.last_browser_hello = Some(std::time::Instant::now());
                 self.publish(CoreEvent::BrowserStatus {
                     connected: true,
                     version: version.clone(),
@@ -288,6 +290,12 @@ impl CoreRuntime {
 
     pub fn latest_sequence(&self) -> u64 {
         self.sequence
+    }
+
+    pub fn browser_connected(&self) -> bool {
+        // 插件每分钟发送心跳；连接状态仅属于当前进程，不能从旧事件恢复。
+        self.last_browser_hello
+            .is_some_and(|hello| hello.elapsed() < std::time::Duration::from_secs(150))
     }
 
     pub(crate) fn emit(&mut self, event: CoreEvent) -> Vec<EventEnvelope> {
@@ -416,6 +424,8 @@ impl CoreRuntime {
             credential_ref: offer.credential_ref,
             replay_context_ref: offer.replay_context_ref,
             expected_size: (offer.size > 0).then_some(offer.size),
+            preferred_bandwidth: offer.preferred_bandwidth,
+            preferred_height: offer.preferred_height,
             ..Default::default()
         };
         let snapshot = self.create_task(spec);
@@ -983,6 +993,22 @@ fn pending_mirror_status(mirrors: &[String]) -> Vec<MirrorStatus> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn browser_connection_expires_and_is_not_restored_from_persisted_sequence() {
+        let mut runtime = super::CoreRuntime::new();
+        assert!(!runtime.browser_connected());
+        runtime.handle(crate::CoreCommand::BrowserHello {
+            version: "7.0.3".into(),
+            browser: "Firefox".into(),
+        });
+        assert!(runtime.browser_connected());
+        let restored = super::CoreRuntime::from_state([], [], runtime.latest_sequence());
+        assert!(!restored.browser_connected());
+        runtime.last_browser_hello =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(151));
+        assert!(!runtime.browser_connected());
+    }
+
+    #[test]
     fn get_task_returns_single_task_snapshot() {
         // 协议层此前没有"按 task_id 查单个任务"，UI 只能拉全量快照；
         // 千任务库里全量约 1.4MB。这里锁住 GetTask 的行为。
@@ -1350,6 +1376,8 @@ mod tests {
                 title: "Setup".into(),
                 mime_type: "application/vnd.microsoft.portable-executable".into(),
                 size: 1024,
+                preferred_bandwidth: 2_500_000,
+                preferred_height: 720,
             },
         });
         assert!(matches!(events[0].event, CoreEvent::HandoffOffered { .. }));
@@ -1371,6 +1399,11 @@ mod tests {
             other => panic!("expected HandoffResolved, got {other:?}"),
         }
         assert_eq!(runtime.list_tasks()[0].filename, "installer.exe");
+        assert_eq!(
+            runtime.task_spec("task-1").unwrap().preferred_bandwidth,
+            2_500_000
+        );
+        assert_eq!(runtime.task_spec("task-1").unwrap().preferred_height, 720);
         runtime.handle(CoreCommand::OfferResource {
             offer: ResourceOffer {
                 url: "https://cdn.test/other.bin".into(),

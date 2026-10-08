@@ -313,6 +313,11 @@ impl NativeHostSession {
 
     fn offer(&mut self, message: &Value) -> Result<Value, String> {
         let payload = resource_payload(message)?;
+        let mut offer = parse_offer(payload)?;
+        if matches!(&self.core, HostCore::Remote(_)) {
+            let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
+            crate::core_spawn::ensure_presenter(&root)?;
+        }
         let request_id = payload
             .get("client_request_id")
             .and_then(Value::as_str)
@@ -326,7 +331,6 @@ impl NativeHostSession {
             }
         }
 
-        let mut offer = parse_offer(payload)?;
         let owned_credential_ref = self.persist_browser_context(payload)?;
         offer.credential_ref = owned_credential_ref.clone();
         let id = next_handoff_id();
@@ -950,6 +954,15 @@ fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
         filename: field(payload, "filename"),
         title: field(payload, "title"),
         mime_type: field(payload, "mime_type"),
+        preferred_bandwidth: payload
+            .get("preferred_bandwidth")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        preferred_height: payload
+            .get("preferred_height")
+            .and_then(Value::as_u64)
+            .and_then(|height| u32::try_from(height).ok())
+            .unwrap_or(0),
         // 浏览器捕获的是清单响应长度，不能用它校验下载并合流后的媒体文件。
         size: if matches!(
             resource_kind,
@@ -1285,15 +1298,18 @@ mod tests {
                 let mut session = NativeHostSession::in_memory().unwrap();
                 let response = session.dispatch(&json!({
                     "op": operation,
-                    "resource": {"url": "https://cdn.test/media", "filename": "media.mp4", "resource_kind": kind, "size": 336}
+                    "resource": {"url": "https://cdn.test/media", "filename": "media.mp4", "resource_kind": kind, "size": 336, "preferred_bandwidth": 2_500_000, "preferred_height": 720}
                 })).unwrap();
                 if operation == "offer" {
+                    assert!(session.core.local().tasks().is_empty());
                     session.dispatch(&json!({
                         "op": "accept_handoff", "handoff_id": response["handoff"]["id"], "filename": "media.mp4"
                     })).unwrap();
                 }
                 let specs = session.core.local().store().load_task_specs().unwrap();
                 assert_eq!(specs.len(), 1);
+                assert_eq!(specs[0].1.preferred_bandwidth, 2_500_000);
+                assert_eq!(specs[0].1.preferred_height, 720);
                 assert_eq!(
                     specs[0].1.expected_size, expected_size,
                     "{kind} {operation}"

@@ -156,7 +156,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       ui.button.textContent = !allowed ? '字幕翻译已关闭' : active ? '停止翻译' : '翻译字幕'
       ui.button.title = !allowed ? '在 HLS 插件弹窗中开启字幕翻译，检查全局、本站和本页开关' : '在线翻译当前播放器音频'
       ui.status.textContent = selected !== media ? '' : error || (active ? status === 'running'
-        ? `${capture === 'prefetch' ? '音轨预翻译中' : '翻译中'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
+        ? `${capture === 'prefetch' ? '音轨预翻译中' : media.paused || media.ended ? '等待播放器播放' : '翻译中'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
       const cue = allowed && selected === media ? visibleSubtitle(cues.values(), media.currentTime, settings.offset) : undefined
       // 同传有服务端延迟，最新译文在抵达后短暂显示；回看仍严格使用音频时间轴。
       const recent = capture !== 'prefetch' && allowed && active && live && Date.now() >= live.at + Math.max(0, settings.offset * 1000)
@@ -207,7 +207,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       void (async () => {
         const stream = capture.call(media)
         if (!stream.getAudioTracks().length) { stream.getTracks().forEach(t => t.stop()); throw new Error('播放器未提供可采集音轨，请开始播放或使用 Edge / Chrome') }
-        stream.getVideoTracks().forEach(t => t.stop())
+        // AudioContext 只读取音频；保持采集流完整，统一在结束时释放各轨道。
         const cleanup = await captureSubtitleAudio(stream, false, (audio, capturedAt) => {
           if (id === sessionId) void send({ type: 'subtitle-audio', sessionId: id, audio, capturedAt }).catch(() => undefined)
         })

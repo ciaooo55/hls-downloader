@@ -367,7 +367,7 @@ export component ConfirmWindow inherits Window {
                 spacing: 8px;
                 HotButton { label: "更多设置"; enabled: !root.busy; clicked => { root.command("more"); } }
                 Rectangle { horizontal-stretch: 1; }
-                HotButton { label: "保留浏览器下载"; enabled: !root.busy; clicked => { root.command("reject"); } }
+                HotButton { label: "取消"; enabled: !root.busy; clicked => { root.command("reject"); } }
                 HotButton { label: root.busy ? "处理中…" : "确认下载"; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
             }
         }

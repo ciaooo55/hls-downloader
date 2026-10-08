@@ -155,6 +155,8 @@ pub enum CorePipeResponse {
         tasks: Vec<crate::TaskSnapshot>,
         #[serde(default)]
         latest_sequence: u64,
+        #[serde(default)]
+        browser_connected: bool,
     },
     Capabilities {
         request_id: u64,

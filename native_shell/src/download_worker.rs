@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -2271,9 +2271,12 @@ impl CoreCoordinator {
             filename,
             download_dir,
             request_method: offer.request_method.clone(),
+            mime_type: offer.mime_type.clone(),
             credential_ref: offer.credential_ref.clone(),
             replay_context_ref: offer.replay_context_ref.clone(),
             expected_size: (offer.size > 0).then_some(offer.size),
+            preferred_bandwidth: offer.preferred_bandwidth,
+            preferred_height: offer.preferred_height,
             ..Default::default()
         })?;
         let mut events = self.dispatch(CoreCommand::CreateTask { spec })?;
@@ -2468,13 +2471,24 @@ impl CoreCoordinator {
     }
 
     fn delete_task_files(&self, task_id: &str) -> Result<(), String> {
-        let spec = self
-            .lock()?
-            .task_spec(task_id)
-            .cloned()
-            .ok_or_else(|| format!("unknown task {task_id}"))?;
+        let (spec, completed) = {
+            let core = self.lock()?;
+            let spec = core.task_spec(task_id).cloned()
+                .ok_or_else(|| format!("unknown task {task_id}"))?;
+            let completed = core.tasks().iter().any(|task| task.task_id == task_id
+                && matches!(task.status.as_str(), "completed" | "done"));
+            (spec, completed)
+        };
         let paths = TaskPaths::for_task(task_id, &spec)?;
-        let _ = fs::remove_file(&paths.final_output);
+        // 改名后的产物属于此任务，原始同名文件属于其他任务；未发布的任务没有成品可删。
+        if paths.task_dir().join("published.path").is_file() || completed {
+            let published = resolve_published(&paths);
+            if published.is_dir() {
+                let _ = fs::remove_dir_all(published);
+            } else {
+                let _ = fs::remove_file(published);
+            }
+        }
         let _ = fs::remove_file(&paths.output);
         let _ = fs::remove_dir_all(paths.task_dir());
         Ok(())
@@ -2508,7 +2522,7 @@ impl CoreCoordinator {
             return Ok(());
         }
         {
-            let core = self.lock()?;
+            let mut core = self.lock()?;
             let status = core
                 .tasks()
                 .iter()
@@ -2520,8 +2534,20 @@ impl CoreCoordinator {
             if status.as_deref() == Some("queued") {
                 if let Some(spec) = spec.as_ref() {
                     let paths = TaskPaths::for_task(&task_id, spec)?;
-                    paths.prepare()?;
-                    paths.set_control("run")?;
+                    if let Err(error) = paths.prepare().and_then(|_| paths.set_control("run")) {
+                        // 无效目录只阻止当前任务，不能把它留在队列头阻塞所有后续下载。
+                        core.report_failure(
+                            &task_id,
+                            task_failure_from_error(
+                                &error,
+                                "waiting",
+                                &spec.url,
+                                0,
+                                spec.credential_ref.is_some(),
+                            ),
+                        )?;
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -3387,6 +3413,7 @@ fn complete_payload(
     spec: &TaskSpec,
 ) -> Result<(), String> {
     ensure_publish_allowed(&paths.control)?;
+    reject_html_media_payload(payload, spec)?;
     mark_progress(
         core,
         task_id,
@@ -3505,6 +3532,35 @@ fn complete_payload(
     )
 }
 
+fn reject_html_media_payload(payload: &Path, spec: &TaskSpec) -> Result<(), String> {
+    let mime = spec.mime_type.to_ascii_lowercase();
+    let extension = Path::new(&spec.filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !mime.starts_with("video/")
+        && !mime.starts_with("audio/")
+        && !matches!(extension.as_str(), "mp4" | "m4v" | "mkv" | "webm" | "mov" | "avi" | "ts" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "flac" | "wav")
+    {
+        return Ok(());
+    }
+    // 登录页常以 HTTP 200 返回；只读文件头，不能把它作为媒体成品发布。
+    let mut prefix = [0u8; 4096];
+    let size = fs::File::open(payload)
+        .and_then(|mut file| file.read(&mut prefix))
+        .map_err(|error| format!("读取媒体文件头失败: {error}"))?;
+    let text = String::from_utf8_lossy(&prefix[..size]);
+    let text = text.trim_start_matches('\u{feff}').trim_start().to_ascii_lowercase();
+    if ["<!doctype html", "<html", "<head", "<body", "<script", "<form"]
+        .iter()
+        .any(|tag| text.starts_with(tag))
+    {
+        return Err("服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试".into());
+    }
+    Ok(())
+}
+
 /// Finishes a task whose payload is already published at `published`.
 ///
 /// Every step is best effort and none of them is allowed to fail the task, for the
@@ -3585,11 +3641,16 @@ fn remember_published(paths: &TaskPaths, published: &Path) {
 }
 
 fn resolve_published(paths: &TaskPaths) -> PathBuf {
-    if let Ok(text) = fs::read_to_string(paths.task_dir().join("published.path")) {
-        let candidate = PathBuf::from(text.trim());
-        if published_path_allowed(&candidate, paths) && candidate.exists() {
-            return candidate;
+    let marker = paths.task_dir().join("published.path");
+    if marker.is_file() {
+        if let Ok(text) = fs::read_to_string(marker) {
+            let candidate = PathBuf::from(text.trim());
+            // 已记录的文件丢失时仍保留其路径，不能回退到其他任务的同名成品。
+            if published_path_allowed(&candidate, paths) {
+                return candidate;
+            }
         }
+        return paths.output.clone();
     }
     if paths.final_output.exists() {
         paths.final_output.clone()
@@ -5009,6 +5070,7 @@ fn open_path(path: &Path) -> Result<(), String> {
 fn player_control(action: &str) -> Result<(), String> {
     let player = shared_player()?;
     match action {
+        "status" => Ok(()),
         "pause" => player.pause(true),
         "resume" | "play" => player.pause(false),
         "fullscreen" => player.set_fullscreen(true),
@@ -7024,6 +7086,16 @@ mod tests {
             speed.last().map(|item| &item.event),
             Some(CoreEvent::PlayerSession { speed, .. }) if (*speed - 1.5).abs() < f64::EPSILON
         ));
+        let status = coordinator
+            .dispatch(CoreCommand::PlayerControl {
+                action: "status".into(),
+            })
+            .unwrap();
+        assert!(matches!(
+            status.last().map(|item| &item.event),
+            Some(CoreEvent::PlayerSession { active: true, paused: true, speed, status, .. })
+                if (*speed - 1.5).abs() < f64::EPSILON && status == "PAUSED"
+        ));
         let stop = coordinator
             .dispatch(CoreCommand::PlayerControl {
                 action: "stop".into(),
@@ -7808,6 +7880,41 @@ mod tests {
         assert!(rows.iter().any(|row| {
             row.contains("\"host\":\"video.example.test\"") && row.contains("\"kind\":\"hls\"")
         }));
+    }
+
+    #[test]
+    fn deleting_task_files_preserves_other_same_named_outputs() {
+        let dir = std::env::temp_dir().join(format!("hls-delete-owned-{}-{}",
+            std::process::id(), handoff_now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let spec = TaskSpec {
+            url: "https://example.test/clip.bin".into(), filename: "clip.bin".into(),
+            download_dir: dir.to_string_lossy().into_owned(), ..Default::default()
+        };
+        let mut core = PersistentCore::in_memory().unwrap();
+        core.handle(CoreCommand::CreateTask { spec: spec.clone() }).unwrap();
+        let task_id = core.tasks()[0].task_id.clone();
+        let coordinator = CoreCoordinator::new(core);
+        let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+        paths.prepare().unwrap();
+        fs::write(&paths.final_output, b"existing user file").unwrap();
+        coordinator.delete_task_files(&task_id).unwrap();
+        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user file");
+        paths.prepare().unwrap();
+        fs::write(&paths.output, b"new download").unwrap();
+        let renamed = paths.publish_with("rename", false).unwrap();
+        remember_published(&paths, &renamed);
+        assert_ne!(renamed, paths.final_output);
+        assert_eq!(resolve_published(&paths), renamed);
+        coordinator.delete_task_files(&task_id).unwrap();
+        assert!(!renamed.exists());
+        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user file");
+        paths.prepare().unwrap();
+        remember_published(&paths, &renamed);
+        assert_eq!(resolve_published(&paths), renamed);
+        coordinator.delete_task_files(&task_id).unwrap();
+        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user file");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

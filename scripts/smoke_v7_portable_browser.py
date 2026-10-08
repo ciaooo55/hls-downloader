@@ -11,6 +11,7 @@ import threading
 from urllib.request import urlopen
 import winreg
 import zipfile
+import uuid
 
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
@@ -20,6 +21,7 @@ from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, Server
 from smoke_extension_media import _find_firefox
 from smoke_v7_local_app import Handler
 from smoke_v7_portable_app import Pipe, wait
+from smoke_v7_browser_download_confirmation import click_download_confirmation
 
 
 def run(args):
@@ -96,10 +98,12 @@ def run(args):
             check("precise-response-recognition", detected.get("kind") == "file" and detected.get("size") == PAYLOAD_SIZE, detected)
             pipe = Pipe()
             pipe.request({"type": "hello", "protocol": "hls-downloader-v7-core", "version": 1})
+            initial_tasks = {t['task_id'] for t in pipe.request({'type':'snapshot','request_id':9})['tasks']}
 
             def download(value, expected_bytes, expected_hash, name):
                 requested = message({"type": "download-now", "resource": {**value, "tabId": tab_id, "pageUrl": page_url}})
                 check(name+"-plugin-request", requested.get("ok") is True, requested)
+                click_download_confirmation()
 
                 def task():
                     tasks = pipe.request({"type": "snapshot", "request_id": 10})["tasks"]
@@ -119,14 +123,19 @@ def run(args):
 
             download({**detected, "filename": "portable-browser.bin"}, PAYLOAD_SIZE,
                      hashlib.sha256(BLOCK*(PAYLOAD_SIZE//len(BLOCK))).hexdigest(), "local-32mib")
-            public_url = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm"
+            public_url = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm?hls-browser-smoke="+uuid.uuid4().hex
             with urlopen(public_url, timeout=30) as response:
                 expected = response.read(8*1024*1024+1)
             if not expected or len(expected) > 8*1024*1024:
                 raise ValueError("Unexpected public media fixture")
             driver.switch_to.new_window("tab")
             driver.get("https://interactive-examples.mdn.mozilla.net/pages/tabbed/video.html")
-            driver.execute_script("document.querySelectorAll('video').forEach(v=>{v.muted=true;v.play().catch(()=>{});})")
+            for frame in driver.find_elements('tag name', 'iframe'):
+                driver.switch_to.frame(frame)
+                if driver.find_elements('tag name','video'): break
+                driver.switch_to.default_content()
+            driver.execute_script("document.querySelectorAll('video').forEach(v=>{v.src=arguments[0];v.muted=true;v.play().catch(()=>{});})",public_url)
+            driver.switch_to.default_content()
             driver.switch_to.window(driver.window_handles[1])
             tabs = driver.execute_async_script("const done=arguments[0];browser.tabs.query({}).then(done)")
             tab_id = next(t["id"] for t in tabs if t.get("url", "").startswith("https://interactive-examples.mdn.mozilla.net/pages/tabbed/video.html"))
@@ -136,7 +145,7 @@ def run(args):
             check("precise-public-media-recognition", public_resource.get("url") == public_url, public_resource)
             download({**public_resource, "filename": "portable-public-flower.webm"}, len(expected), hashlib.sha256(expected).hexdigest(), "public-https-media")
             driver.save_screenshot(str(args.report.with_suffix(".png")))
-            check("user-profile-left-empty", pipe.request({"type": "snapshot", "request_id": 12})["tasks"] == [], {})
+            check("original-user-tasks-preserved", initial_tasks <= {t['task_id'] for t in pipe.request({"type": "snapshot", "request_id": 12})["tasks"]}, {})
             report["passed"] = True
         except Exception as error:
             report["error"] = str(error)

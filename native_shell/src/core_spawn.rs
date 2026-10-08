@@ -55,7 +55,8 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        // Firefox 会终止 Native Host 的整个 Job；下载核心必须跨插件断线继续运行。
+        command.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
     }
     if profile {
         eprintln!(
@@ -90,9 +91,37 @@ pub fn spawn_desktop_ui(root: &Path) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x00000008 | 0x00000200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        command.creation_flags(0x00000008 | 0x00000200 | 0x01000000); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
     }
     command.spawn().is_ok()
+}
+
+pub(crate) fn ensure_presenter(root: &Path) -> Result<(), String> {
+    if crate::instance::presenter_is_running() {
+        return Ok(());
+    }
+    let executable = ["HLSDownloaderPresenter.exe", "HLSDownloaderPresenter"]
+        .into_iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())
+        .ok_or_else(|| "找不到下载确认组件，请修复主程序安装".to_string())?;
+    let mut command = Command::new(executable);
+    command
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // 确认/完成窗口独立于浏览器通信端口，重连和关闭网页不会销毁弹窗。
+        command.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+    }
+    // 多个浏览器同时点击时，弹窗进程的现有单实例锁保留唯一实例。
+    command
+        .spawn()
+        .map_err(|error| format!("无法启动下载确认窗口: {error}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

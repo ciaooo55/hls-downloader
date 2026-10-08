@@ -164,6 +164,25 @@ fn claim_presenter_session_mutex() -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn presenter_is_running() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::OpenMutexW;
+        let name = session_mutex_name("Local\\HLSDownloader.v7.presenter");
+        let handle = unsafe { OpenMutexW(0x00100000, 0, name.as_ptr()) };
+        if handle.is_null() {
+            return false;
+        }
+        unsafe { CloseHandle(handle) };
+        true
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn claim_profile_lock() -> Result<(), String> {
     let path = lock_path();
     if let Some(parent) = path.parent() {

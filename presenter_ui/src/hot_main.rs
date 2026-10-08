@@ -517,6 +517,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &completed_notified,
                         ),
                         CoreEvent::TaskDeleted { task_id } => {
+                            completed_notified.borrow_mut().remove(&task_id);
+                            if completed_task.borrow().as_deref() == Some(task_id.as_str()) {
+                                *completed_task.borrow_mut() = None;
+                                if let Some(item) = complete.upgrade() {
+                                    let _ = item.hide();
+                                }
+                            }
                             let primary = active_hud.borrow_mut().remove(&task_id);
                             match primary {
                                 Some(primary) => {

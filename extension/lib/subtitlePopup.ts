@@ -73,8 +73,9 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       site.value = rule(settings.sites[subtitleSite(state.pageUrl)])
       page.value = rule(state.pages[subtitlePage(state.pageUrl)])
       live = Boolean(state.session && !['stopped', 'failed'].includes(state.session.status))
+      const playing = (state.players || []).some((p: any) => p.mediaId === state.session?.mediaId && p.frameId === state.session?.frameId && p.playing)
       status.textContent = !settings.enabled ? '全局已关闭' : !state.allowed ? '当前页已关闭' : live
-        ? state.session.status === 'running' ? state.session.capture === 'prefetch' ? '音轨预翻译中' : '翻译中' : '连接中' : '已开启 · 待启动'
+        ? state.session.status === 'running' ? state.session.capture === 'prefetch' ? '音轨预翻译中' : playing ? '翻译中' : '等待播放器播放' : '连接中' : '已开启 · 待启动'
       start.textContent = live ? '停止翻译' : '开始翻译'
       const options = (state.players || []).map((p: any, index: number) => ({ value: `${p.frameId}:${p.mediaId}`, label: `播放器 ${index + 1}${p.playing ? ' · 播放中' : ''} · ${String(p.label).slice(0, 36)}` }))
       const old = player.value

@@ -64,7 +64,7 @@ export interface EarlyBrowserTakeover {
   promise: Promise<{ resource: MediaResource, response: any } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
-const activeDirectDownloads = new Map<string, Promise<any>>()
+const activeDownloadOffers = new Map<string, Promise<any>>()
 
 /**
  * Locate an early takeover when the request chain is no longer available.
@@ -121,6 +121,7 @@ const HANDOFF_TRACKER_STORAGE_KEY = 'handoff-tracker-v1'
 interface TrackedHandoff {
   id: string
   resourceId: string
+  tabId?: number
   status: string
   checkedAt: number
   failures: number
@@ -260,6 +261,7 @@ async function hydrateHandoffTracker(): Promise<void> {
     trackedHandoffs.set(id, {
       id,
       resourceId: String(item.resourceId || ''),
+      tabId: validIdentity(item.tabId) ? item.tabId : undefined,
       status: String(item.status || 'pending'),
       checkedAt: Number(item.checkedAt || 0),
       failures: Math.max(0, Number(item.failures || 0)),
@@ -325,16 +327,17 @@ function scheduleHandoffPoll(delay = 120): void {
   }, delay)
 }
 
-async function trackHandoff(handoffId: string, resourceId = ''): Promise<TrackedHandoff> {
+async function trackHandoff(handoffId: string, resourceId = '', tabId?: number): Promise<TrackedHandoff> {
   await hydrateHandoffTracker()
   const id = String(handoffId || '')
   const current = trackedHandoffs.get(id)
   if (current) {
     if (resourceId && !current.resourceId) current.resourceId = resourceId
+    if (validIdentity(tabId)) current.tabId = tabId
     scheduleHandoffPoll()
     return current
   }
-  const tracked: TrackedHandoff = { id, resourceId, status: 'pending', checkedAt: 0, failures: 0 }
+  const tracked: TrackedHandoff = { id, resourceId, tabId, status: 'pending', checkedAt: 0, failures: 0 }
   trackedHandoffs.set(id, tracked)
   pruneTrackedHandoffs()
   await persistHandoffTracker()
@@ -951,31 +954,48 @@ async function resourcePayload(
   }
 }
 
-async function downloadNow(
+async function requestDownload(
   resource: MediaResource,
   chain?: RequestChain,
   options: { allowUnverified?: boolean } = {},
 ) {
+  if (validIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`)
+  await hydrateHandoffTracker()
+  const pending = [...trackedHandoffs.values()].find(item => item.tabId === resource.tabId
+    && item.resourceId === resource.id && item.status === 'pending')
+  if (pending) {
+    const previous = await native({ op: 'handoff_status', handoff_id: pending.id })
+    if (!previous?.ok) throw new Error(previous?.error || '无法读取下载确认状态')
+    updateTrackedHandoff(pending, previous.handoff || {})
+    await persistHandoffTracker()
+    if (pending.status === 'pending') return previous
+  }
   // 保留主清单的外置音轨/字幕关系，Core 按用户选定的码率和高度选择视频轨。
   if (resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')) {
     resource = { ...resource, url: resource.manifestUrl }
   }
   const key = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
-  const active = activeDirectDownloads.get(key)
-  if (active) return active
-  const request = resourcePayload(resource, chain, options)
-    .then(payload => native({ op: 'download', resource: payload }))
+  const active = activeDownloadOffers.get(key)
+  if (active) {
+    const previous = await active
+    const status = await native({ op: 'handoff_status', handoff_id: previous.handoff.id })
+    if (!status?.ok) throw new Error(status?.error || '无法读取下载确认状态')
+    if (status.handoff?.status === 'pending') return previous
+    if (activeDownloadOffers.get(key) === active) activeDownloadOffers.delete(key)
+    else return requestDownload(resource, chain, options)
+  }
+  const request = offer(resource, chain, { ...options, explicit: true })
     .then(response => {
-      if (response?.ok === false) activeDirectDownloads.delete(key)
-      else setTimeout(() => {
-        if (activeDirectDownloads.get(key) === request) activeDirectDownloads.delete(key)
-      }, 30_000)
+      if (!response?.ok) activeDownloadOffers.delete(key)
+      else void waitForHandoffResolution(String(response.handoff.id)).then(resolved => {
+        if (handoffTerminalStatus(resolved.status) && activeDownloadOffers.get(key) === request) activeDownloadOffers.delete(key)
+      }).catch(() => undefined)
       return response
     }, error => {
-      activeDirectDownloads.delete(key)
+      activeDownloadOffers.delete(key)
       throw error
     })
-  activeDirectDownloads.set(key, request)
+  activeDownloadOffers.set(key, request)
   return request
 }
 
@@ -991,7 +1011,7 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: st
   return { ok: true, id }
 }
 
-async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}) {
+async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean, explicit?: boolean } = {}) {
   const fingerprint = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
   let requestId = ''
   try {
@@ -1003,7 +1023,8 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
   }
   const payload = {
     ...await resourcePayload(resource, chain, options),
-    client_request_id: requestId,
+    // 自动接管按资源去重；主动点击取消/完成后允许再次打开确认窗。
+    client_request_id: options.explicit ? `explicit:${crypto.randomUUID()}` : requestId,
   }
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
@@ -1013,8 +1034,16 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
   }
   // Handoff creation is the acknowledgement. Presentation happens in the
   // desktop queue and must never hold the browser button at “发送中”.
-  void trackHandoff(String(handoff.id), resource.id)
+  await trackHandoff(String(handoff.id), resource.id, resource.tabId)
   return response
+}
+
+async function reportDownloadError(tabId: number | undefined, reason: unknown): Promise<void> {
+  if (!validIdentity(tabId)) return
+  const error = reason instanceof Error ? reason.message : String(reason || '下载请求失败，请重试')
+  // 受限页面无法注入提示时，下一次打开工具栏弹窗仍能看到失败原因。
+  await browser.storage.session.set({ [`download-error:${tabId}`]: error }).catch(() => undefined)
+  await browser.tabs.sendMessage(tabId, { type: 'download-error', error }, { frameId: 0 }).catch(() => undefined)
 }
 
 async function refreshedDownload(downloadId: number, original: Browser.downloads.DownloadItem) {
@@ -1314,6 +1343,7 @@ export default defineBackground(() => {
     void refreshTabBadge(activeInfo.tabId).catch(error => console.warn('HLS Downloader badge refresh failed', error))
   })
   browser.tabs.onRemoved.addListener(tabId => {
+    void browser.storage.session.remove(`download-error:${tabId}`).catch(() => undefined)
     requestChains.clearTab(tabId)
     blobSources.clearTab(tabId)
     inspectedAdaptive.releasePrefix(`${tabId}:`)
@@ -1621,7 +1651,12 @@ export default defineBackground(() => {
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
     if (info.menuItemId === 'hls-download-selection') {
-      if (tab?.id !== undefined) void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' }).catch(() => undefined)
+      if (tab?.id !== undefined) {
+        const frameId = Number((info as any).frameId)
+        void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' },
+          Number.isInteger(frameId) && frameId >= 0 ? { frameId } : undefined)
+          .catch(error => reportDownloadError(tab.id!, `无法读取选中的链接：${String(error)}`))
+      }
       return
     }
     const capabilities = contextMenuCapabilities(info)
@@ -1661,8 +1696,11 @@ export default defineBackground(() => {
     }
     // Choosing the extension's context-menu command is already an explicit
     // confirmation, just like the popup and in-player Download buttons.
-    void downloadNow(resource, undefined, { allowUnverified: true })
-      .catch(error => console.warn('HLS Downloader context download failed', error))
+    void requestDownload(resource, undefined, { allowUnverified: true })
+      .then(response => {
+        if (!response?.ok) return reportDownloadError(tab?.id, response?.error || '桌面端未接受下载请求')
+      })
+      .catch(error => reportDownloadError(tab?.id, error))
   })
 
   dynamicContextMenus.onShown?.addListener(info => {
@@ -1730,13 +1768,23 @@ export default defineBackground(() => {
         tabId: message.resource.tabId ?? sender.tab?.id,
         frameId: message.resource.frameId ?? sender.frameId,
       }
-      // A click on our popup/hover action is already an explicit confirmation.
-      // Create the task directly; automatic browser takeover continues to use
-      // the separate desktop confirmation window.
       // 插件加载前已播放或命中缓存的媒体可能没有响应链；用户主动点击仍应交给 Core。
-      void downloadNow(resource, undefined, { allowUnverified: true })
+      void requestDownload(resource, undefined, { allowUnverified: true })
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'handoff-status') {
+      void native({ op: 'handoff_status', handoff_id: String(message.handoffId || '') }, 2_500)
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, error: String(error) }))
+      return true
+    }
+    if (message?.type === 'pending-downloads') {
+      const tabId = Number(message.tabId ?? sender.tab?.id ?? -1)
+      void hydrateHandoffTracker().then(() => {
+        sendResponse([...trackedHandoffs.values()].filter(item => item.tabId === tabId && item.status === 'pending'))
+      }).catch(() => sendResponse([]))
       return true
     }
     if (message?.type === 'list') {

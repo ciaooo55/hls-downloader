@@ -47,10 +47,15 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             .then(|| period_duration_seconds(xml, absolute))
             .flatten();
         let after = &rest[start..];
-        let end = after
-            .find("</Representation>")
-            .or_else(|| after.find("/>"))
-            .ok_or_else(|| "truncated Representation".to_string())?;
+        let opening_end = after.find('>').ok_or_else(|| "truncated Representation".to_string())?;
+        // 自闭合视频轨不能吞入后面的音轨，否则会继承音频分片模板并请求错误地址。
+        let end = if after[..opening_end].trim_end().ends_with('/') {
+            opening_end + 1
+        } else {
+            after.find("</Representation>")
+                .map(|index| index + "</Representation>".len())
+                .ok_or_else(|| "truncated Representation".to_string())?
+        };
         let block = &after[..end];
         let id = attr(block, "id").unwrap_or_else(|| "0".into());
         let bandwidth = attr(block, "bandwidth")
@@ -128,7 +133,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                     init: init.or(init_from_set).filter(|url| !url.is_empty()),
                     media: media.into_iter().filter(|url| !url.is_empty()).collect(),
                 });
-                rest = &after[end.saturating_add(1)..];
+                rest = &after[end..];
                 continue;
             }
         }
@@ -145,7 +150,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             init: init.filter(|url| !url.is_empty()),
             media: media.into_iter().filter(|url| !url.is_empty()).collect(),
         });
-        rest = &after[end.saturating_add(1)..];
+        rest = &after[end..];
     }
     if representations.is_empty() {
         return Err("DASH manifest has no representations".into());
@@ -1310,6 +1315,28 @@ fn multi_period_codec_change(xml: &str, period_count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_closing_video_representations_do_not_consume_following_audio_template() {
+        let xml = r#"<MPD type="static" mediaPresentationDuration="PT8S"><Period>
+<AdaptationSet mimeType="video/mp4" contentType="video">
+<SegmentTemplate duration="120" timescale="30" media="$RepresentationID$/$Number$.m4v" initialization="$RepresentationID$/0.m4v"/>
+<Representation id="low" height="180" bandwidth="250000"/>
+<Representation id="high" height="720" bandwidth="4000000"/>
+</AdaptationSet><AdaptationSet mimeType="audio/mp4" contentType="audio">
+<SegmentTemplate duration="192512" timescale="48000" media="$RepresentationID$/$Number$.m4a" initialization="$RepresentationID$/0.m4a"/>
+<Representation id="audio" bandwidth="64000"><AudioChannelConfiguration value="2"/></Representation>
+</AdaptationSet></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        assert_eq!(parsed.representations.len(), 3);
+        let low = &parsed.representations[0];
+        assert_eq!(low.mime, "video/mp4");
+        assert_eq!(low.init.as_deref(), Some("https://cdn.test/low/0.m4v"));
+        assert_eq!(low.media, ["https://cdn.test/low/1.m4v", "https://cdn.test/low/2.m4v"]);
+        let audio = &parsed.representations[2];
+        assert_eq!(audio.mime, "audio/mp4");
+        assert_eq!(audio.init.as_deref(), Some("https://cdn.test/audio/0.m4a"));
+    }
 
     #[test]
     fn fixed_duration_templates_download_every_video_and_audio_segment() {

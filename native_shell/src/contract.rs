@@ -90,6 +90,10 @@ pub struct ResourceOffer {
     pub mime_type: String,
     #[serde(default)]
     pub size: u64,
+    #[serde(default)]
+    pub preferred_bandwidth: u64,
+    #[serde(default)]
+    pub preferred_height: u32,
 }
 
 impl Default for ResourceOffer {
@@ -109,6 +113,8 @@ impl Default for ResourceOffer {
             title: String::new(),
             mime_type: String::new(),
             size: 0,
+            preferred_bandwidth: 0,
+            preferred_height: 0,
         }
     }
 }
@@ -301,6 +307,8 @@ pub struct TaskSpec {
     #[serde(default)]
     pub filename: String,
     #[serde(default)]
+    pub mime_type: String,
+    #[serde(default)]
     pub download_dir: String,
     #[serde(default)]
     pub work_dir: String,
@@ -361,6 +369,7 @@ impl Default for TaskSpec {
             resource_kind: ResourceKind::File,
             title: String::new(),
             filename: String::new(),
+            mime_type: String::new(),
             download_dir: String::new(),
             work_dir: String::new(),
             request_method: default_method(),
@@ -899,6 +908,8 @@ mod tests {
             title: "Video".into(),
             mime_type: "application/vnd.apple.mpegurl".into(),
             size: 42,
+            preferred_bandwidth: 2_500_000,
+            preferred_height: 720,
         };
         let encoded = serde_json::to_vec(&offer).unwrap();
         let restored: ResourceOffer = serde_json::from_slice(&encoded).unwrap();

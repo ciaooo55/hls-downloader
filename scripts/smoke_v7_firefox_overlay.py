@@ -20,6 +20,7 @@ from selenium.common.exceptions import StaleElementReferenceException
 
 from smoke_extension_media import _find_firefox
 from smoke_v7_portable_app import Pipe, wait
+from smoke_v7_browser_download_confirmation import click_download_confirmation
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -110,6 +111,7 @@ def run(args):
             good_id = driver.install_addon(str(addon_file("valid.xpi")), temporary=True)
             assert good_id == manifest["browser_specific_settings"]["gecko"]["id"]
             open_player()
+            click_download_confirmation()
 
             def download_task():
                 current = pipe.request({"type": "snapshot", "request_id": 2})["tasks"]
@@ -130,6 +132,7 @@ def run(args):
             driver.uninstall_addon(good_id)
             driver.install_addon(str(stage / "valid.xpi"), temporary=True)
             open_player()
+            click_download_confirmation()
             task = wait(download_task, "Cached playback click was rejected", 45)
             assert task["status"] == "completed", task.get("log_tail")
             assert hashlib.sha256(Path(task["output_path"]).read_bytes()).digest() == hashlib.sha256(media.read_bytes()).digest()

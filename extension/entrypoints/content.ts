@@ -4,6 +4,7 @@ import { boundedConfidence, classifyPlaybackSource, classifyResource, compactRes
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
+import { waitForDownloadConfirmation } from '../lib/downloadConfirmation'
 import { selectedDownloadUrls } from '../lib/selectionLinks'
 import { formatBytes, formatDuration } from '../lib/format'
 import { installSubtitleContent } from '../lib/subtitleContent'
@@ -120,7 +121,7 @@ export default defineContentScript({
       }
     }
     const earlyRuntimeListener = (message: any) => {
-      if (contentReady || !['captured-resource', 'collect-selection', 'open-media-panel'].includes(String(message?.type || ''))) return
+      if (contentReady || !['captured-resource', 'collect-selection', 'open-media-panel', 'download-error'].includes(String(message?.type || ''))) return
       if (message.type === 'captured-resource' && !message.resource?.url) return
       earlyRuntimeMessages.push(message)
       if (earlyRuntimeMessages.length > 100) earlyRuntimeMessages.splice(0, earlyRuntimeMessages.length - 100)
@@ -178,6 +179,11 @@ export default defineContentScript({
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
     const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string }>()
+    const preferredVariants = new Map<string, { height: number, bandwidth: number }>()
+    let renderedListSignature = ''
+    let renderedVideoSignature = ''
+    let renderedViewportWidth = 0
+    let renderedViewportHeight = 0
     let activePlayback: PlaybackContext | null = null
     let activeVideo: HTMLVideoElement | null = null
     let selectionMode = false
@@ -429,8 +435,15 @@ export default defineContentScript({
       if (resourceSendStates.get(key)?.disabled) return
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       setSendState(resource, button, '发送中', true)
-      void withDeadline(runtimeMessage({ type: 'download-now', resource }), 10_000, '下载器响应超时，请重试').then(response => {
+      void withDeadline(runtimeMessage({ type: 'download-now', resource }), 10_000, '下载器响应超时，请重试').then(async response => {
         if (!response?.ok) throw new Error(response?.error || '桌面端未接受请求')
+        setSendState(resource, button, '等待确认', true)
+        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载窗口确认文件名和保存位置' }
+        if (!await waitForDownloadConfirmation(runtimeMessage, String(response.handoff?.id || ''))) {
+          setSendState(resource, button, '下载', false)
+          if (result) result.textContent = '已取消下载'
+          return
+        }
         setSendState(resource, button, '已加入', true)
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
         setTimeout(() => resourceSendStates.delete(key), 2_500)
@@ -511,8 +524,8 @@ export default defineContentScript({
       if (!layer) return
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
-      if (videoControlDragging || videoHoverInteractions.size > 0) return
-      layer.replaceChildren()
+      if (videoControlDragging) return
+      if (videoHoverInteractions.size > 0 && innerWidth === renderedViewportWidth && innerHeight === renderedViewportHeight) return
       let visible = 0
       const videos = currentVideos()
         .map(video => ({ video, rect: video.getBoundingClientRect(), playback: playbackByVideo.get(video) || null }))
@@ -522,6 +535,19 @@ export default defineContentScript({
           && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+      const signature = JSON.stringify([
+        innerWidth, innerHeight, selectionMode, resourcePresentationSignature(), [...resourceSendStates],
+        videos.map(({ video, rect, playback }) => [
+          mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback, videoButtonPositions.get(video),
+        ]),
+      ])
+      // 时间进度事件不能不断销毁按钮；只在资源、布局或发送状态变化时重建。
+      if (signature === renderedVideoSignature) return
+      renderedVideoSignature = signature
+      renderedViewportWidth = innerWidth
+      renderedViewportHeight = innerHeight
+      videoHoverInteractions.clear()
+      layer.replaceChildren()
       // 每个播放器独立匹配自己的 currentSrc 或 SourceBuffer 响应，避免串到广告或其他视频。
       videos.forEach(({ video, rect, playback }) => {
         if (!playback) return
@@ -739,8 +765,9 @@ export default defineContentScript({
         group.addEventListener('focusout', dismissHover)
         group.append(hover)
         layer.append(group)
+        positionHover()
       })
-      if (!visible) {
+      if (!visible && !selectionMode) {
         if (pinned) setPinned(false)
         setOpen(false)
         panelPosition = null
@@ -756,6 +783,15 @@ export default defineContentScript({
       const entries = selectionMode && !activePlayback
         ? compactResources(selectionResources, 40).slice(0, 20)
         : visiblePlaybackResources([...resources.values()], activePlayback, 8)
+      const signature = JSON.stringify([selectionMode, selectionResourceIds?.size, entries.map(resource => [
+        resource.id, resource.url, resource.title, resource.filename, resource.kind,
+        resource.size, resource.estimatedSize, resource.width, resource.height, resource.bandwidth,
+        resource.quality, resource.duration, resource.isLive, resource.variants,
+        preferredVariants.get(resourceFingerprint(resource)),
+      ]), [...resourceSendStates]])
+      // 播放进度和重复网络观察不能不断替换用户正在点击的按钮及清晰度控件。
+      if (signature === renderedListSignature) { updateVideoButtons(); return }
+      renderedListSignature = signature
       list.replaceChildren()
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       if (selectionMode && selectionResourceIds?.size === 0 && result) {
@@ -782,7 +818,11 @@ export default defineContentScript({
         const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), streamMode, quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
         const resourceLocation = safeResourceLocation(resource.url)
         const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resourceLocation; resourceUrl.textContent = resourceLocation
-        let selected = resource
+        const preference = preferredVariants.get(resourceFingerprint(resource))
+        const selectedIndex = preference
+          ? resource.variants?.findIndex(variant => (variant.height || 0) === preference.height
+            && (variant.bandwidth || 0) === preference.bandwidth) ?? -1 : -1
+        let selected = selectedIndex >= 0 ? selectMediaVariant(resource, resource.variants![selectedIndex]) : resource
         const actions = document.createElement('div'); actions.className = 'item-actions'
         const button = document.createElement('button'); button.className = 'download'; button.textContent = '下载'
         button.addEventListener('click', () => sendResource(selected, button))
@@ -801,9 +841,12 @@ export default defineContentScript({
             option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '线路'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' · ')
             select.append(option)
           })
+          select.value = selectedIndex >= 0 ? String(selectedIndex) : 'auto'
           select.addEventListener('change', () => {
             const variant = resource.variants?.[Number(select.value)]
             selected = variant ? selectMediaVariant(resource, variant) : resource
+            if (variant) preferredVariants.set(resourceFingerprint(resource), { height: variant.height || 0, bandwidth: variant.bandwidth || 0 })
+            else preferredVariants.delete(resourceFingerprint(resource))
             applySendState(selected, button, '下载')
           })
           meta.append(name, kind, resourceUrl, select)
@@ -1118,6 +1161,20 @@ export default defineContentScript({
     })
     new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
     const handleRuntimeMessage = (message: any) => {
+      if (message?.type === 'download-error') {
+        selectionMode = true
+        selectionResourceIds = null
+        setOpen(true)
+        render()
+        const result = ui.shadow.querySelector<HTMLElement>('.result')
+        if (result) {
+          result.hidden = false
+          result.classList.add('error')
+          result.dataset.source = 'download'
+          result.textContent = String(message.error || '下载请求失败，请重试')
+        }
+        return
+      }
       if (message?.type === 'captured-resource' && message.resource?.url) {
         const pageTitle = pageMediaTitle()
         const resource = {

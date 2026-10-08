@@ -719,7 +719,12 @@ def main() -> int:
     parser.add_argument("--driver", type=Path)
     parser.add_argument("--go", default=shutil.which("go") or "go")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--real-runtime", type=Path, help="Use the installed Host/Core and real desktop confirmation")
     args = parser.parse_args()
+    if args.real_runtime:
+        result = run_real(args)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result['passed'] else 1
     result = run(
         args.extension.resolve(),
         args.browser_binary.resolve(),
@@ -731,6 +736,145 @@ def main() -> int:
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print("Production extension takeover smoke passed.")
     return 0
+
+
+def run_real(args) -> dict[str, Any]:
+    from smoke_v7_portable_app import Pipe, wait
+    from smoke_v7_browser_download_confirmation import click_download_confirmation, presenter_window
+    import traceback
+    import psutil
+    runtime = args.real_runtime.resolve()
+    result = {'passed': False, 'real_native_host': True, 'checks': [], 'runtime': str(runtime)}
+    result['components']={name:hashlib.sha256((runtime/'app/resources'/name).read_bytes()).hexdigest() for name in ['HLSDownloaderEngine.exe','HLSDownloaderNativeHost.exe','HLSDownloaderPresenter.exe']}
+    result['background_sha256']=hashlib.sha256((args.extension/'background.js').read_bytes()).hexdigest()
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    created = set()
+    driver = None
+    server = None
+    def core(message):
+        p = Pipe()
+        try: return p.request(message)
+        finally: p.close()
+    def tasks(): return core({'type':'snapshot','request_id':1})['tasks']
+    initial = {t['task_id'] for t in tasks()}
+    settings = core({'type':'load_settings','request_id':2})
+    def record(name, actual=True):
+        result['checks'].append({'name':name,'actual':actual})
+        args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
+        print(json.dumps({'check':name}),flush=True)
+    temp_root = Path(__file__).resolve().parents[1]/'.tool-cache/test-tmp'
+    with tempfile.TemporaryDirectory(prefix='real-takeover-',dir=temp_root) as temporary:
+        stage = Path(temporary)
+        try:
+            downloads=stage/'downloads'; downloads.mkdir()
+            class RealDownloadHandler(_DownloadHandler):
+                fallback_requests=0
+                def do_GET(self):
+                    if self.path.split('?',1)[0]=='/fallback.bin':
+                        RealDownloadHandler.fallback_requests+=1
+                        result.setdefault('fallback_requests',[]).append({'number':RealDownloadHandler.fallback_requests,'headers':dict(self.headers)})
+                        # 浏览器保留 Fetch Metadata；Core 的分段及重试请求不带这些头。
+                        # 按调用方制造错误，不能把后续 Core 分段误当浏览器续传并阻塞。
+                        if not self.headers.get('Sec-Fetch-Mode'):
+                            self.send_error(403);return
+                    super().do_GET()
+            server=ThreadingHTTPServer(('127.0.0.1',0),RealDownloadHandler)
+            threading.Thread(target=server.serve_forever,daemon=True).start()
+            driver=_create_driver(args.browser,args.browser_binary.resolve(),args.extension.resolve(),stage/'profile',downloads,args.driver.resolve())
+            driver.set_script_timeout(25)
+            page_url=f'http://127.0.0.1:{server.server_port}/page'
+            driver.get(page_url); page=driver.current_window_handle
+            driver.switch_to.new_window('tab'); inspector=driver.current_window_handle
+            driver.get(f'chrome-extension://{EXTENSION_ID}/popup.html')
+            def message(value):
+                driver.switch_to.window(inspector)
+                return _extension_call(driver,'chrome.runtime.sendMessage(arguments[0]).then(done,e=>done({ok:false,error:String(e)}))',value)
+            assert message({'type':'ping'}).get('ok'), 'Real Host unavailable'
+            def enabled(value):
+                r=message({'type':'set-takeover-settings','enabled':value,'minimumBytes':1024*1024})
+                assert r.get('ok'), r
+            enabled(False)
+            _click_download(driver,page,'disabled')
+            record('takeover-disabled-browser-complete-sha256',_assert_browser_completed(driver,inspector,'disabled.bin'))
+            assert initial=={t['task_id'] for t in tasks()}
+            enabled(True)
+            _extension_call(driver,"chrome.storage.local.set({excludedHosts:['127.0.0.1']}).then(()=>done(true))")
+            _click_download(driver,page,'excluded')
+            record('site-excluded-browser-complete-sha256',_assert_browser_completed(driver,inspector,'excluded.bin'))
+            assert initial=={t['task_id'] for t in tasks()}
+            _extension_call(driver,"chrome.storage.local.set({excludedHosts:[]}).then(()=>done(true))")
+            before={t['task_id'] for t in tasks()}
+            _click_download(driver,page,'accept')
+            wait(lambda:presenter_window(runtime=runtime),'Takeover confirmation missing',20)
+            paused=_item_for(driver,inspector,'accept.bin')
+            assert paused and paused['paused'], paused
+            assert before=={t['task_id'] for t in tasks()}, 'Task began before confirmation'
+            record('real-takeover-pauses-before-desktop-confirmation',paused)
+            click_download_confirmation()
+            def completed():
+                found=[t for t in tasks() if t['task_id'] not in before and 'accept.bin' in t['url']]
+                created.update(t['task_id'] for t in found)
+                if found and found[-1]['status']=='failed': raise AssertionError(found[-1])
+                return found[-1] if found and found[-1]['status']=='completed' else None
+            task=wait(completed,'Real takeover task did not complete',60)
+            expected=hashlib.sha256(FILE_CHUNK*(FILE_SIZE//len(FILE_CHUNK))).hexdigest()
+            path=Path(task['output_path'])
+            assert path.stat().st_size==FILE_SIZE and hashlib.sha256(path.read_bytes()).hexdigest()==expected
+            wait(lambda:_item_for(driver,inspector,'accept.bin') is None,'Browser copy remained after accepted takeover',20)
+            assert not list(downloads.glob('accept*')), 'Duplicate browser output'
+            record('real-takeover-accepted-single-complete-file-sha256',expected)
+            _click_download(driver,page,'reject')
+            wait(lambda:presenter_window(runtime=runtime),'Reject confirmation missing',20)
+            click_download_confirmation(accept=False)
+            record('real-desktop-rejection-browser-resumes-sha256',_assert_browser_completed(driver,inspector,'reject.bin'))
+            assert len(created)==len([t for t in tasks() if t['task_id'] not in initial]), 'Rejected takeover created another task'
+            _click_download(driver,page,'fallback')
+            wait(lambda:presenter_window(runtime=runtime),'Fallback confirmation missing',20)
+            click_download_confirmation()
+            def failed():
+                found=[t for t in tasks() if t['task_id'] not in initial and 'fallback.bin' in t['url']]
+                created.update(t['task_id'] for t in found)
+                return found[-1] if found and found[-1]['status']=='failed' else None
+            failure=wait(failed,'Accepted desktop HTTP failure was not reported',60)
+            assert failure.get('error_message'),failure
+            record('real-accepted-desktop-failure-browser-fallback-sha256',_assert_browser_completed(driver,inspector,'fallback.bin'))
+            _click_download(driver,page,'disconnect')
+            wait(lambda:presenter_window(runtime=runtime),'Disconnect confirmation missing',20)
+            owned=[]
+            for process in psutil.process_iter(['name','exe']):
+                if process.info['name']!='HLSDownloaderNativeHost.exe' or not process.info['exe']:continue
+                if Path(process.info['exe']).resolve()!=runtime/'app/resources/HLSDownloaderNativeHost.exe':continue
+                with contextlib.suppress(psutil.NoSuchProcess,psutil.AccessDenied):
+                    if any(parent.pid==driver.service.process.pid for parent in process.parents()):owned.append(process)
+            assert owned,'Could not identify this isolated browser Native Host'
+            for process in owned:process.terminate();process.wait(5)
+            click_download_confirmation(accept=False)
+            record('actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256',_assert_browser_completed(driver,inspector,'disconnect.bin'))
+            assert message({'type':'ping'}).get('ok'),'Native Host did not reconnect'
+            result['passed']=True
+        except Exception as error:
+            result['error']=str(error);result['traceback']=traceback.format_exc()
+            args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
+        finally:
+            if driver: driver.quit()
+            try:
+                if server:
+                    marker=f'http://127.0.0.1:{server.server_port}/'
+                    created.update(t['task_id'] for t in tasks() if t['url'].startswith(marker))
+                    for encoded in core({'type':'load_handoffs','request_id':3})['items']:
+                        handoff=json.loads(encoded)
+                        if handoff.get('status')=='pending' and handoff.get('offer',{}).get('url','').startswith(marker):
+                            core({'type':'command','request_id':4,'command':{'kind':'reject_handoff','handoff_id':handoff['id'],'suppress_site_kind':False}})
+                for task_id in created:
+                    core({'type':'command','request_id':5,'command':{'kind':'task_action','task_id':task_id,'action':'delete_files'}})
+                core({'type':'store_settings','request_id':6,'values':{'browser_takeover_enabled':settings['takeover_enabled'],'browser_takeover_minimum_bytes':settings['takeover_minimum_bytes']}})
+                result['user_tasks_preserved']=initial<={t['task_id'] for t in tasks()}
+            except Exception as error:
+                result['cleanup_error']=str(error)
+                result['passed']=False
+            if server: server.shutdown();server.server_close()
+            args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
+    return result
 
 
 if __name__ == "__main__":

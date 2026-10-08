@@ -8,6 +8,18 @@ import kotlin.test.assertTrue
 class SelectionTest {
     private val tasks = listOf("a", "b", "c", "d", "e")
 
+    @Test fun startButtonResumesPausedRetriesFailedAndPreservesCompletedDownloads() {
+        val snapshots = listOf(
+            TaskDto(id = "queued", filename = "queued.bin", status = "queued", availableActions = listOf("start", "delete")),
+            TaskDto(id = "paused", filename = "paused.bin", status = "paused", availableActions = listOf("resume", "cancel", "delete")),
+            TaskDto(id = "failed", filename = "failed.bin", status = "failed", availableActions = listOf("retry", "delete")),
+            TaskDto(id = "finished", filename = "finished.bin", status = "completed", availableActions = listOf("open", "retry", "delete")),
+            TaskDto(id = "active", filename = "active.bin", status = "downloading", availableActions = listOf("pause", "cancel", "delete")),
+        )
+        assertEquals(listOf("queued" to "start", "paused" to "resume", "failed" to "retry"),
+            snapshots.mapNotNull { task -> taskStartAction(task)?.let { task.id to it } })
+    }
+
     @Test fun plainClickReplacesSelection() {
         assertEquals(setOf("c"), selectionAfterClick(tasks, setOf("a", "b"), "b", "c", shift = false, toggle = false))
     }
