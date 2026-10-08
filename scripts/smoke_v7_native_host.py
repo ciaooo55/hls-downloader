@@ -96,13 +96,10 @@ def responses(executable: Path, environment: dict[str, str]) -> tuple[list[dict[
 
 def stop_isolated_engine(executable: Path) -> None:
     command = (
-        "Get-CimInstance Win32_Process -Filter \"Name='HLSDownloaderEngine.exe'\" | "
-        "Where-Object { $_.ExecutablePath -eq $env:HLS_V7_SMOKE_ENGINE } | "
-        "ForEach-Object { Stop-Process -Id $_.ProcessId }; "
-        "Start-Sleep -Milliseconds 150; "
-        "$remaining = Get-CimInstance Win32_Process -Filter \"Name='HLSDownloaderEngine.exe'\" | "
-        "Where-Object { $_.ExecutablePath -eq $env:HLS_V7_SMOKE_ENGINE }; "
-        "if ($remaining) { exit 1 }"
+        "$ErrorActionPreference = 'Stop'; "
+        "Get-Process -Name HLSDownloaderEngine -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Path -eq $env:HLS_V7_SMOKE_ENGINE } | "
+        "ForEach-Object { Stop-Process -InputObject $_ -PassThru | Wait-Process -Timeout 5 }"
     )
     environment = os.environ.copy()
     environment["HLS_V7_SMOKE_ENGINE"] = str(executable)
