@@ -1733,10 +1733,8 @@ export default defineBackground(() => {
       // A click on our popup/hover action is already an explicit confirmation.
       // Create the task directly; automatic browser takeover continues to use
       // the separate desktop confirmation window.
-      const explicitSelection = resource.owner === 'selection'
-        && Array.isArray(resource.evidence)
-        && resource.evidence.includes('text_selection')
-      void downloadNow(resource, undefined, { allowUnverified: explicitSelection })
+      // 插件加载前已播放或命中缓存的媒体可能没有响应链；用户主动点击仍应交给 Core。
+      void downloadNow(resource, undefined, { allowUnverified: true })
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: String(error) }))
       return true

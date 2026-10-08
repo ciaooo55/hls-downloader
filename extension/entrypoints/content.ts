@@ -177,7 +177,7 @@ export default defineContentScript({
     await activation
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
-    const resourceSendStates = new Map<string, { label: string, disabled: boolean }>()
+    const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string }>()
     let activePlayback: PlaybackContext | null = null
     let activeVideo: HTMLVideoElement | null = null
     let selectionMode = false
@@ -402,11 +402,26 @@ export default defineContentScript({
       else button.textContent = state?.label || fallbackLabel
       if (state?.disabled) button.setAttribute('disabled', '')
       else button.removeAttribute('disabled')
+      if (state?.error) button.title = state.error
+      else if (button.dataset.sendError) button.removeAttribute('title')
+      button.dataset.sendError = state?.error || ''
     }
 
-    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download') => {
-      resourceSendStates.set(overlaySendKey(resourceFingerprint(resource), action), { label, disabled })
+    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download', error = '') => {
+      resourceSendStates.set(overlaySendKey(resourceFingerprint(resource), action), { label, disabled, error })
       applySendState(resource, button, fallbackLabel, action)
+      // 播放器悬浮卡片与折叠列表是两个面板；错误必须显示在用户正在操作的卡片内。
+      const hover = button.closest('.video-action-group')?.querySelector<HTMLElement>('.video-hover')
+      if (hover) {
+        let detail = hover.querySelector<HTMLElement>('.send-error')
+        if (error && !detail) {
+          detail = document.createElement('div')
+          detail.className = 'result error send-error'
+          detail.setAttribute('role', 'alert')
+          hover.append(detail)
+        }
+        if (detail) { detail.textContent = error; detail.hidden = !error }
+      }
     }
 
     const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
@@ -420,8 +435,9 @@ export default defineContentScript({
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
         setTimeout(() => resourceSendStates.delete(key), 2_500)
       }).catch(reason => {
-        setSendState(resource, button, '重试', false)
-        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '发送失败' }
+        const error = reason?.message || String(reason) || '发送失败'
+        setSendState(resource, button, '重试', false, '下载', 'download', error)
+        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = error }
       })
     }
 
@@ -667,6 +683,14 @@ export default defineContentScript({
           applySendState(choice, tvbox, 'TVBox', 'tvbox')
           actions.append(download, cast, tvbox)
           head.append(hoverTitle, state); hover.append(head, facts, source, actions)
+          const error = resourceSendStates.get(resourceFingerprint(choice))?.error
+          if (error) {
+            const detail = document.createElement('div')
+            detail.className = 'result error send-error'
+            detail.textContent = error
+            detail.setAttribute('role', 'alert')
+            hover.append(detail)
+          }
         } else {
           const details = overlayResourceDetails(choices[0])
           const head = document.createElement('div'); head.className = 'hover-head'

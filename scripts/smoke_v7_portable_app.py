@@ -168,6 +168,58 @@ def run(args):
         code = duplicate.wait(timeout=30)
         check("workbench-single-instance", code == 0, {"second_launcher_exit": code})
 
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        user32.FindWindowW.restype = wintypes.HWND
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        hwnd = user32.FindWindowW(None, "HLS Downloader")
+        if not hwnd or not user32.PostMessageW(hwnd, 0x0010, 0, 0):  # WM_CLOSE，走真实关窗隐藏路径。
+            raise ctypes.WinError(ctypes.get_last_error())
+        wait(lambda: not ui("window").get("showing"), "Workbench did not hide to tray", 10)
+        host = subprocess.Popen([str(resources / "HLSDownloaderNativeHost.exe")], cwd=root, env=environment,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        activated = native_message(host, {"op": "activate"})
+        reopened = wait(ready, "Browser activation did not restore the hidden workbench", 15)
+        check("native-host-restores-hidden-workbench", activated.get("ok") is True, reopened)
+        host.stdin.close()
+        host.wait(timeout=5)
+        host = None
+        hwnd = user32.FindWindowW(None, "HLS Downloader")
+        if not hwnd or not user32.PostMessageW(hwnd, 0x0010, 0, 0):
+            raise ctypes.WinError(ctypes.get_last_error())
+        wait(lambda: not ui("window").get("showing"), "Workbench did not hide again", 10)
+        pipe.close()
+        pipe = None
+        subprocess.run([str(resources / "HLSDownloaderEngine.exe"), "--shutdown"],
+                       cwd=root, env=environment, check=True, timeout=15)
+        wait(lambda: not any(p["name"] == "HLSDownloaderEngine.exe" for p in runtime_processes(root)),
+             "Core did not stop", 15)
+        started = time.monotonic()
+        duplicate = subprocess.Popen([str(root / "HLSDownloader.exe")], cwd=root, env=environment)
+        restored = wait(lambda: (window if (window := ui("window")).get("showing") else None),
+                        "Repeat launch did not restore the hidden workbench", 15)
+        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+        code = duplicate.wait(timeout=15)
+
+        def recovered_core():
+            connection = None
+            try:
+                connection = Pipe()
+                return connection.request({"type": "hello", "protocol": "hls-downloader-v7-core", "version": 1})
+            except OSError:
+                return None
+            finally:
+                if connection:
+                    connection.close()
+
+        core_hello = wait(recovered_core, "Restored workbench did not restart Core", 30)
+        connected = wait(ready, "Restored workbench did not reconnect to Core", 15)
+        check("hidden-workbench-core-exit-recovery", code == 0 and elapsed_ms < 10_000,
+              {"window_restore_ms": elapsed_ms, "second_launcher_exit": code,
+               "core": core_hello, "restored_window": restored, **connected})
+        pipe = Pipe()
+        check("recovery-preserves-profile", pipe.request({"type": "snapshot", "request_id": 30}).get("tasks") == [], {})
+
         server = Server(("127.0.0.1", 0), RangeHandler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         url = f"http://127.0.0.1:{server.server_port}/portable-validation.bin"

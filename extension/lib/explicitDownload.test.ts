@@ -16,7 +16,6 @@ describe('explicit extension download flow', () => {
     expect(popup).not.toContain("type: 'handoff-status'")
     expect(popup).not.toContain('window.setInterval')
     expect(background).toContain('void downloadNow(resource, undefined, { allowUnverified: true })')
-    expect(background).toContain("resource.evidence.includes('text_selection')")
     expect(background).toContain('activeDirectDownloads.get(key)')
     expect(background).toContain('}, 30_000)')
   })

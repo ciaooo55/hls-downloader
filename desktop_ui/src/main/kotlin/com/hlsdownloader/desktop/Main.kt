@@ -637,6 +637,7 @@ fun main() {
         }
         DisposableEffect(window) {
             WorkbenchWindow.awtWindow = window
+            instanceLock.listenForWake()
             onDispose {
                 WorkbenchWindow.awtWindow = null
             }

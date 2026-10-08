@@ -8,4 +8,16 @@ internal object WorkbenchWindow {
     fun hideToTray() {
         awtWindow?.isVisible = false
     }
+
+    fun show() {
+        java.awt.EventQueue.invokeLater {
+            val window = awtWindow ?: return@invokeLater
+            window.isVisible = true
+            (window as? java.awt.Frame)?.let {
+                it.extendedState = it.extendedState and java.awt.Frame.ICONIFIED.inv()
+            }
+            window.toFront()
+            window.requestFocus()
+        }
+    }
 }
