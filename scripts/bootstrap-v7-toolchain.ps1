@@ -21,6 +21,9 @@ $jdkSha256 = 'f9d6e191ab098c0d416e7d588a24420a8621cd2f4720dab2459b8b7b2d2d8b4e'
 function Test-ExpectedJdk([string]$Root) {
     $java = Join-Path $Root 'bin\java.exe'
     if (-not (Test-Path -LiteralPath $java)) { return $false }
+    # Java writes its version to stderr, which PS 5.1 wraps as an error record.
+    # This function-local preference leaves download/file errors terminating.
+    $ErrorActionPreference = 'Continue'
     $versionOutput = (& $java -version 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) { return $false }
     return $versionOutput -match ('version\s+"' + [regex]::Escape($jdkRuntimeVersion) + '"')
