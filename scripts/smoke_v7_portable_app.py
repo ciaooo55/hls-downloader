@@ -118,6 +118,23 @@ def run(args):
         if not passed:
             raise AssertionError(f"{name}: {actual}")
 
+    def check_transient_taskbar(title):
+        user = ctypes.windll.user32
+        user.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        user.FindWindowW.restype = wintypes.HWND
+        user.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+
+        def styled_window():
+            hwnd = user.FindWindowW(None, title)
+            if not hwnd or not user.IsWindowVisible(hwnd):
+                return None
+            style = user.GetWindowLongPtrW(hwnd, -20)
+            return {"hwnd": hwnd, "extended_style": hex(style)} if style & 0x80 and not style & 0x40000 else None
+
+        state = wait(styled_window, f"{title} remained a separate taskbar window", 15)
+        check("transient-taskbar-" + title, True, state)
+
     try:
         pings, first, _, _ = responses(resources / "HLSDownloaderNativeHost.exe", environment)
         check("default-native-host-ping", all(p.get("ok") is True for p in pings), {"responses": pings, "first_ms": first})
@@ -238,12 +255,14 @@ def run(args):
 
         action("start")
         wait(lambda: task()["downloaded_bytes"] >= 256*1024, "Download never progressed")
+        check_transient_taskbar("下载进度")
         action("pause")
         paused = wait(lambda: (t if (t := task())["status"] == "paused" and t["active_workers"] == 0 else None), "Pause never settled")
         check("pause-with-checkpoint", paused["downloaded_bytes"] > 0, paused)
         action("resume")
         completed = wait(lambda: (t if (t := task())["status"] in ("completed", "failed") else None), "Resume never completed", 90)
         check("resumed-download-completed", completed["status"] == "completed", completed)
+        check_transient_taskbar("下载完成")
         output = Path(completed["output_path"])
         expected = hashlib.sha256(BLOCK*(PAYLOAD_SIZE//len(BLOCK))).hexdigest()
         actual = hashlib.sha256(output.read_bytes()).hexdigest()
@@ -264,6 +283,7 @@ def run(args):
         check("native-host-offer", offer.get("ok") is True and bool(offer.get("handoff", {}).get("id")), offer)
         presenter = wait(lambda: next((p for p in runtime_processes(root) if p["name"] == "HLSDownloaderPresenter.exe" and visible_window(p["pid"], "确认下载")), None), "Presenter not visible", 30)
         check("presenter-visible", True, presenter)
+        check_transient_taskbar("确认下载")
         rejected = native_message(host, {"op": "reject_handoff", "handoff_id": offer["handoff"]["id"]})
         check("presenter-reject", rejected.get("ok") is True, rejected)
         wait(lambda: not visible_window(presenter["pid"], "确认下载"), "Presenter did not hide", 15)

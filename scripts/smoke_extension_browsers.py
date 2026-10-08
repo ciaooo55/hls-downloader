@@ -287,24 +287,33 @@ def _find_chromium_binary(configured: str | None) -> Path:
     raise RuntimeError("Chrome/Edge binary not found; pass --chrome-binary")
 
 
-def _stop_process_tree(process: subprocess.Popen[object], profile: Path | None = None) -> None:
+def _stop_process_tree(process: subprocess.Popen[object] | None, profile: Path | None = None) -> None:
     if profile is not None:
         import psutil
         # Edge 可重启自身并退出启动进程；只按本次独立 profile 清理，避免留下浏览器和文件锁。
         profile_argument = f"--user-data-dir={profile.resolve()}"
         isolated = []
         for candidate in psutil.process_iter(["cmdline"]):
-            if profile_argument not in (candidate.info["cmdline"] or []): continue
+            arguments = candidate.info["cmdline"] or []
+            matching = profile_argument in arguments
+            # Gecko 初始化失败时 WebDriver 尚未返回；Firefox 重启后的进程仍持有本次 profile。
+            for option in ("-profile", "--profile"):
+                if option in arguments:
+                    index = arguments.index(option) + 1
+                    if index < len(arguments):
+                        matching |= Path(arguments[index]).resolve().is_relative_to(profile.resolve())
+            if not matching: continue
             try:
-                isolated.extend(candidate.children(recursive=True))
+                children = candidate.children(recursive=True)
                 isolated.append(candidate)
+                isolated.extend(children)
             except psutil.NoSuchProcess: pass
         for candidate in isolated:
             try: candidate.kill()
             except psutil.NoSuchProcess: pass
-        _, alive = psutil.wait_procs(isolated, timeout=5)
+        _, alive = psutil.wait_procs(isolated, timeout=15)
         if alive: raise RuntimeError("isolated browser processes did not exit")
-    if process.poll() is not None:
+    if process is None or process.poll() is not None:
         return
     if os.name == "nt":
         subprocess.run(

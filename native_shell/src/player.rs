@@ -11,6 +11,10 @@ use std::sync::Mutex;
 
 pub const PLAYER_WINDOW_TITLE: &str = "HLS Downloader 播放器";
 
+#[cfg(test)]
+// 播放器和 Core 控制测试共享此环境变量，修改和使用必须在同一个锁内。
+pub(crate) static TEST_PLAYER_ENV: Mutex<()> = Mutex::new(());
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct PlayerMetadata {
     pub position_seconds: f64,
@@ -646,6 +650,8 @@ mod tests {
 
     #[test]
     fn null_backend_records_url_embed_and_preview() {
+        let _guard = TEST_PLAYER_ENV.lock().unwrap();
+        let previous = std::env::var_os("HLS_V7_PLAYER_NULL");
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let player = Player::default();
         player.play("http://127.0.0.1:9/media/task-1").unwrap();
@@ -666,10 +672,16 @@ mod tests {
             .unwrap()
             .starts_with('"'));
         assert!(quote_mpv("http://127.0.0.1/a\nrun").is_err());
+        match previous {
+            Some(value) => std::env::set_var("HLS_V7_PLAYER_NULL", value),
+            None => std::env::remove_var("HLS_V7_PLAYER_NULL"),
+        }
     }
 
     #[test]
     fn null_backend_reports_unavailable_metadata_instead_of_fake_progress() {
+        let _guard = TEST_PLAYER_ENV.lock().unwrap();
+        let previous = std::env::var_os("HLS_V7_PLAYER_NULL");
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let metadata = Player::default().metadata();
         assert!(!metadata.position_available);
@@ -677,6 +689,9 @@ mod tests {
         assert_eq!(metadata.duration_seconds, 0.0);
         assert_eq!(metadata.audio_tracks, 0);
         assert_eq!(metadata.subtitle_tracks, 0);
-        std::env::remove_var("HLS_V7_PLAYER_NULL");
+        match previous {
+            Some(value) => std::env::set_var("HLS_V7_PLAYER_NULL", value),
+            None => std::env::remove_var("HLS_V7_PLAYER_NULL"),
+        }
     }
 }

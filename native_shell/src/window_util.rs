@@ -237,7 +237,8 @@ pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
     {
         use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_NOTOPMOST,
+            GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            GWL_EXSTYLE, HWND_NOTOPMOST, SW_HIDE, SW_SHOWNOACTIVATE,
             SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
         };
@@ -254,12 +255,20 @@ pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
             }
             let next = (style & !(WS_EX_APPWINDOW as isize)) | WS_EX_TOOLWINDOW as isize;
             if next != style {
+                // Shell 只会在隐藏后重新显示时移除已有的任务栏按钮。
+                let visible = IsWindowVisible(hwnd) != 0;
+                if visible {
+                    ShowWindow(hwnd, SW_HIDE);
+                }
                 SetLastError(0);
                 let previous = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
                 if !window_long_ptr_call_succeeded(previous, GetLastError()) {
+                    if visible {
+                        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    }
                     return false;
                 }
-                SetWindowPos(
+                let updated = SetWindowPos(
                     hwnd,
                     HWND_NOTOPMOST,
                     0,
@@ -267,7 +276,11 @@ pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
                     0,
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-                ) != 0
+                ) != 0;
+                if visible {
+                    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                }
+                updated
             } else {
                 true
             }

@@ -6955,6 +6955,7 @@ mod tests {
 
     #[test]
     fn player_control_accepts_speed_and_pause_on_null_backend() {
+        let _guard = crate::player::TEST_PLAYER_ENV.lock().unwrap();
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         player_control("pause").unwrap();
         player_control("resume").unwrap();
@@ -6972,6 +6973,7 @@ mod tests {
 
     #[test]
     fn player_session_reports_play_pause_speed_and_stop() {
+        let _guard = crate::player::TEST_PLAYER_ENV.lock().unwrap();
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let dir = std::env::temp_dir().join(format!("hls-player-session-{}", std::process::id()));
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());

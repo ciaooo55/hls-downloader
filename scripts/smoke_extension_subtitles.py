@@ -374,6 +374,7 @@ def run(args):
         finally:
             if driver:
                 with contextlib.suppress(Exception): driver.quit()
+            if firefox: _stop_process_tree(None, root)
             if process: _stop_process_tree(process, root/'profile')
             core.shutdown(); core.server_close(); origin.shutdown(); origin.server_close()
 

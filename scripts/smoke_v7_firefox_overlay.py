@@ -16,6 +16,7 @@ import zipfile
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
+from selenium.common.exceptions import StaleElementReferenceException
 
 from smoke_extension_media import _find_firefox
 from smoke_v7_portable_app import Pipe, wait
@@ -86,15 +87,29 @@ def run(args):
                 driver.get(url)
                 wait(lambda: driver.execute_script("return document.querySelector('video').currentTime>0"),
                      "Fixture video did not play", 30)
-                return wait(lambda: driver.execute_script(
-                    "return document.querySelector('hls-downloader-media-panel')?.shadowRoot"
-                    "?.querySelector('.video-download:not(.identifying)') || null"),
+                wait(lambda: driver.execute_script(
+                    "return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot"
+                    "?.querySelector('.video-download:not(.identifying)'))"),
                     "Playback download button did not appear", 30)
+
+                def click_current_button():
+                    try:
+                        button = driver.execute_script(
+                            "return document.querySelector('hls-downloader-media-panel')?.shadowRoot"
+                            "?.querySelector('.video-download:not(.identifying)') || null")
+                        if button is None:
+                            return False
+                        button.click()
+                        return True
+                    except StaleElementReferenceException:
+                        # 状态更新会重绘卡片，重新取得当前按钮后再执行真实 WebDriver 点击。
+                        return False
+
+                wait(click_current_button, "Playback download button kept being replaced", 10)
 
             good_id = driver.install_addon(str(addon_file("valid.xpi")), temporary=True)
             assert good_id == manifest["browser_specific_settings"]["gecko"]["id"]
-            button = open_player()
-            button.click()
+            open_player()
 
             def download_task():
                 current = pipe.request({"type": "snapshot", "request_id": 2})["tasks"]
@@ -114,16 +129,14 @@ def run(args):
             task_ids.discard(task["task_id"])
             driver.uninstall_addon(good_id)
             driver.install_addon(str(stage / "valid.xpi"), temporary=True)
-            button = open_player()
-            button.click()
+            open_player()
             task = wait(download_task, "Cached playback click was rejected", 45)
             assert task["status"] == "completed", task.get("log_tail")
             assert hashlib.sha256(Path(task["output_path"]).read_bytes()).digest() == hashlib.sha256(media.read_bytes()).digest()
             check("reinstalled-extension-cached-video-download", {"status": task["status"], "bytes": media.stat().st_size})
             driver.uninstall_addon(good_id)
             driver.install_addon(str(addon_file("rejected.xpi", "hls-overlay-rejection-test@local")), temporary=True)
-            button = open_player()
-            button.click()
+            open_player()
             error = wait(lambda: driver.execute_script(
                 "return document.querySelector('hls-downloader-media-panel')?.shadowRoot"
                 "?.querySelector('.video-hover .send-error')?.textContent || ''"),

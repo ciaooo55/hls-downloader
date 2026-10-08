@@ -560,6 +560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .into(),
                                 );
                                 if item.show().is_ok() {
+                                    let _ = hide_window_from_taskbar_by_title(COMPLETE);
                                     let _ = center_window_by_title(COMPLETE);
                                     let _ = activate_window_by_title(COMPLETE);
                                 }
@@ -1328,6 +1329,7 @@ fn update_task_windows(
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
                 if item.show().is_ok() {
+                    let _ = hide_window_from_taskbar_by_title(COMPLETE);
                     let _ = center_window_by_title(COMPLETE);
                     let _ = activate_window_by_title(COMPLETE);
                 }
@@ -1380,7 +1382,9 @@ fn render_progress_hud(
         snapshot.stage.clone().into()
     });
     item.set_progress(task_progress(snapshot));
-    let _ = item.show();
+    if item.show().is_ok() {
+        let _ = hide_window_from_taskbar_by_title(item.get_headline().as_str());
+    }
 }
 
 fn filename_from_url(url: &str) -> String {
