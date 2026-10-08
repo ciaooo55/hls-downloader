@@ -328,7 +328,7 @@ def _download_items(driver, inspector: str) -> list[dict[str, Any]]:
         "chrome.downloads.search({}, items => done(items.map(item => ({"
         "id:item.id,url:item.url,finalUrl:item.finalUrl,state:item.state,paused:item.paused,"
         "bytesReceived:item.bytesReceived,totalBytes:item.totalBytes,filename:item.filename,error:item.error,"
-        "canResume:item.canResume"
+        "canResume:item.canResume,danger:item.danger,mime:item.mime,exists:item.exists"
         "}))));",
     )
 

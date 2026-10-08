@@ -490,6 +490,10 @@ def _exercise_chrome(
         f"--user-data-dir={profile}",
         "--no-first-run",
         "--no-default-browser-check",
+        # Edge 仍可能从 Windows 身份触发首次同步确认页。按 WebDriver 的
+        # 启动方式隔离账户同步，避免该确认页阻塞真实插件页面的渲染。
+        "--enable-automation",
+        "--disable-sync",
         "--disable-background-networking",
         "--disable-features=DisableLoadExtensionCommandLineSwitch",
         f"--disable-extensions-except={extension_dir}",
