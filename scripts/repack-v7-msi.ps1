@@ -23,7 +23,7 @@ try {
     $text = $text.Replace('Title=""', 'Title="Main Features"')
     $text = [regex]::Replace($text, 'Source="[^"]*\\(File|Binary|Icon)\\', 'Source="$1\\')
     $text = [regex]::Replace($text, 'SourceFile="[^"]*\\(File|Binary|Icon)\\', 'SourceFile="$1\\')
-    $text = $text.Replace('<File ', '<File Compressed="yes" ')
+    $text = [regex]::Replace($text, '<File\b(?![^>]*\bCompressed=)', '<File Compressed="yes"')
     [IO.File]::WriteAllText($wxs, $text, (New-Object Text.UTF8Encoding($false)))
     # 修复单个 Core 时复用已验收安装包的其他文件，不再构建整套应用镜像。
     [xml]$model = $text
