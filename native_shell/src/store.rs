@@ -8,6 +8,7 @@ use crate::{CoreEvent, EventEnvelope, TaskSnapshot, TaskSpec};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -289,7 +290,8 @@ impl CoreStore {
     }
 
     fn logged_fallback<T>(key: &str, error: serde_json::Error, fallback: T) -> T {
-        eprintln!("Core setting {key} is unreadable, using fallback: {error}");
+        // Core 可跨启动器退出继续运行，诊断管道关闭不能使持锁线程 panic。
+        let _ = writeln!(std::io::stderr(), "Core setting {key} is unreadable, using fallback: {error}");
         fallback
     }
 
@@ -342,7 +344,7 @@ impl CoreStore {
             Some(value) => Ok(match serde_json::from_str(&value) {
                 Ok(decoded) => decoded,
                 Err(error) => {
-                    eprintln!("Core setting {key} is unreadable, using raw value: {error}");
+                    let _ = writeln!(std::io::stderr(), "Core setting {key} is unreadable, using raw value: {error}");
                     value
                 }
             }),
