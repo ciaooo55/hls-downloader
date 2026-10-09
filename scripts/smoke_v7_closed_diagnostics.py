@@ -33,7 +33,7 @@ def run(args):
                 # 在隔离数据库制造真实设置解码告警，不触及用户数据。
                 with sqlite3.connect(root / 'data/data.db') as db:
                     db.execute('INSERT OR REPLACE INTO settings(key,value_json) VALUES (?,?)',
-                               ('queue_profiles', json.dumps([])))
+                               ('queue_profiles', json.dumps(before['queue_profiles'])))
                     db.execute('INSERT OR REPLACE INTO settings(key,value_json) VALUES (?,?)',
                                ('download_complete_popup_enabled', json.dumps('invalid-bool')))
                 db.close()
