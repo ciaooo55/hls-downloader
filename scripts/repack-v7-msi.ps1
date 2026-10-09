@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$MsiPath,
     [Parameter(Mandatory = $true)][string]$OutMsiPath,
-    [Parameter(Mandatory = $true)][string]$WixRoot
+    [Parameter(Mandatory = $true)][string]$WixRoot,
+    [string]$EngineReplacement = '',
+    [string]$ProvenanceReplacement = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +25,19 @@ try {
     $text = [regex]::Replace($text, 'SourceFile="[^"]*\\(File|Binary|Icon)\\', 'SourceFile="$1\\')
     $text = $text.Replace('<File ', '<File Compressed="yes" ')
     [IO.File]::WriteAllText($wxs, $text, (New-Object Text.UTF8Encoding($false)))
+    # 修复单个 Core 时复用已验收安装包的其他文件，不再构建整套应用镜像。
+    [xml]$model = $text
+    foreach ($replacement in @(
+        @('HLSDownloaderEngine.exe', $EngineReplacement),
+        @('BUILD-PROVENANCE.json', $ProvenanceReplacement)
+    )) {
+        if ([string]::IsNullOrWhiteSpace($replacement[1])) { continue }
+        $files = $model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']")
+        if ($files.Count -ne 1) { throw "Installer replacement file is not unique: $($replacement[0])" }
+        $destination = [IO.Path]::GetFullPath((Join-Path $work $files[0].GetAttribute('Source')))
+        if (-not $destination.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Replacement target escaped the extracted installer.' }
+        Copy-Item -LiteralPath (Resolve-Path -LiteralPath $replacement[1]).Path -Destination $destination -Force
+    }
     $wixobj = Join-Path $work 'HLSDownloader.wixobj'
     & (Join-Path $WixRoot 'candle.exe') $wxs -o $wixobj -nologo -ext (Join-Path $WixRoot 'WixUtilExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX candle failed: $LASTEXITCODE" }

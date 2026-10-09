@@ -113,6 +113,21 @@ def run(args):
                 task=download('/login',filename='opaque-download',mime_type='video/mp4')
                 assert task['status']=='failed' and 'HTML' in task.get('error_message',''), task
                 record('browser-media-mime-survives-opaque-filename')
+                handoff_id='mime-no-extension-'+uuid.uuid4().hex
+                response=send(ipc,{'type':'command','request_id':2,'command':{'kind':'offer_resource','offer':{
+                    'url':f'http://127.0.0.1:{server.server_port}/login?handoff={handoff_id}','resource_kind':'file',
+                    'filename':'opaque-offer','mime_type':'video/mp4','handoff_id':handoff_id,
+                    'source_page_url':f'http://127.0.0.1:{server.server_port}/page'}}})
+                assert response.get('type')!='error',response
+                response=send(ipc,{'type':'command','request_id':3,'command':{'kind':'accept_handoff',
+                    'handoff_id':handoff_id,'filename':'opaque-offer','download_dir':str(root/'downloads'),'trusted_ui':True}})
+                assert response.get('type')!='error',response
+                task=next((item['event']['snapshot'] for item in response['events'] if item['event']['kind']=='task_created'),None)
+                assert task is not None,response
+                task=wait_task(ipc,task['task_id'],lambda t:t['status'] in ('completed','failed'),60)
+                assert task['status']=='failed' and 'HTML' in task.get('error_message',''),task
+                assert not (root/'downloads/opaque-offer').exists()
+                record('offer-confirmation-preserves-media-mime-and-rejects-html-without-extension')
                 task=download('/login',filename='saved-page.html')
                 assert task['status']=='completed' and Path(task['output_path']).read_bytes().startswith(b'<!doctype html')
                 record('intentional-html-file-download-still-works')
