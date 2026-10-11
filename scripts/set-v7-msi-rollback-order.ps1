@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$MsiPath,
@@ -184,26 +184,34 @@ try {
     # Candidate rebuilds keep the product version but receive a new ProductCode.
     # Include VersionMax so a newer candidate replaces the earlier one cleanly.
     $sameVersionAttributes = [int]$upgradableAttributes -bor 0x200
-    $view = $database.GetType().InvokeMember(
-        'OpenView', 'InvokeMethod', $null, $database,
-        @("SELECT * FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'")
-    )
-    $upgradeRecord = $null
-    try {
-        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
-        $upgradeRecord = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
-        if ($null -eq $upgradeRecord) {
-            throw 'MSI is missing the JP_UPGRADABLE_FOUND upgrade row.'
+    $downgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_DOWNGRADABLE_FOUND'"
+    if ($null -eq $downgradableAttributes) { throw 'MSI is missing the downgrade detection rule.' }
+    # 同版本只归入升级范围；降级检测必须严格大于当前版本。
+    foreach ($rule in @(
+        @('JP_UPGRADABLE_FOUND', $sameVersionAttributes),
+        @('JP_DOWNGRADABLE_FOUND', ([int]$downgradableAttributes -band (-bnot 0x100)))
+    )) {
+        $view = $database.GetType().InvokeMember(
+            'OpenView', 'InvokeMethod', $null, $database,
+            @("SELECT * FROM ``Upgrade`` WHERE ``ActionProperty``='$($rule[0])'")
+        )
+        $upgradeRecord = $null
+        try {
+            $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+            $upgradeRecord = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+            if ($null -eq $upgradeRecord) {
+                throw "MSI is missing the $($rule[0]) upgrade row."
+            }
+            $view.GetType().InvokeMember('Modify', 'InvokeMethod', $null, $view, @([int]6, $upgradeRecord)) | Out-Null
+            $upgradeRecord.GetType().InvokeMember('IntegerData', 'SetProperty', $null, $upgradeRecord, @(5, $rule[1])) | Out-Null
+            $view.GetType().InvokeMember('Modify', 'InvokeMethod', $null, $view, @([int]1, $upgradeRecord)) | Out-Null
+        } finally {
+            if ($null -ne $upgradeRecord) {
+                [Runtime.InteropServices.Marshal]::FinalReleaseComObject($upgradeRecord) | Out-Null
+            }
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
+            $view = $null
         }
-        $view.GetType().InvokeMember('Modify', 'InvokeMethod', $null, $view, @([int]6, $upgradeRecord)) | Out-Null
-        $upgradeRecord.GetType().InvokeMember('IntegerData', 'SetProperty', $null, $upgradeRecord, @(5, $sameVersionAttributes)) | Out-Null
-        $view.GetType().InvokeMember('Modify', 'InvokeMethod', $null, $view, @([int]1, $upgradeRecord)) | Out-Null
-    } finally {
-        if ($null -ne $upgradeRecord) {
-            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($upgradeRecord) | Out-Null
-        }
-        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
-        $view = $null
     }
 
     # jpackage restores the saved directory for RemoveFoldersEx only. Standard
@@ -219,8 +227,7 @@ try {
     Invoke-MsiNonQuery "DELETE FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
     Invoke-MsiNonQuery "INSERT INTO ``AppSearch`` (``Property``,``Signature_``) VALUES ('INSTALLDIR','$installDirSearch')"
 
-    # Remove the old jpackage product before installing new files; its uninstall
-    # recursively removes INSTALLDIR even when component GUIDs are stable.
+    # 先移除旧产品再写入新文件；旧版 jpackage 卸载可能递归移除 INSTALLDIR。
     $target = [int]$initialize + 10
     if ($target -le [int]$initialize -or $target -ge [int]$installFiles) {
         throw 'MSI does not provide a major-upgrade slot before InstallFiles.'
@@ -228,6 +235,8 @@ try {
     if ([int]$current -ne $target) {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
     }
+    # 只移除 MSI 管理的文件；递归清理安装目录会删除便携模式的任务库和下载成品。
+    Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='WixRemoveFoldersEx'"
     # 标准用户能安装 per-user MSI，但旧产品的注册回滚写入受保护的 Installer 键。
     # 必须在移除旧产品前拒绝未提升权限的升级，不能只依赖 SummaryInfo 标志。
     $privilegeAction = 'V7RequireUpgradePrivileges'
@@ -311,8 +320,23 @@ try {
     }
     if (([int]$verifiedWordCount -band 8) -ne 0) { throw 'MSI must request installation privileges for protected rollback registration.' }
     $verified = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'"
+    if ($null -ne (Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='WixRemoveFoldersEx'")) {
+        throw 'MSI must preserve files not owned by the installer.'
+    }
     $verifiedProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
     $verifiedUpgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
+    $verifiedDowngradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_DOWNGRADABLE_FOUND'"
+    if (([int]$verifiedDowngradableAttributes -band 0x100) -ne 0) { throw 'MSI upgrade and downgrade ranges must not overlap.' }
+    foreach ($table in @('InstallExecuteSequence', 'InstallUISequence', 'CustomAction')) {
+        if ($null -ne (Invoke-MsiStringQuery "SELECT ``Action`` FROM ``$table`` WHERE ``Action``='JpFindRelatedProducts'")) {
+            throw 'MSI must use standard related-product detection without the jpackage override.'
+        }
+    }
+    foreach ($table in @('InstallExecuteSequence', 'InstallUISequence')) {
+        if ($null -eq (Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``$table`` WHERE ``Action``='FindRelatedProducts'")) {
+            throw 'MSI is missing standard related-product detection.'
+        }
+    }
     $verifiedPrepareSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
     $verifiedPrepareTarget = Invoke-MsiStringQuery "SELECT ``Target`` FROM ``CustomAction`` WHERE ``Action``='V7PrepareNativeHostManifests'"
@@ -399,6 +423,8 @@ try {
     native_host_prepare_sequence = [int]$verifiedPrepareSequence
     native_host_registry_count = $nativeHostRegistry.Count
     same_version_upgrade_attributes = [int]$verifiedUpgradableAttributes
+    downgrade_detection_attributes = [int]$verifiedDowngradableAttributes
+    related_product_detection = 'Windows Installer FindRelatedProducts'
     sha256_before = $beforeHash
     sha256_after = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash
 } | ConvertTo-Json

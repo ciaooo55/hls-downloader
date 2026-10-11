@@ -229,6 +229,7 @@ impl NativeHostSession {
             "ping"
                 | "activate"
                 | "offer"
+                | "offer_local_file"
                 | "download"
                 | "handoff_status"
                 | "wait_handoff"
@@ -278,7 +279,8 @@ impl NativeHostSession {
                 }
                 Ok(json!({"ok": true, "activated": true}))
             }
-            "offer" => self.offer(message),
+            "offer" => self.offer(message, false),
+            "offer_local_file" => self.offer(message, true),
             "download" => self.download(message),
             "handoff_status" | "wait_handoff" => self.handoff_status(message),
             "accept_handoff" => self.accept_handoff(message),
@@ -311,9 +313,9 @@ impl NativeHostSession {
         }))
     }
 
-    fn offer(&mut self, message: &Value) -> Result<Value, String> {
+    fn offer(&mut self, message: &Value, allow_local_file: bool) -> Result<Value, String> {
         let payload = resource_payload(message)?;
-        let mut offer = parse_offer(payload)?;
+        let mut offer = parse_offer(payload, allow_local_file)?;
         if matches!(&self.core, HostCore::Remote(_)) {
             let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
             crate::core_spawn::ensure_presenter(&root)?;
@@ -395,7 +397,7 @@ impl NativeHostSession {
 
     fn download(&mut self, message: &Value) -> Result<Value, String> {
         let payload = resource_payload(message)?;
-        let offer = parse_offer(payload)?;
+        let offer = parse_offer(payload, false)?;
         let owned_credential_ref = self.persist_browser_context(payload)?;
         let filename = filename(payload, &offer.url);
         let snapshot = self.create_download_task(
@@ -907,21 +909,53 @@ fn resource_payload(message: &Value) -> Result<&Map<String, Value>, String> {
         .ok_or_else(|| "Native Messaging 缺少 resource".to_string())
 }
 
-fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
+fn parse_offer(
+    payload: &Map<String, Value>,
+    allow_local_file: bool,
+) -> Result<ResourceOffer, String> {
     let url = field(payload, "url");
     if url.is_empty() {
         return Err("资源 URL 为空".into());
     }
-    if !browser_resource_url_allowed(&url) {
-        return Err("资源 URL 不受支持".into());
-    }
-    let resource_kind = parse_resource_kind(
+    let local_source_path = if allow_local_file {
+        if !matches_local_payload_url(&url) {
+            return Err("本地文件接管只接受 blob: 或 data: 资源".into());
+        }
+        let filename = field(payload, "filename");
+        if filename.is_empty() {
+            return Err("本地文件接管缺少已下载文件名".into());
+        }
+        let size = payload
+            .get("size")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "本地文件接管缺少有效文件大小".to_string())?;
+        let source_path = field(payload, "local_source_path");
+        let canonical = crate::download_worker::validate_local_source_path(
+            &url,
+            &source_path,
+            Some(size),
+        )?;
+        Some(canonical.to_string_lossy().into_owned())
+    } else {
+        if payload.get("local_source_path").is_some() {
+            return Err("本地文件路径只允许用于本地文件接管".into());
+        }
+        if !browser_resource_url_allowed(&url) {
+            return Err("资源 URL 不受支持".into());
+        }
+        None
+    };
+    let resource_kind = if allow_local_file {
+        ResourceKind::File
+    } else {
+        parse_resource_kind(
         payload
             .get("resource_kind")
             .and_then(Value::as_str)
             .unwrap_or("file"),
         &url,
-    );
+        )
+    };
     let evidence = payload
         .get("evidence")
         .and_then(Value::as_array)
@@ -943,6 +977,7 @@ fn parse_offer(payload: &Map<String, Value>) -> Result<ResourceOffer, String> {
     Ok(ResourceOffer {
         url,
         resource_kind,
+        local_source_path,
         owner: field(payload, "owner").chars().take(160).collect(),
         evidence,
         confidence,
@@ -1088,6 +1123,12 @@ fn field(payload: &Map<String, Value>, key: &str) -> String {
 
 fn browser_resource_url_allowed(url: &str) -> bool {
     crate::http_engine::remote_resource_url_allowed(url)
+}
+
+fn matches_local_payload_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("blob:") || lower.starts_with("data:"))
+        && !url.chars().any(char::is_control)
 }
 
 fn next_handoff_id() -> String {
@@ -1708,6 +1749,15 @@ mod tests {
             }))
             .unwrap_err();
         assert!(file.contains("不受支持"));
+        for url in ["blob:https://site.test/opaque", "data:application/octet-stream;base64,AA=="] {
+            let rejected = session
+                .dispatch(&json!({
+                    "op": "offer",
+                    "resource": { "url": url }
+                }))
+                .unwrap_err();
+            assert!(rejected.contains("不受支持"));
+        }
         let bom = session
             .dispatch(&json!({
                 "op": "offer",
@@ -1737,5 +1787,57 @@ mod tests {
             session.core.local().latest_sequence(),
             sequence_before_invalid
         );
+    }
+
+    #[test]
+    fn local_file_offer_requires_an_absolute_existing_file_with_matching_size() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let source = std::env::temp_dir().join(format!("hls-local-offer-{}", next_handoff_id()));
+        let bytes = b"browser payload";
+        std::fs::write(&source, bytes).unwrap();
+        let source_payload = source.to_string_lossy().into_owned();
+        let accepted = session
+            .dispatch(&json!({
+                "op": "offer_local_file",
+                "resource": {
+                    "url": "blob:https://site.test/opaque",
+                    "local_source_path": &source_payload,
+                    "filename": "saved.bin",
+                    "size": bytes.len()
+                }
+            }))
+            .unwrap();
+        let handoff_id = accepted["handoff"]["id"].as_str().unwrap();
+        let canonical = std::fs::canonicalize(&source).unwrap();
+        let canonical = canonical.to_string_lossy();
+        assert_eq!(
+            session.handoffs[handoff_id].offer.local_source_path.as_deref(),
+            Some(canonical.as_ref())
+        );
+        let wrong_size = session
+            .dispatch(&json!({
+                "op": "offer_local_file",
+                "resource": {
+                    "url": "data:application/octet-stream;base64,AA==",
+                    "local_source_path": &source_payload,
+                    "filename": "saved.bin",
+                    "size": bytes.len() - 1
+                }
+            }))
+            .unwrap_err();
+        assert!(wrong_size.contains("大小不匹配"));
+        let relative_path = session
+            .dispatch(&json!({
+                "op": "offer_local_file",
+                "resource": {
+                    "url": "blob:https://site.test/opaque",
+                    "local_source_path": "relative.bin",
+                    "filename": "saved.bin",
+                    "size": bytes.len()
+                }
+            }))
+            .unwrap_err();
+        assert!(relative_path.contains("绝对路径"));
+        let _ = std::fs::remove_file(source);
     }
 }

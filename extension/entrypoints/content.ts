@@ -83,7 +83,7 @@ export default defineContentScript({
     // The UI mount below is asynchronous. Capture bridge/webRequest messages
     // during that window instead of losing the first manifest from a fast MSE
     // player (which otherwise leaves the overlay in “正在识别” forever).
-    const earlyResourceEvents: Array<{ url: string; mimeType?: string }> = []
+    const earlyResourceEvents: Array<{ url: string; mimeType?: string; inspection?: Partial<MediaResource> }> = []
     const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string; purpose?: 'mse' | 'download' }> = []
     const earlyRuntimeMessages: any[] = []
     let contentReady = false
@@ -91,7 +91,7 @@ export default defineContentScript({
       if (contentReady) return
       const detail = bridgeDetail(event)
       if (typeof detail.url === 'string') {
-        earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType })
+        earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType, inspection: detail.inspection })
         if (classifyResource(detail.url, detail.mimeType)) requestActivation()
       }
       if (earlyResourceEvents.length > 200) earlyResourceEvents.splice(0, earlyResourceEvents.length - 200)
@@ -127,11 +127,23 @@ export default defineContentScript({
       if (earlyRuntimeMessages.length > 100) earlyRuntimeMessages.splice(0, earlyRuntimeMessages.length - 100)
       requestActivation()
     }
+    const srcdocPartitionContextListener = (message: any, _sender: any, sendResponse?: (response?: unknown) => void) => {
+      if (message?.type !== 'srcdoc-partition-context') return
+      const frameLocation = location as Location & { ancestorOrigins?: DOMStringList }
+      sendResponse?.({
+        href: location.href,
+        origin: String((globalThis as any).origin || ''),
+        ancestorOrigins: Array.from(frameLocation.ancestorOrigins || []),
+      })
+    }
     window.addEventListener('__hls_downloader_resource__', earlyResourceListener)
     window.addEventListener('__hls_downloader_mse__', earlyMseListener)
     browser.runtime.onMessage.addListener(earlyRuntimeListener)
+    browser.runtime.onMessage.addListener(srcdocPartitionContextListener)
+    ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(srcdocPartitionContextListener))
     const activationRoots = new WeakSet<Document | ShadowRoot>()
     const activationMediaRoots: Array<Document | ShadowRoot> = []
+    const activationObservers: MutationObserver[] = []
     const discoverActivationShadowRoots = (node: ParentNode | Element) => {
       // Do not build a NodeList for every element in a busy live/chat page.
       // This early race-closing scan is best effort; play events and the
@@ -156,6 +168,27 @@ export default defineContentScript({
       discoverSubtitlePlayers(root)
       root.addEventListener('play', rememberPendingPlayback, true)
       root.addEventListener('playing', rememberPendingPlayback, true)
+      const observer = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+          if (mutation.type === 'attributes') {
+            if (mutation.target instanceof Element && mutation.target.matches('video,audio,source')) {
+              requestActivation()
+              return
+            }
+            continue
+          }
+          for (const node of mutation.addedNodes) {
+            if (!(node instanceof Element)) continue
+            if (node.shadowRoot) observeActivationRoot(node.shadowRoot)
+            if (node.matches('video,audio,source[src]') || node.querySelector('video,audio,source[src]')) {
+              requestActivation()
+              return
+            }
+          }
+        }
+      })
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
+      activationObservers.push(observer)
       if (root.querySelector('video,audio,source[src]')) {
         requestActivation()
       }
@@ -176,14 +209,14 @@ export default defineContentScript({
     // though the expensive media UI remains dormant until concrete evidence.
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
     await activation
+    activationObservers.forEach(observer => observer.disconnect())
+    activationObservers.length = 0
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
     const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string }>()
     const preferredVariants = new Map<string, { height: number, bandwidth: number }>()
     let renderedListSignature = ''
     let renderedVideoSignature = ''
-    let renderedViewportWidth = 0
-    let renderedViewportHeight = 0
     let activePlayback: PlaybackContext | null = null
     let activeVideo: HTMLVideoElement | null = null
     let selectionMode = false
@@ -192,6 +225,8 @@ export default defineContentScript({
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
     let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
+    const discoveryStarted = new WeakMap<HTMLVideoElement, number>()
+    const discoveryWaitMs = 12_000
     const knownVideos = new Set<HTMLVideoElement>()
     const mediaOwnerIds = new WeakMap<HTMLMediaElement, string>()
     let nextMediaOwnerId = 1
@@ -213,15 +248,16 @@ export default defineContentScript({
       resources.clear()
       for (const value of values) resources.set(resourceFingerprint(value), value)
     }
-    const resourcePresentationSignature = () => [...resources.values()]
+    const resourcePresentationSignature = (items = [...resources.values()], includePlaybackEvidence = true) => items
       .map(resource => [
         resourceFingerprint(resource), resource.url, resource.title || '', resource.filename || '',
         resource.kind, resource.mimeType || '', resource.size || 0, resource.estimatedSize || 0,
         resource.width || 0, resource.height || 0, resource.bandwidth || 0, resource.duration || 0,
         resource.isLive === true ? 1 : resource.isLive === false ? 0 : '', resource.inspected ? 1 : 0,
         (resource.variants || []).map(variant => `${variant.url}:${variant.width || 0}:${variant.height || 0}:${variant.bandwidth || 0}`).join(','),
-        (resource.playbackUrls || []).join(','), (resource.playbackPatterns || []).join(','),
-        (resource.playbackUrlHashes || []).join(','),
+        includePlaybackEvidence ? (resource.playbackUrls || []).join(',') : '',
+        includePlaybackEvidence ? (resource.playbackPatterns || []).join(',') : '',
+        includePlaybackEvidence ? (resource.playbackUrlHashes || []).join(',') : '',
       ].join('|'))
       .sort()
       .join('\n')
@@ -334,8 +370,83 @@ export default defineContentScript({
     let panelPosition: { x: number, y: number } | null = null
     let videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
     let videoControlDragging = false
-    const videoHoverInteractions = new Set<HTMLElement>()
     let collapseTimer: ReturnType<typeof setTimeout> | null = null
+    type VideoButtonBounds = { left: number, top: number, right: number, bottom: number }
+    const videoButtonBounds = (): VideoButtonBounds => {
+      const local = { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+      try {
+        const frame = window.frameElement as HTMLIFrameElement | null
+        const parentDocument = frame?.ownerDocument
+        const parentWindow = parentDocument?.defaultView
+        if (!frame || !parentDocument || !parentWindow) return local
+
+        const frameRect = frame.getBoundingClientRect()
+        const frameScaleX = frameRect.width / (frame.offsetWidth || frame.clientWidth || 1)
+        const frameScaleY = frameRect.height / (frame.offsetHeight || frame.clientHeight || 1)
+        const content = {
+          left: frameRect.left + frame.clientLeft * frameScaleX,
+          top: frameRect.top + frame.clientTop * frameScaleY,
+          width: frame.clientWidth * frameScaleX,
+          height: frame.clientHeight * frameScaleY,
+        }
+        const visible = {
+          left: content.left,
+          top: content.top,
+          right: content.left + content.width,
+          bottom: content.top + content.height,
+        }
+        visible.left = Math.max(visible.left, 0)
+        visible.top = Math.max(visible.top, 0)
+        visible.right = Math.min(visible.right, parentWindow.innerWidth)
+        visible.bottom = Math.min(visible.bottom, parentWindow.innerHeight)
+
+        for (let ancestor = frame.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const style = parentWindow.getComputedStyle(ancestor)
+          const clipsX = style.overflowX !== 'visible'
+          const clipsY = style.overflowY !== 'visible'
+          if (!clipsX && !clipsY) continue
+          const rect = ancestor.getBoundingClientRect()
+          const scaleX = rect.width / (ancestor.offsetWidth || ancestor.clientWidth || 1)
+          const scaleY = rect.height / (ancestor.offsetHeight || ancestor.clientHeight || 1)
+          const left = rect.left + ancestor.clientLeft * scaleX
+          const top = rect.top + ancestor.clientTop * scaleY
+          if (clipsX) {
+            visible.left = Math.max(visible.left, left)
+            visible.right = Math.min(visible.right, left + ancestor.clientWidth * scaleX)
+          }
+          if (clipsY) {
+            visible.top = Math.max(visible.top, top)
+            visible.bottom = Math.min(visible.bottom, top + ancestor.clientHeight * scaleY)
+          }
+        }
+
+        const scaleX = content.width / innerWidth
+        const scaleY = content.height / innerHeight
+        if (scaleX <= 0 || scaleY <= 0) return local
+        return {
+          left: Math.max(0, Math.min(innerWidth, (visible.left - content.left) / scaleX)),
+          top: Math.max(0, Math.min(innerHeight, (visible.top - content.top) / scaleY)),
+          right: Math.max(0, Math.min(innerWidth, (visible.right - content.left) / scaleX)),
+          bottom: Math.max(0, Math.min(innerHeight, (visible.bottom - content.top) / scaleY)),
+        }
+      } catch {
+        return local
+      }
+    }
+    const clampVideoButtonPosition = (
+      position: { x: number, y: number },
+      size: { width: number, height: number },
+      bounds: VideoButtonBounds,
+    ) => {
+      const visibleViewport = { width: bounds.right - bounds.left, height: bounds.bottom - bounds.top }
+      const clamped = clampOverlayPosition(
+        { x: position.x - bounds.left, y: position.y - bounds.top },
+        size,
+        visibleViewport,
+        8,
+      )
+      return { x: clamped.x + bounds.left, y: clamped.y + bounds.top }
+    }
     const fitPanel = () => {
       if (!wrap) return
       const rect = wrap.getBoundingClientRect()
@@ -347,8 +458,12 @@ export default defineContentScript({
       }
     }
     const setOpen = (open: boolean) => {
+      if (open && collapseTimer) {
+        clearTimeout(collapseTimer)
+        collapseTimer = null
+      }
       wrap?.classList.toggle('open', open)
-      if (open) requestAnimationFrame(fitPanel)
+      if (open) fitPanel()
     }
     const pinButton = ui.shadow.querySelector<HTMLButtonElement>('.pin')
     const setPinned = (value: boolean) => {
@@ -358,11 +473,11 @@ export default defineContentScript({
       if (value) setOpen(true)
     }
     wrap?.addEventListener('mouseenter', () => {
-      if (collapseTimer) clearTimeout(collapseTimer)
       setOpen(true)
     })
     wrap?.addEventListener('mouseleave', () => {
-      if (pinned || dragged) return
+      // 选中链接需要逐个桌面确认，离开面板不能使剩余链接消失。
+      if (pinned || dragged || selectionMode) return
       collapseTimer = setTimeout(() => setOpen(false), 450)
     })
     pinButton?.addEventListener('click', () => setPinned(!pinned))
@@ -400,9 +515,16 @@ export default defineContentScript({
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish, { once: true })
     }))
     window.addEventListener('resize', fitPanel)
+    if (wrap) new ResizeObserver(() => {
+      // 桌面确认结果会改变提示区高度，不能等下一次鼠标进入才把面板移回视口。
+      if (wrap.classList.contains('open')) fitPanel()
+    }).observe(wrap)
 
     const applySendState = (resource: MediaResource, button: HTMLButtonElement, fallbackLabel: string, action: OverlayAction = 'download') => {
-      const state = resourceSendStates.get(overlaySendKey(resourceFingerprint(resource), action))
+      const key = overlaySendKey(resourceFingerprint(resource), action)
+      button.dataset.sendKey = key
+      button.dataset.sendFallback = fallbackLabel
+      const state = resourceSendStates.get(key)
       const label = button.querySelector<HTMLElement>('.download-label')
       if (label) label.textContent = state?.label || fallbackLabel
       else button.textContent = state?.label || fallbackLabel
@@ -414,11 +536,17 @@ export default defineContentScript({
     }
 
     const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download', error = '') => {
-      resourceSendStates.set(overlaySendKey(resourceFingerprint(resource), action), { label, disabled, error })
+      const key = overlaySendKey(resourceFingerprint(resource), action)
+      resourceSendStates.set(key, { label, disabled, error })
       applySendState(resource, button, fallbackLabel, action)
+      // 等待桌面确认期间控件可能因资源或布局更新而换代；同步当前仍在页面上的同一操作。
+      const buttons = [...ui.shadow.querySelectorAll<HTMLButtonElement>('button[data-send-key]')]
+        .filter(current => current.dataset.sendKey === key)
+      buttons.forEach(current => applySendState(resource, current, current.dataset.sendFallback || fallbackLabel, action))
       // 播放器悬浮卡片与折叠列表是两个面板；错误必须显示在用户正在操作的卡片内。
-      const hover = button.closest('.video-action-group')?.querySelector<HTMLElement>('.video-hover')
-      if (hover) {
+      const hovers = new Set([button, ...buttons].map(current => current.closest('.video-action-group')?.querySelector<HTMLElement>('.video-hover')))
+      hovers.forEach(hover => {
+        if (!hover) return
         let detail = hover.querySelector<HTMLElement>('.send-error')
         if (error && !detail) {
           detail = document.createElement('div')
@@ -427,7 +555,7 @@ export default defineContentScript({
           hover.append(detail)
         }
         if (detail) { detail.textContent = error; detail.hidden = !error }
-      }
+      })
     }
 
     const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
@@ -446,7 +574,10 @@ export default defineContentScript({
         }
         setSendState(resource, button, '已加入', true)
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
-        setTimeout(() => resourceSendStates.delete(key), 2_500)
+        setTimeout(() => {
+          setSendState(resource, button, '下载', false)
+          resourceSendStates.delete(key)
+        }, 2_500)
       }).catch(reason => {
         const error = reason?.message || String(reason) || '发送失败'
         setSendState(resource, button, '重试', false, '下载', 'download', error)
@@ -525,44 +656,41 @@ export default defineContentScript({
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
       if (videoControlDragging) return
-      if (videoHoverInteractions.size > 0 && innerWidth === renderedViewportWidth && innerHeight === renderedViewportHeight) return
       let visible = 0
+      const buttonBounds = videoButtonBounds()
       const videos = currentVideos()
         .map(video => ({ video, rect: video.getBoundingClientRect(), playback: playbackByVideo.get(video) || null }))
         .filter(({ video, rect, playback }) => Boolean(playback)
           && (video === activeVideo || (!video.paused && !video.ended))
           && rect.width >= 180 && rect.height >= 100
           && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
+        .map(item => {
+          const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
+          const exact = candidates.filter(resource => item.playback?.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
+          const choices = (exact.length ? exact : candidates)
+            .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
+          return { ...item, choices }
+        })
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
-        innerWidth, innerHeight, selectionMode, resourcePresentationSignature(), [...resourceSendStates],
-        videos.map(({ video, rect, playback }) => [
-          mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback, videoButtonPositions.get(video),
+        innerWidth, innerHeight, buttonBounds, selectionMode, [...resourceSendStates],
+        videos.map(({ video, rect, playback, choices }) => [
+          mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback?.sourceUrls, playback?.startedAt,
+          resourcePresentationSignature(choices, false), videoButtonPositions.get(video),
+          Date.now() - (discoveryStarted.get(video) || playback?.startedAt || Date.now()) >= discoveryWaitMs,
         ]),
       ])
       // 时间进度事件不能不断销毁按钮；只在资源、布局或发送状态变化时重建。
       if (signature === renderedVideoSignature) return
       renderedVideoSignature = signature
-      renderedViewportWidth = innerWidth
-      renderedViewportHeight = innerHeight
-      videoHoverInteractions.clear()
       layer.replaceChildren()
       // 每个播放器独立匹配自己的 currentSrc 或 SourceBuffer 响应，避免串到广告或其他视频。
-      videos.forEach(({ video, rect, playback }) => {
+      videos.forEach(({ video, rect, playback, choices }) => {
         if (!playback) return
-        const sourceUrls = playback.sourceUrls
-        const candidates = playerPlaybackResources(
-          [...resources.values()],
-          playback,
-          8,
-        )
-        const exact = candidates.filter(item => sourceUrls.some(source => resourceMatchesPlaybackSource(item, source)))
-        const hasExactPlayerMatch = exact.length > 0
-        const choices = (hasExactPlayerMatch ? exact : candidates)
-          .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
         const identifying = choices.length === 0
+        const discoveryExpired = identifying && Date.now() - (discoveryStarted.get(video) || playback.startedAt) >= discoveryWaitMs
         // playerPlaybackResources already enforces the ambiguity boundary for
         // blob/MSE (per-SourceBuffer evidence).
         // Requiring a literal currentSrc match again made a uniquely resolved
@@ -577,18 +705,20 @@ export default defineContentScript({
         const button = document.createElement('button')
         button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
         if (oneClickChoice) button.dataset.resourceId = choices[0].id
-        button.setAttribute('aria-label', identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
-        if (identifying) button.setAttribute('aria-disabled', 'true')
+        button.setAttribute('aria-label', discoveryExpired ? '重新识别当前视频资源' : identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
+        if (identifying && !discoveryExpired) button.setAttribute('aria-disabled', 'true')
         const besidePlayer = rect.right + 8
-        const defaultLeft = besidePlayer + controlsWidth <= innerWidth - 8
+        const defaultLeft = besidePlayer + controlsWidth <= buttonBounds.right - 8
           ? besidePlayer
-          : Math.max(8, Math.min(rect.right - controlsWidth - 8, innerWidth - controlsWidth - 8))
-        const defaultTop = Math.max(8, Math.min(rect.top + 8, innerHeight - buttonHeight - 8))
+          : Math.max(buttonBounds.left + 8, Math.min(rect.right - controlsWidth - 8, buttonBounds.right - controlsWidth - 8))
+        const defaultTop = Math.max(buttonBounds.top + 8, Math.min(rect.top + 8, buttonBounds.bottom - buttonHeight - 8))
         const saved = videoButtonPositions.get(video)
-        group.style.left = `${saved ? Math.max(8, Math.min(saved.x, innerWidth - controlsWidth - 8)) : defaultLeft}px`
-        group.style.top = `${saved ? Math.max(8, Math.min(saved.y, innerHeight - buttonHeight - 8)) : defaultTop}px`
+        const position = clampVideoButtonPosition(saved || { x: defaultLeft, y: defaultTop },
+          { width: controlsWidth, height: buttonHeight }, buttonBounds)
+        group.style.left = `${position.x}px`
+        group.style.top = `${position.y}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-         const fallbackLabel = identifying ? '正在识别' : oneClickChoice ? '下载视频' : '选择资源'
+         const fallbackLabel = discoveryExpired ? '重新识别' : identifying ? '正在识别' : oneClickChoice ? '下载视频' : '选择资源'
          const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
@@ -607,30 +737,26 @@ export default defineContentScript({
             if (next.pointerId !== event.pointerId) return
             videoDragged ||= Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4
             const height = button.offsetHeight || buttonHeight
-            group.style.left = `${Math.max(8, Math.min(innerWidth - controlsWidth - 8, startLeft + next.clientX - startX))}px`
-            group.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, startTop + next.clientY - startY))}px`
+            const position = clampVideoButtonPosition(
+              { x: startLeft + next.clientX - startX, y: startTop + next.clientY - startY },
+              { width: controlsWidth, height },
+              videoButtonBounds(),
+            )
+            group.style.left = `${position.x}px`
+            group.style.top = `${position.y}px`
           }
           const finish = (next: PointerEvent) => {
             if (next.pointerId !== event.pointerId) return
-            button.releasePointerCapture?.(event.pointerId)
             window.removeEventListener('pointermove', move, true)
             window.removeEventListener('pointerup', finish, true)
-            window.removeEventListener('pointercancel', cancel, true)
-            if (videoDragged) {
+            window.removeEventListener('pointercancel', finish, true)
+            button.removeEventListener('lostpointercapture', finish)
+            if (videoDragged && next.type !== 'pointercancel') {
               videoButtonPositions.set(video, { x: group.offsetLeft, y: group.offsetTop })
             }
             videoControlDragging = false
             group.classList.remove('dragging')
-            scheduleVideoButtons()
-          }
-          const cancel = (next: PointerEvent) => {
-            if (next.pointerId !== event.pointerId) return
-            button.releasePointerCapture?.(event.pointerId)
-            window.removeEventListener('pointermove', move, true)
-            window.removeEventListener('pointerup', finish, true)
-            window.removeEventListener('pointercancel', cancel, true)
-            videoControlDragging = false
-            group.classList.remove('dragging')
+            if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId)
             scheduleVideoButtons()
           }
           // Use the window capture phase as a fallback for players that stop
@@ -639,7 +765,9 @@ export default defineContentScript({
           // every iframe/player combination.
           window.addEventListener('pointermove', move, true)
           window.addEventListener('pointerup', finish, true)
-          window.addEventListener('pointercancel', cancel, true)
+          window.addEventListener('pointercancel', finish, true)
+          // iframe 切换或浏览器撤销捕获时，pointerup 可能不再送达当前页面。
+          button.addEventListener('lostpointercapture', finish)
         })
         button.addEventListener('click', event => {
           if (videoDragged) {
@@ -651,6 +779,11 @@ export default defineContentScript({
            if (identifying) {
              event.preventDefault()
              event.stopImmediatePropagation()
+             if (discoveryExpired) {
+               discoveryStarted.set(video, Date.now())
+               void handleRuntimeMessage({ type: 'rescan-media' })
+               ctx.setTimeout(scheduleVideoButtons, discoveryWaitMs + 20)
+             }
              return
            }
            if (oneClickChoice) {
@@ -685,8 +818,10 @@ export default defineContentScript({
         if (identifying) {
           const head = document.createElement('div'); head.className = 'hover-head'
           const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = '当前播放的视频'
-          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = '识别中'
-          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = '正在匹配实际播放资源，确认后即可下载或投屏。'
+          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = discoveryExpired ? '未匹配' : '识别中'
+          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = discoveryExpired
+            ? '未找到能确认属于此播放器的资源。可重新识别，或刷新网页后重新播放；插件弹窗可查看本页已发现的资源。'
+            : '正在匹配实际播放资源，确认后即可下载或投屏。'
           head.append(hoverTitle, state); hover.append(head, copy)
         } else if (oneClickChoice) {
           const choice = choices[0]
@@ -745,7 +880,6 @@ export default defineContentScript({
         const keepHoverOpen = () => {
           if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
           hoverDismissTimer = null
-          videoHoverInteractions.add(group)
           group.classList.add('hover-open')
           positionHover()
         }
@@ -755,7 +889,6 @@ export default defineContentScript({
             hoverDismissTimer = null
             if (shouldKeepHoverOpen(group.matches(':hover'), group.contains(ui.shadow.activeElement))) return
             group.classList.remove('hover-open')
-            videoHoverInteractions.delete(group)
             scheduleVideoButtons()
           }, HOVER_DISMISS_DELAY_MS)
         }
@@ -865,6 +998,8 @@ export default defineContentScript({
         row.append(meta, actions); list.append(row)
       })
       updateVideoButtons()
+      // 聚合 iframe 资源会增加面板高度；在用户移入之前重新定位，避免鼠标下的按钮突然换位。
+      if (wrap?.classList.contains('open')) fitPanel()
     }
     let renderFrame = 0
     const scheduleRender = () => {
@@ -881,6 +1016,17 @@ export default defineContentScript({
     }
     window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
     window.addEventListener('resize', scheduleVideoButtons)
+    try {
+      const parentDocument = window.frameElement?.ownerDocument
+      const parentWindow = parentDocument?.defaultView
+      if (parentDocument && parentWindow) {
+        parentWindow.addEventListener('resize', scheduleVideoButtons)
+        parentWindow.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
+        parentDocument.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
+      }
+    } catch {
+      // Cross-origin parent frames keep the child viewport bounds.
+    }
     document.addEventListener('fullscreenchange', scheduleVideoButtons)
 
     const observedVideoSizes = new WeakSet<HTMLVideoElement>()
@@ -930,12 +1076,23 @@ export default defineContentScript({
       evidence: string[] = [],
       owner = '',
       confidence = 0,
+      inspection?: Partial<MediaResource>,
     ) => {
       const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
       if (!kind) return
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
       const resource = {
+        // MAIN 桥仅接收解析结果，不能用网页事件覆盖请求身份或凭据。
+        ...(inspection?.inspected === true ? {
+          inspected: true, manifestType: inspection.manifestType, isLive: inspection.isLive,
+          lowLatencyLive: inspection.lowLatencyLive, partOnlyLive: inspection.partOnlyLive,
+          duration: inspection.duration, variants: inspection.variants, audioTracks: inspection.audioTracks,
+          renditionUrls: inspection.renditionUrls, playbackUrls: inspection.playbackUrls,
+          playbackUrlHashes: inspection.playbackUrlHashes, playbackPatterns: inspection.playbackPatterns,
+          width: inspection.width, height: inspection.height, bandwidth: inspection.bandwidth,
+          estimatedSize: inspection.estimatedSize, quality: inspection.quality,
+        } : {}),
         id: resourceId(url), url, kind, mimeType, pageUrl: location.href,
         title: pageMediaTitle() || filename, filename, seenAt: Date.now(),
         evidence: evidence.length ? evidence.slice(0, 16) : [playbackSource ? 'current_src' : 'page_observation'],
@@ -975,6 +1132,8 @@ export default defineContentScript({
         if (changedSource) videoButtonPositions.delete(video)
         const playback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
         playbackByVideo.set(video, playback)
+        discoveryStarted.set(video, playback.startedAt)
+        ctx.setTimeout(scheduleVideoButtons, discoveryWaitMs + 20)
         if (video === activeVideo) activePlayback = playback
         // currentSrc is immediate, player-specific evidence. Register it here
         // instead of waiting for PerformanceObserver/webRequest: Firefox can
@@ -1082,7 +1241,7 @@ export default defineContentScript({
 
     const handleResourceEvent = (event: Event) => {
       const detail = bridgeDetail(event)
-      add(detail.url, detail.mimeType)
+      add(detail.url, detail.mimeType, false, detail.inspection?.inspected ? ['manifest_inspection', 'page_response'] : [], '', 0, detail.inspection)
     }
     const handleMseEvent = (event: Event) => {
       const detail = bridgeDetail(event)
@@ -1150,7 +1309,7 @@ export default defineContentScript({
     // Ask the MAIN-world hook to replay events emitted before this content
     // script/UI finished mounting (especially fast MSE and preloaded HLS).
     window.dispatchEvent(new Event('__hls_downloader_replay__'))
-    earlyResourceEvents.splice(0).forEach(event => add(event.url, event.mimeType))
+    earlyResourceEvents.splice(0).forEach(event => handleResourceEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
     earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
     document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
       mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true, ['current_src'], mediaOwner(media), 0.98))
@@ -1220,7 +1379,12 @@ export default defineContentScript({
         return
       }
       if (message?.type === 'open-media-panel') {
-        if (!activePlayback) selectionMode = true
+        if (message.scope === 'tab') {
+          activePlayback = null
+          activeVideo = null
+          selectionMode = true
+          loadPageResources(location.href, 'tab')
+        } else if (!activePlayback) selectionMode = true
         selectionResourceIds = null
         setOpen(true)
         render()
@@ -1249,8 +1413,8 @@ export default defineContentScript({
     browser.runtime.onMessage.removeListener(earlyRuntimeListener)
     earlyRuntimeMessages.splice(0).forEach(handleRuntimeMessage)
     let currentPageUrl = pageKey(location.href)
-    const loadPageResources = (pageUrl: string) => {
-      void runtimeMessage({ type: 'list', pageUrl }).then((stored: MediaResource[]) => {
+    function loadPageResources(pageUrl: string, scope?: 'tab') {
+      void runtimeMessage({ type: 'list', pageUrl, ...(scope ? { scope } : {}) }).then((stored: MediaResource[]) => {
         if (!Array.isArray(stored) || pageKey(location.href) !== pageKey(pageUrl)) return
         stored.forEach(resource => {
           if (resource?.url) addResource({

@@ -163,10 +163,12 @@ class JabClient:
         count = max(0, min(actions.actions_count, MAX_ACTION_INFO))
         return [actions.action_info[index].name for index in range(count)]
 
-    def walk(self, vm_id: int, root: int, max_nodes: int) -> list[dict]:
+    def walk(self, vm_id: int, root: int, max_nodes: int, stop_when=None) -> list[dict]:
         nodes: list[dict] = []
+        stopped = False
 
         def visit(context: int, depth: int, owned: bool, path: list[int]) -> None:
+            nonlocal stopped
             try:
                 if len(nodes) >= max_nodes:
                     raise RuntimeError(f"accessibility tree exceeds --max-nodes={max_nodes}")
@@ -185,8 +187,13 @@ class JabClient:
                     "path": path,
                 }
                 nodes.append(node)
+                if stop_when and stop_when(node):
+                    stopped = True
+                    return
                 child_count = max(0, min(info.children_count, max_nodes - len(nodes)))
                 for index in range(child_count):
+                    if stopped:
+                        break
                     child = int(self.dll.getAccessibleChildFromContext(vm_id, context, index))
                     if child:
                         visit(child, depth + 1, True, path + [index])

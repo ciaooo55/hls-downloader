@@ -222,6 +222,36 @@ def _find_firefox() -> Path:
     raise RuntimeError("Firefox 未安装在已知路径")
 
 
+def _fit_browser_window(driver, width: int = 1280, height: int = 900) -> dict:
+    screen = driver.execute_script("""
+        return {
+            left: Number(screen.availLeft || 0),
+            top: Number(screen.availTop || 0),
+            width: Number(screen.availWidth),
+            height: Number(screen.availHeight)
+        };
+    """)
+    try:
+        screen_left, screen_top = int(screen["left"]), int(screen["top"])
+        screen_width, screen_height = int(screen["width"]), int(screen["height"])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("Browser reported an invalid screen work area") from error
+    if screen_width <= 0 or screen_height <= 0:
+        raise RuntimeError(f"Browser reported an invalid screen work area: {screen_width}x{screen_height}")
+    margin_x = min(16, (screen_width - 1) // 2)
+    margin_y = min(16, (screen_height - 1) // 2)
+    available_width = screen_width - margin_x * 2
+    available_height = screen_height - margin_y * 2
+    rect = {
+        "x": screen_left + margin_x,
+        "y": screen_top + margin_y,
+        "width": min(int(width), available_width),
+        "height": min(int(height), available_height),
+    }
+    driver.set_window_rect(**rect)
+    return rect
+
+
 def _make_media(root: Path, ffmpeg: str) -> None:
     command = [
         ffmpeg,
@@ -316,8 +346,21 @@ def _current_frame_overlay_state(driver) -> dict:
         roots.forEach(root => root.querySelectorAll('.item-actions button').forEach(button => panelActions.push(button.innerText.trim())));
         roots.forEach(root => root.querySelectorAll('.item').forEach(item => panelResources.push(item.innerText)));
         const videos=[];
-        roots.forEach(root => root.querySelectorAll('video').forEach(video => videos.push({paused:video.paused,currentTime:video.currentTime,src:video.currentSrc,manifest:video.dataset.manifest||''})));
-        return {marker:document.documentElement.getAttribute('data-hls-downloader-extension'),labels,resourceIds,moreButtons,panelActions,panelResources,videos,mediaOwnership:window.mediaOwnership||[]};
+        roots.forEach(root => root.querySelectorAll('video').forEach(video => {
+          const r=video.getBoundingClientRect(),s=getComputedStyle(video),parent=video.parentElement,ps=parent?getComputedStyle(parent):null;
+          videos.push({paused:video.paused,currentTime:video.currentTime,src:video.currentSrc,manifest:video.dataset.manifest||'',readyState:video.readyState,networkState:video.networkState,videoWidth:video.videoWidth,videoHeight:video.videoHeight,error:video.error?.message||'',rect:{x:r.x,y:r.y,width:r.width,height:r.height},style:{display:s.display,visibility:s.visibility,opacity:s.opacity,zIndex:s.zIndex},parentStyle:ps?{tag:parent.tagName,className:String(parent.className||'').slice(0,160),display:ps.display,visibility:ps.visibility,opacity:ps.opacity,zIndex:ps.zIndex}:null});
+        }));
+        const host=document.querySelector('hls-downloader-media-panel');
+        let uiHost=null;
+        if(host){
+          const r=host.getBoundingClientRect(),s=getComputedStyle(host),shadow=host.shadowRoot;
+          const wrap=shadow?.querySelector('.wrap'),panel=shadow?.querySelector('.panel');
+          const wr=wrap?.getBoundingClientRect(),ws=wrap?getComputedStyle(wrap):null;
+          const pr=panel?.getBoundingClientRect(),ps=panel?getComputedStyle(panel):null;
+          const point=wr&&wr.width&&wr.height?document.elementFromPoint(Math.max(0,Math.min(innerWidth-1,wr.x+wr.width/2)),Math.max(0,Math.min(innerHeight-1,wr.y+wr.height/2))):null;
+          uiHost={tag:host.tagName,parent:host.parentElement?.tagName||'',rect:{x:r.x,y:r.y,width:r.width,height:r.height},style:{display:s.display,visibility:s.visibility,opacity:s.opacity,zIndex:s.zIndex,position:s.position},shadowRoot:Boolean(shadow),shadowChildren:shadow?.childElementCount||0,wrap:wrap?{className:wrap.className,rect:{x:wr.x,y:wr.y,width:wr.width,height:wr.height},display:ws.display,visibility:ws.visibility,opacity:ws.opacity,zIndex:ws.zIndex,position:ws.position}:null,panel:panel?{rect:{x:pr.x,y:pr.y,width:pr.width,height:pr.height},display:ps.display,visibility:ps.visibility,opacity:ps.opacity,overflow:ps.overflow}:null,hitAtWrapCenter:point?{tag:point.tagName,id:point.id,className:String(point.className||'').slice(0,160)}:null};
+        }
+        return {marker:document.documentElement.getAttribute('data-hls-downloader-extension'),activationMarkerLimitation:'The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.',uiHost,labels,resourceIds,moreButtons,panelActions,panelResources,videos,mediaOwnership:window.mediaOwnership||[],runtimeErrors:window.__hlsQaRuntimeErrors||[]};
         """
     )
 
@@ -457,6 +500,9 @@ def run(
                 options.set_preference("media.autoplay.default", 0)
                 options.set_preference("media.autoplay.blocking_policy", 0)
                 options.set_preference("browser.shell.checkDefaultBrowser", False)
+                options.set_preference('browser.aboutwelcome.enabled', False)
+                options.set_preference('browser.newtabpage.activity-stream.asrouter.providers.onboarding', '{"id":"onboarding","type":"local","localProvider":"OnboardingMessageProvider","enabled":false}')
+                options.set_preference('browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments', '{"id":"messaging-experiments","type":"remote-experiments","enabled":false}')
                 if not headed:
                     options.add_argument("-headless")
                 service = FirefoxService(executable_path=str(driver_path)) if driver_path else FirefoxService()

@@ -13,12 +13,13 @@ import threading
 import traceback
 import time
 import uuid
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import psutil
 from PIL import Image, ImageChops
 
-from smoke_v7_accessibility import JabClient
+from smoke_v7_accessibility import AccessibleContextInfo, JabClient
 from smoke_v7_portable_app import Pipe, runtime_processes, wait
 from smoke_v7_transfer_performance import free_port
 
@@ -26,13 +27,20 @@ from smoke_v7_transfer_performance import free_port
 def run(args):
     runtime, evidence = args.runtime.resolve(), args.report.resolve().parent
     evidence.mkdir(parents=True, exist_ok=True)
-    report = {"passed": False, "runtime": str(runtime), "checks": [], "controls": {}, "feedback": []}
+    report = {"passed": False, "runtime": str(runtime), "checks": [], "controls": {}, "feedback": [],
+              "test_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    report["components"] = {str(p.relative_to(runtime)): hashlib.sha256(p.read_bytes()).hexdigest()
+                            for p in [runtime/"app/HLSDownloaderDesktop-7.0.3.jar",
+                                      runtime/"app/resources/HLSDownloaderEngine.exe"]}
     normal_env = {k: v for k, v in os.environ.items() if not k.startswith("HLS_UI_")}
     port, token = free_port(), uuid.uuid4().hex
     client = JabClient(runtime / "runtime/bin/windowsaccessbridge-64.dll")
     client.start()
     hwnd = None
+    startup_modal_failure = False
     fixture = None
+    torrent_peer = None
+    drop_helper = None
     created_tasks = set()
     settings_to_restore = {}
 
@@ -65,45 +73,124 @@ def run(args):
         if alive:
             raise RuntimeError("Installed workbench did not stop")
 
-    def ui(path, payload=None, raw=False):
+    def ui(path, payload=None, raw=False, timeout=15):
         data = json.dumps(payload).encode() if payload is not None else None
         request = Request(f"http://127.0.0.1:{port}/{path}", data=data,
                           headers={"X-HLS-Test-Token": token, "Content-Type": "application/json"})
-        with urlopen(request, timeout=15) as response:
-            body = response.read()
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                body = response.read()
+        except HTTPError as error:
+            detail = error.read().decode("utf8", "replace").strip()
+            raise RuntimeError(f"UI {path} HTTP {error.code}: {detail}") from error
         return body if raw else json.loads(body)
 
-    def action(kind, **values):
-        ui("action", {"type": kind, **values})
+    def action(kind, timeout=15, **values):
+        ui("action", {"type": kind, **values}, timeout=timeout)
 
-    def tree():
+    def tree(stop_when=None):
         client.pump_messages()
         vm, root = client.context_from_window(hwnd)
         try:
-            return client.walk(vm, root, 5000)
+            return client.walk(vm, root, 5000, stop_when=stop_when)
         finally:
             client.dll.releaseJavaObject(vm, root)
 
+    node_paths = {}
+
     def node(name, actionable=False, index=0):
+        key = (name, actionable, index)
         def find():
-            matches = [n for n in tree() if (n["name"] == name if actionable else name in n["name"]) and (not actionable or n["actions"])]
-            return matches[index] if len(matches) > index else None
+            path = node_paths.get(key)
+            if path is not None:
+                client.pump_messages()
+                vm, root = client.context_from_window(hwnd)
+                owned = []
+                try:
+                    context, owned = client.resolve_path(vm, root, path)
+                    info = AccessibleContextInfo()
+                    if client.dll.getAccessibleContextInfo(vm, context, ctypes.byref(info)):
+                        actions = client.actions(vm, context) if info.accessible_action else []
+                        if (info.name == name if actionable else name in info.name) and (not actionable or actions):
+                            return {"name": info.name, "role": info.role_en_US or info.role,
+                                    "states": info.states_en_US or info.states,
+                                    "bounds": [info.x, info.y, info.width, info.height], "actions": actions, "path": path}
+                except RuntimeError:
+                    # 切换页签和弹窗会重建树；只缓存路径，每次都读取当前控件状态。
+                    pass
+                finally:
+                    for context in reversed(owned):
+                        client.dll.releaseJavaObject(vm, context)
+                    client.dll.releaseJavaObject(vm, root)
+                node_paths.pop(key, None)
+            matches = []
+            def found(n):
+                if (n["name"] == name if actionable else name in n["name"]) and (not actionable or n["actions"]):
+                    matches.append(n)
+                return index >= 0 and len(matches) > index
+            tree(stop_when=found)
+            enough = len(matches) > index if index >= 0 else len(matches) >= -index
+            if enough:
+                node_paths[key] = matches[index]["path"]
+                return matches[index]
+            return None
         return wait(find, "Missing installed UI control: " + name, 12)
 
     def click(name, index=0):
         target = node(name, True, index)
-        vm, root = client.context_from_window(hwnd)
-        owned = []
-        try:
-            context, owned = client.resolve_path(vm, root, target["path"])
-            client.invoke(vm, context, None)
-        finally:
-            for context in reversed(owned):
-                client.dll.releaseJavaObject(vm, context)
-            client.dll.releaseJavaObject(vm, root)
+        if current_context.startswith("main"):
+            categories = ("媒体", "程序", "压缩包", "其他")
+            statuses = ("全部", "进行中", "排队中", "已暂停", "已完成", "失败")
+            section = ("categories", 3) if target["name"].startswith(categories) else (
+                ("statuses", -3) if target["name"].startswith(statuses) else None)
+            if section:
+                direction = section[1]
+                window = ui("window")
+                scroll_x = round(window["deviceWidth"] * .075)
+                scroll_y = window["deviceHeight"] // 2
+                for _ in range(12):
+                    x, y, width, height = target["bounds"]
+                    local_y = y - window["deviceY"]
+                    if (width > 0 and height > 0 and "showing" in target["states"] and
+                            0 <= local_y and local_y + height <= window["deviceHeight"] - 40):
+                        break
+                    action("scroll", x=scroll_x, y=scroll_y, delta=direction)
+                    time.sleep(.2)
+                    target = node(name, True, index)
+        if current_context.startswith("settings-") and (
+                target["role"] == "page tab" or
+                target["role"] in ("check box", "toggle button") or
+                target["role"] == "push button" and name not in ("关闭", "取消", "保存设置")):
+            target_path = target["path"]
+            scroll_pane = next(
+                n for n in tree()
+                if n["role"] == "scroll pane" and "showing" in n["states"] and
+                target_path[:len(n["path"])] == n["path"])
+            pane_x, pane_y, pane_width, pane_height = scroll_pane["bounds"]
+            window = ui("window")
+            scroll_x = pane_x + pane_width // 2 - window["deviceX"]
+            scroll_y = pane_y + pane_height // 2 - window["deviceY"]
+            for _ in range(12):
+                x, y, width, height = target["bounds"]
+                if (width > 0 and height > 0 and "showing" in target["states"] and y >= pane_y and
+                        y + height <= pane_y + pane_height):
+                    break
+                action("scroll", x=scroll_x, y=scroll_y,
+                       delta=-3 if y < pane_y else 3)
+                time.sleep(.2)
+                target = node(name, True, index)
+            else:
+                raise AssertionError("Settings control remains clipped: " + name)
+            assert "showing" in target["states"], "Settings control is not visible: " + name
+        x, y, width, height = target["bounds"]
+        assert width > 0 and height > 0, "Cannot click a clipped control: " + name
+        window = ui("window")
+        started=time.perf_counter()
+        action("click", x=x+width//2-window["deviceX"], y=y+height//2-window["deviceY"])
         time.sleep(.2)
         report["controls"].setdefault(f'{current_context}/{name}', {})["clicked"] = True
         save()
+        return started
 
     def observe(context):
         nonlocal current_context
@@ -215,13 +302,127 @@ def run(args):
                 return False
         wait(ready, "Installed UI did not connect", 90)
         hwnd, _ = client.find_window("HLS Downloader", 15)
+        if args.start_at == "extras" and args.verify_player_output:
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                            ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            user32.SetWindowPos.restype = wintypes.BOOL
+            screen_width = user32.GetSystemMetrics(0)
+            screen_height = user32.GetSystemMetrics(1)
+            current = ui("window")
+            margin = 16
+            width = min(current["deviceWidth"], screen_width - 2 * margin)
+            height = min(current["deviceHeight"], screen_height - 2 * margin)
+            x = max(margin, min(current["deviceX"], screen_width - width - margin))
+            y = max(margin, min(current["deviceY"], screen_height - height - margin))
+            assert width > 0 and height > 0, "Desktop is too small for the player-output workbench"
+            assert user32.SetWindowPos(wintypes.HWND(hwnd), None, x, y, width, height, 0x0014), \
+                "Could not fit player-output workbench to the guest desktop"
+            time.sleep(.5)
+            report["player_output_window_fit"] = {
+                "screen": [screen_width, screen_height], "window": ui("window")}
+            save()
+        startup_state = ui("state")
+        startup_modal_prefixes = (
+            "dialog.", "newtask.", "batch.", "harvest.", "settings.", "device.",
+            "queue.", "extension.", "torrent.", "duplicate.", "update.",
+        )
+        startup_modal_controls = {
+            name: bounds for name, bounds in startup_state["controlBounds"].items()
+            if name.startswith(startup_modal_prefixes)
+        }
+        if startup_modal_controls:
+            from PIL import ImageGrab
+            before_path = evidence / "startup-before.png"
+            ImageGrab.grab(all_screens=True).save(before_path)
+            diagnostic = {
+                "title_candidates": [],
+                "control_bounds": startup_modal_controls,
+                "screenshot": before_path.name,
+            }
+            try:
+                startup_tree = tree()
+                diagnostic["title_candidates"] = [
+                    item["name"] for item in startup_tree
+                    if item["name"] and item["role"] == "label" and
+                    any(marker in item["name"] for marker in (
+                        "选择", "新建", "设置", "导入", "导出", "批量", "抓取", "确认", "设备", "队列",
+                    ))
+                ]
+                diagnostic["accessibility_tree"] = startup_tree
+            except Exception as error:
+                diagnostic["accessibility_error"] = str(error)
+            report["unexpected_startup_modal"] = diagnostic
+            save()
+            startup_modal_failure = True
+            raise AssertionError(
+                "Unexpected modal after workbench startup: " +
+                ", ".join(diagnostic["title_candidates"] or startup_modal_controls)
+            )
         node("新建", True)
-        if initial_browser_connected:
+        # 前一组隔离浏览器已经退出时，旧租约可在 UI 启动期间到期；只验证仍在线的客户端。
+        if initial_browser_connected and core({"type":"snapshot", "request_id":2}).get("browser_connected", False):
             node("浏览器插件 · 已连接")
             record("workbench restart immediately restores current browser connection from snapshot")
         report["window"] = ui("window")
         report["start_at"] = args.start_at
-        if args.start_at == "main":
+        if args.start_at == "hover":
+            from smoke_v7_presenter_visual import user32
+            from PIL import ImageGrab, ImageStat
+            settings_to_restore["dark_mode"] = original_settings["dark_mode"]
+            transitions = []
+            for dark in (False, True):
+                wanted = "浅色模式" if dark else "深色模式"
+                if not any(n["name"] == wanted for n in tree()):
+                    click("深色模式" if dark else "浅色模式")
+                observe("hover-dark" if dark else "hover-light")
+                window = ui("window")
+                controls = ui("state")["controlBounds"]
+                names = [name for name in controls if name.startswith("taskrow.")]
+                names += [name for name in ("sidebar.status.进行中", "toolbar.设置", "toolbar.刷新") if name in controls]
+                for name in names:
+                    left, top, right, bottom = controls[name]
+                    # 取内部空白底色，排除文字、描边和圆角。
+                    region = (window["deviceX"] + left + (right-left)//3, window["deviceY"] + top + 5,
+                              window["deviceX"] + right - (right-left)//3, window["deviceY"] + top + 8)
+                    x, y = window["deviceX"] + (left+right)//2, window["deviceY"] + (top+bottom)//2
+                    away = (window["deviceX"] + 1, window["deviceY"] + 1)
+                    user32.SetCursorPos(*away)
+                    time.sleep(.3)
+                    frames = [(0.0, ImageGrab.grab(bbox=region).convert("RGB"))]
+                    started = time.perf_counter()
+                    user32.SetCursorPos(x, y)
+                    while time.perf_counter() - started < .32:
+                        frames.append((time.perf_counter()-started, ImageGrab.grab(bbox=region).convert("RGB")))
+                        time.sleep(.008)
+                    time.sleep(.1)
+                    frames.append((time.perf_counter()-started, ImageGrab.grab(bbox=region).convert("RGB")))
+                    user32.SetCursorPos(*away)
+                    started = time.perf_counter()
+                    while time.perf_counter() - started < .32:
+                        frames.append((time.perf_counter()-started+.5, ImageGrab.grab(bbox=region).convert("RGB")))
+                        time.sleep(.008)
+                    colors = [ImageStat.Stat(frame).mean for _, frame in frames]
+                    endpoints = [colors[0], colors[next(i for i, (t, _) in enumerate(frames) if t >= .4)]]
+                    low = [min(c[channel] for c in endpoints) for channel in range(3)]
+                    high = [max(c[channel] for c in endpoints) for channel in range(3)]
+                    overshoot = max(max(low[channel]-color[channel], color[channel]-high[channel], 0)
+                                    for color in colors for channel in range(3))
+                    result = {"control": name, "dark": dark, "samples": [
+                        {"time": t, "rgb": color} for (t, _), color in zip(frames, colors)],
+                        "max_channel_overshoot": overshoot}
+                    strip = Image.new("RGB", (frames[0][1].width, frames[0][1].height*len(frames)))
+                    for i, (_, frame) in enumerate(frames):
+                        strip.paste(frame, (0, i*frame.height))
+                    result["image"] = f"{args.report.stem}-hover-timeline-{len(transitions):02d}.png"
+                    strip.save(evidence / result["image"])
+                    transitions.append(result)
+                    report["hover_transitions"] = transitions
+                    save()
+            assert transitions and all(t["max_channel_overshoot"] <= 3 for t in transitions), "Hover color briefly overshoots its resting/hover endpoints"
+            record("real-pointer-hover-enter-and-leave-without-color-flash", len(transitions))
+        if args.start_at in ("main", "feedback"):
             observe("main-light")
             for control in list(ui("state")["controlBounds"]):
                 if control.startswith("toolbar."):
@@ -278,8 +479,10 @@ def run(args):
                     click(label)
                     record("queue-manager draft action: " + label)
             click("取消")
+            wait(lambda: not any(n["name"] == "保存队列" and "showing" in n["states"] for n in tree()),
+                 "Queue manager did not close after cancel", 5)
 
-        if args.start_at not in ("functional", "extras", "dialogs"):
+        if args.start_at not in ("functional", "extras", "dialogs", "files", "drop", "torrent", "feedback", "hover"):
             click("设置")
             node("保存设置")
             started_settings = args.settings_start_tab == "通用"
@@ -289,9 +492,10 @@ def run(args):
                 started_settings = started_settings or tab == args.settings_start_tab
                 if not started_settings:
                     continue
+                current_context = "settings-" + tab
                 click(tab)
                 node(heading)
-                probe_context("settings-" + tab, ("dialog.secondary.", "settings.choice.", "settings.day."))
+                probe_context(current_context, ("dialog.secondary.", "settings.choice.", "settings.day."))
                 toggles = [n["name"] for n in tree() if n["actions"] and n["role"] in ("check box", "toggle button")
                            and "enabled" in n["states"] and "showing" in n["states"]]
                 for label in dict.fromkeys(toggles):
@@ -320,8 +524,37 @@ def run(args):
         if args.start_at == "functional":
             from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
             token_url = uuid.uuid4().hex
+            resume_gate = threading.Event()
+            resume_gate_reached = threading.Event()
             class Handler(RangeHandler):
                 def do_GET(self):
+                    if self.path == f"/controls-{token_url}.bin?resume=1":
+                        start, end, status = 0, PAYLOAD_SIZE - 1, 200
+                        value = self.headers.get("Range", "")
+                        if value.startswith("bytes="):
+                            first, _, last = value[6:].partition("-")
+                            start = int(first or 0)
+                            end = min(int(last) if last else PAYLOAD_SIZE - 1, PAYLOAD_SIZE - 1)
+                            status = 206
+                        self._headers(status, start, end)
+                        remaining, offset, sent = end - start + 1, start, 0
+                        while remaining:
+                            size = min(remaining, len(BLOCK))
+                            pos = offset % len(BLOCK)
+                            chunk = (BLOCK[pos:] + BLOCK[:pos])[:size]
+                            try:
+                                self.wfile.write(chunk)
+                                self.wfile.flush()
+                            except (BrokenPipeError, ConnectionResetError):
+                                return
+                            remaining -= size
+                            offset += size
+                            sent += size
+                            if sent >= 512 * 1024 and not resume_gate.is_set():
+                                resume_gate_reached.set()
+                                resume_gate.wait()
+                            time.sleep(0.01)
+                        return
                     if self.path == "/page-" + token_url:
                         body = (f'<a href="/controls-{token_url}.zip?harvest=1">zip</a>'
                                 f'<a href="/controls-{token_url}.bin?harvest=2">file</a>').encode()
@@ -344,8 +577,12 @@ def run(args):
                 return ours
 
             def pointer(control):
-                left, top, right, bottom = ui("state")["controlBounds"][control]
-                action("click", x=(left+right)//2, y=(top+bottom)//2)
+                state = ui("state")
+                bounds = state["controlBounds"][control]
+                left, top, right, bottom = bounds
+                point = [(left+right)//2, (top+bottom)//2]
+                action("click", x=point[0], y=point[1])
+                return {"state": state, "bounds": bounds, "point": point}
 
             def enter(text, replace=False):
                 if replace:
@@ -367,6 +604,9 @@ def run(args):
                 enter(url, replace=True)
                 node("类型：file")
                 click("分析资源")
+                # 分析期间原新建窗口仍有可用的提交按钮；等结果窗口再点，避免点击旧布局。
+                wait(lambda: "newtask.url" not in ui("state")["controlBounds"], "Probe did not replace new task dialog", 90)
+                node("选择清晰度、音轨或直接使用自动选择")
                 wait(lambda: "enabled" in node("创建下载", True)["states"], "URL analysis did not finish", 30)
                 observe("newtask-valid-analysis")
                 click("创建下载")
@@ -412,18 +652,42 @@ def run(args):
             if args.functional_stage in ("all", "resume"):
                 # 暂停与继续通过当前任务工具栏真实点击，任务来自同一安装程序的下载引擎。
                 response = core({"type": "command", "request_id": 4, "command": {"kind": "create_task", "spec": {
-                    "url": url+"?resume=1", "resource_kind": "file", "filename": "resume-"+token_url+".bin", "concurrency": 1}}})
+                    "url": url+"?resume=1", "resource_kind": "file", "filename": "resume-"+token_url+".bin", "concurrency": 1,
+                    "speed_limit_kib": 1024}}})
                 queued = next(e["event"]["snapshot"] for e in response["events"] if e["event"]["kind"] == "task_created")
                 created_tasks.add(queued["task_id"])
                 wait(lambda: "taskrow."+queued["task_id"] in ui("state")["controlBounds"], "Queued task not rendered", 15)
-                pointer("taskrow."+queued["task_id"])
+                # 等行的语义和布局同时就绪；新建后的首帧位置不能当作稳定点击坐标。
+                queued_row = node(queued["filename"])
+                x, y, width, height = queued_row["bounds"]
+                window = ui("window")
+                action("click", x=x+width//3-window["deviceX"], y=y+height//2-window["deviceY"])
                 wait(lambda: queued["task_id"] in ui("state")["selectedTaskIds"], "Queued row was not selected", 10)
                 pointer("toolbar.全部开始")
                 wait(lambda: any(t["task_id"] == queued["task_id"] and t["downloaded_bytes"] > 262144 for t in tasks()),
                      "Start button did not begin transfer", 20)
-                pointer("toolbar.全部暂停")
+                wait(resume_gate_reached.is_set, "Resume fixture did not reach its pause gate", 15)
+                running_ui = wait(
+                    lambda: (state if "toolbar.暂停" in (state := ui("state"))["controlBounds"] else None),
+                    "UI did not expose pause for the selected running task", 15)
+                pause_before = next(t for t in tasks() if t["task_id"] == queued["task_id"])
+                assert 0 < pause_before["downloaded_bytes"] < PAYLOAD_SIZE, pause_before
+                pause_click = pointer("toolbar.全部暂停")
+                report["pause_diagnostic"] = {
+                    "ui_running_task": running_ui,
+                    "core_before_click": pause_before,
+                    "ui_at_click": pause_click["state"],
+                    "click": {"control": "toolbar.全部暂停", "bounds": pause_click["bounds"], "point": pause_click["point"]},
+                    "core_after_click": next(t for t in tasks() if t["task_id"] == queued["task_id"]),
+                    "ui_after_click": ui("state"),
+                }
+                save()
                 wait(lambda: any(t["task_id"] == queued["task_id"] and t["status"] == "paused" and t["active_workers"] == 0 for t in tasks()),
                      "Pause button did not settle", 20)
+                report["pause_diagnostic"]["core_after_settle"] = next(t for t in tasks() if t["task_id"] == queued["task_id"])
+                report["pause_diagnostic"]["ui_after_settle"] = ui("state")
+                save()
+                resume_gate.set()
                 assert next(t for t in tasks() if t["task_id"] == downloaded["task_id"])["status"] == "completed", "All-start restarted a completed download"
                 if queued["task_id"] not in ui("state")["selectedTaskIds"]:
                     pointer("taskrow."+queued["task_id"])
@@ -434,38 +698,39 @@ def run(args):
                 assert hashlib.sha256(Path(resumed["output_path"]).read_bytes()).hexdigest() == expected
                 record("all-start, all-pause, selected-task resume, checkpoint and SHA256")
 
-            click("批量添加")
-            node("链接列表")
-            focus_text_field()
-            enter(url+"?batch=1\ninvalid input\n"+url+"?batch=2")
-            node("有效 2 / 输入 3 条链接")
-            click("创建 2 个任务")
-            wait(lambda: len([t for t in tasks() if "batch=" in t["url"] and t["status"] == "completed"]) == 2,
-                 "Batch button did not complete both valid downloads", 90)
-            record("batch form rejects invalid line and downloads two valid links")
+            if args.functional_stage != "queue":
+                click("批量添加")
+                node("链接列表")
+                focus_text_field()
+                enter(url+"?batch=1\ninvalid input\n"+url+"?batch=2")
+                node("有效 2 / 输入 3 条链接")
+                click("创建 2 个任务")
+                wait(lambda: len([t for t in tasks() if "batch=" in t["url"] and t["status"] == "completed"]) == 2,
+                     "Batch button did not complete both valid downloads", 90)
+                record("batch form rejects invalid line and downloads two valid links")
 
-            click("页面抓取")
-            node("网页地址")
-            focus_text_field()
-            enter(f"http://127.0.0.1:{fixture.server_port}/page-{token_url}")
-            click("抓取本页链接")
-            node("网页抓取结果")
-            click("取消当前分类")
-            assert "enabled" not in node("创建 0 个下载", True)["states"]
-            click("全选当前分类")
-            click("读取文件大小")
-            node("≥ 1 MB", True)
-            wait(lambda: "enabled" in node("≥ 1 MB", True)["states"], "Harvest size probe did not finish", 30)
-            for label in ("≥ 1 MB", "≥ 10 MB", "全部大小"):
-                click(label)
-                record("harvest size filter: " + label)
-            category = next(n["name"] for n in tree() if n["actions"] and n["name"].startswith("压缩包 "))
-            click(category)
-            click("创建 1 个下载")
-            wait(lambda: any("harvest=1" in t["url"] and t["status"] == "completed" for t in tasks()),
-                 "Selected harvest resource did not download", 90)
-            assert not any("harvest=2" in t["url"] for t in tasks())
-            record("page harvest, size probing, category selection, select/deselect and selected download")
+                click("页面抓取")
+                node("网页地址")
+                focus_text_field()
+                enter(f"http://127.0.0.1:{fixture.server_port}/page-{token_url}")
+                click("抓取本页链接")
+                node("网页抓取结果")
+                click("取消当前分类")
+                assert "enabled" not in node("创建 0 个下载", True)["states"]
+                click("全选当前分类")
+                click("读取文件大小")
+                node("≥ 1 MB", True)
+                wait(lambda: "enabled" in node("≥ 1 MB", True)["states"], "Harvest size probe did not finish", 30)
+                for label in ("≥ 1 MB", "≥ 10 MB", "全部大小"):
+                    click(label)
+                    record("harvest size filter: " + label)
+                category = next(n["name"] for n in tree() if n["actions"] and n["name"].startswith("压缩包 "))
+                click(category)
+                click("创建 1 个下载")
+                wait(lambda: any("harvest=1" in t["url"] and t["status"] == "completed" for t in tasks()),
+                     "Selected harvest resource did not download", 90)
+                assert not any("harvest=2" in t["url"] for t in tasks())
+                record("page harvest, size probing, category selection, select/deselect and selected download")
 
             settings_to_restore["queue_profiles"] = original_settings["queue_profiles"]
             click("管理队列")
@@ -491,7 +756,40 @@ def run(args):
             from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
             token_url = uuid.uuid4().hex
             payload = bytes(range(256))*128
-            media_path = Path("artifacts/v7-productization/adversarial-2026-10-08/every-control/player-hud-fixture.mkv").resolve()
+            media_path = evidence / "player-hud-fixture.mkv"
+            subtitle_path = evidence / "player-hud-fixture.srt"
+            subtitle_path2 = evidence / "player-hud-fixture-track-2.srt"
+            ffmpeg = runtime / "app/resources/ffmpeg.exe"
+            if not ffmpeg.is_file():
+                raise FileNotFoundError("Bundled ffmpeg is missing: " + str(ffmpeg))
+            subtitle_path.write_text(
+                "1\n00:00:00,500 --> 00:00:03,500\nPlayer HUD subtitle fixture\n\n"
+                "2\n00:00:04,000 --> 00:00:07,500\nSubtitle track remains available\n",
+                encoding="ascii")
+            verify_token = "HUDTRACK7K"
+            ffmpeg_args = [
+                str(ffmpeg), "-v", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc=size=320x180:rate=15",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000",
+                "-f", "srt", "-i", str(subtitle_path),
+            ]
+            if args.verify_player_output:
+                subtitle_path2.write_text(
+                    f"1\n00:00:00,200 --> 00:00:07,500\n{verify_token}\n",
+                    encoding="ascii")
+                ffmpeg_args.extend(["-f", "srt", "-i", str(subtitle_path2)])
+            ffmpeg_args.extend([
+                "-t", "8", "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0", "-map", "3:0",
+            ])
+            if args.verify_player_output:
+                ffmpeg_args.extend(["-map", "4:0"])
+            ffmpeg_args.extend([
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k",
+                "-c:s", "srt", "-metadata:s:a:0", "title=Audio 1", "-metadata:s:a:1", "title=Audio 2",
+                str(media_path),
+            ])
+            subprocess.run(ffmpeg_args, check=True, timeout=60, capture_output=True)
             class ExtraHandler(BaseHTTPRequestHandler):
                 def log_message(self, *_): pass
                 def do_GET(self):
@@ -511,13 +809,22 @@ def run(args):
             def enter(text):
                 action("key",key="A",modifiers=["CTRL"])
                 action("type",text=text)
+            def visible_action(name):
+                return next((n for n in tree() if n["name"] == name and n["actions"] and
+                             "showing" in n["states"]), None)
             if args.extras_stage == "all":
                 for label in ("通知中心", "关于 HLS Downloader"):
-                    pointer("toolbar.更多操作")
+                    if not visible_action(label):
+                        pointer("toolbar.更多操作")
+                        wait(lambda: visible_action(label), "More menu item did not appear: " + label, 5)
                     click(label)
                     node("关于" if label == "关于 HLS Downloader" else label)
                     observe("more-"+label)
                     click("关闭",-1)
+                    title = "关于" if label == "关于 HLS Downloader" else label
+                    wait(lambda: not any(n["name"] == title and n["role"] == "label" and
+                                         "showing" in n["states"] for n in tree()),
+                         "More-menu dialog did not close: " + label, 5)
                     record("main more-menu opens and closes: "+label)
             for ext in ("bin","zip","mkv"):
                 response=core({"type":"command","request_id":32,"command":{"kind":"create_task","spec":{
@@ -574,18 +881,207 @@ def run(args):
                 pointer(control)
             node("1.25x")
             click("选择音轨")
+            click("音轨 2")
+            click("选择音轨")
             click("音轨 1")
-            wait(lambda: 'enabled' in node('1.25x', True)['states'], 'Audio switch did not finish', 15)
             click("选择字幕")
             click("字幕 1")
-            wait(lambda: 'enabled' in node('1.25x', True)['states'], 'Subtitle switch did not finish', 15)
+            wait(lambda: 'enabled' in node('1.25x', True)['states'], 'Player controls did not become available after track choices', 15)
+            expected_metadata = "音轨 2 · 字幕 2" if args.verify_player_output else "音轨 2 · 字幕 1"
+            assert node(expected_metadata), "Player track-count metadata changed after track choices"
+            if args.verify_player_output:
+                import numpy as np
+                import soundcard as sc
+                from PIL import ImageGrab
+
+                speaker = sc.default_speaker()
+                if speaker is None:
+                    raise RuntimeError("No default speaker is available for player output verification")
+                loopback = sc.get_microphone(speaker.id, include_loopback=True)
+                assert loopback.isloopback, "Default speaker loopback is unavailable"
+
+                def player_control(action_name):
+                    core({"type": "command", "request_id": 300,
+                          "command": {"kind": "player_control", "action": action_name}})
+
+                def verify_audio_track(track_name, frequency, other_frequency, preview):
+                    click("选择音轨")
+                    click(track_name)
+                    try:
+                        player_control("preview:" + str(preview))
+                        player_control("speed:1.0")
+                        player_control("resume")
+                        time.sleep(.2)
+                        with loopback.recorder(samplerate=48000, channels=2) as recorder:
+                            samples = recorder.record(numframes=48000)
+                    finally:
+                        player_control("pause")
+                    samples = np.asarray(samples, dtype=np.float64)
+                    if samples.ndim != 2 or samples.shape[1] < 2:
+                        raise AssertionError("SoundCard loopback did not return stereo samples")
+                    mono = samples[:, :2].mean(axis=1)
+                    mono -= mono.mean()
+                    rms = float(np.sqrt(np.mean(mono ** 2)))
+                    assert rms > 1e-4, {"track": track_name, "rms": rms, "device": loopback.name}
+                    spectrum = np.abs(np.fft.rfft(mono * np.hanning(len(mono)))) ** 2
+                    bins = np.fft.rfftfreq(len(mono), d=1 / 48000)
+
+                    def energy_at(target):
+                        return float(spectrum[(bins >= target - 25) & (bins <= target + 25)].sum())
+
+                    target_energy, other_energy = energy_at(frequency), energy_at(other_frequency)
+                    ratio = target_energy / max(other_energy, 1e-30)
+                    assert ratio >= 4.0, {
+                        "track": track_name, "expected_hz": frequency, "other_hz": other_frequency,
+                        "expected_energy": target_energy, "other_energy": other_energy, "ratio": ratio,
+                    }
+                    record("actual player audio output: " + track_name,
+                           {"expected_hz": frequency, "other_hz": other_frequency,
+                            "expected_energy": target_energy, "other_energy": other_energy,
+                            "ratio": ratio, "rms": rms, "loopback_device": loopback.name})
+
+                verify_audio_track("音轨 1", 440, 660, 20)
+                verify_audio_track("音轨 2", 660, 440, 50)
+                click("选择字幕")
+                click("字幕 2")
+                from ctypes import wintypes
+
+                user32 = ctypes.windll.user32
+                user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+                user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+                user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+                user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+                user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+                user32.IsWindowVisible.argtypes = [wintypes.HWND]
+                user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+                user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                                ctypes.c_int, ctypes.c_int, wintypes.UINT]
+                user32.SetWindowPos.restype = wintypes.BOOL
+                user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+                user32.SetForegroundWindow.restype = wintypes.BOOL
+                user32.GetForegroundWindow.restype = wintypes.HWND
+                user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+                user32.SetCursorPos.restype = wintypes.BOOL
+                user32.mouse_event.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                               wintypes.DWORD, ctypes.c_size_t]
+                user32.WindowFromPoint.argtypes = [wintypes.POINT]
+                user32.WindowFromPoint.restype = wintypes.HWND
+                user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+                user32.GetAncestor.restype = wintypes.HWND
+                user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
+                                               wintypes.LPARAM]
+                user32.EnumWindows.restype = wintypes.BOOL
+
+                def locate_player_window():
+                    player_pids = set()
+                    engine_path = (runtime / "app/resources/HLSDownloaderEngine.exe").resolve()
+                    for process in runtime_processes(runtime):
+                        if Path(process["exe"]).resolve() != engine_path:
+                            continue
+                        try:
+                            if "--player-process" in psutil.Process(process["pid"]).cmdline():
+                                player_pids.add(process["pid"])
+                        except psutil.Error:
+                            continue
+                    windows = []
+
+                    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                    def visit(handle, _):
+                        owner = wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(handle, ctypes.byref(owner))
+                        if owner.value not in player_pids:
+                            return True
+                        title = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(handle) + 1)
+                        class_name = ctypes.create_unicode_buffer(256)
+                        rect = wintypes.RECT()
+                        user32.GetWindowTextW(handle, title, len(title))
+                        user32.GetClassNameW(handle, class_name, len(class_name))
+                        user32.GetWindowRect(handle, ctypes.byref(rect))
+                        bounds = [rect.left, rect.top, rect.right, rect.bottom]
+                        windows.append({"hwnd": int(handle), "pid": owner.value,
+                                        "visible": bool(user32.IsWindowVisible(handle)),
+                                        "class": class_name.value, "title": title.value,
+                                        "rect": bounds})
+                        return True
+
+                    user32.EnumWindows(visit, 0)
+                    filename = ours[2]["filename"].casefold()
+                    candidates = [window for window in windows
+                                  if window["visible"]
+                                  and window["rect"][2] - window["rect"][0] >= 320
+                                  and window["rect"][3] - window["rect"][1] >= 180
+                                  and ("mpv" in window["class"].casefold()
+                                       or filename in window["title"].casefold())]
+                    report["player_window_probe"] = {
+                        "player_pids": sorted(player_pids), "windows": windows,
+                        "candidate_hwnds": [window["hwnd"] for window in candidates],
+                    }
+                    if not candidates:
+                        return None
+                    return {"player_pids": sorted(player_pids), "windows": windows,
+                            "target": max(candidates,
+                                          key=lambda window: (window["rect"][2] - window["rect"][0])
+                                          * (window["rect"][3] - window["rect"][1]))}
+
+                try:
+                    player_control("fullscreen")
+                    player_control("resume")
+                    located = wait(locate_player_window,
+                                   "No visible native mpv window owned by the installed player process", 10)
+                    target_window = located["target"]
+                    video_hwnd = wintypes.HWND(target_window["hwnd"])
+                    user32.ShowWindow(video_hwnd, 9)
+                    assert user32.SetWindowPos(video_hwnd, wintypes.HWND(-1), 0, 0, 0, 0,
+                                               0x0001 | 0x0002 | 0x0040), "Could not raise native mpv window"
+                    time.sleep(.2)
+                    rect = wintypes.RECT()
+                    if not user32.GetWindowRect(video_hwnd, ctypes.byref(rect)):
+                        raise ctypes.WinError()
+                    center = wintypes.POINT((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+                    assert user32.SetCursorPos(center.x, center.y), ("mpv center SetCursorPos failed", center.x, center.y)
+                    hit = user32.WindowFromPoint(center)
+                    hit_root = user32.GetAncestor(hit, 2) if hit else None
+                    failure_image = evidence / "mpv-focus-failure.png"
+                    if not hit or int(hit_root) != target_window["hwnd"]:
+                        ImageGrab.grab().save(failure_image)
+                        raise AssertionError({
+                            "video_window": target_window, "window_from_point": int(hit or 0),
+                            "root_window_from_point": int(hit_root or 0),
+                            "failure_screenshot": str(failure_image),
+                        })
+                    user32.mouse_event(0x0002, 0, 0, 0, 0)
+                    user32.mouse_event(0x0004, 0, 0, 0, 0)
+                    try:
+                        wait(lambda: int(user32.GetForegroundWindow() or 0) == target_window["hwnd"],
+                             "Native mpv window did not become foreground after a real center click", 5)
+                    except TimeoutError:
+                        ImageGrab.grab().save(failure_image)
+                        raise
+                    time.sleep(.7)
+                    ImageGrab.grab().save(evidence / "player-subtitle-track-2.png")
+                    player_window_evidence = {
+                        **target_window,
+                        "foreground_hwnd": int(user32.GetForegroundWindow() or 0),
+                        "window_from_point": int(hit),
+                        "root_window_from_point": int(hit_root),
+                        "screenshot": str(evidence / "player-subtitle-track-2.png"),
+                    }
+                finally:
+                    if 'video_hwnd' in locals():
+                        user32.SetWindowPos(video_hwnd, wintypes.HWND(-2), 0, 0, 0, 0,
+                                            0x0001 | 0x0002 | 0x0010)
+                    player_control("pause")
+                    player_control("windowed")
+                    user32.SetForegroundWindow(hwnd)
+                record("actual player subtitle track 2 rendered in native mpv window",
+                       {"subtitle": 2, "token": verify_token, **player_window_evidence})
             click("画中画")
             node("本机播放器 · 画中画")
             click("全屏")
             node("本机播放器 · 全屏播放")
             click("停止播放")
             wait(lambda: "player.speed" not in ui("state")["controlBounds"],"Stop did not remove player HUD",10)
-            record("real player HUD pause, volume, seeking, speed, audio, subtitles, PIP, fullscreen and stop")
+            record("real player HUD pause, volume, seeking, speed, audio/subtitle menu choices, PIP, fullscreen and stop")
             settings_to_restore["completion_sound_enabled"] = original_settings["completion_sound_enabled"]
             pointer("toolbar.设置")
             click("完成提示音")
@@ -603,7 +1099,328 @@ def run(args):
             record("confirmed delete removes task and preserves completed file")
             focus_text_field()
             enter("")
-        if args.start_at == "dialogs":
+        if args.start_at == "torrent":
+            import re
+            import socketserver
+            import struct
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            torrent_token=uuid.uuid4().hex
+            parts=[bytes([i])*65536 for i in (11,22,33)]
+            payload=b"".join(parts)
+            requested_pieces=[]
+            metadata_requests=[]
+            metadata_connections=[]
+            tracker_requests=[]
+            metadata_gate=threading.Event()
+            loading_responses=[]
+            info_bytes=b""
+            def bencode(value):
+                if isinstance(value,int): return b"i"+str(value).encode()+b"e"
+                if isinstance(value,str): value=value.encode()
+                if isinstance(value,bytes): return str(len(value)).encode()+b":"+value
+                if isinstance(value,list): return b"l"+b"".join(bencode(v) for v in value)+b"e"
+                return b"d"+b"".join(bencode(k)+bencode(value[k]) for k in sorted(value))+b"e"
+            class Peer(socketserver.BaseRequestHandler):
+                def handle(self):
+                    self.request.settimeout(3)
+                    def read(size):
+                        data=b""
+                        while len(data)<size:
+                            chunk=self.request.recv(size-len(data))
+                            if not chunk: raise EOFError()
+                            data+=chunk
+                        return data
+                    try:
+                        handshake=read(68)
+                        metadata_connections.append(time.perf_counter())
+                        self.request.sendall(handshake+b"\x00\x00\x00\x02\x05\xe0"+b"\x00\x00\x00\x01\x01")
+                        while True:
+                            size=struct.unpack(">I",read(4))[0]
+                            message=read(size)
+                            if message and message[0]==20:
+                                if message[1]==0:
+                                    body=b"\x14\x00"+bencode({"m":{"ut_metadata":3},"metadata_size":len(info_bytes)})
+                                elif message[1]==3:
+                                    index=int(re.search(rb"5:piecei(\d+)e",message[2:]).group(1))
+                                    time.sleep(.25)
+                                    metadata_requests.append(index)
+                                    body=b"\x14\x01"+bencode({"msg_type":1,"piece":index,"total_size":len(info_bytes)})+info_bytes[index*16384:(index+1)*16384]
+                                else: continue
+                                self.request.sendall(struct.pack(">I",len(body))+body)
+                                continue
+                            if not message or message[0]!=6: continue
+                            index,offset,length=struct.unpack(">III",message[1:13])
+                            requested_pieces.append(index)
+                            body=b"\x07"+struct.pack(">II",index,offset)+payload[index*65536+offset:index*65536+offset+length]
+                            self.request.sendall(struct.pack(">I",len(body))+body)
+                    except (EOFError,OSError): pass
+            class PeerServer(socketserver.ThreadingTCPServer):
+                daemon_threads=True
+            torrent_peer=PeerServer(("127.0.0.1",0),Peer)
+            threading.Thread(target=torrent_peer.serve_forever,daemon=True).start()
+            torrent_bytes=b""
+            class TorrentHttp(BaseHTTPRequestHandler):
+                def log_message(self,*_): pass
+                def do_GET(self):
+                    if self.path=="/loading.torrent":
+                        if not metadata_gate.wait(30): return
+                        loading_responses.append(True)
+                    if not self.path.endswith(".torrent"):
+                        tracker_requests.append(self.path)
+                    body=b"!invalid torrent" if self.path.endswith("invalid.torrent") else torrent_bytes if self.path.endswith(".torrent") else bencode({
+                        "interval":30,"peers":bytes([127,0,0,1])+struct.pack(">H",torrent_peer.server_address[1])})
+                    self.send_response(200)
+                    self.send_header("Content-Length",str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+            fixture=ThreadingHTTPServer(("127.0.0.1",0),TorrentHttp)
+            base=f"http://127.0.0.1:{fixture.server_port}"
+            info={
+                "name":"ui-torrent-"+torrent_token,"piece length":65536,
+                "pieces":b"".join(hashlib.sha1(part).digest() for part in parts),
+                "files":[{"length":len(part),"path":[f"file-{i}.bin"]} for i,part in enumerate(parts)]}
+            info_bytes=bencode(info)
+            torrent_bytes=bencode({"announce":base+"/announce","info":info})
+            threading.Thread(target=fixture.serve_forever,daemon=True).start()
+            source=base+"/ui-"+torrent_token+".torrent"
+            if args.torrent_source=="magnet":
+                source=f"magnet:?xt=urn:btih:{hashlib.sha1(info_bytes).hexdigest()}&dn=ui-magnet-{torrent_token}&x.pe=127.0.0.1:{torrent_peer.server_address[1]}&tr={base}/announce"
+            def enter_torrent(url):
+                click("新建")
+                node("等待输入")
+                bounds=ui("state")["controlBounds"]["newtask.url"]
+                action("click",x=(bounds[0]+bounds[2])//2,y=(bounds[1]+bounds[3])//2)
+                action("type",text=url)
+            if args.torrent_source=="magnet" and args.torrent_checks=="all":
+                loading_source=base+"/loading.torrent"
+                enter_torrent(loading_source)
+                click("创建下载")
+                node("正在解析种子")
+                observe("torrent-metadata-loading")
+                assert not loading_responses,"Loading assertion raced completed metadata"
+                click("关闭")
+                metadata_gate.set()
+                wait(lambda: loading_responses,"Closed probe did not complete",10)
+                time.sleep(1)
+                assert not any("选择种子文件" in n["name"] for n in tree()),"Late result reopened closed probe"
+                assert not any(t["url"]==loading_source for t in core({"type":"snapshot","request_id":64})["tasks"]),"Closing probe created a task"
+                record("torrent shows metadata loading; close remains responsive; late result does not reopen selection or create task")
+                enter_torrent(base+"/invalid.torrent")
+                click("创建下载")
+                wait(lambda:any("invalid bencode" in item[1] for item in ui("state").get("noticeHistory",[])),"Parse error did not reach notification history",10)
+                (evidence/"torrent-invalid-error.png").write_bytes(ui("screenshot",raw=True))
+                wait(lambda:not any("正在解析种子" in n["name"] for n in tree()),"Failed probe did not leave loading",10)
+                record("invalid torrent preserves parse error in notification history and leaves loading state")
+            enter_torrent(source)
+            node("类型：torrent")
+            metadata_started=click("创建下载")
+            node("选择种子文件")
+            metadata_ms=(time.perf_counter()-metadata_started)*1000
+            observe("torrent-file-selection")
+            click("选择全部种子文件")
+            assert "enabled" not in node("创建已选任务",True)["states"]
+            click("选择 file-0.bin")
+            click("选择 file-2.bin")
+            node("已选 2 / 3")
+            click("创建已选任务")
+            def torrent_task():
+                task=next((t for t in core({"type":"snapshot","request_id":65})["tasks"] if t["url"]==source),None)
+                if task: created_tasks.add(task["task_id"])
+                return task
+            done=wait(lambda:(t if (t:=torrent_task()) and t["status"] in ("completed","failed") else None),"UI torrent did not finish",60)
+            assert done["status"]=="completed",done
+            output=Path(done["output_path"])
+            assert output.is_dir(),done
+            for index in (0,2):
+                assert (output/f"file-{index}.bin").read_bytes()==parts[index]
+            assert not (output/"file-1.bin").exists()
+            assert set(requested_pieces)=={0,2},requested_pieces
+            if args.torrent_source=="magnet":
+                assert metadata_requests and not tracker_requests,{"metadata":metadata_requests,"tracker":tracker_requests}
+                peer_ms=(metadata_connections[0]-metadata_started)*1000
+                assert peer_ms<8000,peer_ms
+            record("real new-task "+args.torrent_source+" probe, deselect-all disabled submit, select two files, peer transfer and selected-only publication",
+                   {"ui_action_and_accessibility_observation_ms":metadata_ms,"first_peer_ms":(metadata_connections[0]-metadata_started)*1000,
+                    "metadata_requests":metadata_requests,"tracker_requests":len(tracker_requests),
+                    "requested_pieces":sorted(set(requested_pieces)),"selected_sha256":[hashlib.sha256(parts[i]).hexdigest() for i in (0,2)]})
+        if args.start_at == "drop":
+            from ctypes import wintypes
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            from smoke_v7_presenter_visual import user32, find_window
+            from PIL import ImageGrab
+            drop_token=uuid.uuid4().hex
+            payload=bytes(range(256))*512
+            class DropHttp(BaseHTTPRequestHandler):
+                def log_message(self,*_): pass
+                def do_GET(self):
+                    self.send_response(200)
+                    self.send_header("Content-Length",str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+            fixture=ThreadingHTTPServer(("127.0.0.1",0),DropHttp)
+            threading.Thread(target=fixture.serve_forever,daemon=True).start()
+            source=f"http://127.0.0.1:{fixture.server_port}/drop-{drop_token}.bin"
+            dropped=evidence/"真实拖入链接.txt"
+            dropped.write_text(source+"\n",encoding="utf8")
+            helper=evidence/"DragFixture.java"
+            helper.write_text('''import javax.swing.*;
+import java.awt.datatransfer.*;
+import java.awt.event.*;
+import java.io.File;
+import java.util.List;
+public class DragFixture {
+  public static void main(String[] args) {
+    SwingUtilities.invokeLater(() -> {
+      JFrame frame=new JFrame("HLS native file drag fixture");
+      JLabel file=new JLabel(new File(args[0]).getName(),SwingConstants.CENTER);
+      file.setTransferHandler(new TransferHandler() {
+        public int getSourceActions(JComponent c) { return COPY; }
+        protected Transferable createTransferable(JComponent c) {
+          return new Transferable() {
+            public DataFlavor[] getTransferDataFlavors() { return new DataFlavor[]{DataFlavor.javaFileListFlavor}; }
+            public boolean isDataFlavorSupported(DataFlavor f) { return DataFlavor.javaFileListFlavor.equals(f); }
+            public Object getTransferData(DataFlavor f) throws UnsupportedFlavorException {
+              if (!isDataFlavorSupported(f)) throw new UnsupportedFlavorException(f);
+              return List.of(new File(args[0]));
+            }
+          };
+        }
+      });
+      file.addMouseMotionListener(new MouseMotionAdapter() {
+        public void mouseDragged(MouseEvent e) { System.out.println("drag source started"); file.getTransferHandler().exportAsDrag(file,e,TransferHandler.COPY); }
+      });
+      frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+      frame.add(file); frame.setBounds(15,150,330,170); frame.setVisible(true);
+    });
+  }
+}''',encoding="utf8")
+            temporary=evidence/"java-tmp"
+            temporary.mkdir(exist_ok=True)
+            original_window=ui("window")
+            user32.SetWindowPos.argtypes=[wintypes.HWND,wintypes.HWND,ctypes.c_int,ctypes.c_int,
+                                          ctypes.c_int,ctypes.c_int,wintypes.UINT]
+            user32.SetWindowPos.restype=wintypes.BOOL
+            user32.SystemParametersInfoW.argtypes=[wintypes.UINT,wintypes.UINT,
+                                                   ctypes.POINTER(wintypes.RECT),wintypes.UINT]
+            user32.SystemParametersInfoW.restype=wintypes.BOOL
+            work_area=wintypes.RECT()
+            assert user32.SystemParametersInfoW(0x0030,0,ctypes.byref(work_area),0), \
+                "Could not read desktop work area"
+            margin=16
+            work_width,work_height=work_area.right-work_area.left,work_area.bottom-work_area.top
+            fitted_width=min(1250,work_width-2*margin)
+            fitted_height=min(960,work_height-2*margin)
+            assert fitted_width>0 and fitted_height>0,"Desktop work area is too small for native drag"
+            fitted_x=max(work_area.left+margin,min(500,work_area.right-fitted_width-margin))
+            fitted_y=max(work_area.top+margin,min(0,work_area.bottom-fitted_height-margin))
+            assert user32.SetWindowPos(wintypes.HWND(hwnd),None,fitted_x,fitted_y,
+                                      fitted_width,fitted_height,0x0014), \
+                "Could not fit workbench into the visible desktop work area"
+            time.sleep(.3)
+            try:
+                with (evidence/"drag-fixture.log").open("wb") as log:
+                    drop_helper=subprocess.Popen([str(Path(__file__).resolve().parents[1]/".tool-cache/build-cache/jdk-21/bin/java.exe"),
+                        "-Djava.io.tmpdir="+str(temporary),str(helper),str(dropped)],stdout=log,stderr=log,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+                try:
+                    source_window=wait(lambda:find_window(drop_helper.pid,"HLS native file drag fixture"),"Native drag source did not open",90)
+                except TimeoutError:
+                    diagnostic={"pid":drop_helper.pid,"exit_code":drop_helper.poll(),"exe":None,"windows":[]}
+                    try:
+                        diagnostic["exe"]=psutil.Process(drop_helper.pid).exe()
+                    except psutil.Error as error:
+                        diagnostic["process_error"]=str(error)
+                    user32.GetClassNameW.argtypes=[wintypes.HWND,wintypes.LPWSTR,ctypes.c_int]
+                    user32.GetClassNameW.restype=ctypes.c_int
+                    user32.EnumWindows.argtypes=[ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM),wintypes.LPARAM]
+                    @ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+                    def inspect_drag_window(handle,_):
+                        owner=wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(handle,ctypes.byref(owner))
+                        if owner.value!=drop_helper.pid:
+                            return True
+                        title=ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(handle)+1)
+                        class_name=ctypes.create_unicode_buffer(256)
+                        rect=wintypes.RECT()
+                        user32.GetWindowTextW(handle,title,len(title))
+                        user32.GetClassNameW(handle,class_name,len(class_name))
+                        user32.GetWindowRect(handle,ctypes.byref(rect))
+                        diagnostic["windows"].append({"hwnd":int(handle),"visible":bool(user32.IsWindowVisible(handle)),
+                            "title":title.value,"class":class_name.value,
+                            "rect":[rect.left,rect.top,rect.right,rect.bottom]})
+                        return True
+                    try:
+                        user32.EnumWindows(inspect_drag_window,0)
+                    except OSError as error:
+                        diagnostic["window_enumeration_error"]=str(error)
+                    report["drop_helper_diagnostic"]=diagnostic
+                    raise
+                user32.SetForegroundWindow(source_window)
+                rect=wintypes.RECT()
+                user32.GetWindowRect(source_window,ctypes.byref(rect))
+                sx,sy=(rect.left+rect.right)//2,(rect.top+rect.bottom)//2
+                target=ui("window")
+                workbench_rect=[target["deviceX"],target["deviceY"],
+                                target["deviceX"]+target["deviceWidth"],
+                                target["deviceY"]+target["deviceHeight"]]
+                assert (work_area.left<=workbench_rect[0]<workbench_rect[2]<=work_area.right and
+                        work_area.top<=workbench_rect[1]<workbench_rect[3]<=work_area.bottom), \
+                    "Fitted workbench is not fully inside the visible desktop work area: " + str(workbench_rect)
+                report["native_drag_layout"]={
+                    "work_area":[work_area.left,work_area.top,work_area.right,work_area.bottom],
+                    "workbench_rect":workbench_rect,
+                }
+                save()
+                tx,ty=target["deviceX"]+target["deviceWidth"]//2,target["deviceY"]+target["deviceHeight"]//2
+                user32.SetCursorPos(sx,sy)
+                time.sleep(.3)
+                user32.mouse_event(2,0,0,0,0)
+                time.sleep(.2)
+                try:
+                    for step in range(1,31):
+                        user32.SetCursorPos(round(sx+(tx-sx)*step/30),round(sy+(ty-sy)*step/30))
+                        time.sleep(.05)
+                    time.sleep(.5)
+                    ImageGrab.grab().save(evidence/"native-drag-hover.png")
+                    user32.GetAncestor.argtypes=[wintypes.HWND,wintypes.UINT]
+                    user32.GetAncestor.restype=wintypes.HWND
+                    user32.WindowFromPoint.argtypes=[wintypes.POINT]
+                    user32.WindowFromPoint.restype=wintypes.HWND
+                    cursor=wintypes.POINT()
+                    user32.GetCursorPos(ctypes.byref(cursor))
+                    hit=user32.WindowFromPoint(cursor)
+                    hit_root=user32.GetAncestor(hit,2) if hit else 0
+                    target_visible=(work_area.left<=cursor.x<work_area.right and
+                                    work_area.top<=cursor.y<work_area.bottom and
+                                    int(hit_root or 0)==int(hwnd))
+                    report["native_drag_release_target"]={
+                        "point":[cursor.x,cursor.y],
+                        "work_area":[work_area.left,work_area.top,work_area.right,work_area.bottom],
+                        "hit_window":int(hit or 0),"hit_root_window":int(hit_root or 0),
+                        "workbench_window":int(hwnd),"visible_workbench_hit":target_visible,
+                    }
+                    save()
+                    if not target_visible:
+                        user32.SetCursorPos(sx,sy)
+                        raise AssertionError(
+                            "Native drag release point is outside the visible workbench: " +
+                            json.dumps(report["native_drag_release_target"])
+                        )
+                finally:
+                    user32.mouse_event(4,0,0,0,0)
+                def dropped_task():
+                    task=next((t for t in core({"type":"snapshot","request_id":75})["tasks"] if t["url"]==source),None)
+                    if task: created_tasks.add(task["task_id"])
+                    return task if task and task["status"] in ("completed","failed") else None
+                done=wait(dropped_task,"Native file drag did not import and finish",30)
+                assert done["status"]=="completed",done
+                assert Path(done["output_path"]).read_bytes()==payload
+                observe("native-drag-imported")
+                record("real cross-process native file drag imports UTF8 URL list and downloads exact bytes",
+                       {"bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()})
+            finally:
+                user32.SetWindowPos(hwnd,None,original_window["deviceX"],original_window["deviceY"],original_window["deviceWidth"],original_window["deviceHeight"],0x0014)
+        if args.start_at in ("dialogs", "files"):
             from ctypes import wintypes
             from PIL import ImageGrab
             user=ctypes.windll.user32
@@ -614,8 +1431,7 @@ def run(args):
             user.GetWindowThreadProcessId.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.DWORD)]
             user.EnumWindows.argtypes=[ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM),wintypes.LPARAM]
             callback_type=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
-            def cancel_chooser(title, control_label):
-                result={}
+            def use_chooser(title, control_label, selected_path=None):
                 target=node(control_label,True)
                 x,y,w,h=target["bounds"]
                 window=ui("window")
@@ -634,29 +1450,116 @@ def run(args):
                         return True
                     user.EnumWindows(visit,0)
                     return found[0] if found else None
-                action("click",**click_point)
-                chooser=wait(find,"System chooser not visible: "+title,20)
-                ImageGrab.grab().save(evidence/("chooser-"+title[:12]+".png"))
-                vm,root=client.context_from_window(chooser)
-                owned=[]
+                click_errors=[]
+                click_thread=None
+                if selected_path is None:
+                    def click_cancel_flow():
+                        try:
+                            action("click",timeout=60,**click_point)
+                        except Exception as error:
+                            click_errors.append(error)
+                    click_thread=threading.Thread(target=click_cancel_flow,daemon=True)
+                    click_thread.start()
+                else:
+                    action("click",**click_point)
                 try:
-                    controls=client.walk(vm,root,1000)
-                    cancel=next(n for n in controls if n["name"].startswith("取消") and n["role"]=="push button")
-                    context,owned=client.resolve_path(vm,root,cancel["path"])
-                    client.invoke(vm,context,None)
+                    chooser=wait(find,"System chooser not visible: "+title,20)
+                    ImageGrab.grab().save(evidence/("chooser-"+title[:12]+".png"))
+                    vm,root=client.context_from_window(chooser)
+                    owned=[]
+                    try:
+                        controls=client.walk(vm,root,1000)
+                        (evidence/("chooser-"+title[:12]+".json")).write_text(json.dumps(controls,ensure_ascii=False,indent=2),encoding="utf8")
+                        if selected_path is not None:
+                            field=next(n for n in controls if n["role"]=="text" and "editable" in n["states"] and "showing" in n["states"])
+                            x,y,w,h=field["bounds"]
+                            action("click",x=x+w//2-window["deviceX"],y=y+h//2-window["deviceY"])
+                            action("key",key="A",modifiers=["CTRL"])
+                            action("type",text=str(selected_path))
+                            controls=client.walk(vm,root,1000)
+                        labels=("保存","打开") if selected_path is not None else ("取消",)
+                        button=next(n for n in controls if any(n["name"].startswith(label) for label in labels) and n["role"]=="push button")
+                        context,owned=client.resolve_path(vm,root,button["path"])
+                        client.invoke(vm,context,None)
+                    finally:
+                        for context in reversed(owned):client.dll.releaseJavaObject(vm,context)
+                        client.dll.releaseJavaObject(vm,root)
+                    wait(lambda: not user.IsWindowVisible(wintypes.HWND(chooser)),"System chooser button failed",10)
                 finally:
-                    for context in reversed(owned):client.dll.releaseJavaObject(vm,context)
-                    client.dll.releaseJavaObject(vm,root)
-                wait(lambda: not user.IsWindowVisible(wintypes.HWND(chooser)),"System chooser cancel button failed",10)
-                record("real system chooser opens and cancels: "+title)
-            click("新建")
-            node("新建下载")
-            cancel_chooser("选择下载保存目录","选择目录")
-            click("取消",-1)
-            for label,title in (("导入任务或种子","导入任务 JSON、种子、Metalink 或 URL 列表"),("导出任务列表","导出任务列表")):
+                    if click_thread:
+                        click_thread.join(timeout=60)
+                        if click_thread.is_alive():
+                            raise TimeoutError("Chooser click action did not return after closing: "+title)
+                        if click_errors:
+                            raise click_errors[0]
+                record("real system chooser "+("selects file: " if selected_path is not None else "opens and cancels: ")+title)
+            if args.start_at == "files":
+                from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+                file_token=uuid.uuid4().hex
+                payload=bytes(range(256))*128
+                class FileHandler(BaseHTTPRequestHandler):
+                    def log_message(self,*_): pass
+                    def do_GET(self):
+                        self.send_response(200)
+                        self.send_header("Content-Length",str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+                fixture=ThreadingHTTPServer(("127.0.0.1",0),FileHandler)
+                threading.Thread(target=fixture.serve_forever,daemon=True).start()
+                file_url=f"http://127.0.0.1:{fixture.server_port}/files-{file_token}.bin"
+                response=core({"type":"command","request_id":50,"command":{"kind":"create_task","spec":{
+                    "url":file_url,"filename":f"files-{file_token}.bin","resource_kind":"file"}}})
+                source=next(e["event"]["snapshot"] for e in response["events"] if e["event"]["kind"]=="task_created")
+                created_tasks.add(source["task_id"])
+                def file_tasks():
+                    matches=[t for t in core({"type":"snapshot","request_id":51})["tasks"] if t["url"]==file_url]
+                    created_tasks.update(t["task_id"] for t in matches)
+                    return matches
+                source=wait(lambda:next((t for t in file_tasks() if t["status"]=="completed"),None),"File fixture did not complete",30)
+                target=node(source["filename"])
+                x,y,w,h=target["bounds"]
+                window=ui("window")
+                action("click",x=x+w//3-window["deviceX"],y=y+h//2-window["deviceY"])
+                wait(lambda:ui("state")["selectedTaskIds"]==[source["task_id"]],"Export source not selected",10)
                 bounds=ui("state")["controlBounds"]["toolbar.更多操作"]
                 action("click",x=(bounds[0]+bounds[2])//2,y=(bounds[1]+bounds[3])//2)
-                cancel_chooser(title,label)
+                exported=evidence/"tasks-roundtrip.json"
+                use_chooser("导出任务列表","导出任务列表",exported)
+                wait(exported.is_file,"Export did not write file",15)
+                document=json.loads(exported.read_text(encoding="utf8"))
+                assert len(document["tasks"])==1 and document["tasks"][0]["url"]==file_url,document
+                click("删除")
+                click("确认删除")
+                wait(lambda:not file_tasks(),"Delete did not remove exported record",15)
+                assert Path(source["output_path"]).read_bytes()==payload
+                Path(source["output_path"]).unlink()
+                created_tasks.discard(source["task_id"])
+                # Core 删除可先于 Compose 关闭确认窗完成，等模态控件真正移除后再点主窗口。
+                wait(lambda: not any(key.startswith("dialog.") for key in ui("state")["controlBounds"]),
+                     "Delete confirmation did not leave the main window", 10)
+                import_menu_before = ui("state")
+                bounds=ui("state")["controlBounds"]["toolbar.更多操作"]
+                action("click",x=(bounds[0]+bounds[2])//2,y=(bounds[1]+bounds[3])//2)
+                import_menu_after = ui("state")
+                (evidence/"import-menu-click.json").write_text(json.dumps({
+                    "before": import_menu_before, "after": import_menu_after,
+                    "bounds": bounds, "window": ui("window")}, ensure_ascii=False, indent=2), encoding="utf8")
+                (evidence/"import-menu-click.png").write_bytes(ui("screenshot", raw=True))
+                use_chooser("导入任务 JSON、种子、Metalink 或 URL 列表","导入任务或种子",exported)
+                imported=wait(lambda:next((t for t in file_tasks() if t["status"]=="completed"),None),"Imported task did not download",30)
+                assert Path(imported["output_path"]).read_bytes()==payload
+                record("actual export chooser saves selected task; delete preserves file; import chooser recreates task and downloads matching bytes")
+                record("imported output SHA256",hashlib.sha256(payload).hexdigest())
+            else:
+                click("新建")
+                node("新建下载")
+                use_chooser("选择下载保存目录","选择目录")
+                click("取消",-1)
+            for label,title in (("导入任务或种子","导入任务 JSON、种子、Metalink 或 URL 列表"),("导出任务列表","导出任务列表")):
+                if args.start_at=="files": break
+                bounds=ui("state")["controlBounds"]["toolbar.更多操作"]
+                action("click",x=(bounds[0]+bounds[2])//2,y=(bounds[1]+bounds[3])//2)
+                use_chooser(title,label)
             original_window=ui("window")
             click("最大化")
             node("还原",True)
@@ -690,6 +1593,10 @@ def run(args):
         report["error"] = str(error)
         report["traceback"] = traceback.format_exc()
         try:
+            report["failure_tasks"] = core({"type": "snapshot", "request_id": 88})["tasks"]
+        except Exception:
+            pass
+        try:
             (evidence / "failure.png").write_bytes(ui("screenshot", raw=True))
             report["failure_state"] = ui("state")
             report["failure_tree"] = tree()
@@ -699,7 +1606,8 @@ def run(args):
     finally:
         try:
             action("release")
-            action("key", key="ESCAPE")
+            if not startup_modal_failure:
+                action("key", key="ESCAPE")
         except Exception:
             pass
         try:
@@ -710,9 +1618,17 @@ def run(args):
                     "kind": "task_action", "task_id": task_id, "action": "delete_files"}})
             if settings_to_restore:
                 core({"type":"store_settings","request_id":91,"values":settings_to_restore})
+            if args.start_at == "functional":
+                resume_gate.set()
             if fixture:
                 fixture.shutdown()
                 fixture.server_close()
+            if torrent_peer:
+                torrent_peer.shutdown()
+                torrent_peer.server_close()
+            if drop_helper:
+                drop_helper.terminate()
+                drop_helper.wait(timeout=10)
         except Exception as error:
             report["cleanup_error"] = str(error)
             report["passed"] = False
@@ -733,7 +1649,11 @@ if __name__ == "__main__":
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--extras-stage", choices=("all", "selection"), default="all")
-    parser.add_argument("--functional-stage", choices=("all", "resume", "batch"), default="all")
+    parser.add_argument("--verify-player-output", action="store_true",
+                        help="Verify selected audio via loopback and save native subtitle evidence")
+    parser.add_argument("--functional-stage", choices=("all", "resume", "batch", "queue"), default="all")
     parser.add_argument("--settings-start-tab", default="通用")
-    parser.add_argument("--start-at", choices=("main", "newtask", "settings", "functional", "extras", "dialogs"), default="main")
+    parser.add_argument("--torrent-source", choices=("torrent", "magnet"), default="torrent")
+    parser.add_argument("--torrent-checks", choices=("all", "download"), default="all")
+    parser.add_argument("--start-at", choices=("main", "newtask", "settings", "functional", "extras", "dialogs", "files", "drop", "torrent", "feedback", "hover"), default="main")
     raise SystemExit(run(parser.parse_args()))

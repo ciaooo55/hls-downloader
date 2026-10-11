@@ -69,8 +69,9 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const host = document.createElement('div'); host.dataset.hlsSubtitle = id
     const shadow = host.attachShadow({ mode: 'open' })
     const style = document.createElement('style')
+    // 播放器顶行留给下载和更多操作；窄播放器也不能让字幕工具栏遮住它们。
     style.textContent = `:host{position:fixed;z-index:2147483646;pointer-events:none;display:block;box-sizing:border-box}
-      *{box-sizing:border-box} .tools{position:absolute;left:8px;top:8px;display:flex;gap:4px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 16px);pointer-events:auto;font:12px system-ui;color:white}
+      *{box-sizing:border-box} .tools{position:absolute;right:8px;top:50px;display:flex;justify-content:flex-end;gap:4px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 16px);pointer-events:auto;font:12px system-ui;color:white}
       button{border:1px solid #596675;border-radius:5px;padding:5px 8px;background:#17202ee8;color:#fff;cursor:pointer;font:12px system-ui}button:hover{background:#285379}button:disabled{opacity:.65;cursor:default}
       .status{padding:4px 6px;background:#111b;border-radius:4px;max-width:300px;white-space:normal}
       .captions{position:absolute;bottom:48px;left:5%;width:90%;text-align:center;font:600 clamp(15px,2vw,24px)/1.4 system-ui;color:#fff;text-shadow:0 1px 3px #000;white-space:pre-wrap;overflow-wrap:anywhere}

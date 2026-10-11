@@ -734,9 +734,31 @@ describe('resource rules', () => {
       'attachment; filename="report.json"',
     )).toBe('file')
   })
+  it('takes over actual browser downloads without excluding page-resource file types', () => {
+    for (const [url, mime, filename] of [
+      ['https://site.test/photo.png', 'image/png', 'photo.png'],
+      ['https://site.test/export', 'application/json', 'export.json'],
+      ['https://site.test/app.js', 'application/javascript', 'app.js'],
+      ['https://site.test/theme.css', 'text/css', 'theme.css'],
+      ['https://site.test/download.php', 'application/octet-stream', 'download.php'],
+      ['https://site.test/get?id=1', 'application/octet-stream', 'download'],
+      ['https://site.test/page', 'text/html', 'page.html'],
+    ]) {
+      expect(classifyDownload(url, mime, filename, '', true)).toBe('file')
+      expect(classifyDownload(url, mime, filename)).toBeNull()
+    }
+    expect(classifyDownload('https://site.test/movie.mp4', 'video/mp4', 'movie.mp4', '', true)).toBe('media')
+  })
   it('honors Alt bypass and Ctrl force', () => {
     const base = { url: 'https://a.test/file.zip', size: 20, enabled: true, minimumBytes: 10, excludedHosts: [], explicitClick: true }
     expect(shouldTakeover({ ...base, altBypass: true })).toBe(false)
+    for (const url of ['blob:https://export.test/local-file', 'data:text/plain,export']) {
+      const local = { ...base, url, sourcePageUrl: 'https://export.test/report', localBrowserDownload: true }
+      expect(shouldTakeover(local)).toBe(true)
+      expect(shouldTakeover({ ...local, altBypass: true })).toBe(false)
+      expect(shouldTakeover({ ...local, excludedHosts: ['export.test'] })).toBe(false)
+      expect(shouldTakeover({ ...local, localBrowserDownload: false })).toBe(false)
+    }
     expect(shouldTakeover({ ...base, enabled: false, ctrlForce: true })).toBe(true)
     expect(shouldTakeover({ ...base, size: 9 })).toBe(false)
     expect(shouldTakeover({ ...base, size: 0 })).toBe(true)

@@ -22,7 +22,7 @@ from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 
-from smoke_extension_media import _find_edge, _find_firefox, _overlay_state, _resource_id
+from smoke_extension_media import _find_edge, _find_firefox, _overlay_state, _resource_id, _fit_browser_window
 
 
 HLS = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
@@ -32,6 +32,66 @@ CASES = [
     ("dash-js", "https://reference.dashif.org/dash.js/latest/samples/getting-started/manual-load-single-video.html", DASH),
     ("mdn-video", "https://interactive-examples.mdn.mozilla.net/pages/tabbed/video.html", "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm"),
 ]
+
+
+def _hook_replay_diagnostics(driver, expected: str) -> dict:
+    """Replay MAIN-world resource events and summarize matching network evidence."""
+    replay = driver.execute_async_script(
+        """
+        const [expected, done] = arguments;
+        const events = [];
+        const safeUrl = value => {
+          try {
+            const url = new URL(value);
+            url.search = [...url.searchParams.keys()].map(key => `${encodeURIComponent(key)}=<redacted>`).join('&');
+            url.hash = '';
+            return url.href;
+          } catch { return String(value || '').slice(0, 500); }
+        };
+        const onResource = event => {
+          let detail = {};
+          try { detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : {}; } catch {}
+          events.push({
+            url: safeUrl(detail.url), mimeType: detail.mimeType || '',
+            inspected: detail.inspection?.inspected === true,
+            manifestType: detail.inspection?.manifestType || '',
+            variantCount: Array.isArray(detail.inspection?.variants) ? detail.inspection.variants.length : 0,
+          });
+        };
+        window.addEventListener('__hls_downloader_resource__', onResource);
+        window.dispatchEvent(new Event('__hls_downloader_replay__'));
+        setTimeout(() => {
+          window.removeEventListener('__hls_downloader_resource__', onResource);
+          const expectedUrl = new URL(expected);
+          const network = performance.getEntriesByType('resource')
+            .filter(entry => {
+              try {
+                const url = new URL(entry.name);
+                return /\.m3u8?(?:$|[?#])/i.test(url.href)
+                  || (url.origin === expectedUrl.origin && url.pathname === expectedUrl.pathname);
+              } catch { return false; }
+            })
+            .map(entry => ({url: safeUrl(entry.name), initiatorType: entry.initiatorType, durationMs: Math.round(entry.duration)}));
+          done({events, network, marker: document.documentElement.getAttribute('data-hls-downloader-extension')});
+        }, 1200);
+        """,
+        expected,
+    )
+    driver.switch_to.default_content()
+    replay["overlay_after_replay"] = _overlay_state(driver)
+    return replay
+
+
+def _browser_console_errors(driver) -> list[dict]:
+    try:
+        entries = driver.get_log("browser")
+    except Exception as error:
+        return [{"logging_unavailable": str(error)}]
+    return [
+        {key: entry.get(key) for key in ("level", "message", "source", "timestamp")}
+        for entry in entries
+        if entry.get("level") in {"SEVERE", "ERROR"}
+    ][:100]
 
 
 def play_frames(driver):
@@ -62,28 +122,41 @@ def run(args):
             if args.browser == "edge":
                 options = EdgeOptions()
                 options.binary_location = str(_find_edge())
-                for value in [f"--user-data-dir={root / 'profile'}", "--headless=new",
+                for value in [f"--user-data-dir={root / 'profile'}", *([] if args.headed else ['--headless=new']),
                               "--disable-features=DisableLoadExtensionCommandLineSwitch",
                               f"--disable-extensions-except={extension}", f"--load-extension={extension}",
                               "--autoplay-policy=no-user-gesture-required", "--no-first-run", "--window-size=1280,900"]:
                     options.add_argument(value)
+                options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
                 service = EdgeService(executable_path=str(args.driver))
                 driver = webdriver.Edge(service=service, options=options)
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": """
+                    (() => {
+                      const errors = window.__hlsQaRuntimeErrors = [];
+                      const add = value => { errors.push(value); if (errors.length > 100) errors.shift(); };
+                      window.addEventListener('error', event => add({type:'error',message:event.message,filename:event.filename,line:event.lineno,column:event.colno}), true);
+                      window.addEventListener('unhandledrejection', event => add({type:'unhandledrejection',reason:String(event.reason?.stack||event.reason||'').slice(0,1000)}));
+                    })();
+                """})
             else:
                 addon = root / "extension.xpi"
                 with zipfile.ZipFile(addon, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                     for p in sorted(extension.rglob("*")):
                         if p.is_file(): archive.write(p, p.relative_to(extension).as_posix())
                 options = FirefoxOptions()
+                options.set_preference('browser.shell.checkDefaultBrowser', False)
+                options.set_preference('browser.aboutwelcome.enabled', False)
+                options.set_preference('browser.newtabpage.activity-stream.asrouter.providers.onboarding', '{"id":"onboarding","type":"local","localProvider":"OnboardingMessageProvider","enabled":false}')
+                options.set_preference('browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments', '{"id":"messaging-experiments","type":"remote-experiments","enabled":false}')
                 options.binary_location = str(_find_firefox())
-                options.add_argument("-headless")
+                if not args.headed: options.add_argument("-headless")
                 options.set_preference("media.autoplay.default", 0)
                 options.set_preference("media.autoplay.blocking_policy", 0)
                 service = FirefoxService(executable_path=str(args.driver),
                                          service_args=["--profile-root", str(root)])
                 driver = webdriver.Firefox(service=service, options=options)
                 driver.install_addon(str(addon), temporary=True)
-                driver.set_window_size(1280, 900)
+            _fit_browser_window(driver)
             driver.set_page_load_timeout(30)
             for name, url, expected in CASES:
                 if args.case and name not in args.case: continue
@@ -95,6 +168,8 @@ def run(args):
                     while time.monotonic() < deadline:
                         driver.switch_to.default_content()
                         play_frames(driver)
+                        # 小屏幕沙盒中 HLS demo 的播放器位于首屏下方；入口只随可见播放器显示。
+                        driver.execute_script("document.querySelector('video')?.scrollIntoView({block:'center',inline:'nearest'})")
                         state = _overlay_state(driver)
                         record["state"] = state
                         # The button must point at the requested manifest/media, not merely any detected URL.
@@ -105,6 +180,9 @@ def run(args):
                     driver.save_screenshot(str(args.report.with_name(f"{args.report.stem}-{name}.png")))
                     if not record["passed"]:
                         record["page_text"] = driver.execute_script("return document.body.innerText.slice(0,6000)")
+                        if args.browser == "edge" and name == "hls-js":
+                            record["hook_diagnostics"] = _hook_replay_diagnostics(driver, expected)
+                            record["browser_console_errors"] = _browser_console_errors(driver)
                 except Exception as error:
                     record["error"] = str(error)
                 result["cases"].append(record)
@@ -123,5 +201,6 @@ if __name__ == "__main__":
     parser.add_argument("--driver", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--browser", choices=("edge", "firefox"), default="edge")
+    parser.add_argument("--headed", action="store_true")
     parser.add_argument("--case", choices=tuple(c[0] for c in CASES), action="append")
     raise SystemExit(0 if run(parser.parse_args())["passed"] else 1)

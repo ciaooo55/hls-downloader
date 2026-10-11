@@ -209,6 +209,17 @@ describe('browser request chains', () => {
     expect(contexts.map(item => item.requestId)).toEqual(['segment-new', 'manifest'])
   })
 
+  it('keeps different authorization contexts for media directories on the same origin', () => {
+    const store = new RequestChainStore()
+    for (const [index, path] of ['hls/master.m3u8', 'init/video.mp4', 'chunks/1.m4s', 'chunks/2.m4s'].entries()) {
+      store.observeRequest({ requestId: path, url: `https://cdn.test/${path}`, tabId: 7,
+        type: 'xmlhttprequest', documentUrl: 'https://page.test/watch', timeStamp: 1000 + index,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer ${path.split('/')[0]}` }] })
+    }
+    expect(store.contextsForPage(7, 'https://page.test/watch', 1200).map(c => c.requestId))
+      .toEqual(['chunks/2.m4s', 'init/video.mp4', 'hls/master.m3u8'])
+  })
+
   it('keeps a recent playback context long enough for a user to choose a resource', () => {
     const store = new RequestChainStore()
     store.observeRequest({ requestId: 'old', url: 'https://a.test/file', tabId: 1, timeStamp: 1000 })
@@ -296,7 +307,7 @@ describe('browser request chains', () => {
     })).toBe('')
   })
 
-  it('drops only the navigated tab request chains', () => {
+  it('drops only the closed tab request chains', () => {
     const store = new RequestChainStore()
     store.observeRequest({ requestId: 'old-page', url: 'https://cdn.test/old.m3u8', tabId: 7, timeStamp: 1000 })
     store.observeRequest({ requestId: 'other-tab', url: 'https://cdn.test/other.m3u8', tabId: 8, timeStamp: 1000 })
@@ -305,6 +316,25 @@ describe('browser request chains', () => {
 
     expect(store.find({ url: 'https://cdn.test/old.m3u8' }, 1200)).toBeUndefined()
     expect(store.find({ url: 'https://cdn.test/other.m3u8' }, 1200)?.requestId).toBe('other-tab')
+  })
+
+  it('keeps POST identity across navigation without retaining replay credentials or body', () => {
+    const store = new RequestChainStore()
+    store.observeRequest({
+      requestId: 'post-download', url: 'https://site.test/export', tabId: 7,
+      method: 'POST', documentUrl: 'https://site.test/form', timeStamp: 1000,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer old-page' }],
+      requestBody: { formData: { token: ['single-use'] } },
+    })
+    store.observeRequest({ requestId: 'old-get', url: 'https://site.test/old.bin', tabId: 7, timeStamp: 1000 })
+    store.clearTab(7, true)
+    const retained = store.find({ url: 'https://site.test/export' }, 1100)
+    expect(retained?.method).toBe('POST')
+    expect(retained?.requestHeaders).toEqual({})
+    expect(retained?.requestBody).toBe('')
+    expect(store.find({ url: 'https://site.test/old.bin' }, 1100)).toBeUndefined()
+    store.clearTab(7)
+    expect(store.find({ url: 'https://site.test/export' }, 1100)).toBeUndefined()
   })
 
   it('keeps a failed request briefly for the downloads.onCreated race', () => {

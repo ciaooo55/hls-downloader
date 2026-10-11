@@ -9,14 +9,6 @@ const background = readFileSync(fileURLToPath(new URL('../entrypoints/background
 const css = readFileSync(`${popupRoot}/style.css`, 'utf8')
 
 describe('popup first paint', () => {
-  it('keeps the 400px preferred width but clamps boot and loaded surfaces to the viewport', () => {
-    for (const source of [html, css]) {
-      const bodyRule = source.match(/body\s*\{([^}]+)\}/)?.[1] ?? ''
-      expect(bodyRule).toMatch(/(?:^|;)\s*width:\s*400px;/)
-      expect(bodyRule).toMatch(/max-width:\s*100vw;/)
-    }
-  })
-
   it('lets resource cards and branding shrink without losing action buttons', () => {
     expect(css).toMatch(/article\s*\{[^}]*min-width:\s*0;/)
     expect(css).toMatch(/\.brand\s*>\s*div\s*\{[^}]*min-width:\s*0;/)

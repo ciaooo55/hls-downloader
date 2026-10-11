@@ -25,6 +25,17 @@ const tokenStyle = document.createElement('style')
 tokenStyle.textContent = THEME_TOKENS_CSS + THEME_BASE_CSS
 document.head.append(tokenStyle)
 
+function updatePopupMaxHeight(main: HTMLElement) {
+  // Firefox 的内容 viewport 可能高于原生弹窗；按工作区剩余高度约束，让资源列表滚动。
+  const screen = window.screen as Screen & { availTop?: number }
+  const firefoxWindow = window as Window & { mozInnerScreenY?: number }
+  const viewportTop = firefoxWindow.mozInnerScreenY ?? window.screenY
+  const workAreaTop = screen.availTop ?? 0
+  const remainingHeight = workAreaTop + screen.availHeight - viewportTop
+  const maxHeight = Math.max(1, Math.min(640, Math.floor(remainingHeight)))
+  main.style.setProperty('--popup-max-height', `${maxHeight}px`)
+}
+
 const THEME_LABELS: Record<ThemePreference, string> = {
   auto: '主题：自动',
   dark: '主题：深色',
@@ -40,24 +51,33 @@ const SEND_BUSY: ReadonlySet<SendState> = new Set(['sending', 'confirming', 'que
 const TVBOX_PUSH_LABELS: Record<PushState, string> = { working: '推送中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const CAST_PUSH_LABELS: Record<PushState, string> = { working: '投屏中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const PUSH_BUSY: ReadonlySet<PushState> = new Set(['working', 'awaiting', 'sent'])
-const ICONS: Record<string, string> = {
-  auto: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>',
-  dark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 15.4A8.6 8.6 0 0 1 8.6 3.2 8.9 8.9 0 1 0 20.8 15.4Z"/></svg>',
-  light: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
-  close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',
-  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m-5-5 5 5-5 5"/></svg>',
-  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"/></svg>',
-  cast: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18a2 2 0 0 1 2 2M5 13a7 7 0 0 1 7 7M5 8a12 12 0 0 1 12 12M19 5H5v3"/></svg>',
-  tv: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
-  chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>',
-  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',
-  scan: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/></svg>',
-  media: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/></svg>',
-  copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
+const ICONS: Record<string, Array<['path' | 'circle' | 'rect', Record<string, string>]>> = {
+  auto: [['path', { d: 'M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z' }]],
+  dark: [['path', { d: 'M20.8 15.4A8.6 8.6 0 0 1 8.6 3.2 8.9 8.9 0 1 0 20.8 15.4Z' }]],
+  light: [['circle', { cx: '12', cy: '12', r: '4' }], ['path', { d: 'M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4' }]],
+  close: [['path', { d: 'm6 6 12 12M18 6 6 18' }]],
+  open: [['path', { d: 'M5 12h13m-5-5 5 5-5 5' }]],
+  download: [['path', { d: 'M12 4v10m0 0 4-4m-4 4-4-4M5 19h14' }]],
+  cast: [['path', { d: 'M5 18a2 2 0 0 1 2 2M5 13a7 7 0 0 1 7 7M5 8a12 12 0 0 1 12 12M19 5H5v3' }]],
+  tv: [['rect', { x: '3', y: '5', width: '18', height: '12', rx: '2' }], ['path', { d: 'M8 21h8M12 17v4' }]],
+  chevron: [['path', { d: 'm7 10 5 5 5-5' }]],
+  check: [['path', { d: 'm5 12 4 4L19 6' }]],
+  scan: [['path', { d: 'M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7' }]],
+  media: [['rect', { x: '3', y: '5', width: '18', height: '14', rx: '2' }], ['path', { d: 'm10 9 5 3-5 3Z' }]],
+  copy: [['rect', { x: '9', y: '9', width: '11', height: '11', rx: '2' }], ['path', { d: 'M5 15V6a2 2 0 0 1 2-2h9' }]],
 }
 function icon(name: string, label = '') {
   const node = el('span', 'hlsd-icon')
-  node.innerHTML = ICONS[name] || ''
+  const namespace = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(namespace, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const [tag, attributes] of ICONS[name] || []) {
+    const shape = document.createElementNS(namespace, tag)
+    for (const [attribute, value] of Object.entries(attributes)) shape.setAttribute(attribute, value)
+    svg.append(shape)
+  }
+  node.append(svg)
   if (label) node.setAttribute('aria-label', label)
   return node
 }
@@ -187,7 +207,9 @@ async function main() {
     restorePromptsBtn,
   )
   mainEl.append(header, controls, updateNotice, errorBox, section, footer)
+  updatePopupMaxHeight(mainEl)
   root.append(mainEl)
+  window.addEventListener('resize', () => updatePopupMaxHeight(mainEl))
   document.documentElement.dataset.popupReady = 'shell'
 
   const themeRestoreGeneration = themeChangeGeneration

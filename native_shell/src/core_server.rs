@@ -609,19 +609,24 @@ fn wait_events(
     after_sequence: u64,
     timeout_ms: u64,
 ) -> Vec<EventEnvelope> {
-    if let Ok(events) = coordinator.events_after(after_sequence, 256) {
-        if !events.is_empty() {
-            return events;
+    let deadline = std::time::Instant::now()
+        + Duration::from_millis(timeout_ms.clamp(1, 60_000));
+    loop {
+        if let Ok(events) = coordinator.events_after(after_sequence, 256) {
+            if !events.is_empty() {
+                return events;
+            }
         }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Vec::new();
+        }
+        // 下载工作线程直接发布事件，不经过 IPC 命令的 bump_notify。
+        // 分段等待让进度及时到达客户端，同时保留空闲长轮询的超时语义。
+        let (lock, condvar) = notify.as_ref();
+        let Ok(guard) = lock.lock() else { return Vec::new(); };
+        let _ = condvar.wait_timeout(guard, remaining.min(Duration::from_millis(100)));
     }
-    let timeout = Duration::from_millis(timeout_ms.clamp(1, 60_000));
-    let (lock, condvar) = notify.as_ref();
-    if let Ok(guard) = lock.lock() {
-        let _ = condvar.wait_timeout_while(guard, timeout, |sequence| *sequence <= after_sequence);
-    }
-    coordinator
-        .events_after(after_sequence, 256)
-        .unwrap_or_default()
 }
 
 fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
@@ -747,16 +752,12 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                 if global_start_due {
                     last_start = stamp.clone();
                 }
-                if global_start_due
-                    || settings
-                        .queue_profiles
-                        .iter()
-                        .any(|profile| profile.schedule_enabled)
-                {
-                    let _ = coordinator.start_next_queued();
-                }
+                let queue_start_due = global_start_due
+                    || settings.queue_profiles.iter().any(|profile| profile.schedule_enabled);
+                // 独立任务的开始时间不依赖队列定时开关；仅释放已设开始时间的任务。
+                let _ = coordinator.start_next_queued(!queue_start_due);
             }
-            thread::sleep(Duration::from_secs(10));
+            thread::sleep(Duration::from_secs(1));
         }
     });
 }

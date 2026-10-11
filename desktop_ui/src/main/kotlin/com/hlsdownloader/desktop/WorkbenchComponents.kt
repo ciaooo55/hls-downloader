@@ -20,6 +20,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -265,21 +267,23 @@ internal fun rememberPressFeedback(
     enabled: Boolean = true,
     interactionSource: MutableInteractionSource? = null,
     pressScale: Float = .985f,
-    hoverMillis: Int = 130,
+    hoverMillis: Int = 180,
     pressMillis: Int = 90,
 ): PressFeedback {
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val reduceMotion by MotionPreferences.reduceMotion
+    // 透明黑到浅色的 RGB 插值会先画出一层暗色；透明端沿用悬停色，仅渐变透明度。
+    val restingBackground = if (restColor.alpha == 0f) hoverColor.copy(alpha = 0f) else restColor
     val background by animateColorAsState(
         targetValue = when {
-            !enabled -> restColor
+            !enabled -> restingBackground
             // 整行通宽的横向缩放在视觉上像"菜单在抖"，所以这类目标用底色档位表达按压，
             // 此时 pressScale 传 1f，按压反馈完全由 pressedColor 承担。
             pressed && pressedColor != Color.Unspecified -> pressedColor
             hovered -> hoverColor
-            else -> restColor
+            else -> restingBackground
         },
         animationSpec = tween(motionDurationMillis(reduceMotion, hoverMillis)),
         label = "press-feedback-background",
@@ -372,11 +376,7 @@ internal fun Button(
     border: BorderStroke? = null,
     contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
     colors: ButtonColors = ButtonDefaults.buttonColors(blue, onBlue),
-    /**
-     * 底色是透明时（TextButton、"文字按钮"那一类），`blendToward(White, .08f)` 是**从无到有的 8%**，
-     * 叠在深色底上每个通道只动一两个数，肉眼和截图差分都看不出来——等于没有悬停反馈。
-     * 所以允许显式指定一档可见的 hover / press 色；不传则沿用原来的"朝白推 8%"。
-     */
+    // 透明按钮可按所在表面的选中态显式指定反馈颜色。
     hoverColor: Color? = null,
     pressedColor: Color? = null,
     pressScale: Float? = null,
@@ -395,12 +395,12 @@ internal fun Button(
     val contentColor = if (enabled) colors.content else colors.disabledContent
     val feedback = rememberPressFeedback(
         restColor = container,
-        hoverColor = hoverColor ?: container.blendToward(Color.White, .08f),
-        pressedColor = pressedColor ?: Color.Unspecified,
+        hoverColor = hoverColor ?: container.blendToward(colors.content, .08f),
+        pressedColor = pressedColor ?: container.blendToward(colors.content, .16f),
         enabled = enabled,
         interactionSource = interaction,
-        pressScale = pressScale ?: .985f,
-        hoverMillis = 140,
+        pressScale = pressScale ?: .97f,
+        hoverMillis = 180,
     )
     val focusAlpha by animateFloatAsState(
         if (focused && enabled) 1f else 0f,
@@ -416,6 +416,7 @@ internal fun Button(
             .border(2.dp, blue.copy(alpha = focusAlpha), shape)
             .then(if (!(focused && enabled) && border != null) Modifier.border(border, shape) else Modifier)
             .hoverable(interaction)
+            .pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(contentPadding),
         horizontalArrangement = Arrangement.Center,
@@ -467,7 +468,7 @@ internal fun IconButton(
         enabled = enabled,
         interactionSource = interaction,
         pressScale = .9f,
-        hoverMillis = 120,
+        hoverMillis = 180,
     )
     val focusAlpha by animateFloatAsState(
         if (focused && enabled) 1f else 0f,

@@ -241,6 +241,10 @@ def run(args):
                     from selenium.webdriver.firefox.service import Service
                     addon = root/'subtitle-smoke.xpi'; _zip_firefox_extension(extension, addon)
                     options = Options(); options.binary_location = str(browser)
+                    options.set_preference('browser.shell.checkDefaultBrowser', False)
+                    options.set_preference('browser.aboutwelcome.enabled', False)
+                    options.set_preference('browser.newtabpage.activity-stream.asrouter.providers.onboarding', '{"id":"onboarding","type":"local","localProvider":"OnboardingMessageProvider","enabled":false}')
+                    options.set_preference('browser.newtabpage.activity-stream.asrouter.providers.messaging-experiments', '{"id":"messaging-experiments","type":"remote-experiments","enabled":false}')
                     if not args.headed: options.add_argument('-headless')
                     options.set_capability('webSocketUrl', True)
                     options.set_preference('media.autoplay.default', 0)
@@ -264,7 +268,7 @@ def run(args):
                     evaluate(inspector,f"browser.tabs.query({{}}).then(t=>browser.tabs.update(t.find(t=>t.url==={json.dumps(page_url)}).id,{{active:true}})).then(()=>browser.tabs.create({{url:browser.runtime.getURL('popup.html?site=1'),active:false}}))")
                     popup = wait(lambda:next((h for h in driver.window_handles if h not in [page,inspector]),None),'popup missing')
                 else:
-                    process = subprocess.Popen([str(browser),"--headless=new",f"--remote-debugging-port={port}","--remote-allow-origins=*",
+                    process = subprocess.Popen([str(browser),*([] if args.headed else ["--headless=new"]),f"--remote-debugging-port={port}","--remote-allow-origins=*",
                     f"--user-data-dir={root/'profile'}","--no-first-run","--no-default-browser-check","--autoplay-policy=no-user-gesture-required",
                     "--enable-unsafe-extension-debugging","--disable-features=DisableLoadExtensionCommandLineSwitch",f"--disable-extensions-except={extension}",f"--load-extension={extension}","about:blank"],
                     env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
@@ -366,7 +370,7 @@ def run(args):
                 screenshot(popup,args.report.with_suffix('.png'))
                 evaluate(page,"window.testMedia.remove()")
                 wait(lambda:evaluate(page,"document.querySelectorAll('[data-hls-subtitle]').length === 0"),"removed player retained subtitle UI")
-                result = {"passed":True,"browser":family,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "audio_frames":core.audio_frames,
+                result = {"passed":True,"browser":family,"headed":args.headed,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "audio_frames":core.audio_frames,
                     "nonzero_samples":core.nonzero_samples,"seek_resets":core.resets,"checks":["production popup","global switch broadcast","site disable and page override","real browser audio + AudioWorklet","real Native Host PCM forwarding","subtitle render","seek reset","rate reset","time offset","provider failure and retry","reset rejection and retry","disable hides cached navigation and reenable restores audio","language change clears old cues","stop capture","removed player clears subtitle UI",*prefetch_checks]}
                 args.report.parent.mkdir(parents=True,exist_ok=True); args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
                 return result

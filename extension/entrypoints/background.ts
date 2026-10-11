@@ -1,10 +1,11 @@
 import { browser } from 'wxt/browser'
+import { localDownloadIntentUrl } from '../lib/resources'
 import { mediaPushRequestId } from '../lib/mediaPush'
-import { isSniffCurrentPageCommand, openMediaPanelMessage } from '../lib/sniffCommand'
+import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggregateTabMedia } from '../lib/sniffCommand'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, localFileTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
 import {
   PAUSED_FOLLOW_UP_RECHECK_MS,
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
@@ -19,7 +20,7 @@ import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import { contentDispositionFilename } from '../lib/contentDisposition'
 import { InspectionCache } from '../lib/inspectionCache'
-import { cookieLookupUrl, cookiePermissionAllows, normalizeCookiePermissionHosts } from '../lib/browserCookies'
+import { cookieHeaderForUrl, cookieLookupUrl, cookieMatchesUrl, cookiePartitionKeyForSrcdoc, cookiePartitionSite, cookiePermissionAllows, isCookieHostPermissionError, isSrcdocCookieHostPermissionError, normalizeCookiePermissionHosts, replayCookieIdentity, type ReplayCookie, type SrcdocFrameContext } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
 import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
@@ -48,12 +49,114 @@ const TRACKED_REQUEST_FILTER = {
 } as any
 const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
+const LOCAL_DOWNLOADS_KEY = 'local-browser-download-handoffs'
+interface LocalDownloadHandoff {
+  downloadId: number
+  requestId: string
+  sourceKey: string
+  pageUrl: string
+  importUrl?: string
+  handoffId?: string
+  intent?: DownloadClickIntent
+}
+const localDownloadHandoffs = new Map<number, LocalDownloadHandoff>()
+let localDownloadsHydration: Promise<void> | undefined
+let localDownloadsPass = false
+let localDownloadsTimer: ReturnType<typeof setTimeout> | undefined
+let localDownloadsWrite: Promise<unknown> = Promise.resolve()
+
+async function hydrateLocalDownloads(): Promise<void> {
+  localDownloadsHydration ??= browser.storage.local.get(LOCAL_DOWNLOADS_KEY).then(data => {
+    const stored = data[LOCAL_DOWNLOADS_KEY]
+    for (const record of Array.isArray(stored) ? stored as LocalDownloadHandoff[] : []) {
+      if (Number.isInteger(record.downloadId) && typeof record.requestId === 'string') {
+        localDownloadHandoffs.set(record.downloadId, record)
+      }
+    }
+  })
+  await localDownloadsHydration
+}
+
+async function persistLocalDownloads(): Promise<void> {
+  const records = [...localDownloadHandoffs.values()]
+  localDownloadsWrite = localDownloadsWrite.catch(() => undefined)
+    .then(() => browser.storage.local.set({ [LOCAL_DOWNLOADS_KEY]: records }))
+  await localDownloadsWrite
+}
+
+async function continueLocalDownloadHandoffs(): Promise<void> {
+  if (localDownloadsPass) return
+  localDownloadsPass = true
+  try {
+    await hydrateLocalDownloads()
+    for (const record of localDownloadHandoffs.values()) {
+      try {
+        const [item] = await browser.downloads.search({ id: record.downloadId })
+        if (!item || (item.state === 'interrupted' && item.error === 'USER_CANCELED')) {
+          localDownloadHandoffs.delete(record.downloadId)
+          await persistLocalDownloads()
+          continue
+        }
+        if (item.state !== 'complete' || !item.filename) continue
+        if (await localDownloadIntentUrl(item.url) !== record.sourceKey) {
+          localDownloadHandoffs.delete(record.downloadId)
+          await persistLocalDownloads()
+          continue
+        }
+        if (!record.handoffId) {
+          const config = await settings()
+          const size = Math.max(0, item.fileSize >= 0 ? item.fileSize : item.bytesReceived)
+          if (!shouldTakeover({ url: item.url, sourcePageUrl: record.pageUrl, size,
+            ...config, ...record.intent, strongEvidence: true, localBrowserDownload: true })
+            || (!record.intent?.ctrlForce && isHandoffSuppressed(config.suppressions, record.pageUrl, 'file'))) {
+            localDownloadHandoffs.delete(record.downloadId)
+            await persistLocalDownloads()
+            continue
+          }
+          // data URL 内容可能远超 Native Messaging 限制；文件字节只从已完成的本地文件复制。
+          const url = record.importUrl || (item.url.startsWith('data:') ? 'data:application/octet-stream,' : item.url)
+          const response = await native({ op: 'offer_local_file', resource: {
+            url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
+            mime_type: item.mime, size, resource_kind: 'file', source_page_url: record.pageUrl,
+            client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
+          } })
+          if (!desktopAcceptedHandoff(response)) {
+            localDownloadHandoffs.delete(record.downloadId)
+            await persistLocalDownloads()
+            continue
+          }
+          record.handoffId = String(response.handoff.id)
+          await persistLocalDownloads()
+          await trackHandoff(record.handoffId)
+        }
+        const response = await native({ op: 'handoff_status', handoff_id: record.handoffId }, 2_500)
+        const handoff = (response?.handoff || response || {}) as BrowserHandoffPayload
+        const readiness = localFileTaskReadiness(handoff)
+        if (readiness === 'waiting') continue
+        await rememberHandoffSuppression((handoff as any).suppression)
+        if (readiness === 'safe-to-remove' && !await removeBrowserDownload(item)) continue
+        localDownloadHandoffs.delete(record.downloadId)
+        await persistLocalDownloads()
+      } catch (error) {
+        // 状态不明时保留源文件，并以持久 request ID 恢复查询，不能重复创建任务或删源。
+        console.warn('HLS Downloader local file handoff awaits desktop', error)
+      }
+    }
+  } finally {
+    localDownloadsPass = false
+    if (localDownloadHandoffs.size && !localDownloadsTimer) {
+      localDownloadsTimer = setTimeout(() => {
+        localDownloadsTimer = undefined
+        void continueLocalDownloadHandoffs()
+      }, 1_000)
+    }
+  }
+}
 /**
- * Chrome MV3 delivers a browser DownloadItem after the response has already
- * been accepted.  Keep a short-lived promise for the direct responses that
- * were offered from onHeadersReceived so onCreated can reuse that handoff
- * instead of waiting for a second offer round.  Firefox does not use this
- * path because its blocking listener can cancel the response directly.
+ * Chromium delivers a browser DownloadItem after the response has already
+ * been accepted. Keep a short-lived promise for direct responses offered from
+ * onHeadersReceived so onCreated can reuse that handoff instead of issuing a
+ * second offer. Firefox uses the DownloadItem path directly.
  */
 export interface EarlyBrowserTakeover {
   requestId: string
@@ -70,7 +173,7 @@ const activeDownloadOffers = new Map<string, Promise<any>>()
  * Locate an early takeover when the request chain is no longer available.
  * Tab navigation events routinely clear the chain between onHeadersReceived
  * and downloads.onCreated. Some browsers expose the originating tab on the
- * DownloadItem; only a unique URL-and-identity match is safe to reuse.
+ * DownloadItem; only a unique URL-and-tab identity match is safe to reuse.
  */
 function validIdentity(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 0
@@ -504,7 +607,7 @@ async function continuePausedHandoffFollowups(): Promise<void> {
           continue
         }
         const [browserItem] = browserItems
-        if (!browserItem || browserItem.paused !== true) {
+        if (!browserItem || (browserItem.paused !== true && browserItem.state !== 'complete')) {
           await pausedFollowUpStore.drop(record.handoffId)
           continue
         }
@@ -676,16 +779,95 @@ async function sendCapturedResource(tabId: number, resource: Omit<MediaResource,
   await browser.tabs.sendMessage(tabId, message).catch(() => undefined)
 }
 
-async function cookiesFor(url: string, pageUrl = ''): Promise<string> {
+async function srcdocPartitionKeyForFrame(
+  tabId: number,
+  frameId: number,
+  getPartitionKey: (details: { tabId: number, frameId: number }) => Promise<{ partitionKey: { topLevelSite?: string } }>,
+): Promise<{ topLevelSite: string, hasCrossSiteAncestor: boolean } | undefined> {
+  const context = await browser.tabs.sendMessage(
+    tabId,
+    { type: 'srcdoc-partition-context' },
+    { frameId },
+  ).catch(() => undefined) as SrcdocFrameContext | undefined
+  if (!context || typeof context.href !== 'string' || typeof context.origin !== 'string'
+    || context.href.split(/[?#]/, 1)[0] !== 'about:srcdoc'
+    || !Array.isArray(context.ancestorOrigins) || context.ancestorOrigins.some(origin => typeof origin !== 'string')) return undefined
+
+  let topLevel: { partitionKey: { topLevelSite?: string } }
+  try {
+    topLevel = await getPartitionKey({ tabId, frameId: 0 })
+  } catch (error) {
+    if (isCookieHostPermissionError(error)) return undefined
+    throw error
+  }
+  return cookiePartitionKeyForSrcdoc(topLevel.partitionKey?.topLevelSite || '', context)
+}
+
+async function cookieRecordsFor(url: string, pageUrl = '', tabId = -1, frameId = 0, allPaths = false): Promise<ReplayCookie[]> {
   const cookieUrl = cookieLookupUrl(url)
-  if (!cookieUrl) return ''
+  if (!cookieUrl) return []
   const config = await settings()
-  // Authorizing a page means its detected resources may reuse only cookies
-  // that the browser would send to the resource URL itself. Page cookies are
-  // never copied across origins.
-  if (!cookiePermissionAllows(cookieUrl, pageUrl, config.authorizedCookieHosts)) return ''
-  const values = await browser.cookies.getAll({ url: cookieUrl }).catch(() => [])
-  return values.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
+  if (!cookiePermissionAllows(cookieUrl, pageUrl, config.authorizedCookieHosts)) return []
+  // 容器和隐私窗口必须使用发起媒体请求的标签页 Cookie store。
+  const stores = tabId >= 0 ? await browser.cookies.getAllCookieStores() : []
+  const storeId = stores.find(store => store.tabIds.includes(tabId))?.id
+  if (tabId >= 0 && !storeId) throw new Error('无法读取当前标签页的 Cookie 存储；请重新打开网页后重试')
+  type PartitionKey = { topLevelSite?: string, hasCrossSiteAncestor?: boolean }
+  const cookieApi = browser.cookies as typeof browser.cookies & {
+    getPartitionKey?: (details: { tabId: number, frameId: number }) => Promise<{ partitionKey: PartitionKey }>
+  }
+  const fallbackSite = cookiePartitionSite(pageUrl)
+  let partitionKey: PartitionKey | undefined
+  if (tabId >= 0 && cookieApi.getPartitionKey) {
+    try {
+      partitionKey = (await cookieApi.getPartitionKey({ tabId, frameId })).partitionKey
+    } catch (error) {
+      if (frameId === 0 || !isSrcdocCookieHostPermissionError(error)) throw error
+      partitionKey = await srcdocPartitionKeyForFrame(
+        tabId,
+        frameId,
+        details => cookieApi.getPartitionKey!(details),
+      )
+    }
+  } else if (fallbackSite) {
+    partitionKey = { topLevelSite: fallbackSite }
+  }
+  const target = new URL(cookieUrl)
+  const queries: Array<{ url?: string, domain?: string }> = [{ url: cookieUrl }]
+  if (allPaths) {
+    // 清单未播放到的分片/密钥也需要自己的 Path Cookie；只导出目标主机适用的记录。
+    const labels = target.hostname.split('.')
+    for (let i = 0; i === 0 || (i < labels.length - 1 && !/^\d+$/.test(labels[i])); i += 1) {
+      queries.push({ domain: labels.slice(i).join('.') })
+    }
+  }
+  const collected = new Map<string, ReplayCookie>()
+  for (const query of queries) {
+    const base = { ...query, ...(storeId ? { storeId } : {}) }
+    const values = await browser.cookies.getAll(base)
+    const partitioned = partitionKey?.topLevelSite
+      ? await browser.cookies.getAll({ ...base, partitionKey }) : []
+    for (const cookie of [...values.filter(cookie => !cookie.partitionKey?.topLevelSite), ...partitioned]) {
+      const record: ReplayCookie = {
+        name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path,
+        hostOnly: cookie.hostOnly, secure: cookie.secure,
+        ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+        ...(cookie.partitionKey ? { partitionKey: cookie.partitionKey } : {}),
+      }
+      // 按每条 Cookie 的 Path 构造 URL，仅检查 Domain/Secure/有效期；发送时再匹配实际 Path。
+      if (!cookieMatchesUrl(record, allPaths ? target.origin + record.path : cookieUrl)) continue
+      collected.set(replayCookieIdentity(record), record)
+    }
+  }
+  const result = [...collected.values()]
+  if (result.length > 256 || JSON.stringify(result).length > 128 * 1024) {
+    throw new Error('当前站点 Cookie 超出下载上下文限制；请清理本站过期登录数据后重试')
+  }
+  return result
+}
+
+async function cookiesFor(url: string, pageUrl = '', tabId = -1, frameId = 0): Promise<string> {
+  return cookieHeaderForUrl(await cookieRecordsFor(url, pageUrl, tabId, frameId), url)
 }
 
 async function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
@@ -693,7 +875,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
   const identity = extensionIdentity()
   const operation = String(message.op || '')
   const retryCount = new Set([
-    'ping', 'offer', 'handoff_status', 'media_push_status',
+    'ping', 'offer', 'offer_local_file', 'handoff_status', 'media_push_status',
   ]).has(operation) ? 1 : 0
   const payload = {
     ...message,
@@ -713,6 +895,7 @@ async function pingDesktop(): Promise<any> {
 }
 
 async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
+  if (resource.inspected) return
   const normalized = {
     ...resource,
     url: canonicalMediaUrl(resource.url, resource.kind),
@@ -733,7 +916,7 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
         inspectionHeaders.origin = page.origin
       }
     } catch {}
-    const cookie = await cookiesFor(normalized.url, pageUrl)
+    const cookie = await cookiesFor(normalized.url, await topLevelPageUrl(tabId, pageUrl), tabId, resource.frameId ?? 0)
     if (cookie) inspectionHeaders.cookie = cookie
     const probeResource = { ...normalized, inspectionHeaders }
     const metadata = normalized.kind === 'hls'
@@ -892,32 +1075,46 @@ async function resourcePayload(
   }
   const requestContexts: Record<string, Record<string, unknown>> = {}
   if (resource.tabId !== undefined && resource.tabId >= 0) {
+    const cookieSnapshots = new Map<string, Promise<ReplayCookie[]>>()
     const addRequestContext = async (requestUrl: string, requestHeaders: Record<string, string> | undefined) => {
       let origin = ''
       try { origin = new URL(requestUrl).origin } catch {}
       if (!origin) return
       const scopedIdentity = capturedRequestIdentity(requestHeaders, navigator.userAgent)
-      requestContexts[origin] = {
+      let snapshot = cookieSnapshots.get(origin)
+      if (!snapshot) {
+        snapshot = cookieRecordsFor(requestUrl, pageUrl, resource.tabId, resource.frameId ?? 0, true)
+        cookieSnapshots.set(origin, snapshot)
+      }
+      const cookies = await snapshot
+      const context = {
         request_headers: replayableRequestHeaders(requestHeaders),
         referer: scopedIdentity.referer,
         origin: scopedIdentity.origin,
         user_agent: scopedIdentity.userAgent,
-        cookie: await cookiesFor(requestUrl, pageUrl),
+      }
+      const pathname = new URL(requestUrl).pathname
+      const path = pathname.slice(0, pathname.lastIndexOf('/') + 1)
+      requestContexts[origin] = {
+        ...context,
+        cookie: cookieHeaderForUrl(cookies, requestUrl), cookies,
+        path_contexts: { ...(requestContexts[origin]?.path_contexts as Record<string, unknown> || {}), [path]: context },
       }
     }
-    const contexts = requestChains.contextsForPage(resource.tabId, pageUrl)
-    // An iframe resource has its own document URL and is deliberately absent
-    // from contextsForPage(topPage). The selected resource's exact chain is
-    // still authoritative for its CDN credentials, so append it explicitly.
-    if (chain && !contexts.some(context => context.requestId === chain.requestId)) contexts.push(chain)
-    for (const context of contexts) {
+    const contexts = requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl)
+    // 最后应用所选媒体；同域的其他音轨/分片保留自己的目录请求身份。
+    for (const context of contexts.filter(context => context.requestId !== chain?.requestId)) {
       await addRequestContext(context.finalUrl, context.requestHeaders)
     }
-    if (!chain && resource.requestHeaders && Object.keys(resource.requestHeaders).length) {
+    if (chain) await addRequestContext(chain.finalUrl, chain.requestHeaders)
+    if (!chain) {
       // Variant URLs parsed from a master HLS playlist are often chosen before
       // the browser fetches them. Reuse that master request's captured headers
       // only for the selected variant's origin, and fetch cookies for that URL.
-      await addRequestContext(resource.url, resource.requestHeaders)
+      await addRequestContext(resource.url, resource.requestHeaders || {
+        referer: resource.pageUrl || pageUrl,
+        'user-agent': navigator.userAgent,
+      })
     }
   }
   const replay = replayablePostRequest(chain)
@@ -937,11 +1134,9 @@ async function resourcePayload(
     preferred_height: resource.preferredHeight || 0,
     referer: sourceIdentity.referer || identity.referer,
     origin: sourceIdentity.origin || identity.origin,
-    // This top-level context belongs to the browser URL, not the media URL.
-    // Exact resource/CDN cookies are still supplied through request_contexts.
-    cookie: await cookiesFor(pageUrl || resource.url, pageUrl),
+    cookie: await cookiesFor(resource.url, pageUrl, resource.tabId, resource.frameId ?? 0),
     user_agent: sourceIdentity.userAgent || identity.userAgent,
-    request_headers: replayableRequestHeaders(pageChain?.requestHeaders || resource.requestHeaders),
+    request_headers: replayableRequestHeaders(chain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
     evidence: [...new Set((resource.evidence || []).map(value => String(value).trim()).filter(Boolean))].slice(0, 16),
     owner: String(resource.owner || '').slice(0, 160),
@@ -1074,17 +1269,28 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Prom
     return false
   }
   if (!current) return true
-  const state = current?.state || item.state
   try {
-    if (browserCleanupAction(state) === 'remove-file') {
+    if (browserCleanupAction(current.state) === 'remove-file') {
       await browser.downloads.removeFile(item.id)
     } else {
       await browser.downloads.cancel(item.id)
+      // 快速文件可能在 search 和 cancel 之间完成，不能先 erase 丢掉可清理的项目。
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const [settled] = await browser.downloads.search({ id: item.id })
+        if (!settled) return true
+        if (settled.state === 'complete') {
+          await browser.downloads.removeFile(item.id)
+          break
+        }
+        if (settled.state === 'interrupted') break
+        if (attempt === 19) return false
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
     }
+    await browser.downloads.erase({ id: item.id })
   } catch {
     return false
   }
-  await browser.downloads.erase({ id: item.id }).catch(() => undefined)
   return true
 }
 
@@ -1101,9 +1307,20 @@ function downloadRequestItem(
   }
 }
 
-async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean> {
+async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean | null> {
   if (item.state !== 'in_progress') return false
   try {
+    if (import.meta.env.FIREFOX) {
+      // Firefox 在网络通道尚未收到数据时暂停，会偶发变成无法恢复的 USER_CANCELED。
+      // 先等原下载初始化；小文件已完成时保留它，待桌面成功后再清理。
+      while (true) {
+        const [current] = await browser.downloads.search({ id: item.id })
+        if (!current || current.state === 'interrupted') return null
+        if (current.state === 'complete' || current.paused) return false
+        if (current.bytesReceived > 0) break
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+    }
     await browser.downloads.pause(item.id)
     return true
   } catch {
@@ -1326,7 +1543,7 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
 export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading' || changeInfo.url) {
-      requestChains.clearTab(tabId)
+      requestChains.clearTab(tabId, true)
       inspectedAdaptive.releasePrefix(`${tabId}:`)
       void browser.action.setBadgeText({ tabId, text: '' }).catch(() => undefined)
       if (changeInfo.url) {
@@ -1370,6 +1587,7 @@ export default defineBackground(() => {
   // A suspended worker may have left paused downloads waiting on a handoff;
   // storage.local survives suspension and browser restart, so finish that work right away.
   void continuePausedHandoffFollowups().catch(() => undefined)
+  void continueLocalDownloadHandoffs().catch(() => undefined)
   void setBrowserDownloadUi(true)
   void pingDesktop().catch(() => undefined)
   // One recurring alarm drives everything that must survive service-worker
@@ -1394,6 +1612,7 @@ export default defineBackground(() => {
     void pingDesktop().catch(() => undefined)
     void pollTrackedHandoffs()
     void continuePausedHandoffFollowups().catch(() => undefined)
+    void continueLocalDownloadHandoffs().catch(() => undefined)
     void refreshOpenTabBadgesWhenDue()
   })
   browser.runtime.onInstalled.addListener(() => {
@@ -1409,7 +1628,8 @@ export default defineBackground(() => {
     void browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
       const tab = tabs[0]
       if (tab?.id === undefined) return
-      void browser.tabs.sendMessage(tab.id, openMediaPanelMessage()).catch(() => undefined)
+      const dispatch = openMediaPanelCommandDispatch()
+      void browser.tabs.sendMessage(tab.id, dispatch.message, dispatch.options).catch(() => undefined)
     })
   })
 
@@ -1431,7 +1651,10 @@ export default defineBackground(() => {
     // window opened; rejecting that window then left no DownloadItem to
     // resume. onCreated pauses the browser item and either removes it after
     // a successful desktop transfer or resumes it on reject/expire.
-    rememberEarlyBrowserTakeover(details, chain, observed)
+    // Firefox 的 DownloadItem 与响应事件无法可靠关联，只由 onCreated 提交一次接管。
+    if (import.meta.env.CHROME) {
+      rememberEarlyBrowserTakeover(details, chain, observed)
+    }
     return undefined
   }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
   browser.webRequest.onCompleted.addListener(details => {
@@ -1451,13 +1674,25 @@ export default defineBackground(() => {
   browser.downloads.onCreated.addListener(async item => {
     if (!item.url) return
     const blobSource = item.url.startsWith('blob:') ? blobSources.find(item.url) : undefined
-    // A client-generated Blob has no replayable HTTP origin. Leave it entirely
-    // browser-owned. Fetched blobs proceed only when the page hook correlated
-    // this exact object URL to its successful response.
-    if (item.url.startsWith('blob:') && !blobSource) return
     const originalRequest = downloadRequestItem(item, blobSource)
     const creatingExtension = String((item as any).byExtensionId || '')
     if (creatingExtension && creatingExtension !== browser.runtime.id) return
+    if (item.url.startsWith('blob:') || item.url.startsWith('data:')) {
+      const config = await settings()
+      if (!config.enabled) return
+      const sourceKey = await localDownloadIntentUrl(item.url)
+      const intent = await waitForClickIntent(sourceKey, undefined, item.referrer || '', undefined, 12)
+      if (intent?.altBypass) return
+      const blobOrigin = item.url.startsWith('blob:') ? new URL(item.url).origin : ''
+      const pageUrl = await topLevelPageUrl(intent?.tabId ?? blobSource?.tabId ?? downloadIdentity(item).tabId ?? -1,
+        intent?.pageUrl || blobSource?.pageUrl || item.referrer || (blobOrigin !== 'null' ? blobOrigin : ''))
+      if (!pageUrl && config.excludedHosts.length) return
+      await hydrateLocalDownloads()
+      localDownloadHandoffs.set(item.id, { downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`, sourceKey, pageUrl, intent })
+      await persistLocalDownloads()
+      void continueLocalDownloadHandoffs()
+      return
+    }
     console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
     // Once a handoff may own the transfer, finally must leave the durable
@@ -1469,14 +1704,14 @@ export default defineBackground(() => {
     try {
       const config = await settings()
       if (!config.enabled) return
-      // IDM pauses the browser item immediately in onCreated and resolves
-      // ownership afterwards. Do the same before any native await so a
-      // fast local/CDN file cannot visibly advance behind the desktop prompt.
-      paused = await pauseBrowserDownload(item)
+      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId)
+      // POST 的浏览器恢复可能改发 GET；让原请求完成后导入，避免重复提交或破坏已收到的文件。
+      const pauseResult = provisionalChain?.method.toUpperCase() === 'POST' ? false : await pauseBrowserDownload(item)
+      if (pauseResult === null) return
+      paused = pauseResult
       // Prefer the request chain first so click matching can use tabId even when
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
-      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId)
       const earlyTakeover = (provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
         : undefined)
@@ -1536,12 +1771,12 @@ export default defineBackground(() => {
           contentDisposition,
           filename,
           mimeType,
-          kind: classifyDownload(url, mimeType, filename, contentDisposition),
+          kind: classifyDownload(url, mimeType, filename, contentDisposition, true),
         }
       }
       let classified = classifyBrowserItem(item, provisionalChain)
       let actualBrowser = item
-      if (!classified.kind) {
+      if (!item.filename) {
         actualBrowser = await refreshedDownload(item.id, item)
         if (!canContinueTakeover(actualBrowser.state, paused)) return
         provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId) || provisionalChain
@@ -1581,9 +1816,6 @@ export default defineBackground(() => {
         requestHeaders: chain?.requestHeaders,
         seenAt: Date.now(),
       }
-      if (String(chain?.method || '').toUpperCase() === 'POST' && !replayablePostRequest(chain).request_body) {
-        return
-      }
       if (!shouldTakeover({
         url: resource.url,
         sourcePageUrl: resource.pageUrl,
@@ -1595,6 +1827,18 @@ export default defineBackground(() => {
         explicitClick: Boolean(intent),
         strongEvidence: true,
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
+        return
+      }
+      if (String(chain?.method || '').toUpperCase() === 'POST') {
+        // 复用本地导入，复制成功前保留浏览器源文件。
+        await hydrateLocalDownloads()
+        localDownloadHandoffs.set(item.id, {
+          downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
+          sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
+          importUrl: 'data:application/octet-stream,',
+        })
+        await persistLocalDownloads()
+        void continueLocalDownloadHandoffs()
         return
       }
       console.debug('HLS Downloader offering a verified browser download')
@@ -1649,10 +1893,16 @@ export default defineBackground(() => {
     }
   })
 
+  browser.downloads.onChanged.addListener(change => {
+    if (change.state?.current === 'complete' || change.state?.current === 'interrupted') {
+      void continueLocalDownloadHandoffs().catch(() => undefined)
+    }
+  })
+
   browser.contextMenus.onClicked.addListener((info, tab) => {
+    const frameId = Number((info as any).frameId)
     if (info.menuItemId === 'hls-download-selection') {
       if (tab?.id !== undefined) {
-        const frameId = Number((info as any).frameId)
         void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' },
           Number.isInteger(frameId) && frameId >= 0 ? { frameId } : undefined)
           .catch(error => reportDownloadError(tab.id!, `无法读取选中的链接：${String(error)}`))
@@ -1672,7 +1922,6 @@ export default defineBackground(() => {
       // not a downloadable origin; open the correlated player panel instead
       // of mislabelling it as a file task.
       if (tab?.id !== undefined) {
-        const frameId = Number((info as any).frameId)
         void browser.tabs.sendMessage(
           tab.id,
           { type: 'open-media-panel' },
@@ -1682,7 +1931,8 @@ export default defineBackground(() => {
       return
     }
     const resource = {
-      id: resourceId(url), url, kind, pageUrl: tab?.url, title: tab?.title, tabId: tab?.id,
+      id: resourceId(url), url, kind, pageUrl: info.frameUrl || tab?.url, title: tab?.title, tabId: tab?.id,
+      frameId: Number.isInteger(frameId) && frameId >= 0 ? frameId : 0,
       seenAt: Date.now(), evidence: ['context_menu'], owner: 'context-menu', confidence: 0.99,
       replayContext: { method: 'GET', page_url: String(tab?.url || '') },
     }
@@ -1794,22 +2044,23 @@ export default defineBackground(() => {
       // must receive only its own observations; otherwise two same-page MSE
       // players (especially in cross-origin iframes) can exchange manifests
       // and show a download button for the wrong video.  Extension pages such
-      // as the popup do not have an http(s) sender URL, so they intentionally
-      // keep the aggregate view.
+      // as the popup do not have an http(s) sender URL, so they keep the
+      // aggregate view. The top-frame tab panel explicitly requests it too.
       const pageSender = /^https?:\/\//i.test(String(sender.url || ''))
       const senderFrameId = pageSender && Number.isInteger(Number(sender.frameId))
         ? Number(sender.frameId)
         : -1
+      const aggregateTab = shouldAggregateTabMedia(message.scope, senderFrameId)
       void topLevelPageUrl(tabId, String(message.pageUrl || ''))
         .then(pageUrl => storageKey(tabId, pageUrl))
         .then(key => resourceSessionStore.update(key, raw => compactResources(pruneExpiredResources(raw), 40, true)).then(async cleaned => {
           // Never write the frame-filtered view back to the page cache: doing
           // so would erase sibling iframe resources just because one frame
           // opened its panel first.
-          const scoped = senderFrameId >= 0
+          const scoped = senderFrameId >= 0 && !aggregateTab
             ? cleaned.filter(resource => resourceBelongsToFrame(resource, senderFrameId))
             : cleaned
-          const visible = senderFrameId >= 0 ? compactResources(scoped, 40, true) : compactResources(cleaned, 40)
+          const visible = senderFrameId >= 0 && !aggregateTab ? compactResources(scoped, 40, true) : compactResources(cleaned, 40)
           // The toolbar badge is tab-wide. An iframe asking for its scoped
           // overlay list must never overwrite that badge with only its own
           // candidates (or clear resources found by a sibling/top frame).

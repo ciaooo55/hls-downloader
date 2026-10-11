@@ -10,7 +10,14 @@ autobins = false
 hls-native-shell = { path = "../native_shell", default-features = false, features = ["presenter-client"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-slint = "1.16"
+slint = { version = "1.16", features = ["unstable-winit-030"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [[bin]]
 name = "hls-downloader-presenter"

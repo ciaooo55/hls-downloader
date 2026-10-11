@@ -5,8 +5,8 @@
  button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
  /* 实底按钮的焦点环要多留 2px 间隙：offset 1px 时圆环紧贴主色填充，两者同色分不开。 */
  .update-notice button:focus-visible { outline-offset: 2px; }
-body { margin: 0; width: 400px; max-width: 100vw; background: var(--bg); color: var(--text); font: 12px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
-main { display: flex; min-height: 0; max-height: 640px; flex-direction: column; animation: pop .18s cubic-bezier(.2,.8,.2,1); }
+body { margin: 0; width: 400px; background: var(--bg); color: var(--text); font: 12px/1.45 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+main { display: flex; min-height: 0; max-height: var(--popup-max-height, 640px); flex-direction: column; overflow: hidden; animation: pop .18s cubic-bezier(.2,.8,.2,1); }
 @keyframes pop { from { opacity: 0; transform: translateY(4px) scale(.99); } to { opacity: 1; transform: none; } }
 
 header { display: flex; justify-content: space-between; align-items: center; height: 56px; padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--border); }

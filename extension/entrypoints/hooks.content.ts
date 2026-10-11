@@ -1,6 +1,9 @@
 import { copyHttpBufferSource, inheritHttpBufferSource } from '../lib/blobOwnership'
 import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
 import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from '../lib/hlsWorkerOwnership'
+import { inspectHlsResource } from '../lib/hlsInspection'
+import { inspectDashResource } from '../lib/dashInspection'
+import type { MediaResource } from '../lib/resources'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -18,17 +21,23 @@ export default defineContentScript({
     const mixedMseBuffers = new WeakSet<object>()
     const mediaSourceBlobs = new WeakMap<object, string>()
     const sourceBufferOwners = new WeakMap<object, object>()
-    const pendingResources: Array<{ url: string; mimeType: string }> = []
+    const pendingResources: Array<{ url: string; mimeType: string; inspection?: Partial<MediaResource> }> = []
     type MediaOwnershipPurpose = 'mse' | 'download'
     const pendingMse: Array<{ blobUrl: string; mediaUrl: string; purpose: MediaOwnershipPurpose }> = []
     const mseReportTimes = new Map<string, { mediaUrl: string; purpose: MediaOwnershipPurpose; at: number }>()
     const MSE_REPORT_INTERVAL_MS = 300
-    const report = (url: unknown, mimeType = '') => {
+    const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>) => {
       if (typeof url !== 'string') return
       if (!shouldReportMediaResponse(url, mimeType)) return
-      pendingResources.push({ url, mimeType })
+      const detail = { url, mimeType, inspection }
+      const previous = pendingResources.findIndex(item => item.url === url)
+      if (previous >= 0) {
+        detail.inspection ||= pendingResources[previous].inspection
+        pendingResources.splice(previous, 1)
+      }
+      pendingResources.push(detail)
       if (pendingResources.length > 200) pendingResources.shift()
-      window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify({ url, mimeType }) }))
+      window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(detail) }))
     }
     const reportMse = (blobUrl: string, mediaUrl: string, purpose: MediaOwnershipPurpose = 'mse') => {
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
@@ -58,23 +67,24 @@ export default defineContentScript({
       const reader = body.getReader()
       const chunks: Uint8Array[] = []
       let total = 0
+      let complete = false
       try {
-        while (total < 128 * 1024) {
+        while (total <= 2 * 1024 * 1024) {
           const next = await reader.read()
-          if (next.done || !next.value) break
+          if (next.done) { complete = true; break }
+          if (!next.value) continue
           const value = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value)
-          const remaining = 128 * 1024 - total
-          const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value
-          chunks.push(chunk)
-          total += chunk.byteLength
-          if (chunk.byteLength < value.byteLength) break
+          total += value.byteLength
+          if (total > 2 * 1024 * 1024) break
+          chunks.push(value)
         }
       } catch {
         return
       } finally {
-        try { await reader.cancel() } catch {}
+        // 克隆流的 cancel 可能等到原始响应被消费完；不能阻塞页面播放器。
+        void reader.cancel().catch(() => undefined)
       }
-      if (!total) return
+      if (!total || !complete) return
       const prefix = new TextDecoder().decode(
         (() => {
           const bytes = new Uint8Array(total)
@@ -84,7 +94,19 @@ export default defineContentScript({
         })(),
       )
       const kind = detectManifestKind(prefix)
-      if (kind) report(response.url, manifestMimeType(kind))
+      if (!kind) return
+      await reportManifest(response.url, kind, prefix)
+    }
+    const reportManifest = async (url: string, kind: 'hls' | 'dash', text: string) => {
+      // 使用播放器成功取得的正文。禁止为子清单另发无页面凭据的 fetch。
+      const fetcher = async (requested: string) => {
+        if (requested !== url) throw new Error('Child manifest not observed yet')
+        return new Response(text, { headers: { 'content-type': manifestMimeType(kind) } })
+      }
+      const inspection = kind === 'hls'
+        ? await inspectHlsResource({ url }, fetcher)
+        : await inspectDashResource({ url }, fetcher)
+      report(url, manifestMimeType(kind), inspection || undefined)
     }
     let blobSliceInstalled = false
     const installBlobSliceHook = () => {
@@ -322,6 +344,16 @@ export default defineContentScript({
       }
     }
     try {
+      const responseText = Response.prototype.text
+      Response.prototype.text = async function () {
+        const text = await responseText.call(this)
+        // 不透明 URL/MIME 的清单仍会被播放器按文本读取；复用这次读取即可识别。
+        if (this.ok && /^https?:\/\//i.test(this.url) && text.length <= 2 * 1024 * 1024) {
+          const kind = detectManifestKind(text.slice(0, 256))
+          if (kind) void reportManifest(this.url, kind, text).catch(() => undefined)
+        }
+        return text
+      }
       const responseArrayBuffer = Response.prototype.arrayBuffer
       Response.prototype.arrayBuffer = async function () {
         const value = await responseArrayBuffer.call(this)
@@ -362,9 +394,10 @@ export default defineContentScript({
       // immediately without buffering the real response or touching page
       // playback.  Ordinary MP4s are not cloned unless their URL has a
       // manifest-like hint.
-      try { void inspectManifestResponse(response.clone(), mimeType).catch(() => undefined) } catch {
-        // A locked/opaque response must never turn the page's successful fetch
-        // into a rejected one; the ordinary URL/MIME report remains valid.
+      if (response.ok && shouldInspectManifestResponse(response.url, mimeType)) {
+        try { void inspectManifestResponse(response.clone(), mimeType).catch(() => undefined) } catch {
+          // 锁定/不透明响应不能让页面已成功的 fetch 失败。
+        }
       }
       if (response.body && response.url) streamSources.set(response.body, response.url)
       return response
@@ -415,11 +448,14 @@ export default defineContentScript({
           const responseUrl = this.responseURL || xhrRequestedUrls.get(this) || ''
           const mimeType = this.getResponseHeader('content-type') || ''
           report(responseUrl, mimeType)
-          if (shouldInspectManifestResponse(responseUrl, mimeType)
+          if (this.status >= 200 && this.status < 300
             && (!this.responseType || this.responseType === 'text')) {
             try {
-              const kind = detectManifestKind(String(this.responseText || '').slice(0, 128 * 1024))
-              if (kind) report(responseUrl, manifestMimeType(kind))
+              const text = String(this.responseText || '')
+              const kind = detectManifestKind(text.slice(0, 128 * 1024))
+              if (kind && text.length <= 2 * 1024 * 1024) {
+                void reportManifest(responseUrl, kind, text).catch(() => undefined)
+              }
             } catch {
               // Binary XHR responses expose no responseText; fetch/MSE hooks
               // still provide the normal ownership evidence in that case.

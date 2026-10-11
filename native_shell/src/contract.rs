@@ -67,6 +67,8 @@ pub struct ResourceOffer {
     pub url: String,
     pub resource_kind: ResourceKind,
     #[serde(default)]
+    pub local_source_path: Option<String>,
+    #[serde(default)]
     pub owner: String,
     #[serde(default)]
     pub evidence: Vec<String>,
@@ -101,6 +103,7 @@ impl Default for ResourceOffer {
         Self {
             url: String::new(),
             resource_kind: ResourceKind::File,
+            local_source_path: None,
             owner: String::new(),
             evidence: Vec::new(),
             confidence: 0.0,
@@ -303,6 +306,8 @@ pub struct TaskSpec {
     pub url: String,
     pub resource_kind: ResourceKind,
     #[serde(default)]
+    pub local_source_path: Option<String>,
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub filename: String,
@@ -367,6 +372,7 @@ impl Default for TaskSpec {
         Self {
             url: String::new(),
             resource_kind: ResourceKind::File,
+            local_source_path: None,
             title: String::new(),
             filename: String::new(),
             mime_type: String::new(),
@@ -896,6 +902,7 @@ mod tests {
         let offer = ResourceOffer {
             url: "https://cdn.example/video.m3u8".into(),
             resource_kind: ResourceKind::Hls,
+            local_source_path: None,
             owner: "media-element:2".into(),
             evidence: vec!["manifest_mime".into(), "current_src".into()],
             confidence: 0.98,

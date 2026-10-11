@@ -1,6 +1,7 @@
 //! IDM-style output collision policy: rename, overwrite, or skip.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -90,7 +91,8 @@ fn publish_payload(source: &Path, dest: &Path, keep_temp: bool) -> Result<(), St
         .map(|_| ())
         .map_err(|error| format!("publish completed output: {error}"))?;
     if let Err(error) = fs::remove_file(source) {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "published output but could not remove temporary payload {}: {error}",
             source.display()
         );
@@ -143,7 +145,8 @@ pub fn publish_file(
 
     if let Some(backup) = backup {
         if let Err(error) = fs::remove_file(&backup) {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "published output but could not remove previous-output backup {}: {error}",
                 backup.display()
             );

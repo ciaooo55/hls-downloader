@@ -455,9 +455,7 @@ fn finish_dash(
 ) -> Result<PathBuf, String> {
     let mut audio_merged = None;
     if let Some(audio) = audio {
-        if let Some(audio_out) = fetch_dash_audio(&audio, task_dir, headers, proxy, control, vod)? {
-            audio_merged = Some(audio_out);
-        }
+        audio_merged = Some(fetch_dash_audio(&audio, task_dir, headers, proxy, control, vod)?);
     }
     let output = task_dir.join("merged.mp4");
     merge_with_ffmpeg(task_dir, &output)?;
@@ -516,8 +514,9 @@ fn pull_dash_audio_segments(
     let audio_dir = task_dir.join("audio");
     fs::create_dir_all(&audio_dir).map_err(|error| error.to_string())?;
     let mut audio_files = Vec::new();
+    // 选定音轨的请求失败必须传递给任务，不能发布缺失或截断音频的成功成品。
     if let Some(init) = &audio.init {
-        if let Ok(path) = resume_or_fetch(
+        let path = resume_or_fetch(
             init,
             headers,
             proxy,
@@ -530,15 +529,14 @@ fn pull_dash_audio_segments(
             &audio.mime,
             true,
             vod,
-        ) {
-            audio_files.push(path);
-        }
+        )?;
+        audio_files.push(path);
     }
     for (index, media) in audio.media.iter().enumerate() {
         if read_control(control) != "run" {
             break;
         }
-        if let Ok(path) = resume_or_fetch(
+        let path = resume_or_fetch(
             media,
             headers,
             proxy,
@@ -551,9 +549,8 @@ fn pull_dash_audio_segments(
             &audio.mime,
             true,
             vod,
-        ) {
-            audio_files.push(path);
-        }
+        )?;
+        audio_files.push(path);
     }
     Ok(audio_files)
 }
@@ -565,16 +562,16 @@ fn fetch_dash_audio(
     proxy: &str,
     control: &Path,
     vod: &mut DashCheckpoint,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<PathBuf, String> {
     let audio_files = pull_dash_audio_segments(audio, task_dir, headers, proxy, control, vod)?;
     if audio_files.is_empty() {
-        return Ok(None);
+        return Err("DASH audio track has no downloadable segments".into());
     }
     let audio_dir = task_dir.join("audio");
     write_dash_playlist(&audio_dir, &audio_files)?;
     let audio_out = audio_dir.join("merged.m4a");
     merge_with_ffmpeg(&audio_dir, &audio_out)?;
-    Ok(Some(audio_out))
+    Ok(audio_out)
 }
 
 fn download_one(

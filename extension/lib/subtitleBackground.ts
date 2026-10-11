@@ -140,7 +140,8 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     if (prefetch !== (session.capture === 'prefetch') || !prefetch && !session.clock.playing) return { ok: true }
     const clock = session.clock
     const at = Number(message.capturedAt)
-    if (!Number.isFinite(at) || Math.abs(Date.now() - at) > 1500 || !prefetch && Math.abs(at - clock.at) > 1500) throw new Error('字幕音频或播放器时钟已过期，请重新开始')
+    // 预取的是已录制音轨，消息排队不会使音频失效；它由下方的 epoch 和媒体位置校验。
+    if (!Number.isFinite(at) || !prefetch && (Math.abs(Date.now() - at) > 1500 || Math.abs(at - clock.at) > 1500)) throw new Error('字幕音频或播放器时钟已过期，请重新开始')
     if (prefetch && Number(message.epoch) !== clock.epoch) return { ok: true }
     const position = prefetch ? Number(message.position) : Math.max(0, clock.position + (at - clock.at) / 1000 * clock.rate - .25 * clock.rate)
     const rate = prefetch ? Number(message.rate) : clock.rate

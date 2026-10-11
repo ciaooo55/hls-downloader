@@ -92,9 +92,36 @@ impl TaskPaths {
                     .into_owned();
             }
         }
+        let mut final_output = root.join(&final_name);
+        if let Some(source) = spec.local_source_path.as_deref() {
+            if fs::canonicalize(source).ok() == fs::canonicalize(&final_output).ok() {
+                let source_name = Path::new(&final_name);
+                let stem = source_name
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("download");
+                let extension = source_name
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty());
+                let mut sequence = 2u64;
+                loop {
+                    let candidate_name = match extension {
+                        Some(extension) => format!("{stem} ({sequence}).{extension}"),
+                        None => format!("{stem} ({sequence})"),
+                    };
+                    let candidate = root.join(candidate_name);
+                    if !candidate.exists() {
+                        final_output = candidate;
+                        break;
+                    }
+                    sequence = sequence.saturating_add(1);
+                }
+            }
+        }
         Ok(Self {
             output: task_dir.join("payload.downloading"),
-            final_output: root.join(final_name),
+            final_output,
             control: task_dir.join("control"),
             progress: task_dir.join("progress.json"),
             torrent_selection: task_dir.join("torrent-selection.json"),
@@ -328,6 +355,37 @@ fn reject_task_url(url: &str) -> Result<(), String> {
     Err("链接协议不受支持".into())
 }
 
+pub(crate) fn validate_local_source_path(
+    url: &str,
+    source_path: &str,
+    expected_size: Option<u64>,
+) -> Result<PathBuf, String> {
+    let lower_url = url.to_ascii_lowercase();
+    if !(lower_url.starts_with("blob:") || lower_url.starts_with("data:"))
+        || url.is_empty()
+        || url.chars().any(char::is_control)
+    {
+        return Err("本地源只允许对应 blob: 或 data: 资源".into());
+    }
+    let path = Path::new(source_path.trim());
+    if !path.is_absolute() || source_path.chars().any(char::is_control) {
+        return Err("本地源路径必须是有效的绝对路径".into());
+    }
+    let canonical = fs::canonicalize(path).map_err(|error| format!("无法读取本地源文件: {error}"))?;
+    let metadata = fs::metadata(&canonical).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("本地源必须是常规文件".into());
+    }
+    let expected = expected_size.ok_or_else(|| "本地源缺少声明的文件大小".to_string())?;
+    if metadata.len() != expected {
+        return Err(format!(
+            "本地源大小不匹配: 声明 {expected} 字节，实际 {} 字节",
+            metadata.len()
+        ));
+    }
+    Ok(canonical)
+}
+
 fn is_importable_local_path(url: &str) -> bool {
     let bytes = url.as_bytes();
     if bytes.len() >= 3
@@ -395,6 +453,9 @@ pub fn build_job(
     task_id: &str,
     spec: &TaskSpec,
 ) -> Result<(crate::http_engine::Job, TaskPaths), String> {
+    if spec.local_source_path.is_some() {
+        return Err("本地文件任务不能构造 HTTP 下载作业".into());
+    }
     let paths = TaskPaths::for_task(task_id, spec)?;
     paths.prepare()?;
     let method = crate::http_engine::sanitize_http_method(&spec.request_method);
@@ -1418,7 +1479,7 @@ impl CoreCoordinator {
                 return Err("目标队列不存在".into());
             }
             let events = self.dispatch_inner(CoreCommand::AssignQueue { task_ids, queue_id })?;
-            self.start_next_queued()?;
+            self.start_next_queued(false)?;
             return Ok(events);
         }
         if let CoreCommand::ControlCast { action } = command {
@@ -1458,7 +1519,7 @@ impl CoreCoordinator {
             let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
-                if !spec.allow_duplicate {
+                if spec.local_source_path.is_none() && !spec.allow_duplicate {
                     if let Some((task_id, status)) = self.duplicate_of(&spec)? {
                         events.extend(self.reuse_duplicate(task_id, &status)?);
                         continue;
@@ -1466,13 +1527,16 @@ impl CoreCoordinator {
                 }
                 events.extend(self.dispatch_created(spec)?);
             }
-            self.start_next_queued()?;
+            self.start_next_queued(false)?;
             return Ok(events);
         }
         self.dispatch_inner(command)
     }
 
     fn expand_create(&self, spec: TaskSpec) -> Result<Vec<TaskSpec>, String> {
+        if spec.local_source_path.is_some() {
+            return Ok(vec![spec]);
+        }
         let (auto, dirs) = {
             let core = self.lock()?;
             (
@@ -1898,7 +1962,7 @@ impl CoreCoordinator {
         Ok(events)
     }
 
-    pub(crate) fn start_next_queued(&self) -> Result<(), String> {
+    pub(crate) fn start_next_queued(&self, scheduled_only: bool) -> Result<(), String> {
         if self.update_shutdown.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -1932,6 +1996,7 @@ impl CoreCoordinator {
                     .filter(|task| {
                         task.queue_id == profile.id
                             && task.status == "queued"
+                            && (!scheduled_only || !task.scheduled_start_at.is_empty())
                             && !active_ids.contains(&task.task_id)
                             && task_schedule_allowed(task)
                     })
@@ -1969,7 +2034,7 @@ impl CoreCoordinator {
             }
         }
         if resume {
-            self.start_next_queued()?;
+            self.start_next_queued(false)?;
         }
         Ok(())
     }
@@ -2018,7 +2083,9 @@ impl CoreCoordinator {
 
     fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
         let client_dir = spec.download_dir.trim().to_string();
-        spec = apply_site_rules_to_spec(&self.core(), spec)?;
+        if spec.local_source_path.is_none() {
+            spec = apply_site_rules_to_spec(&self.core(), spec)?;
+        }
         let settings = self.settings()?;
         if spec.queue_id.trim().is_empty() {
             spec.queue_id = crate::DEFAULT_QUEUE_ID.into();
@@ -2073,16 +2140,25 @@ impl CoreCoordinator {
         {
             return Err("代理地址无效".into());
         }
-        spec.proxy = crate::net_policy::effective_proxy(
-            &settings.proxy_mode,
-            &settings.proxy_url,
-            &settings.proxy_bypass,
-            &spec.url,
-            &spec.proxy,
-        );
-        reject_task_url(&spec.url)?;
-        if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
-            return Err("下载地址不在允许的域名范围内".into());
+        if let Some(source_path) = spec.local_source_path.as_deref() {
+            if spec.resource_kind != crate::ResourceKind::File {
+                return Err("本地文件源只能用于普通文件任务".into());
+            }
+            let path = validate_local_source_path(&spec.url, source_path, spec.expected_size)?;
+            spec.local_source_path = Some(path.to_string_lossy().into_owned());
+            spec.proxy.clear();
+        } else {
+            spec.proxy = crate::net_policy::effective_proxy(
+                &settings.proxy_mode,
+                &settings.proxy_url,
+                &settings.proxy_bypass,
+                &spec.url,
+                &spec.proxy,
+            );
+            reject_task_url(&spec.url)?;
+            if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
+                return Err("下载地址不在允许的域名范围内".into());
+            }
         }
         if spec.concurrency == 0 {
             spec.concurrency = settings.default_concurrency.max(1) as u32;
@@ -2191,7 +2267,7 @@ impl CoreCoordinator {
                     task_id: task_id.clone(),
                     action: action.into(),
                 })?;
-                self.start_next_queued()?;
+                self.start_next_queued(false)?;
                 Ok(events)
             }
             other => self.lock()?.emit(CoreEvent::DuplicateOffered {
@@ -2263,6 +2339,7 @@ impl CoreCoordinator {
         let spec = self.apply_defaults_to_spec(TaskSpec {
             url: offer.url.clone(),
             resource_kind: offer.resource_kind,
+            local_source_path: offer.local_source_path.clone(),
             title: if offer.title.trim().is_empty() {
                 filename.clone()
             } else {
@@ -2651,7 +2728,8 @@ impl CoreCoordinator {
                             status: status.into(),
                         });
                     }
-                    eprintln!("v7 task {task_id} {status}: {error}");
+                    // 常驻 Core 的启动器可能已关闭诊断管道；日志写失败不能污染任务锁。
+                    let _ = writeln!(std::io::stderr(), "v7 task {task_id} {status}: {error}");
                 });
                 if status == "failed" {
                     let max = coordinator
@@ -2677,7 +2755,7 @@ impl CoreCoordinator {
                 active.remove(&task_id);
                 crate::sleep_inhibit::set_active(!active.is_empty());
             }
-            let _ = coordinator.start_next_queued();
+            let _ = coordinator.start_next_queued(false);
         });
         Ok(())
     }
@@ -2859,6 +2937,12 @@ fn run_task_with_throttle(
     spec: TaskSpec,
     replay_json: String,
 ) -> Result<(), String> {
+    if spec.local_source_path.is_some() {
+        let paths = TaskPaths::for_task(task_id, &spec)?;
+        paths.prepare()?;
+        let payload = copy_local_source_payload(&core, task_id, &paths, &spec)?;
+        return complete_payload(&core, task_id, &paths, &payload, &spec);
+    }
     let headers: std::collections::HashMap<_, _> = spec
         .headers
         .iter()
@@ -3088,6 +3172,79 @@ fn run_task_with_throttle(
         }
         crate::ResourceKind::File => run_http_file(core, task_id, spec, replay_json),
     }
+}
+
+fn copy_local_source_payload(
+    core: &Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    paths: &TaskPaths,
+    spec: &TaskSpec,
+) -> Result<PathBuf, String> {
+    let source_path = spec
+        .local_source_path
+        .as_deref()
+        .ok_or_else(|| "本地文件任务缺少源路径".to_string())?;
+    let expected_size = spec
+        .expected_size
+        .ok_or_else(|| "本地文件任务缺少声明的文件大小".to_string())?;
+    let source_path = validate_local_source_path(&spec.url, source_path, Some(expected_size))?;
+    let mut source = fs::File::open(&source_path).map_err(|error| error.to_string())?;
+    let initial = source.metadata().map_err(|error| error.to_string())?;
+    let initial_path = fs::metadata(&source_path).map_err(|error| error.to_string())?;
+    if !same_source_metadata(&initial, &initial_path) {
+        return Err("本地源文件在打开时发生变化".into());
+    }
+
+    let mut output = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&paths.output)
+        .map_err(|error| error.to_string())?;
+    let mut buffer = [0u8; 1024 * 1024];
+    let mut copied = 0u64;
+    loop {
+        ensure_publish_allowed(&paths.control)?;
+        let count = source.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| error.to_string())?;
+        copied = copied.saturating_add(count as u64);
+        mark_progress(
+            core,
+            task_id,
+            copied,
+            Some(expected_size),
+            "transfer",
+            "downloading",
+        )?;
+    }
+    ensure_publish_allowed(&paths.control)?;
+    output.flush().map_err(|error| error.to_string())?;
+    let final_handle = source.metadata().map_err(|error| error.to_string())?;
+    let final_path = fs::metadata(&source_path).map_err(|error| error.to_string())?;
+    if !same_source_metadata(&initial, &final_handle)
+        || !same_source_metadata(&initial, &final_path)
+    {
+        return Err("本地源文件在复制期间发生变化".into());
+    }
+    if copied != expected_size {
+        return Err(format!(
+            "本地源复制大小不匹配: 声明 {expected_size} 字节，实际 {copied} 字节"
+        ));
+    }
+    Ok(paths.output.clone())
+}
+
+fn same_source_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file()
+        && right.is_file()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+        && left.created().ok() == right.created().ok()
 }
 
 fn run_http_file(
@@ -3414,16 +3571,16 @@ fn complete_payload(
 ) -> Result<(), String> {
     ensure_publish_allowed(&paths.control)?;
     reject_html_media_payload(payload, spec)?;
+    let actual = fs::metadata(payload).map_err(|error| error.to_string())?.len();
     mark_progress(
         core,
         task_id,
-        spec.expected_size.unwrap_or(0),
-        spec.expected_size,
+        actual,
+        spec.expected_size.or(Some(actual)),
         "checking",
         "checking",
     )?;
     if let Some(expected) = spec.expected_size {
-        let actual = fs::metadata(payload).map(|meta| meta.len()).unwrap_or(0);
         if actual != expected {
             mark_progress(core, task_id, actual, Some(expected), "size", "checking")?;
             return Err(format!("size mismatch: expected {expected}, got {actual}"));
@@ -3445,7 +3602,7 @@ fn complete_payload(
                         result.verified,
                     )?;
                 if !result.verified {
-                    mark_progress(core, task_id, 0, None, "checksum", "checking")?;
+                    mark_progress(core, task_id, actual, Some(actual), "checksum", "checking")?;
                     return Err(format!(
                         "checksum mismatch: expected {}, got {}",
                         result.expected, result.actual
@@ -3454,7 +3611,7 @@ fn complete_payload(
             }
             Ok(None) => {}
             Err(error) => {
-                mark_progress(core, task_id, 0, None, "checksum", "checking")?;
+                mark_progress(core, task_id, actual, Some(actual), "checksum", "checking")?;
                 return Err(error);
             }
         }
@@ -3496,11 +3653,11 @@ fn complete_payload(
         // 威胁"冒充"查过了"。这一条不受 fail_on_threat 影响：那个开关只决定
         // "发现威胁时是否阻止"，不决定"扫描状态未知时是否放行"。
         if result.state == "error" {
-            mark_progress(core, task_id, 0, None, "av_scan", "checking")?;
+            mark_progress(core, task_id, actual, Some(actual), "av_scan", "checking")?;
             return Err(format!("av_scan_error: {}", result.detail));
         }
         if result.state == "threat" && fail_on_threat {
-            mark_progress(core, task_id, 0, None, "av_scan", "checking")?;
+            mark_progress(core, task_id, actual, Some(actual), "av_scan", "checking")?;
             return Err(format!("av_threat: {}", result.detail));
         }
     }
@@ -3587,7 +3744,8 @@ fn finish_published_task(
             if let Err(error) =
                 guard.set_output_path(task_id, published.to_string_lossy().into_owned())
             {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "v7 task {task_id} was published but recording its output path failed: {error}"
                 );
             }
@@ -3599,13 +3757,17 @@ fn finish_published_task(
                 stage: "finished".into(),
                 status: "completed".into(),
             }) {
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr(),
                     "v7 task {task_id} was published but publishing its completion failed: {error}"
                 );
             }
         }
         Err(_) => {
-            eprintln!("v7 task {task_id} was published but the Core mutex was poisoned")
+            let _ = writeln!(
+                std::io::stderr(),
+                "v7 task {task_id} was published but the Core mutex was poisoned"
+            );
         }
     }
     crate::motw::mark_downloaded_file(published, &spec.url);
@@ -3613,7 +3775,8 @@ fn finish_published_task(
         copy_subtitle_sidecars(&paths.task_dir(), published);
     }
     if let Err(error) = maybe_schedule_power(core, spec) {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "v7 task {task_id} was published but its completion power action failed: {error}"
         );
     }
@@ -3941,7 +4104,10 @@ fn spec_from_url(
 ) -> TaskSpec {
     let mut spec = template.clone();
     spec.url = url.to_string();
-    spec.resource_kind = crate::classify_url(url);
+    // 已识别的同一资源保留媒体类型；导入/采集出来的新 URL 才重新分类。
+    if url != template.url || spec.resource_kind == crate::ResourceKind::File {
+        spec.resource_kind = crate::classify_url(url);
+    }
     if !filename.trim().is_empty() {
         spec.filename = filename.to_string();
     }
@@ -5585,6 +5751,110 @@ mod tests {
             paths.prepare().unwrap();
             assert_eq!(fs::read_to_string(&paths.control).unwrap(), control);
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn local_source_fixture(label: &str, contents: &[u8]) -> (PathBuf, PathBuf, TaskSpec) {
+        let root = std::env::temp_dir().join(format!(
+            "hls-local-source-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("browser-download.bin");
+        fs::write(&source, contents).unwrap();
+        let spec = TaskSpec {
+            url: "blob:https://site.test/opaque".into(),
+            local_source_path: Some(fs::canonicalize(&source).unwrap().to_string_lossy().into_owned()),
+            filename: "saved.bin".into(),
+            download_dir: root.join("downloads").to_string_lossy().into_owned(),
+            work_dir: root.join("work").to_string_lossy().into_owned(),
+            expected_size: Some(contents.len() as u64),
+            ..Default::default()
+        };
+        (root, source, spec)
+    }
+
+    fn create_test_task(spec: &TaskSpec) -> (Arc<Mutex<PersistentCore>>, String) {
+        let mut persistent = PersistentCore::in_memory().unwrap();
+        let events = persistent
+            .handle(CoreCommand::CreateTask { spec: spec.clone() })
+            .unwrap();
+        let task_id = events
+            .into_iter()
+            .find_map(|event| match event.event {
+                CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id),
+                _ => None,
+            })
+            .unwrap();
+        (Arc::new(Mutex::new(persistent)), task_id)
+    }
+
+    #[test]
+    fn local_source_is_copied_and_published_with_verified_bytes() {
+        let contents = vec![0x5a; 2 * 1024 * 1024 + 13];
+        let (root, source, spec) = local_source_fixture("success", &contents);
+        let (core, task_id) = create_test_task(&spec);
+        let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+        paths.prepare().unwrap();
+
+        run_task_with_throttle(Arc::clone(&core), &task_id, spec, String::new()).unwrap();
+
+        assert_eq!(fs::read(&paths.final_output).unwrap(), contents);
+        assert!(source.is_file(), "Core leaves source cleanup to the browser extension");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canceled_local_source_copy_does_not_publish_or_remove_source() {
+        let contents = vec![0x31; 2 * 1024 * 1024 + 13];
+        let (root, source, spec) = local_source_fixture("cancel", &contents);
+        let (core, task_id) = create_test_task(&spec);
+        let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+        paths.prepare().unwrap();
+        paths.set_control("cancel").unwrap();
+
+        let error = run_task_with_throttle(core, &task_id, spec, String::new()).unwrap_err();
+
+        assert_eq!(error, "canceled");
+        assert!(!paths.final_output.exists());
+        assert!(source.is_file());
+        assert_eq!(fs::read(source).unwrap(), contents);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_source_in_output_directory_uses_a_distinct_target_path() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-local-collision-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let output_dir = root.join("downloads");
+        fs::create_dir_all(&output_dir).unwrap();
+        let source = output_dir.join("saved.bin");
+        fs::write(&source, b"already downloaded").unwrap();
+        let spec = TaskSpec {
+            url: "data:application/octet-stream,".into(),
+            local_source_path: Some(fs::canonicalize(&source).unwrap().to_string_lossy().into_owned()),
+            filename: "saved.bin".into(),
+            download_dir: output_dir.to_string_lossy().into_owned(),
+            work_dir: root.join("work").to_string_lossy().into_owned(),
+            expected_size: Some(18),
+            ..Default::default()
+        };
+
+        let paths = TaskPaths::for_task("task-collision", &spec).unwrap();
+
+        assert_ne!(paths.final_output, fs::canonicalize(&source).unwrap());
+        assert_eq!(paths.final_output.file_name().unwrap(), "saved (2).bin");
+        assert_eq!(fs::read(&source).unwrap(), b"already downloaded");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7674,6 +7944,78 @@ mod tests {
             .iter()
             .any(|envelope| matches!(envelope.event, crate::CoreEvent::HandoffResolved { .. })));
         assert_eq!(coordinator.tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn coordinator_accept_handoff_carries_local_source_into_task_spec() {
+        let contents = b"accepted browser payload";
+        let (root, source, spec) = local_source_fixture("handoff", contents);
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(spec.download_dir.clone()),
+            )
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::OfferResource {
+                offer: crate::ResourceOffer {
+                    url: spec.url.clone(),
+                    resource_kind: crate::ResourceKind::File,
+                    local_source_path: spec.local_source_path.clone(),
+                    handoff_id: "handoff-local-source".into(),
+                    filename: spec.filename.clone(),
+                    size: contents.len() as u64,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+
+        let events = coordinator
+            .dispatch(CoreCommand::AcceptHandoff {
+                handoff_id: "handoff-local-source".into(),
+                filename: spec.filename.clone(),
+                download_dir: String::new(),
+                trusted_ui: false,
+            })
+            .unwrap();
+        let task_id = events
+            .iter()
+            .find_map(|event| match &event.event {
+                CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let task_spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec(&task_id)
+            .cloned()
+            .unwrap();
+        coordinator.wait_for_worker_stop(&task_id).unwrap();
+
+        assert_eq!(task_spec.local_source_path, spec.local_source_path);
+        assert!(source.is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_create_preserves_detected_adaptive_kind_without_extension() {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        for resource_kind in [crate::ResourceKind::Hls, crate::ResourceKind::Dash] {
+            let spec = TaskSpec {
+                url: "https://cdn.test/opaque?token=media".into(),
+                resource_kind,
+                filename: "video.mp4".into(),
+                ..Default::default()
+            };
+            let expanded = coordinator.expand_create(spec).unwrap();
+            assert_eq!(expanded.len(), 1);
+            assert_eq!(expanded[0].resource_kind, resource_kind);
+        }
     }
 
     #[test]

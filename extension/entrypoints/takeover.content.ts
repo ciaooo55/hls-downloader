@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser'
+import { localDownloadIntentUrl } from '../lib/resources'
 import {
   isLikelyDownloadControl,
   linkOpensNewTab,
@@ -28,8 +29,10 @@ export default defineContentScript({
   runAt: 'document_start',
   main() {
     let lastIntent = { key: '', at: 0 }
+    let lastTrustedClick = { at: 0, alt: false, ctrl: false }
     const recordIntent = (event: MouseEvent) => {
-      if (!event.isTrusted || event.button !== 0) return
+      if (event.button !== 0) return
+      if (event.isTrusted) lastTrustedClick = { at: Date.now(), alt: event.altKey, ctrl: event.ctrlKey }
       const path = event.composedPath()
       const link = path.find(value => isHtmlLink(value) || isSvgLink(value)) as
         | HTMLAnchorElement
@@ -41,6 +44,20 @@ export default defineContentScript({
       if (!link && !control) return
       const htmlLink = isHtmlLink(link) ? link : undefined
       const svgLink = isSvgLink(link) ? link : undefined
+      const localHref = htmlLink?.href || ''
+      if (/^(blob:|data:)/i.test(localHref) && htmlLink?.hasAttribute('download')) {
+        // 导出按钮常在可信点击中调用隐藏 a.click()；绑定真实本地 URL，避免缺失 referrer 时丢掉来源和 Alt。
+        const modifiers = Date.now() - lastTrustedClick.at < 1_500 ? lastTrustedClick : { alt: false, ctrl: false }
+        const key = `${localHref}:${modifiers.alt}:${modifiers.ctrl}`
+        if (lastIntent.key === key && Date.now() - lastIntent.at < 1_500) return
+        lastIntent = { key, at: Date.now() }
+        void localDownloadIntentUrl(localHref).then(href => browser.runtime.sendMessage({
+          type: 'click-intent', href, pageUrl: location.href,
+          altBypass: modifiers.alt, ctrlForce: modifiers.ctrl, generic: false, controlHint: true,
+        }))
+        return
+      }
+      if (!event.isTrusted) return
       const directHref = resolveClickedLinkHref({
         htmlHref: htmlLink?.href || '',
         htmlHrefAttribute: htmlLink ? attribute(htmlLink, 'href') : '',

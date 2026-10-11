@@ -33,6 +33,8 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
+最新修订版：[7.0.3-r2](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r2)。本次提供已通过 Windows Sandbox 50 组功能验收及干净安装、旧版升级验收的未签名 MSI、Chromium/Firefox 插件和 Firefox 审核源码包。软件版本仍为 7.0.3；修订号用于区分此前发布的包。具体验收范围和校验值见发布附件。
+
 ### 系统要求
 
 | 项目 | 要求 |
@@ -40,7 +42,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 | 操作系统 | Windows 10 或 Windows 11（x64） |
 | 处理器架构 | **仅 x64**。播放与部分抓取依赖随包的 x64 原生库（libmpv、curl-impersonate），ARM64 Windows 无法运行 |
 | 运行时 | 无需预装 Java——安装包内置裁剪过的 JRE |
-| 权限 | 按用户安装，**不需要管理员权限**；数据存放在 `%LOCALAPPDATA%` |
+| 权限 | MSI 安装或覆盖升级需要管理员权限；便携包以对应发布说明为准 |
 | 浏览器 | Chromium 系（Chrome / Edge）或 Firefox，用于下载接管 |
 | 显示器 | 最低 1024×600；界面跟随系统 DPI 缩放 |
 
@@ -81,7 +83,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 ## 🌐 浏览器接管是怎么工作的
 
-浏览器扩展并不自己执行下载。它负责识别资源、收集完成任务所需的请求信息，然后通过 Native Messaging 把任务交给本机 Core。
+普通下载由扩展识别资源、收集请求信息，再通过 Native Messaging 交给本机 Core。POST 表单、Blob/data 生成文件由浏览器先完成原请求，再导入桌面任务；成功后删除浏览器源副本，拒绝或失败时保留文件。默认自动接管全部文件大小；按住 Alt、关闭接管或命中排除规则时保留浏览器下载。
 
 这意味着浏览器只是入口，而不是下载生命周期的所有者：浏览器崩溃、关闭或扩展重新连接时，已经进入 Core 的任务仍由桌面端自己的持久状态管理。
 

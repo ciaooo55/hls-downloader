@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 
 from smoke_v7_portable_app import Pipe
 
@@ -19,13 +23,31 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def do_GET(self):
+        if urlsplit(self.path).path == '/live/index.m3u8':
+            body = self.server.live_playlist
+            if self.server.live_finished.is_set():
+                body += '\n#EXT-X-ENDLIST\n'
+            encoded = body.encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
+            self.send_header('Content-Length', str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
+        if urlsplit(self.path).path in getattr(self.server, 'blocked_files', set()):
+            self.send_error(403, 'Test audio unavailable')
+            return
+        super().do_GET()
+
 
 def run(args):
     runtime = args.runtime.resolve()
     ffmpeg = runtime / "app/resources/ffmpeg.exe"
     ffprobe = runtime / "app/resources/ffprobe.exe"
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    result = {"passed": False, "cases": []}
+    result = {"passed": False, "cases": [], "engine_sha256": hashlib.sha256(
+        (runtime / 'app/resources/HLSDownloaderEngine.exe').read_bytes()).hexdigest()}
     created = set()
     server = None
 
@@ -71,10 +93,30 @@ def run(args):
                     generate("-i", source, "-c", "copy", "-hls_time", "1", "-hls_playlist_type", "vod",
                              *extra, folder / "index.m3u8", cwd=folder)
             server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(stage)))
+            if args.live:
+                shutil.copytree(stage / 'hls', stage / 'live')
+                server.live_playlist = (stage / 'live/index.m3u8').read_text().replace('#EXT-X-PLAYLIST-TYPE:VOD', '').replace('#EXT-X-ENDLIST', '')
+                server.live_finished = threading.Event()
             threading.Thread(target=server.serve_forever, daemon=True).start()
-            for case, kind, manifest in [("HLS fMP4 with audio", "hls", "hls/index.m3u8"),
+            cases = [("HLS fMP4 with audio", "hls", "hls/index.m3u8"),
                                          ("HLS AES-128 with audio", "hls", "encrypted/index.m3u8"),
-                                         ("DASH separate video and audio", "dash", "dash/index.mpd")]:
+                                         ("DASH separate video and audio", "dash", "dash/index.mpd")]
+            if args.live:
+                cases = [("HLS live finite window, pause/resume and full decode", "live", "live/index.m3u8")]
+            for case, kind, manifest in cases:
+                if args.audio_failure and kind != 'dash':
+                    continue
+                if args.audio_failure:
+                    xml = ET.parse(stage / manifest)
+                    audio = next(r for r in xml.iter() if r.tag.endswith('Representation')
+                                 and r.attrib.get('mimeType', '').startswith('audio/'))
+                    server.blocked_files = {'/dash/' + p.name for p in (stage / 'dash').iterdir()
+                                            if 'stream' + audio.attrib['id'] + '.' in p.name
+                                            or 'stream' + audio.attrib['id'] + '-' in p.name}
+                    assert server.blocked_files, 'Audio failure fixture has no blocked segments'
+                    if args.audio_failure == 'segment':
+                        server.blocked_files = {min(p for p in server.blocked_files if 'chunk-' in p)}
+                    result['blocked_files'] = sorted(server.blocked_files)
                 url = f"http://127.0.0.1:{server.server_port}/{manifest}"
                 response = request({"type": "command", "request_id": 1, "command": {
                     "kind": "create_task", "spec": {"url": url, "resource_kind": kind,
@@ -84,12 +126,38 @@ def run(args):
                 created.add(task_id)
                 request({"type": "command", "request_id": 2, "command": {
                     "kind": "task_action", "task_id": task_id, "action": "start"}})
+                if args.live:
+                    from smoke_v7_portable_app import wait
+                    def current():
+                        return next(t for t in request({'type': 'snapshot', 'request_id': 3})['tasks'] if t['task_id'] == task_id)
+                    active = wait(lambda: (t if (t := current())['status'] == 'recording' and t['downloaded_bytes'] > 0 else None),
+                                  'Live recording did not report transferred bytes', 30)
+                    request({'type': 'command', 'request_id': 2, 'command': {'kind': 'task_action', 'task_id': task_id, 'action': 'pause'}})
+                    paused = wait(lambda: (t if (t := current())['status'] == 'paused' and t['active_workers'] == 0 else None),
+                                  'Live recording did not pause', 15)
+                    request({'type': 'command', 'request_id': 2, 'command': {'kind': 'task_action', 'task_id': task_id, 'action': 'resume'}})
+                    wait(lambda: current()['status'] == 'recording', 'Live recording did not resume', 15)
+                    server.live_finished.set()
+                    result['live_checkpoint'] = {'recording_bytes': active['downloaded_bytes'], 'paused_bytes': paused['downloaded_bytes']}
                 deadline = time.monotonic() + 90
                 while time.monotonic() < deadline:
                     task = next(t for t in request({"type": "snapshot", "request_id": 3})["tasks"] if t["task_id"] == task_id)
                     if task["status"] in {"completed", "failed"}:
                         break
                     time.sleep(.1)
+                if args.audio_failure:
+                    result['unavailable_audio_task'] = task
+                    assert task['status'] == 'failed', 'Missing audio silently published as a successful download'
+                    assert not Path(task['output_path']).is_file(), 'Incomplete download was published'
+                    server.blocked_files.clear()
+                    request({'type': 'command', 'request_id': 2, 'command': {
+                        'kind': 'task_action', 'task_id': task_id, 'action': 'retry'}})
+                    deadline = time.monotonic() + 90
+                    while time.monotonic() < deadline:
+                        task = next(t for t in request({'type': 'snapshot', 'request_id': 3})['tasks'] if t['task_id'] == task_id)
+                        if task['status'] in {'completed', 'failed'}:
+                            break
+                        time.sleep(.1)
                 if task["status"] != "completed":
                     result["failed_task"] = task
                     raise AssertionError(f"{case}: {task['status']}")
@@ -126,4 +194,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument('--audio-failure', nargs='?', const='all', choices=['all', 'segment'])
+    parser.add_argument('--live', action='store_true')
     raise SystemExit(run(parser.parse_args()))

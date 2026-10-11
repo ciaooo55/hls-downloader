@@ -37,7 +37,8 @@ export default defineConfig({
       gecko: {
         id: FIREFOX_EXTENSION_ID,
         strict_min_version: '142.0',
-        data_collection_permissions: { required: ['none'] },
+        // Native Messaging 也属于浏览器外传输，必须声明下载上下文和用户授权的凭据。
+        data_collection_permissions: { required: ['browsingActivity', 'websiteContent', 'authenticationInfo'] },
       },
     } : undefined,
   }),

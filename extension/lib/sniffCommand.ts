@@ -4,6 +4,13 @@ export function isSniffCurrentPageCommand(command: string): boolean {
   return command === SNIFF_CURRENT_PAGE_COMMAND
 }
 
-export function openMediaPanelMessage(): { type: 'open-media-panel' } {
-  return { type: 'open-media-panel' }
+export function openMediaPanelCommandDispatch() {
+  return {
+    message: { type: 'open-media-panel', scope: 'tab' } as const,
+    options: { frameId: 0 },
+  }
+}
+
+export function shouldAggregateTabMedia(scope: unknown, senderFrameId: number): boolean {
+  return scope === 'tab' && senderFrameId === 0
 }

@@ -1,13 +1,12 @@
 import { ScrollView } from "std-widgets.slint";
+import "../fonts/NotoSansCJKsc-Regular.otf";
 
 export global Tokens {
     in-out property <bool> dark: false;
     in-out property <bool> reduce-motion: false;
     out property <duration> motion: reduce-motion ? 1ms : 150ms;
     out property <duration> motion-fast: reduce-motion ? 1ms : 90ms;
-    // Segoe UI Variable 只有 Windows 11 自带；用 Segoe UI 让 Win10/11 落到同一套有意选择的字体，
-    // 而不是在 Win10 上静默回退到未指定的默认字体。
-    out property <string> type-face: "Segoe UI";
+    out property <string> type-face: "Noto Sans CJK SC";
     out property <color> surface: dark ? #1c1f23 : #fcfdfe;
     out property <color> surface-2: dark ? #23272b : #f5f7fa;
     out property <color> surface-3: dark ? #2b3035 : #e8edf3;
@@ -33,7 +32,8 @@ component HotButton inherits Rectangle {
     min-width: 72px;
     height: 34px;
     border-radius: 7px;
-    opacity: enabled ? 1 : 0.48;
+    opacity: enabled ? (touch.pressed ? 0.8 : 1) : 0.48;
+    animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
     background: primary ? (touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : (touch.has-hover && enabled ? Tokens.surface-3 : Tokens.surface-2);
     border-width: primary ? 0px : 1px;
     border-color: danger ? Tokens.fail : Tokens.line;
@@ -50,7 +50,7 @@ component HotButton inherits Rectangle {
             horizontal-alignment: center;
         }
     }
-    touch := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.clicked(); } }
 }
 
 component HotCloseButton inherits Rectangle {
@@ -380,16 +380,19 @@ export component ProgressWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 12px;
     min-width: 400px;
-    min-height: 204px;
+    min-height: 228px;
     preferred-width: 400px;
-    preferred-height: 204px;
+    preferred-height: 228px;
     background: Tokens.surface;
-    always-on-top: false;
+    always-on-top: true;
     no-frame: true;
     in-out property <string> headline: "下载进度";
     in-out property <string> filename;
     in-out property <string> speed;
     in-out property <float> progress;
+    in-out property <string> transferred;
+    in-out property <bool> total_known;
+    in-out property <bool> hidden_by_user: false;
     in-out property <bool> action_busy: false;
     in-out property <bool> action_error: false;
     in-out property <string> action_text;
@@ -412,8 +415,9 @@ export component ProgressWindow inherits Window {
             HorizontalLayout {
                 Text { text: root.speed; color: Tokens.accent; font-size: 12px; font-weight: 600; }
                 Rectangle { horizontal-stretch: 1; }
-                Text { text: "\{Math.round(root.progress * 100)}%"; color: Tokens.muted; font-size: 12px; font-weight: 600; }
+                Text { text: root.total_known ? "\{Math.round(root.progress * 100)}%" : "大小未知"; color: Tokens.muted; font-size: 12px; font-weight: 600; }
             }
+            Text { text: root.transferred; color: Tokens.muted; font-size: 12px; }
             Rectangle {
                 height: 6px;
                 border-radius: 3px;

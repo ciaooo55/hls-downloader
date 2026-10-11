@@ -654,6 +654,10 @@ fn fetch_magnet_metadata(
 ) -> Result<TorrentMeta, String> {
     let hash = canonical_info_hash(&magnet.info_hash)
         .ok_or_else(|| format!("magnet info_hash 无效: {}", magnet.info_hash))?;
+    let swarm_error = match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht) {
+        Ok(meta) => return Ok(meta),
+        Err(error) => error,
+    };
     let mut last = "未能取得种子元数据".to_string();
     for url in [
         format!("https://itorrents.org/torrent/{hash}.torrent"),
@@ -664,6 +668,10 @@ fn fetch_magnet_metadata(
         match crate::http_engine::fetch_bytes(&url, headers, proxy) {
             Ok((status, body)) if status == 200 || status == 206 => {
                 if let Ok(mut parsed) = parse_torrent_file(&body) {
+                    if canonical_info_hash(&parsed.info_hash).as_deref() != Some(hash.as_str()) {
+                        last = "缓存种子的 info_hash 与磁力链接不匹配".into();
+                        continue;
+                    }
                     if parsed.pieces.is_empty() {
                         last = "元数据没有 piece 列表".into();
                         continue;
@@ -689,10 +697,7 @@ fn fetch_magnet_metadata(
             Err(error) => last = error.to_string(),
         }
     }
-    if let Ok(from_swarm) = fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht) {
-        return Ok(from_swarm);
-    }
-    Err(last)
+    Err(format!("未能取得种子元数据：{swarm_error}；缓存：{last}"))
 }
 
 fn canonical_info_hash(value: &str) -> Option<String> {
@@ -750,10 +755,8 @@ fn download_swarm(
     options: TorrentOptions,
     reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<u64, String> {
-    let mut peers = announce_peers(meta, headers, proxy, options.enable_dht)?;
-    if peers.is_empty() {
-        return Err("tracker returned no peers".into());
-    }
+    let mut peers = resolve_hint_peers(&meta.hint_peers);
+    let mut discovered = false;
     let mut telemetry = TorrentTelemetry {
         peer_count: peers.len().min(u32::MAX as usize) as u32,
         ..TorrentTelemetry::default()
@@ -762,7 +765,22 @@ fn download_swarm(
     let mut seen = BTreeSet::new();
     let mut last = "all peers failed".to_string();
     let mut index = 0;
-    while index < peers.len() && index < options.max_connections.clamp(10, 1000) {
+    while index < options.max_connections.clamp(10, 1000) {
+        if index == peers.len() {
+            if discovered {
+                break;
+            }
+            check_torrent_control(control)?;
+            discovered = true;
+            for peer in announce_peers(meta, headers, proxy, options.enable_dht)? {
+                if !peers.contains(&peer) {
+                    peers.push(peer);
+                }
+            }
+            if index == peers.len() {
+                break;
+            }
+        }
         let peer = peers[index];
         index += 1;
         if !seen.insert(peer) {
@@ -874,15 +892,26 @@ fn fetch_metadata_from_swarm(
     proxy: &str,
     enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
-    let peers = announce_peers(magnet, headers, proxy, enable_dht)?;
-    if peers.is_empty() {
-        return Err("magnet 没有 tracker 返回的节点".into());
-    }
-    let mut last = "节点没有提供 ut_metadata".to_string();
-    let mut queue = peers;
+    let mut last = "没有节点提供种子元数据".to_string();
+    let mut queue = resolve_hint_peers(&magnet.hint_peers);
+    let mut discovered = false;
     let mut seen = BTreeSet::new();
     let mut index = 0;
-    while index < queue.len() && index < 24 {
+    while index < 24 {
+        if index == queue.len() {
+            if discovered {
+                break;
+            }
+            discovered = true;
+            for peer in announce_peers(magnet, headers, proxy, enable_dht)? {
+                if !queue.contains(&peer) {
+                    queue.push(peer);
+                }
+            }
+            if index == queue.len() {
+                break;
+            }
+        }
         let peer = queue[index];
         index += 1;
         if !seen.insert(peer) {

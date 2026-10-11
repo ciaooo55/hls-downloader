@@ -656,6 +656,8 @@ pub fn download_hls_with(
             proxy,
             control,
             options.concurrency.max(1),
+            options.progress.as_deref().map(|path| (path,
+                timeline.entries.iter().map(|entry| file_len(&entry.path)).sum::<u64>(), live)),
         );
         if let Some(error) = stop_error {
             // A stopping run must still vouch for the segments that landed:
@@ -1238,6 +1240,7 @@ fn download_prepared_segments(
     proxy: &str,
     control: &Path,
     concurrency: usize,
+    progress: Option<(&Path, u64, bool)>,
 ) -> (HashSet<PathBuf>, Option<String>) {
     let queue: VecDeque<SegmentWork> = prepared
         .iter()
@@ -1257,6 +1260,9 @@ fn download_prepared_segments(
     let completed: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
     let replay = crate::credentials::scoped_replay_json();
     let throttle = crate::net_policy::current_throttle_context();
+    // VOD 一次提交全部分片；不能等整批结束后才报告下载字节。
+    let downloaded = Mutex::new(progress.map_or(0, |(_, bytes, _)| bytes)
+        + prepared.iter().filter(|item| !item.needs_download).map(|item| file_len(&item.path)).sum::<u64>());
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             let queue = Arc::clone(&queue);
@@ -1264,6 +1270,7 @@ fn download_prepared_segments(
             let completed = Arc::clone(&completed);
             let replay = replay.clone();
             let throttle = throttle.clone();
+            let downloaded = &downloaded;
             scope.spawn(move || {
                 crate::net_policy::with_throttle_context(throttle, || {
                     crate::with_replay_json(&replay, || loop {
@@ -1284,6 +1291,13 @@ fn download_prepared_segments(
                             Ok(_) => {
                                 if let Ok(mut completed) = completed.lock() {
                                     completed.insert(work.path.clone());
+                                }
+                                if let Some((path, _, live)) = progress {
+                                    if let Ok(mut bytes) = downloaded.lock() {
+                                        *bytes += file_len(&work.path);
+                                        crate::http_engine::write_progress(path, *bytes, 0, 0.0,
+                                            if live { "recording" } else { "downloading" });
+                                    }
                                 }
                             }
                             Err(error) => {

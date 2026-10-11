@@ -243,6 +243,11 @@ fn replay_request_header_names(json: &str) -> Vec<String> {
     {
         for scoped in contexts.values() {
             merge_header_map(&mut headers, scoped.get("request_headers"));
+            if let Some(paths) = scoped.get("path_contexts").and_then(|v| v.as_object()) {
+                for path in paths.values() {
+                    merge_header_map(&mut headers, path.get("request_headers"));
+                }
+            }
         }
     }
     headers.into_keys().collect()
@@ -296,14 +301,28 @@ fn apply_scoped_request_context_inner(
     else {
         return;
     };
-    merge_header_map(headers, scoped.get("request_headers"));
-    replace_header(headers, "Referer", scoped.get("referer"));
-    replace_header(headers, "Origin", scoped.get("origin"));
-    insert_header(headers, "User-Agent", scoped.get("user_agent"));
-    let scoped_cookie = scoped
-        .get("cookie")
-        .and_then(value_as_header_text)
-        .unwrap_or_default();
+    let request_path = replay_request_path(request_url);
+    let path_context = scoped.get("path_contexts").and_then(|v| v.as_object())
+        .and_then(|paths| paths.iter()
+            .filter(|(path, _)| path.starts_with('/') && path.ends_with('/') && request_path.starts_with(path.as_str()))
+            .max_by_key(|(path, _)| path.len()).map(|(_, context)| context));
+    if path_context.is_some() {
+        // 音轨、密钥和分片可能使用不同 Token；切换目录时替换浏览器请求头。
+        for name in replay_request_header_names(json) {
+            remove_header(headers, &name);
+        }
+    }
+    let identity = path_context.unwrap_or(scoped);
+    merge_header_map(headers, identity.get("request_headers"));
+    replace_header(headers, "Referer", identity.get("referer"));
+    replace_header(headers, "Origin", identity.get("origin"));
+    insert_header(headers, "User-Agent", identity.get("user_agent"));
+    let scoped_cookie = if let Some(cookies) = scoped.get("cookies").and_then(|v| v.as_array()) {
+        replay_cookie_header(cookies, request_url)
+    } else {
+        // 已保存的任务仍可能只有旧格式的 Cookie 字符串。
+        scoped.get("cookie").and_then(value_as_header_text).unwrap_or_default()
+    };
     if scoped_cookie.trim().is_empty() {
         remove_header(headers, "Cookie");
     } else {
@@ -313,6 +332,47 @@ fn apply_scoped_request_context_inner(
             Some(&serde_json::Value::String(scoped_cookie)),
         );
     }
+}
+
+fn replay_cookie_header(cookies: &[serde_json::Value], request_url: &str) -> String {
+    let origin = request_origin(request_url);
+    let Some((scheme, authority)) = origin.split_once("://") else { return String::new() };
+    let host = authority.split(':').next().unwrap_or("");
+    let path = replay_request_path(request_url);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_secs_f64();
+    let mut matching = Vec::new();
+    for cookie in cookies.iter().take(256) {
+        let text = |key| cookie.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        let domain = text("domain").trim_start_matches('.').to_ascii_lowercase();
+        let cookie_path = text("path");
+        let name = text("name");
+        let value = text("value");
+        let domain_matches = host == domain
+            || (cookie.get("hostOnly").and_then(|v| v.as_bool()) == Some(false)
+                && host.ends_with(&format!(".{domain}")));
+        let path_matches = !cookie_path.is_empty() && (path == cookie_path
+            || (path.starts_with(cookie_path)
+                && (cookie_path.ends_with('/') || path.as_bytes().get(cookie_path.len()) == Some(&b'/'))));
+        if domain.is_empty() || !domain_matches || !path_matches
+            || (cookie.get("secure").and_then(|v| v.as_bool()) == Some(true) && scheme != "https")
+            || cookie.get("expirationDate").and_then(|v| v.as_f64()).is_some_and(|expires| expires <= now)
+            || name.contains(['\r', '\n', '\0', ';']) || value.contains(['\r', '\n', '\0', ';'])
+        {
+            continue;
+        }
+        matching.push((cookie_path.len(), format!("{name}={value}")));
+    }
+    matching.sort_by_key(|(length, _)| std::cmp::Reverse(*length));
+    matching.into_iter().map(|(_, value)| value).collect::<Vec<_>>().join("; ")
+}
+
+fn replay_request_path(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let start = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let target = &rest[start..];
+    if !target.starts_with('/') { return "/" }
+    target.split(['?', '#']).next().unwrap_or("/")
 }
 
 pub(crate) fn request_origin(url: &str) -> String {
@@ -460,6 +520,66 @@ fn hex_digit(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_selects_cookie_path_for_each_adaptive_media_request() {
+        let json = r#"{"cookie":"page=wrong","request_contexts":{"https://cdn.test":{
+            "cookie":"legacy=wrong","referer":"https://site.test/watch","cookies":[
+                {"name":"session","value":"root","domain":"cdn.test","path":"/","hostOnly":true},
+                {"name":"session","value":"chunks","domain":"cdn.test","path":"/chunks","hostOnly":true},
+                {"name":"session","value":"init","domain":"cdn.test","path":"/init","hostOnly":true},
+                {"name":"session","value":"foreign","domain":"other.test","path":"/","hostOnly":true},
+                {"name":"expired","value":"no","domain":"cdn.test","path":"/","expirationDate":1}
+            ]}}}"#;
+        for (url, expected) in [
+            ("https://cdn.test/chunks/1.ts?token=1", "session=chunks; session=root"),
+            ("https://cdn.test/init/video.mp4", "session=init; session=root"),
+            ("https://cdn.test/chunksevil/1.ts", "session=root"),
+        ] {
+            let mut headers = std::collections::BTreeMap::new();
+            apply_replay_json_for(&mut headers, json, url);
+            assert_eq!(headers.get("Cookie").map(String::as_str), Some(expected));
+        }
+        let mut headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(&mut headers, r#"{"request_contexts":{"https://cdn.test":{"cookie":"stale=1","cookies":[]}}}"#, "https://cdn.test/file");
+        assert!(!headers.contains_key("Cookie"));
+    }
+
+    #[test]
+    fn replay_cookie_snapshot_enforces_secure_and_host_only() {
+        let cookies = serde_json::json!([
+            {"name":"a","value":"1","domain":".cdn.test","path":"/","hostOnly":false},
+            {"name":"b","value":"2","domain":"cdn.test","path":"/","hostOnly":true},
+            {"name":"c","value":"3","domain":"cdn.test","path":"/","secure":true}
+        ]);
+        let cookies = cookies.as_array().unwrap();
+        assert_eq!(replay_cookie_header(cookies, "http://cdn.test/file"), "a=1; b=2");
+        assert_eq!(replay_cookie_header(cookies, "https://sub.cdn.test/file"), "a=1");
+        assert_eq!(replay_cookie_header(cookies, "https://cdn.test/file"), "a=1; b=2; c=3");
+    }
+
+    #[test]
+    fn replay_uses_directory_request_identity_without_leaking_manifest_token() {
+        let json = r#"{"request_headers":{"Authorization":"Bearer manifest","X-Manifest":"private"},
+            "request_contexts":{"https://cdn.test":{"cookies":[],"path_contexts":{
+                "/init/":{"referer":"https://frame.test/player","origin":"","request_headers":{"Authorization":"Bearer init"}},
+                "/chunks/":{"referer":"https://frame.test/player","origin":"https://frame.test","request_headers":{"X-Playback-Token":"chunks"}},
+                "/chunks/audio/":{"referer":"https://frame.test/player","origin":"","request_headers":{"Authorization":"Bearer audio"}}
+            }}}}"#;
+        for (url, auth, token, origin) in [
+            ("https://cdn.test/init/video.mp4", Some("Bearer init"), None, None),
+            ("https://cdn.test/chunks/1.m4s", None, Some("chunks"), Some("https://frame.test")),
+            ("https://cdn.test/chunks/audio/1.m4s", Some("Bearer audio"), None, None),
+        ] {
+            let mut headers = std::collections::BTreeMap::new();
+            apply_replay_json_for(&mut headers, json, url);
+            assert_eq!(headers.get("Authorization").map(String::as_str), auth);
+            assert_eq!(headers.get("X-Playback-Token").map(String::as_str), token);
+            assert_eq!(headers.get("Origin").map(String::as_str), origin);
+            assert_eq!(headers.get("Referer").map(String::as_str), Some("https://frame.test/player"));
+            assert!(!headers.contains_key("X-Manifest"));
+        }
+    }
 
     #[test]
     fn empty_and_plain_values_are_stable() {

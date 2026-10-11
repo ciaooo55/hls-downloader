@@ -38,6 +38,14 @@ export interface BrowserHandoffPayload {
 
 export type DesktopTaskReadiness = 'waiting' | 'safe-to-remove' | 'browser-fallback'
 
+export function localFileTaskReadiness(handoff: BrowserHandoffPayload): DesktopTaskReadiness {
+  const readiness = desktopTaskReadiness(handoff)
+  if (readiness === 'browser-fallback') return readiness
+  // 本地文件是 Core 复制的源；即使已开始复制，也必须等最终发布成功才能删除。
+  return handoff.status === 'accepted' && ['done', 'completed'].includes(handoff.task_status || '')
+    ? 'safe-to-remove' : 'waiting'
+}
+
 /**
  * Decide whether Chromium may discard its paused DownloadItem. Handoff
  * acceptance proves only that a task was created; it does not prove that a

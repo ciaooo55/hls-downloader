@@ -16,11 +16,19 @@ import {
   canContinueTakeover,
   canResumeBrowserDownload,
   desktopTaskReadiness,
+  localFileTaskReadiness,
   desktopAcceptedHandoff,
   handoffTerminalStatus,
 } from './takeover'
 
 describe('browser download takeover helpers', () => {
+  it('retains the local source through partial copying, verification and failure', () => {
+    expect(localFileTaskReadiness({ status: 'accepted', task_status: 'downloading', task_downloaded_bytes: 1024 })).toBe('waiting')
+    expect(localFileTaskReadiness({ status: 'accepted', task_status: 'downloading', task_stage: 'checking' })).toBe('waiting')
+    expect(localFileTaskReadiness({ status: 'accepted', task_status: 'failed', task_downloaded_bytes: 1024 })).toBe('browser-fallback')
+    expect(localFileTaskReadiness({ status: 'rejected' })).toBe('browser-fallback')
+    expect(localFileTaskReadiness({ status: 'accepted', task_status: 'completed' })).toBe('safe-to-remove')
+  })
   it('matches same-URL early takeovers only to the DownloadItem tab after chain loss', () => {
     const entry = (requestId: string, tabId: number): EarlyBrowserTakeover => ({
       requestId,

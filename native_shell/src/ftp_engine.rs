@@ -8,7 +8,10 @@ use std::time::Duration;
 enum Conn {
     Plain(TcpStream),
     #[cfg(windows)]
-    Tls(schannel::tls_stream::TlsStream<TcpStream>),
+    Tls(
+        schannel::tls_stream::TlsStream<TcpStream>,
+        schannel::schannel_cred::SchannelCred,
+    ),
 }
 
 impl Read for Conn {
@@ -16,7 +19,7 @@ impl Read for Conn {
         match self {
             Self::Plain(stream) => stream.read(buf),
             #[cfg(windows)]
-            Self::Tls(stream) => stream.read(buf),
+            Self::Tls(stream, _) => stream.read(buf),
         }
     }
 }
@@ -26,11 +29,25 @@ impl Conn {
         match self {
             Self::Plain(stream) => stream.peer_addr().map_err(|error| error.to_string()),
             #[cfg(windows)]
-            Self::Tls(stream) => stream
+            Self::Tls(stream, _) => stream
                 .get_ref()
                 .peer_addr()
                 .map_err(|error| error.to_string()),
         }
+    }
+
+    fn secure_data(&self, stream: TcpStream, host: &str) -> Result<Self, String> {
+        #[cfg(windows)]
+        if let Self::Tls(_, credentials) = self {
+            // FTPS 服务器可能要求数据连接恢复控制连接的 TLS 会话；必须复用凭据句柄。
+            let tls = schannel::tls_stream::Builder::new()
+                .domain(host)
+                .connect(credentials.clone(), stream)
+                .map_err(|error| error.to_string())?;
+            return Ok(Self::Tls(tls, credentials.clone()));
+        }
+        let _ = (stream, host);
+        Err("FTPS control connection is not TLS".into())
     }
 }
 
@@ -39,7 +56,7 @@ impl Write for Conn {
         match self {
             Self::Plain(stream) => stream.write(buf),
             #[cfg(windows)]
-            Self::Tls(stream) => stream.write(buf),
+            Self::Tls(stream, _) => stream.write(buf),
         }
     }
 
@@ -47,7 +64,7 @@ impl Write for Conn {
         match self {
             Self::Plain(stream) => stream.flush(),
             #[cfg(windows)]
-            Self::Tls(stream) => stream.flush(),
+            Self::Tls(stream, _) => stream.flush(),
         }
     }
 }
@@ -158,6 +175,8 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         let reply = command(&mut ctrl, "AUTH TLS")?;
         require_reply_code(&reply, &[234], "AUTH TLS")?;
         ctrl = wrap_tls(take_plain(ctrl)?, &target.host)?;
+    }
+    if target.tls {
         let reply = command(&mut ctrl, "PBSZ 0")?;
         require_reply_code(&reply, &[200], "PBSZ")?;
         let reply = command(&mut ctrl, "PROT P")?;
@@ -191,26 +210,31 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     } else {
         0
     };
-    if resume_from > 0 {
-        let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
-        require_reply_code(&reply, &[350], "REST")?;
-    }
     let pasv = command(&mut ctrl, "PASV")?;
     require_reply_code(&pasv, &[227], "PASV")?;
     let data_port = parse_pasv_port(&pasv)?;
     let data_addr = std::net::SocketAddr::new(ctrl.peer_addr()?.ip(), data_port);
     let data_raw = TcpStream::connect(data_addr).map_err(|error| error.to_string())?;
+    data_raw
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|error| error.to_string())?;
     // Keep a raw duplicate of the socket outside Schannel so pause/cancel can
     // interrupt a blocked FTP or FTPS data read without relying on short TLS
     // read timeouts or transport-specific timeout semantics.
     let data_abort = data_raw.try_clone().map_err(|error| error.to_string())?;
+    // REST 必须紧挨 RETR；中间发送 PASV 会让部分服务器取消续传偏移。
+    if resume_from > 0 {
+        let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
+        require_reply_code(&reply, &[350], "REST")?;
+    }
+    // 服务器在收到 RETR 后才启动数据通道 TLS；先握手会让客户端与服务器互相等待。
+    let reply = command(&mut ctrl, &format!("RETR {}", target.path))?;
+    require_reply_code(&reply, &[125, 150], "RETR")?;
     let mut data = if target.tls {
-        wrap_tls(data_raw, &target.host)?
+        ctrl.secure_data(data_raw, &target.host)?
     } else {
         Conn::Plain(data_raw)
     };
-    let reply = command(&mut ctrl, &format!("RETR {}", target.path))?;
-    require_reply_code(&reply, &[125, 150], "RETR")?;
     let mut file = if resume_from > 0 {
         std::fs::OpenOptions::new()
             .append(true)
@@ -225,9 +249,11 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     let stop_reader = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_reader_worker = std::sync::Arc::clone(&stop_reader);
     let progress_for_reader = progress.clone();
+    let throttle = crate::net_policy::current_throttle_context();
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
     let data_reader = std::thread::spawn(move || {
-        let result = (|| -> Result<u64, String> {
+        // 限速上下文是线程局部状态，读取线程必须继承任务、队列和全局限额。
+        let result = crate::net_policy::with_throttle_context(throttle, || -> Result<u64, String> {
             let mut buf = [0u8; 64 * 1024];
             let mut downloaded = resume_from;
             crate::http_engine::write_progress(
@@ -259,7 +285,7 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
             }
             file.flush().map_err(|error| error.to_string())?;
             Ok(downloaded)
-        })();
+        });
         let _ = result_tx.send(result);
     });
 
@@ -314,13 +340,15 @@ fn wrap_tls(stream: TcpStream, host: &str) -> Result<Conn, String> {
     #[cfg(windows)]
     {
         let cred = schannel::schannel_cred::SchannelCred::builder()
+            // FTPS 数据通道需要恢复控制会话；本机 Schannel 的 TLS 1.3 重连被真实服务器拒绝。
+            .enabled_protocols(&[schannel::schannel_cred::Protocol::Tls12])
             .acquire(schannel::schannel_cred::Direction::Outbound)
             .map_err(|error| error.to_string())?;
         let tls = schannel::tls_stream::Builder::new()
             .domain(host)
-            .connect(cred, stream)
+            .connect(cred.clone(), stream)
             .map_err(|error| error.to_string())?;
-        Ok(Conn::Tls(tls))
+        Ok(Conn::Tls(tls, cred))
     }
     #[cfg(not(windows))]
     {
@@ -333,7 +361,7 @@ fn take_plain(conn: Conn) -> Result<TcpStream, String> {
     match conn {
         Conn::Plain(stream) => Ok(stream),
         #[cfg(windows)]
-        Conn::Tls(_) => Err("control socket already TLS".into()),
+        Conn::Tls(_, _) => Err("control socket already TLS".into()),
     }
 }
 

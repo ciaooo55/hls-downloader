@@ -10,6 +10,7 @@ use crate::contract::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
+use std::io::Write;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
@@ -660,7 +661,9 @@ impl CoreRuntime {
                 code: "update_failed".into(),
                 message: error,
             }),
-            Err(error) => eprintln!("silent update check failed: {error}"),
+            Err(error) => {
+                let _ = writeln!(std::io::stderr(), "silent update check failed: {error}");
+            }
         }
     }
 
@@ -1365,6 +1368,7 @@ mod tests {
             offer: ResourceOffer {
                 url: "https://cdn.test/setup.exe".into(),
                 resource_kind: ResourceKind::File,
+                local_source_path: None,
                 owner: "tab:1".into(),
                 evidence: vec!["download_item".into()],
                 confidence: 0.9,

@@ -123,6 +123,11 @@ $sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
 $sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
 $libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
 $libMpvArchiveSha256 = '0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c'
+$vulkanRuntimeVersion = '1.4.363.0'
+$vulkanRuntimeCache = Join-Path $cacheRoot "vulkan-runtime-$vulkanRuntimeVersion"
+$vulkanRuntimeArchive = Join-Path $vulkanRuntimeCache "VulkanRT-X64-$vulkanRuntimeVersion-Components.zip"
+$vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanRuntimeVersion/windows/VulkanRT-X64-$vulkanRuntimeVersion-Components.zip"
+$vulkanRuntimeArchiveSha256 = 'a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a'
 $curlImpersonateVersion = 'v2.0.0'
 $curlImpersonateCache = Join-Path $cacheRoot "curl-impersonate-$curlImpersonateVersion"
 $curlImpersonateArchive = Join-Path $curlImpersonateCache 'curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
@@ -153,9 +158,13 @@ function Get-VerifiedFile([string]$Url, [string]$Path, [string]$Expected, [strin
 function Copy-LibMpv([string]$Destination) {
     Get-VerifiedFile $sevenZipUrl $sevenZipExe $sevenZipSha256 '7zr.exe'
     Get-VerifiedFile $libMpvArchiveUrl $libMpvArchive $libMpvArchiveSha256 'libmpv archive'
+    Get-VerifiedFile $vulkanRuntimeUrl $vulkanRuntimeArchive $vulkanRuntimeArchiveSha256 "Vulkan Runtime Components $vulkanRuntimeVersion archive"
     $extract = Join-Path $libMpvCache 'extract'
+    $vulkanExtract = Join-Path $vulkanRuntimeCache 'extract'
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+    if (Test-Path -LiteralPath $vulkanExtract) { Remove-Item -LiteralPath $vulkanExtract -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $extract | Out-Null
+    New-Item -ItemType Directory -Force -Path $vulkanExtract | Out-Null
     try {
         & $sevenZipExe e -y "-o$extract" $libMpvArchive 'libmpv-2.dll'
         if ($LASTEXITCODE -ne 0) { throw "7zr failed to extract libmpv-2.dll (exit $LASTEXITCODE)" }
@@ -163,7 +172,19 @@ function Copy-LibMpv([string]$Destination) {
         if (-not $dll) { throw 'libmpv archive did not contain libmpv-2.dll' }
         Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $Destination 'libmpv-2.dll') -Force
         Assert-FileSha256 (Join-Path $Destination 'libmpv-2.dll') ((Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash) 'bundled libmpv-2.dll'
-    } finally { Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue }
+        Expand-Archive -LiteralPath $vulkanRuntimeArchive -DestinationPath $vulkanExtract -Force
+        $vulkanRoot = Join-Path $vulkanExtract "VulkanRT-X64-$vulkanRuntimeVersion-Components"
+        $vulkanDll = Join-Path $vulkanRoot 'x64\vulkan-1.dll'
+        $vulkanLicense = Join-Path $vulkanRoot 'VulkanRT-License.txt'
+        if (-not (Test-Path -LiteralPath $vulkanDll -PathType Leaf)) { throw 'Vulkan Runtime Components archive did not contain the x64 vulkan-1.dll' }
+        if (-not (Test-Path -LiteralPath $vulkanLicense -PathType Leaf)) { throw 'Vulkan Runtime Components archive did not contain VulkanRT-License.txt' }
+        Copy-Item -LiteralPath $vulkanDll -Destination (Join-Path $Destination 'vulkan-1.dll') -Force
+        Copy-Item -LiteralPath $vulkanLicense -Destination (Join-Path $Destination 'VulkanLoader-LICENSE.txt') -Force
+        Assert-FileSha256 (Join-Path $Destination 'vulkan-1.dll') ((Get-FileHash -LiteralPath $vulkanDll -Algorithm SHA256).Hash) 'bundled Vulkan loader'
+    } finally {
+        Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $vulkanExtract -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Copy-CurlImpersonate([string]$Destination) {
@@ -319,6 +340,9 @@ if ($isPackage) {
     Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
     Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
+    Copy-Item -LiteralPath (Join-Path $repo 'presenter_ui\fonts\OFL.txt') -Destination (Join-Path $resources 'NotoSansCJK-OFL.txt') -Force
+    # 原生 EXE 与 JRE 不在同一目录；干净 Windows 不会从 runtime/bin 查找 MSVC 运行库。
+    Copy-Item -LiteralPath (Join-Path $jdkRoot 'bin\vcruntime140.dll') -Destination (Join-Path $resources 'vcruntime140.dll') -Force
     Copy-Item -LiteralPath $featureParity -Destination (Join-Path $resources 'FEATURE-PARITY.json') -Force
     Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
     # Formal and candidate packages must never inherit media binaries from a

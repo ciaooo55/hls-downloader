@@ -749,9 +749,16 @@ export function classifyDownload(
   mimeType = '',
   filename = '',
   contentDisposition = '',
+  browserDownload = false,
 ): ResourceKind | null {
   const mime = mimeType.toLowerCase()
   const suppliedName = filename.split(/[\\/]/).pop() || ''
+  // onCreated 已证明用户正在保存文件，不再用嗅探网页响应的排除规则丢弃图片、导出数据和无扩展名文件。
+  if (browserDownload) {
+    return classifyResource(url, mimeType)
+      || classifyResource(`https://download.invalid/${encodeURIComponent(suppliedName)}`, mimeType)
+      || 'file'
+  }
   const attachment = /^\s*attachment\b/i.test(contentDisposition)
   const suppliedIsImage = IMAGE_EXT.test(suppliedName)
   const suppliedIsDocument = DYNAMIC_DOCUMENT_EXT.test(suppliedName)
@@ -798,6 +805,11 @@ export function resourceId(url: string): string {
   return `${forward.toString(16).padStart(16, '0')}${reverse.toString(16).padStart(16, '0')}`
 }
 
+export async function localDownloadIntentUrl(url: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url))
+  return `https://local-download.invalid/${[...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
 /** Drop observations from pages the user has left behind before rendering UI. */
 export function pruneExpiredResources(resources: MediaResource[], now = Date.now()): MediaResource[] {
   return resources.filter(resource => Number.isFinite(resource.seenAt)
@@ -820,6 +832,7 @@ export function shouldTakeover(input: {
   excludedHosts: string[]
   explicitClick?: boolean
   strongEvidence?: boolean
+  localBrowserDownload?: boolean
   altBypass?: boolean
   ctrlForce?: boolean
 }): boolean {
@@ -835,7 +848,9 @@ export function shouldTakeover(input: {
     const url = new URL(input.url)
     const hosts = [url.hostname, hostnameOf(input.sourcePageUrl || '')].filter(Boolean)
     const excluded = hosts.some(host => isExcludedHost(host, input.excludedHosts))
-    if (!['http:', 'https:', 'magnet:'].includes(url.protocol) || excluded) return false
+    const supported = ['http:', 'https:', 'magnet:'].includes(url.protocol)
+      || (input.localBrowserDownload === true && ['blob:', 'data:'].includes(url.protocol))
+    if (!supported || excluded) return false
   } catch {
     return false
   }

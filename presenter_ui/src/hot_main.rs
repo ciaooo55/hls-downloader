@@ -10,13 +10,12 @@ use hls_native_shell::{
     EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
-use slint::{ComponentHandle, RenderingState, Timer, TimerMode};
+use slint::{ComponentHandle, Timer, TimerMode};
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::io::Write;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -139,6 +138,12 @@ impl PresenterSettings {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_panic_log();
+    // 确认弹窗必须在沙盒、远程桌面和无 OpenGL 驱动的电脑上正常显示。
+    #[cfg(windows)]
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .select()?;
     let args: Vec<String> = env::args().collect();
     if let Some(kind) = args
         .windows(2)
@@ -185,6 +190,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let confirm = ConfirmWindow::new()?;
     let progress = ProgressWindow::new()?;
     let complete = CompleteWindow::new()?;
+    correct_native_click_position(confirm.window());
+    correct_native_click_position(progress.window());
+    correct_native_click_position(complete.window());
     confirm.set_window_title(CONFIRM.into());
     progress.set_headline(PROGRESS_HEADLINE.into());
     complete.set_window_title(COMPLETE.into());
@@ -193,16 +201,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     complete.hide()?;
     apply_runtime_settings(&confirm, &progress, &complete, initial_runtime);
 
-    let prewarm_rendered = Arc::new(AtomicBool::new(false));
-    confirm.window().set_rendering_notifier({
-        let prewarm_rendered = Arc::clone(&prewarm_rendered);
-        move |state, _| {
-            if matches!(state, RenderingState::AfterRendering) {
-                prewarm_rendered.store(true, Ordering::Release);
-            }
-        }
-    })?;
-
     let client = Rc::new(RefCell::new(initial_client));
     let pending = Arc::new(Mutex::new(initial_pending));
     let active_handoff = Arc::new(Mutex::new(None::<String>));
@@ -210,7 +208,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
-    let prewarm_finished = Rc::new(RefCell::new(false));
 
     progress.on_command({
         let active_hud = Rc::clone(&active_hud);
@@ -218,8 +215,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window = progress.as_weak();
         move |command| {
             let action = command.to_string();
+            trace(&format!("progress command: {action}"));
             if action == "hide_progress" {
                 if let Some(item) = window.upgrade() {
+                    item.set_hidden_by_user(true);
                     let _ = item.hide();
                 }
                 return;
@@ -277,6 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window = confirm.as_weak();
         move |command| {
             let command = command.to_string();
+            trace(&format!("confirm command: {command}"));
             match command.as_str() {
                 "drag" => {
                     let _ = begin_caption_drag(CONFIRM);
@@ -327,9 +327,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "reject" => {
-                    if let Some(offer) =
-                        pending.lock().ok().and_then(|items| items.front().cloned())
-                    {
+                    // 先释放队列锁；成功后还需要再次获取它移除请求。
+                    let offer = pending.lock().ok().and_then(|items| items.front().cloned());
+                    if let Some(offer) = offer {
                         let result = command_with_reconnect(
                             &client,
                             CoreCommand::RejectHandoff {
@@ -459,7 +459,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_timer = Timer::default();
     event_timer.start(TimerMode::Repeated, Duration::from_millis(4), {
         let rx = Rc::clone(&rx);
-        let pending = Arc::clone(&pending);
         let active_hud = Rc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
@@ -469,20 +468,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
-        let prewarm_rendered = Arc::clone(&prewarm_rendered);
-        let prewarm_finished = Rc::clone(&prewarm_finished);
         move || {
-            if prewarm_rendered.load(Ordering::Acquire) && !*prewarm_finished.borrow() {
-                let _ = hide_window_from_taskbar_by_title(CONFIRM);
-                let _ = center_window_by_title(CONFIRM);
-                if let Some(item) = confirm.upgrade() {
-                    if pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
-                        let _ = item.hide();
-                    }
-                }
-                *prewarm_finished.borrow_mut() = true;
-                write_ready_marker();
-            }
             while let Ok(events) = rx.borrow_mut().try_recv() {
                 for envelope in events {
                     match envelope.event {
@@ -589,7 +575,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prewarm_timer.start(TimerMode::SingleShot, Duration::from_millis(1), {
         let confirm = confirm.as_weak();
         let pending = Arc::clone(&pending);
-        let prewarm_finished = Rc::clone(&prewarm_finished);
         move || {
             if !pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
                 return;
@@ -608,7 +593,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // first real popup worked. The latency smoke still measures
                 // the first real visible frame, so marking the completed
                 // off-screen show here is both deterministic and honest.
-                *prewarm_finished.borrow_mut() = true;
                 write_ready_marker();
                 let _ = item.hide();
             }
@@ -797,8 +781,12 @@ fn event_loop(
             continue;
         };
         if let Ok(mut known_tasks) = known_tasks.lock() {
-            *known_tasks = tasks;
+            *known_tasks = tasks.clone();
         }
+        // 重连后用快照恢复正在传输的任务，不能只等下一次增量事件。
+        let active: Vec<_> = tasks.into_iter().filter(|task| task_is_active(&task.status))
+            .map(|snapshot| EventEnvelope { sequence: latest_sequence, event: CoreEvent::TaskUpdated { snapshot } }).collect();
+        if !active.is_empty() && tx.send(active).is_err() { return; }
         let restored = load_pending_offers(&mut client);
         let resync_pending = Arc::clone(&pending);
         let resync_active_handoff = Arc::clone(&active_handoff);
@@ -1167,9 +1155,61 @@ fn update_known_tasks(tasks: &Arc<Mutex<Vec<TaskSnapshot>>>, event: &CoreEvent) 
 }
 
 fn trace(message: &str) {
-    if env::var_os("HLS_V7_PRESENTER_TRACE").is_some() {
-        eprintln!("[presenter] {message}");
+    if let Some(path) = env::var_os("HLS_V7_PRESENTER_TRACE_FILE") {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "[presenter {}] {message}", std::process::id());
+        }
+    } else if env::var_os("HLS_V7_PRESENTER_TRACE").is_some() {
+        let _ = writeln!(std::io::stderr(), "[presenter] {message}");
     }
+}
+
+fn correct_native_click_position(window: &slint::Window) {
+    #[cfg(windows)]
+    {
+        use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        // Winit 的多窗口事件循环复用鼠标位置；Windows 会过滤同坐标的移动事件。
+        // 确认窗再次出现时，点击可能被当成上一进度窗的标题栏点击。
+        // 按当前 HWND 的客户区坐标派发真实鼠标按下/释放，保持原有按钮回调。
+        window.on_winit_window_event(|window, event| {
+            let winit::event::WindowEvent::MouseInput {
+                state, button: winit::event::MouseButton::Left, ..
+            } = event else { return EventResult::Propagate; };
+            let position = window.with_winit_window(|native| {
+                let RawWindowHandle::Win32(handle) = native.window_handle().ok()?.as_raw()
+                    else { return None; };
+                let mut point = POINT { x: 0, y: 0 };
+                unsafe {
+                    if GetCursorPos(&mut point) == 0
+                        || ScreenToClient(handle.hwnd.get() as _, &mut point) == 0 {
+                        return None;
+                    }
+                }
+                Some(slint::LogicalPosition::new(
+                    point.x as f32 / window.scale_factor(),
+                    point.y as f32 / window.scale_factor(),
+                ))
+            }).flatten();
+            let Some(position) = position else { return EventResult::Propagate; };
+            let _ = window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+            let button = slint::platform::PointerEventButton::Left;
+            let event = if *state == winit::event::ElementState::Pressed {
+                slint::platform::WindowEvent::PointerPressed { position, button }
+            } else {
+                slint::platform::WindowEvent::PointerReleased { position, button }
+            };
+            trace(&format!("native left button: {state:?} at {},{}", position.x, position.y));
+            let _ = window.try_dispatch_event(event);
+            EventResult::PreventDefault
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = window;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1358,6 +1398,7 @@ fn reset_progress_action_for_new_task(
     }
     *rendered = Some(task_id.to_string());
     if let Some(item) = progress.upgrade() {
+        item.set_hidden_by_user(false);
         item.set_action_busy(false);
         item.set_action_error(false);
         item.set_action_text("".into());
@@ -1375,6 +1416,8 @@ fn render_progress_hud(
     let Some(item) = progress.upgrade() else {
         return;
     };
+    if item.get_hidden_by_user() { return; }
+    trace(&format!("render progress: {} {} {}", snapshot.task_id, snapshot.status, snapshot.downloaded_bytes));
     item.set_headline(
         if matches!(snapshot.status.as_str(), "merging" | "checking") {
             LOCAL_PROCESSING.into()
@@ -1389,6 +1432,11 @@ fn render_progress_hud(
         snapshot.stage.clone().into()
     });
     item.set_progress(task_progress(snapshot));
+    item.set_total_known(snapshot.total_bytes.is_some_and(|total| total > 0));
+    item.set_transferred(match snapshot.total_bytes.filter(|total| *total > 0) {
+        Some(total) => format!("已下载 {} / {}", format_bytes(snapshot.downloaded_bytes), format_bytes(total)).into(),
+        None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
+    });
     if item.show().is_ok() {
         let _ = hide_window_from_taskbar_by_title(item.get_headline().as_str());
     }

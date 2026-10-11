@@ -609,8 +609,7 @@ fun main() {
         }
         DisposableEffect(window) {
             val uiTestApi = UiTestApi.startIfEnabled(window)
-            val previous = window.dropTarget
-            val target = DropTarget(window, object : DropTargetAdapter() {
+            val listener = object : DropTargetAdapter() {
                 override fun dragEnter(event: DropTargetDragEvent) {
                     val accepted = event.isDataFlavorSupported(DataFlavor.javaFileListFlavor)
                     if (accepted) event.acceptDrag(DnDConstants.ACTION_COPY) else event.rejectDrag()
@@ -631,11 +630,21 @@ fun main() {
                         EventQueue.invokeLater { dropActive = false }
                     }
                 }
-            })
+            }
+            val targets = mutableListOf<Triple<java.awt.Component, DropTarget?, DropTarget>>()
+            fun attach(component: java.awt.Component) {
+                val previous = component.dropTarget
+                targets += Triple(component, previous, DropTarget(component, listener))
+                if (component is java.awt.Container) component.components.forEach(::attach)
+            }
+            // 文件实际落在 Skia 的子控件上，单独注册 Window 收不到跨进程拖放。
+            attach(window)
             onDispose {
                 uiTestApi?.close()
-                target.component = null
-                window.dropTarget = previous
+                targets.asReversed().forEach { (component, previous, target) ->
+                    target.component = null
+                    component.dropTarget = previous
+                }
             }
         }
         DisposableEffect(window) {
@@ -727,6 +736,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     val shellFocus = remember { FocusRequester() }
     var probeResult by remember { mutableStateOf<UiSignal.Probe?>(null) }
     var probeDraft by remember { mutableStateOf<TaskDraft?>(null) }
+    var newTaskProbeBusy by remember { mutableStateOf(false) }
     var torrentProbe by remember { mutableStateOf<UiSignal.TorrentProbe?>(null) }
     var torrentDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var deviceResult by remember { mutableStateOf<UiSignal.Devices?>(when (visualFixture) {
@@ -1166,7 +1176,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         refreshKey++
                     }
                     val attentionRequired = when (eventKind) {
-                        "handoff_offered", "error", "open_main" -> true
+                        // 浏览器交接由独立确认窗处理，工作台只响应明确的打开请求。
+                        "error", "open_main" -> true
                         "ui_show" -> envelope.event["surface"]?.jsonPrimitive?.content == "main"
                         "update_install_result" -> envelope.event["status"]?.jsonPrimitive?.content != "success"
                         "task_created", "task_updated", "task_progress" -> {
@@ -1174,11 +1185,14 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             val taskId = snapshot?.get("task_id")?.jsonPrimitive?.content.orEmpty()
                             val previousStatus = tasks.firstOrNull { it.id == taskId }?.source?.status.orEmpty().lowercase()
                             val nextStatus = snapshot?.get("status")?.jsonPrimitive?.content.orEmpty().lowercase()
-                            previousStatus != nextStatus && nextStatus in setOf("completed", "done", "failed", "error")
+                            previousStatus != nextStatus && nextStatus in setOf("failed", "error")
                         }
                         else -> false
                     }
                     if (eventKind == "error") {
+                        if (envelope.event["code"]?.jsonPrimitive?.content == "torrent_probe_failed") {
+                            torrentDraft = null
+                        }
                         val engineMessage = envelope.event["message"]?.jsonPrimitive?.content ?: "下载引擎报告错误"
                         UiDiagnostics.warning(
                             "engine.event.error",
@@ -1214,7 +1228,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                 newTaskDialog = false
                                 probeResult = signal
                             }
-                            is UiSignal.TorrentProbe -> torrentProbe = signal
+                            is UiSignal.TorrentProbe -> {
+                                if (torrentDraft?.url?.trim() == signal.data.source.trim()) {
+                                    newTaskDialog = false
+                                    torrentProbe = signal
+                                }
+                            }
                             is UiSignal.TorrentSelection -> notice = UiSignal.Notice("success", "已选择 ${signal.files.count { it.selected }} 个文件，共 ${formatBytes(signal.totalSize)}")
                             is UiSignal.Devices -> {
                                 // 选择器只接收自身命令的结果，迟到的广播不能覆盖后续扫描。
@@ -1348,7 +1367,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }
     val modalVisible = newTaskDialog || batchDialog || harvestDialog || settingsDialog || queueManagerDialog ||
         queueAssignTaskIds.isNotEmpty() || detailTaskId != null || extensionDialog || activeHandoff != null ||
-        probeResult != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
+        probeResult != null || torrentDraft != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
         (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
         preparedUpdate != null || powerPending != null || destructiveRequest != null || aboutDialog || noticesDialog
     CompositionLocalProvider(LocalWorkbenchPalette provides if (darkMode) darkPalette else lightPalette) {
@@ -1428,7 +1447,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         ConnectionStatus(tasks, engineText, extensionText)
     }
     if (externalDropActive || visualFixture == "drop") {
-        Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(2.dp, blue), modifier = Modifier.width(390.dp)) {
                 Row(Modifier.padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(Modifier.size(42.dp), color = selectedSurface, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.FileDownload, null, tint = blue, modifier = Modifier.size(23.dp)) } }
@@ -1437,20 +1456,22 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
         }
     }
-    if (newTaskDialog) NewTaskDialog({ newTaskDialog = false }, newTaskUrl, settings, onProbe = { draft ->
+    if (newTaskDialog) NewTaskDialog({ newTaskDialog = false }, newTaskUrl, settings, probing = newTaskProbeBusy, onProbe = { draft ->
+        if (newTaskProbeBusy) return@NewTaskDialog
+        newTaskProbeBusy = true
         if (taskProbeTarget(draft) == ResourceProbeTarget.Torrent) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
             scope.launch {
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeTorrent(draft.url) } }
-                    .onSuccess { newTaskDialog = false }
-                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
+                    .onSuccess { newTaskProbeBusy = false; newTaskDialog = false }
+                    .onFailure { newTaskProbeBusy = false; torrentDraft = null; notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
             }
         } else {
             scope.launch {
                 probeDraft = draft
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeUrl(draft) } }
-                    .onSuccess { newTaskDialog = false }
-                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "资源分析失败")) }
+                    .onSuccess { newTaskProbeBusy = false; newTaskDialog = false }
+                    .onFailure { newTaskProbeBusy = false; notice = UiSignal.Notice("error", describeTaskActionFailure(it, "资源分析失败")) }
             }
         }
     }) { draft ->
@@ -1459,7 +1480,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch {
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeTorrent(draft.url) } }
                     .onSuccess { newTaskDialog = false }
-                    .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
+                    .onFailure { torrentDraft = null; notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
             }
             return@NewTaskDialog
         }
@@ -1471,6 +1492,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 .onSuccess { newTaskDialog = false; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建下载失败")) }
         }
+    }
+    if (torrentDraft != null && torrentProbe == null && !newTaskDialog) {
+        WorkbenchDialog({ torrentDraft = null }, "正在解析种子", "取得文件清单后可选择需要下载的文件", 520.dp, content = {
+            Row(Modifier.fillMaxWidth().padding(vertical = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = blue)
+                Spacer(Modifier.width(14.dp))
+                Text("正在连接节点并读取种子元数据…", color = ink, fontSize = TypeScale.body)
+            }
+            Text("节点无响应时解析可能较慢。关闭窗口不会创建下载任务。", color = muted, fontSize = TypeScale.caption)
+        }, actions = { DialogSecondary("关闭", { torrentDraft = null }) })
     }
     torrentProbe?.let { signal -> TorrentSelectionDialog(signal.data, { torrentProbe = null; torrentDraft = null }) { files ->
         val draft = torrentDraft ?: return@TorrentSelectionDialog
@@ -2943,13 +2974,19 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
     // 按下和抬起之间肉眼完全一样。按住任务行时没有"我按住了"的信号，而这是表格里最高频的手势。
     // 档位与 NavRow / 轨带选择一致：未选中按下压到 surface3（比 hover 深一档），
     // 已选中按下用 selectedSurface 朝 ink 混 5%——两种选中态下都留得下一格按压痕迹。
-    val rowColor = when {
+    val rowColorTarget = when {
         isSelected && pressed -> selectedSurface.blendToward(ink, .05f)
         isSelected -> selectedSurface
         pressed -> surface3
         hovered -> surface2
         else -> rail
     }
+    val reduceMotion by MotionPreferences.reduceMotion
+    val rowColor by animateColorAsState(
+        targetValue = rowColorTarget,
+        animationSpec = tween(motionDurationMillis(reduceMotion, 180)),
+        label = "task-row-background",
+    )
     val separatorColor = border
     Row(Modifier.fillMaxWidth().height(52.dp).reportControlBounds("taskrow.${task.id}").onGloballyPositioned { rowWindowOrigin = it.positionInWindow(); rowSize = it.size }.background(rowColor).drawBehind { drawLine(separatorColor, androidx.compose.ui.geometry.Offset(0f, size.height - 1f), androidx.compose.ui.geometry.Offset(size.width, size.height - 1f), 1f) }.hoverable(rowInteraction).semantics { selected = isSelected; contentDescription = taskAccessibilityLabel(task) }.onPointerEvent(PointerEventType.Press, PointerEventPass.Initial) {
         clickShift = it.keyboardModifiers.isPointerShiftPressed
@@ -3468,6 +3505,7 @@ private fun NewTaskDialog(
     onDismiss: () -> Unit,
     initialUrl: String,
     defaults: EngineSettingsDto,
+    probing: Boolean,
     onProbe: (TaskDraft) -> Unit,
     onCreate: (TaskDraft) -> Unit,
 ) {
@@ -3595,12 +3633,12 @@ private fun NewTaskDialog(
     }, actions = {
         DialogSecondary("取消", onDismiss)
         TextButton(
-            onClick = { if (normalized != null && parsedHeaders.isSuccess) onProbe(buildDraft()) },
-            enabled = normalized != null && parsedHeaders.isSuccess,
+            onClick = { if (!probing && normalized != null && parsedHeaders.isSuccess) onProbe(buildDraft()) },
+            enabled = !probing && normalized != null && parsedHeaders.isSuccess,
             contentPadding = PaddingValues(horizontal = 12.dp),
             modifier = Modifier.reportControlBounds("newtask.probe"),
-        ) { Text("分析资源", fontSize = TypeScale.body, color = if (normalized != null && parsedHeaders.isSuccess) muted else faint) }
-        DialogPrimary("创建下载", validInput && parsedHeaders.isSuccess) {
+        ) { Text(if (probing) "分析中…" else "分析资源", fontSize = TypeScale.body, color = if (!probing && normalized != null && parsedHeaders.isSuccess) muted else faint) }
+        DialogPrimary("创建下载", !probing && validInput && parsedHeaders.isSuccess) {
             onCreate(buildDraft())
         }
     })

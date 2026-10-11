@@ -311,7 +311,7 @@ export class RequestChainStore {
       })[0]
   }
 
-  contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 12): RequestChain[] {
+  contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 32): RequestChain[] {
     this.cleanup(now)
     const page = normalized(pageUrl)
     const supportedTypes = new Set(['xmlhttprequest', 'media', 'other'])
@@ -326,8 +326,11 @@ export class RequestChainStore {
       .sort((left, right) => right.updatedAt - left.updatedAt)
     for (const chain of candidates) {
       const origin = httpOrigin(chain.finalUrl)
-      if (!origin || selected.has(origin)) continue
-      selected.set(origin, chain)
+      if (!origin) continue
+      const pathname = new URL(chain.finalUrl).pathname
+      const scope = origin + pathname.slice(0, pathname.lastIndexOf('/') + 1)
+      if (selected.has(scope)) continue
+      selected.set(scope, chain)
       if (selected.size >= limit) break
     }
     return [...selected.values()]
@@ -368,9 +371,18 @@ export class RequestChainStore {
     chain.updatedAt = now
   }
 
-  clearTab(tabId: number): void {
+  clearTab(tabId: number, preservePostDownloads = false): void {
     for (const [requestId, chain] of this.chains) {
-      if (chain.tabId === tabId) this.chains.delete(requestId)
+      if (chain.tabId !== tabId) continue
+      if (preservePostDownloads && chain.method.toUpperCase() === 'POST') {
+        // 导航事件可能先于 downloads.onCreated。只保留 POST 身份供已下载文件导入，
+        // 清掉旧页面重放上下文，不能把认证头或请求体带到下一页面。
+        chain.requestHeaders = {}
+        chain.requestBody = ''
+        chain.responseHeaders = {}
+      } else {
+        this.chains.delete(requestId)
+      }
     }
   }
 
