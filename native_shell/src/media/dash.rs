@@ -47,12 +47,15 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             .then(|| period_duration_seconds(xml, absolute))
             .flatten();
         let after = &rest[start..];
-        let opening_end = after.find('>').ok_or_else(|| "truncated Representation".to_string())?;
+        let opening_end = after
+            .find('>')
+            .ok_or_else(|| "truncated Representation".to_string())?;
         // 自闭合视频轨不能吞入后面的音轨，否则会继承音频分片模板并请求错误地址。
         let end = if after[..opening_end].trim_end().ends_with('/') {
             opening_end + 1
         } else {
-            after.find("</Representation>")
+            after
+                .find("</Representation>")
                 .map(|index| index + "</Representation>".len())
                 .ok_or_else(|| "truncated Representation".to_string())?
         };
@@ -455,7 +458,9 @@ fn finish_dash(
 ) -> Result<PathBuf, String> {
     let mut audio_merged = None;
     if let Some(audio) = audio {
-        audio_merged = Some(fetch_dash_audio(&audio, task_dir, headers, proxy, control, vod)?);
+        audio_merged = Some(fetch_dash_audio(
+            &audio, task_dir, headers, proxy, control, vod,
+        )?);
     }
     let output = task_dir.join("merged.mp4");
     merge_with_ffmpeg(task_dir, &output)?;
@@ -1329,7 +1334,10 @@ mod tests {
         let low = &parsed.representations[0];
         assert_eq!(low.mime, "video/mp4");
         assert_eq!(low.init.as_deref(), Some("https://cdn.test/low/0.m4v"));
-        assert_eq!(low.media, ["https://cdn.test/low/1.m4v", "https://cdn.test/low/2.m4v"]);
+        assert_eq!(
+            low.media,
+            ["https://cdn.test/low/1.m4v", "https://cdn.test/low/2.m4v"]
+        );
         let audio = &parsed.representations[2];
         assert_eq!(audio.mime, "audio/mp4");
         assert_eq!(audio.init.as_deref(), Some("https://cdn.test/audio/0.m4a"));

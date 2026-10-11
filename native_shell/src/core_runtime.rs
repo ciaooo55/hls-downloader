@@ -1409,8 +1409,10 @@ mod tests {
             2_500_000
         );
         assert_eq!(runtime.task_spec("task-1").unwrap().preferred_height, 720);
-        assert_eq!(runtime.task_spec("task-1").unwrap().mime_type,
-            "application/vnd.microsoft.portable-executable");
+        assert_eq!(
+            runtime.task_spec("task-1").unwrap().mime_type,
+            "application/vnd.microsoft.portable-executable"
+        );
         runtime.handle(CoreCommand::OfferResource {
             offer: ResourceOffer {
                 url: "https://cdn.test/other.bin".into(),

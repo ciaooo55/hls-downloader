@@ -253,27 +253,10 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
     let data_reader = std::thread::spawn(move || {
         // 限速上下文是线程局部状态，读取线程必须继承任务、队列和全局限额。
-        let result = crate::net_policy::with_throttle_context(throttle, || -> Result<u64, String> {
-            let mut buf = [0u8; 64 * 1024];
-            let mut downloaded = resume_from;
-            crate::http_engine::write_progress(
-                &progress_for_reader,
-                downloaded,
-                size,
-                0.0,
-                "downloading",
-            );
-            loop {
-                let count = data.read(&mut buf).map_err(|error| error.to_string())?;
-                if stop_reader_worker.load(std::sync::atomic::Ordering::Acquire) {
-                    return Err("stopped".into());
-                }
-                if count == 0 {
-                    break;
-                }
-                file.write_all(&buf[..count])
-                    .map_err(|error| error.to_string())?;
-                downloaded += count as u64;
+        let result =
+            crate::net_policy::with_throttle_context(throttle, || -> Result<u64, String> {
+                let mut buf = [0u8; 64 * 1024];
+                let mut downloaded = resume_from;
                 crate::http_engine::write_progress(
                     &progress_for_reader,
                     downloaded,
@@ -281,11 +264,29 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
                     0.0,
                     "downloading",
                 );
-                crate::net_policy::consume(count);
-            }
-            file.flush().map_err(|error| error.to_string())?;
-            Ok(downloaded)
-        });
+                loop {
+                    let count = data.read(&mut buf).map_err(|error| error.to_string())?;
+                    if stop_reader_worker.load(std::sync::atomic::Ordering::Acquire) {
+                        return Err("stopped".into());
+                    }
+                    if count == 0 {
+                        break;
+                    }
+                    file.write_all(&buf[..count])
+                        .map_err(|error| error.to_string())?;
+                    downloaded += count as u64;
+                    crate::http_engine::write_progress(
+                        &progress_for_reader,
+                        downloaded,
+                        size,
+                        0.0,
+                        "downloading",
+                    );
+                    crate::net_policy::consume(count);
+                }
+                file.flush().map_err(|error| error.to_string())?;
+                Ok(downloaded)
+            });
         let _ = result_tx.send(result);
     });
 

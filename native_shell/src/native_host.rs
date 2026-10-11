@@ -930,11 +930,8 @@ fn parse_offer(
             .and_then(Value::as_u64)
             .ok_or_else(|| "本地文件接管缺少有效文件大小".to_string())?;
         let source_path = field(payload, "local_source_path");
-        let canonical = crate::download_worker::validate_local_source_path(
-            &url,
-            &source_path,
-            Some(size),
-        )?;
+        let canonical =
+            crate::download_worker::validate_local_source_path(&url, &source_path, Some(size))?;
         Some(canonical.to_string_lossy().into_owned())
     } else {
         if payload.get("local_source_path").is_some() {
@@ -949,11 +946,11 @@ fn parse_offer(
         ResourceKind::File
     } else {
         parse_resource_kind(
-        payload
-            .get("resource_kind")
-            .and_then(Value::as_str)
-            .unwrap_or("file"),
-        &url,
+            payload
+                .get("resource_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("file"),
+            &url,
         )
     };
     let evidence = payload
@@ -1127,8 +1124,7 @@ fn browser_resource_url_allowed(url: &str) -> bool {
 
 fn matches_local_payload_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    (lower.starts_with("blob:") || lower.starts_with("data:"))
-        && !url.chars().any(char::is_control)
+    (lower.starts_with("blob:") || lower.starts_with("data:")) && !url.chars().any(char::is_control)
 }
 
 fn next_handoff_id() -> String {
@@ -1749,7 +1745,10 @@ mod tests {
             }))
             .unwrap_err();
         assert!(file.contains("不受支持"));
-        for url in ["blob:https://site.test/opaque", "data:application/octet-stream;base64,AA=="] {
+        for url in [
+            "blob:https://site.test/opaque",
+            "data:application/octet-stream;base64,AA==",
+        ] {
             let rejected = session
                 .dispatch(&json!({
                     "op": "offer",
@@ -1811,7 +1810,10 @@ mod tests {
         let canonical = std::fs::canonicalize(&source).unwrap();
         let canonical = canonical.to_string_lossy();
         assert_eq!(
-            session.handoffs[handoff_id].offer.local_source_path.as_deref(),
+            session.handoffs[handoff_id]
+                .offer
+                .local_source_path
+                .as_deref(),
             Some(canonical.as_ref())
         );
         let wrong_size = session

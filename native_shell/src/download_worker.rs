@@ -371,7 +371,8 @@ pub(crate) fn validate_local_source_path(
     if !path.is_absolute() || source_path.chars().any(char::is_control) {
         return Err("本地源路径必须是有效的绝对路径".into());
     }
-    let canonical = fs::canonicalize(path).map_err(|error| format!("无法读取本地源文件: {error}"))?;
+    let canonical =
+        fs::canonicalize(path).map_err(|error| format!("无法读取本地源文件: {error}"))?;
     let metadata = fs::metadata(&canonical).map_err(|error| error.to_string())?;
     if !metadata.is_file() {
         return Err("本地源必须是常规文件".into());
@@ -2550,10 +2551,13 @@ impl CoreCoordinator {
     fn delete_task_files(&self, task_id: &str) -> Result<(), String> {
         let (spec, completed) = {
             let core = self.lock()?;
-            let spec = core.task_spec(task_id).cloned()
+            let spec = core
+                .task_spec(task_id)
+                .cloned()
                 .ok_or_else(|| format!("unknown task {task_id}"))?;
-            let completed = core.tasks().iter().any(|task| task.task_id == task_id
-                && matches!(task.status.as_str(), "completed" | "done"));
+            let completed = core.tasks().iter().any(|task| {
+                task.task_id == task_id && matches!(task.status.as_str(), "completed" | "done")
+            });
             (spec, completed)
         };
         let paths = TaskPaths::for_task(task_id, &spec)?;
@@ -3205,7 +3209,9 @@ fn copy_local_source_payload(
     let mut copied = 0u64;
     loop {
         ensure_publish_allowed(&paths.control)?;
-        let count = source.read(&mut buffer).map_err(|error| error.to_string())?;
+        let count = source
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
         if count == 0 {
             break;
         }
@@ -3571,7 +3577,9 @@ fn complete_payload(
 ) -> Result<(), String> {
     ensure_publish_allowed(&paths.control)?;
     reject_html_media_payload(payload, spec)?;
-    let actual = fs::metadata(payload).map_err(|error| error.to_string())?.len();
+    let actual = fs::metadata(payload)
+        .map_err(|error| error.to_string())?
+        .len();
     mark_progress(
         core,
         task_id,
@@ -3698,7 +3706,23 @@ fn reject_html_media_payload(payload: &Path, spec: &TaskSpec) -> Result<(), Stri
         .to_ascii_lowercase();
     if !mime.starts_with("video/")
         && !mime.starts_with("audio/")
-        && !matches!(extension.as_str(), "mp4" | "m4v" | "mkv" | "webm" | "mov" | "avi" | "ts" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "flac" | "wav")
+        && !matches!(
+            extension.as_str(),
+            "mp4"
+                | "m4v"
+                | "mkv"
+                | "webm"
+                | "mov"
+                | "avi"
+                | "ts"
+                | "mp3"
+                | "m4a"
+                | "aac"
+                | "ogg"
+                | "opus"
+                | "flac"
+                | "wav"
+        )
     {
         return Ok(());
     }
@@ -3708,12 +3732,25 @@ fn reject_html_media_payload(payload: &Path, spec: &TaskSpec) -> Result<(), Stri
         .and_then(|mut file| file.read(&mut prefix))
         .map_err(|error| format!("读取媒体文件头失败: {error}"))?;
     let text = String::from_utf8_lossy(&prefix[..size]);
-    let text = text.trim_start_matches('\u{feff}').trim_start().to_ascii_lowercase();
-    if ["<!doctype html", "<html", "<head", "<body", "<script", "<form"]
-        .iter()
-        .any(|tag| text.starts_with(tag))
+    let text = text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .to_ascii_lowercase();
+    if [
+        "<!doctype html",
+        "<html",
+        "<head",
+        "<body",
+        "<script",
+        "<form",
+    ]
+    .iter()
+    .any(|tag| text.starts_with(tag))
     {
-        return Err("服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试".into());
+        return Err(
+            "服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -5768,7 +5805,12 @@ mod tests {
         fs::write(&source, contents).unwrap();
         let spec = TaskSpec {
             url: "blob:https://site.test/opaque".into(),
-            local_source_path: Some(fs::canonicalize(&source).unwrap().to_string_lossy().into_owned()),
+            local_source_path: Some(
+                fs::canonicalize(&source)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             filename: "saved.bin".into(),
             download_dir: root.join("downloads").to_string_lossy().into_owned(),
             work_dir: root.join("work").to_string_lossy().into_owned(),
@@ -5804,7 +5846,10 @@ mod tests {
         run_task_with_throttle(Arc::clone(&core), &task_id, spec, String::new()).unwrap();
 
         assert_eq!(fs::read(&paths.final_output).unwrap(), contents);
-        assert!(source.is_file(), "Core leaves source cleanup to the browser extension");
+        assert!(
+            source.is_file(),
+            "Core leaves source cleanup to the browser extension"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -5842,7 +5887,12 @@ mod tests {
         fs::write(&source, b"already downloaded").unwrap();
         let spec = TaskSpec {
             url: "data:application/octet-stream,".into(),
-            local_source_path: Some(fs::canonicalize(&source).unwrap().to_string_lossy().into_owned()),
+            local_source_path: Some(
+                fs::canonicalize(&source)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             filename: "saved.bin".into(),
             download_dir: output_dir.to_string_lossy().into_owned(),
             work_dir: root.join("work").to_string_lossy().into_owned(),
@@ -7955,10 +8005,7 @@ mod tests {
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
         coordinator
-            .set_setting(
-                "download_dir",
-                serde_json::json!(spec.download_dir.clone()),
-            )
+            .set_setting("download_dir", serde_json::json!(spec.download_dir.clone()))
             .unwrap();
         coordinator
             .dispatch(CoreCommand::OfferResource {
@@ -8226,22 +8273,31 @@ mod tests {
 
     #[test]
     fn deleting_task_files_preserves_other_same_named_outputs() {
-        let dir = std::env::temp_dir().join(format!("hls-delete-owned-{}-{}",
-            std::process::id(), handoff_now_ms()));
+        let dir = std::env::temp_dir().join(format!(
+            "hls-delete-owned-{}-{}",
+            std::process::id(),
+            handoff_now_ms()
+        ));
         fs::create_dir_all(&dir).unwrap();
         let spec = TaskSpec {
-            url: "https://example.test/clip.bin".into(), filename: "clip.bin".into(),
-            download_dir: dir.to_string_lossy().into_owned(), ..Default::default()
+            url: "https://example.test/clip.bin".into(),
+            filename: "clip.bin".into(),
+            download_dir: dir.to_string_lossy().into_owned(),
+            ..Default::default()
         };
         let mut core = PersistentCore::in_memory().unwrap();
-        core.handle(CoreCommand::CreateTask { spec: spec.clone() }).unwrap();
+        core.handle(CoreCommand::CreateTask { spec: spec.clone() })
+            .unwrap();
         let task_id = core.tasks()[0].task_id.clone();
         let coordinator = CoreCoordinator::new(core);
         let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
         paths.prepare().unwrap();
         fs::write(&paths.final_output, b"existing user file").unwrap();
         coordinator.delete_task_files(&task_id).unwrap();
-        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user file");
+        assert_eq!(
+            fs::read(&paths.final_output).unwrap(),
+            b"existing user file"
+        );
         paths.prepare().unwrap();
         fs::write(&paths.output, b"new download").unwrap();
         let renamed = paths.publish_with("rename", false).unwrap();
@@ -8250,12 +8306,18 @@ mod tests {
         assert_eq!(resolve_published(&paths), renamed);
         coordinator.delete_task_files(&task_id).unwrap();
         assert!(!renamed.exists());
-        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user file");
+        assert_eq!(
+            fs::read(&paths.final_output).unwrap(),
+            b"existing user file"
+        );
         paths.prepare().unwrap();
         remember_published(&paths, &renamed);
         assert_eq!(resolve_published(&paths), renamed);
         coordinator.delete_task_files(&task_id).unwrap();
-        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user file");
+        assert_eq!(
+            fs::read(&paths.final_output).unwrap(),
+            b"existing user file"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

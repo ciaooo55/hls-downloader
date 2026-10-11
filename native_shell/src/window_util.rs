@@ -238,9 +238,8 @@ pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
         use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-            GWL_EXSTYLE, HWND_NOTOPMOST, SW_HIDE, SW_SHOWNOACTIVATE,
-            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+            GWL_EXSTYLE, HWND_NOTOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
         };
 
         let Some(raw_hwnd) = window_handle_by_title(title) else {

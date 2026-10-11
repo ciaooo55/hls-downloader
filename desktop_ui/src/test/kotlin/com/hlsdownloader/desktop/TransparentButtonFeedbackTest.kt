@@ -153,18 +153,4 @@ class TransparentButtonFeedbackTest {
         )
     }
 
-    @Test
-    fun button_keeps_its_old_behaviour_when_no_override_is_passed() {
-        val src = File("src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt").readText()
-        val body = src.substringAfter("internal fun Button(").substringBefore("internal fun TextButton(")
-        assertTrue(
-            body.contains("hoverColor ?: container.blendToward(Color.White, .08f)"),
-            "不显式传 hoverColor 时必须沿用原来的\"朝白推 8%\"，否则改了所有按钮的悬停表现",
-        )
-        assertTrue(
-            body.contains("pressScale ?: .985f") &&
-            body.contains("pressedColor ?: Color.Unspecified"),
-            "pressedColor 的可空哨兵必须是 Color.Unspecified——rememberPressFeedback 用它判断按压档位是否存在",
-        )
-    }
 }

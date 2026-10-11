@@ -609,8 +609,7 @@ fn wait_events(
     after_sequence: u64,
     timeout_ms: u64,
 ) -> Vec<EventEnvelope> {
-    let deadline = std::time::Instant::now()
-        + Duration::from_millis(timeout_ms.clamp(1, 60_000));
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.clamp(1, 60_000));
     loop {
         if let Ok(events) = coordinator.events_after(after_sequence, 256) {
             if !events.is_empty() {
@@ -624,7 +623,9 @@ fn wait_events(
         // 下载工作线程直接发布事件，不经过 IPC 命令的 bump_notify。
         // 分段等待让进度及时到达客户端，同时保留空闲长轮询的超时语义。
         let (lock, condvar) = notify.as_ref();
-        let Ok(guard) = lock.lock() else { return Vec::new(); };
+        let Ok(guard) = lock.lock() else {
+            return Vec::new();
+        };
         let _ = condvar.wait_timeout(guard, remaining.min(Duration::from_millis(100)));
     }
 }
@@ -753,7 +754,10 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                     last_start = stamp.clone();
                 }
                 let queue_start_due = global_start_due
-                    || settings.queue_profiles.iter().any(|profile| profile.schedule_enabled);
+                    || settings
+                        .queue_profiles
+                        .iter()
+                        .any(|profile| profile.schedule_enabled);
                 // 独立任务的开始时间不依赖队列定时开关；仅释放已设开始时间的任务。
                 let _ = coordinator.start_next_queued(!queue_start_due);
             }

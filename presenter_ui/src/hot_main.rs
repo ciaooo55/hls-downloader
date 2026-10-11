@@ -784,9 +784,17 @@ fn event_loop(
             *known_tasks = tasks.clone();
         }
         // 重连后用快照恢复正在传输的任务，不能只等下一次增量事件。
-        let active: Vec<_> = tasks.into_iter().filter(|task| task_is_active(&task.status))
-            .map(|snapshot| EventEnvelope { sequence: latest_sequence, event: CoreEvent::TaskUpdated { snapshot } }).collect();
-        if !active.is_empty() && tx.send(active).is_err() { return; }
+        let active: Vec<_> = tasks
+            .into_iter()
+            .filter(|task| task_is_active(&task.status))
+            .map(|snapshot| EventEnvelope {
+                sequence: latest_sequence,
+                event: CoreEvent::TaskUpdated { snapshot },
+            })
+            .collect();
+        if !active.is_empty() && tx.send(active).is_err() {
+            return;
+        }
         let restored = load_pending_offers(&mut client);
         let resync_pending = Arc::clone(&pending);
         let resync_active_handoff = Arc::clone(&active_handoff);
@@ -1156,7 +1164,11 @@ fn update_known_tasks(tasks: &Arc<Mutex<Vec<TaskSnapshot>>>, event: &CoreEvent) 
 
 fn trace(message: &str) {
     if let Some(path) = env::var_os("HLS_V7_PRESENTER_TRACE_FILE") {
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(file, "[presenter {}] {message}", std::process::id());
         }
     } else if env::var_os("HLS_V7_PRESENTER_TRACE").is_some() {
@@ -1168,42 +1180,58 @@ fn correct_native_click_position(window: &slint::Window) {
     #[cfg(windows)]
     {
         use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
-        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use windows_sys::Win32::Foundation::POINT;
         use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
         use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
         // Winit 的多窗口事件循环复用鼠标位置；Windows 会过滤同坐标的移动事件。
         // 确认窗再次出现时，点击可能被当成上一进度窗的标题栏点击。
         // 按当前 HWND 的客户区坐标派发真实鼠标按下/释放，保持原有按钮回调。
         window.on_winit_window_event(|window, event| {
             let winit::event::WindowEvent::MouseInput {
-                state, button: winit::event::MouseButton::Left, ..
-            } = event else { return EventResult::Propagate; };
-            let position = window.with_winit_window(|native| {
-                let RawWindowHandle::Win32(handle) = native.window_handle().ok()?.as_raw()
-                    else { return None; };
-                let mut point = POINT { x: 0, y: 0 };
-                unsafe {
-                    if GetCursorPos(&mut point) == 0
-                        || ScreenToClient(handle.hwnd.get() as _, &mut point) == 0 {
+                state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } = event
+            else {
+                return EventResult::Propagate;
+            };
+            let position = window
+                .with_winit_window(|native| {
+                    let RawWindowHandle::Win32(handle) = native.window_handle().ok()?.as_raw()
+                    else {
                         return None;
+                    };
+                    let mut point = POINT { x: 0, y: 0 };
+                    unsafe {
+                        if GetCursorPos(&mut point) == 0
+                            || ScreenToClient(handle.hwnd.get() as _, &mut point) == 0
+                        {
+                            return None;
+                        }
                     }
-                }
-                Some(slint::LogicalPosition::new(
-                    point.x as f32 / window.scale_factor(),
-                    point.y as f32 / window.scale_factor(),
-                ))
-            }).flatten();
-            let Some(position) = position else { return EventResult::Propagate; };
-            let _ = window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                    Some(slint::LogicalPosition::new(
+                        point.x as f32 / window.scale_factor(),
+                        point.y as f32 / window.scale_factor(),
+                    ))
+                })
+                .flatten();
+            let Some(position) = position else {
+                return EventResult::Propagate;
+            };
+            let _ =
+                window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
             let button = slint::platform::PointerEventButton::Left;
             let event = if *state == winit::event::ElementState::Pressed {
                 slint::platform::WindowEvent::PointerPressed { position, button }
             } else {
                 slint::platform::WindowEvent::PointerReleased { position, button }
             };
-            trace(&format!("native left button: {state:?} at {},{}", position.x, position.y));
+            trace(&format!(
+                "native left button: {state:?} at {},{}",
+                position.x, position.y
+            ));
             let _ = window.try_dispatch_event(event);
             EventResult::PreventDefault
         });
@@ -1416,8 +1444,13 @@ fn render_progress_hud(
     let Some(item) = progress.upgrade() else {
         return;
     };
-    if item.get_hidden_by_user() { return; }
-    trace(&format!("render progress: {} {} {}", snapshot.task_id, snapshot.status, snapshot.downloaded_bytes));
+    if item.get_hidden_by_user() {
+        return;
+    }
+    trace(&format!(
+        "render progress: {} {} {}",
+        snapshot.task_id, snapshot.status, snapshot.downloaded_bytes
+    ));
     item.set_headline(
         if matches!(snapshot.status.as_str(), "merging" | "checking") {
             LOCAL_PROCESSING.into()
@@ -1434,7 +1467,12 @@ fn render_progress_hud(
     item.set_progress(task_progress(snapshot));
     item.set_total_known(snapshot.total_bytes.is_some_and(|total| total > 0));
     item.set_transferred(match snapshot.total_bytes.filter(|total| *total > 0) {
-        Some(total) => format!("已下载 {} / {}", format_bytes(snapshot.downloaded_bytes), format_bytes(total)).into(),
+        Some(total) => format!(
+            "已下载 {} / {}",
+            format_bytes(snapshot.downloaded_bytes),
+            format_bytes(total)
+        )
+        .into(),
         None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
     });
     if item.show().is_ok() {

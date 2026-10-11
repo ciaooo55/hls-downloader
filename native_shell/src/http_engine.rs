@@ -1990,7 +1990,10 @@ fn drop_cross_origin_secrets(
     let to_origin = crate::credentials::request_origin(to);
     if !from_origin.is_empty() && from_origin == to_origin {
         if !replay.trim().is_empty() {
-            let mut map = headers.iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+            let mut map = headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
             // 同域重定向也可能从入口跳到另一个 Cookie Path。
             crate::apply_replay_json_for(&mut map, replay, to);
             *headers = map.into_iter().collect();
