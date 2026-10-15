@@ -50,6 +50,7 @@ class FixtureCore(socketserver.ThreadingTCPServer):
         self.fail_poll = False
         self.fail_reset = False
         self.prefetch_positions = []
+        self.idle_timeout = 30
 
     def respond(self, request):
         kind = request["type"]
@@ -86,9 +87,11 @@ class FixtureCore(socketserver.ThreadingTCPServer):
             elif action == "audio":
                 session = self.sessions[sid]
                 pcm = base64.b64decode(request["audio"], validate=True)
-                assert len(pcm) == 8000
-                assert request["epoch"] == session["epoch"]
-                samples = struct.unpack("<4000h", pcm)
+                assert 2 <= len(pcm) <= 8000 and len(pcm) % 2 == 0
+                # A reset rejection leaves the provider at the prior epoch;
+                # Core accepts such queued PCM and drops it in the worker.
+                if request["epoch"] != session["epoch"]: return result
+                samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
                 self.audio_frames += 1
                 self.prefetch_positions.append(request['position'])
                 self.nonzero_samples += sum(sample != 0 for sample in samples)
@@ -112,7 +115,7 @@ class CoreHandler(socketserver.StreamRequestHandler):
         with contextlib.suppress(OSError): self.frames()
 
     def frames(self):
-        self.connection.settimeout(30)
+        self.connection.settimeout(self.server.idle_timeout)
         while True:
             header = self.rfile.read(4)
             if len(header) != 4: return
@@ -213,7 +216,9 @@ def run(args):
         if(mode==='dynamic-shadow') setTimeout(mount,1200);else mount();
         </script>''',encoding="utf-8")
         origin_thread = threading.Thread(target=origin.serve_forever,daemon=True); origin_thread.start()
-        core = FixtureCore(); core_thread = threading.Thread(target=core.serve_forever,daemon=True); core_thread.start()
+        core = FixtureCore()
+        if args.idle_reconnect: core.idle_timeout = 120
+        core_thread = threading.Thread(target=core.serve_forever,daemon=True); core_thread.start()
         manifest = root/"native-host.json"
         manifest.write_text(json.dumps({"name":"com.ciaooo55.hls_downloader", "description":"isolated subtitle smoke",
             "path":str(args.host.resolve()), "type":"stdio", **({'allowed_extensions':[eid]} if firefox else {'allowed_origins':[f"chrome-extension://{eid}/"]})}),encoding="utf-8")
@@ -284,6 +289,14 @@ def run(args):
                     _open_debug_target(port,popup_url)
                     popup = wait(lambda:next((t for t in _read_debug_targets(port) if t.get('url')==popup_url and t['id'] not in previous_targets),None),"popup missing")["webSocketDebuggerUrl"]
                 wait(lambda:evaluate(popup,"Boolean(document.querySelector('[data-subtitle-panel] select option'))"),"subtitle popup missing")
+                if args.idle_reconnect:
+                    provider_request = "browser.runtime.sendMessage({type:'subtitle-provider',request:{action:'configuration'}})"
+                    initial_provider = evaluate(popup,provider_request)
+                    assert initial_provider.get('ok'), f'initial subtitle connection failed: {initial_provider}'
+                    # 真实闲置超过 Core 的 120 秒，验证下一次调用无需用户先遇到管道错误。
+                    time.sleep(125)
+                    resumed_provider = evaluate(popup,provider_request)
+                    assert resumed_provider.get('ok'), f'subtitle connection failed after Core idle expiry: {resumed_provider}'
                 evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === false"),"global enable not broadcast")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"本站字幕翻译\"]');c.value='off';c.dispatchEvent(new Event('change'));return true})()")
@@ -370,7 +383,7 @@ def run(args):
                 screenshot(popup,args.report.with_suffix('.png'))
                 evaluate(page,"window.testMedia.remove()")
                 wait(lambda:evaluate(page,"document.querySelectorAll('[data-hls-subtitle]').length === 0"),"removed player retained subtitle UI")
-                result = {"passed":True,"browser":family,"headed":args.headed,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "audio_frames":core.audio_frames,
+                result = {"passed":True,"browser":family,"headed":args.headed,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "idle_reconnect_verified":args.idle_reconnect,"audio_frames":core.audio_frames,
                     "nonzero_samples":core.nonzero_samples,"seek_resets":core.resets,"checks":["production popup","global switch broadcast","site disable and page override","real browser audio + AudioWorklet","real Native Host PCM forwarding","subtitle render","seek reset","rate reset","time offset","provider failure and retry","reset rejection and retry","disable hides cached navigation and reenable restores audio","language change clears old cues","stop capture","removed player clears subtitle UI",*prefetch_checks]}
                 args.report.parent.mkdir(parents=True,exist_ok=True); args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
                 return result
@@ -406,4 +419,5 @@ if __name__ == "__main__":
     parser.add_argument('--player-dom', choices=('document','shadow','dynamic-shadow','nested-shadow'), default='document')
     parser.add_argument('--system-temp', action='store_true')
     parser.add_argument('--headed', action='store_true')
+    parser.add_argument('--idle-reconnect', action='store_true', help='Verify subtitle IPC after 125 seconds of actual idle time')
     print(json.dumps(run(parser.parse_args()),ensure_ascii=False,indent=2))

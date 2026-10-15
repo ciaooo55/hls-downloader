@@ -275,10 +275,9 @@ function mseCorrelatedResources(
 ): MediaResource[] {
   const evidence = playback.mseResourceUrls || []
   if (!evidence.length) return []
-  const floor = playback.startedAt - 3 * 60_000
   const ranked = compactResources(resources, 40)
     .filter(item => {
-      if (item.seenAt < floor) return false
+      // 实际追加的分片已证明归属；提前加载后长时间暂停不能使清单失配。
       if (['hls', 'dash', 'media'].includes(item.kind)) return true
       // PerformanceObserver classifies progressive MP4/WebM as `file`. Bind
       // that file only when SourceBuffer bytes are the same object, never by

@@ -37,6 +37,22 @@ describe('字幕的实际行为边界', () => {
     expect(chunks.flatMap(chunk => [...chunk])).toHaveLength(16000)
     expect(chunks.every(chunk => chunk.every(value => Math.abs(value - 16383.5) <= 0.6))).toBe(true)
   })
+  it('flush 会发送末尾不满块的实际样本，并允许后续继续累积', () => {
+    const chunks: Int16Array[] = []
+    const pcm = new SubtitlePcm(16000, chunk => chunks.push(chunk))
+    pcm.push([new Float32Array(4500).fill(0.5)])
+
+    expect(chunks.map(chunk => chunk.length)).toEqual([4000])
+    pcm.flush()
+    pcm.flush()
+    expect(chunks.map(chunk => chunk.length)).toEqual([4000, 500])
+    expect(chunks[1].every(value => value === 16384)).toBe(true)
+
+    pcm.push([new Float32Array(10).fill(-0.5)])
+    pcm.flush()
+    expect(chunks.map(chunk => chunk.length)).toEqual([4000, 500, 10])
+    expect(chunks[2].every(value => value === -16384)).toBe(true)
+  })
   it('字幕微调参与快进后的缓存选择，重叠时使用最新语句', () => {
     const cues = [
       { id: 'one', start: 10, end: 13, source: '', translation: '一', final: true },

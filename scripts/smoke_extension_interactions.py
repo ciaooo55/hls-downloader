@@ -821,7 +821,7 @@ def run(args):
                 driver.save_screenshot(str(evidence/"public-video-hover.png"))
                 record("real webpage hover card visible and inside viewport", hover)
                 overlay(".video-download").click()
-                click_download_confirmation(evidence_path=evidence/'page-confirmation.json')
+                click_download_confirmation(evidence_path=evidence/'page-confirmation.json', runtime=args.runtime)
                 def downloaded():
                     task = next((t for t in core({"type":"snapshot","request_id":3})["tasks"]
                                  if t["task_id"] not in original_tasks and t["url"] == MEDIA), None)
@@ -1021,7 +1021,7 @@ def run(args):
                 assert 'hlsqa_partition=ordinary' in context['cookie'] and 'hlsqa_partition=partitioned' in context['cookie'],context['cookie']
                 assert 'hlsqa_partition=foreign' not in context['cookie'],context['cookie']
                 record('installed Native Host/Core preserves both same-name cookies and excludes foreign partition', selected)
-            click_download_confirmation(evidence_path=evidence/'popup-confirmation.json')
+            click_download_confirmation(evidence_path=evidence/'popup-confirmation.json', runtime=args.runtime)
             def popup_downloaded():
                 task=next((t for t in core({"type":"snapshot","request_id":42})["tasks"] if t["task_id"] not in before_popup_download and t["url"]==MEDIA),None)
                 if task:
@@ -1031,7 +1031,7 @@ def run(args):
             assert task["status"]=="completed" and hashlib.sha256(Path(task["output_path"]).read_bytes()).hexdigest()==expected_sha256,task
             record("popup download button -> actual local video -> completed and SHA256")
 
-            # 字幕来源、目标、本页/本站开关是本地 UI 行为；真实云模型未配置。
+            # 此处只验证字幕设置交互；真实云端音频另行验收。
             for label, value in (("来源语言", "en"), ("目标语言", "ja"), ("本站字幕翻译", "off"), ("本页字幕翻译", "on")):
                 select = driver.find_element(By.CSS_SELECTOR,f'select[aria-label="{label}"]')
                 original = select.get_attribute("value")
@@ -1043,10 +1043,18 @@ def run(args):
             driver.find_element(By.CSS_SELECTOR, ".subtitle-panel summary").click()
             for b in driver.find_elements(By.CSS_SELECTOR, ".subtitle-provider button"):
                 if not args.actions_only: measure(b, "subtitle provider")
+            service = driver.find_element(By.CSS_SELECTOR, 'select[aria-label="翻译服务"]')
+            original_service = service.get_attribute('value')
+            workspace = driver.find_element(By.CSS_SELECTOR, 'input[aria-label="百炼业务空间 ID"]')
+            original_workspace = workspace.get_attribute('value')
+            Select(service).select_by_value('dashscope')
+            workspace.clear()
             save_button = popup_button("保存服务设置")
             save_button.click()
             assert not driver.execute_script("return document.querySelector('.subtitle-provider').checkValidity()")
-            record("empty subtitle credentials: browser validation prevents invalid save")
+            driver.execute_script('arguments[0].value=arguments[1]', workspace, original_workspace)
+            Select(service).select_by_value(original_service)
+            record("DashScope without workspace: browser validation prevents invalid save and original service is restored")
             popup_button("打开").click()
             record("popup open desktop button")
             driver.save_screenshot(str(evidence/"popup-final.png"))

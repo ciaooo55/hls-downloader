@@ -26,15 +26,54 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     type: 'subtitle-state', sessionId: session.id, mediaId: session.mediaId,
     status: session.status, error: session.error || '', epoch: session.epoch, capture: session.capture, note: session.note, events,
   }, { frameId: session.frameId }).catch(() => undefined)
-  const stop = async (session: Session, error = '') => {
-    session.status = error ? 'failed' : 'stopped'; session.error = error
-    await persist()
-    await Promise.allSettled([
-      call('stop', session),
-      session.capture === 'tab' ? browser.runtime.sendMessage({ target: 'subtitle-offscreen', type: 'stop', sessionId: session.id })
-        : browser.tabs.sendMessage(session.tabId, { type: 'subtitle-capture-stop', sessionId: session.id }, { frameId: session.frameId }),
-    ])
-    await notify(session)
+  const stopping = new WeakMap<Session, Promise<void>>()
+  const stop = (session: Session, error = '') => {
+    const pending = stopping.get(session)
+    if (pending) return pending
+    const operation = (async () => {
+      session.error = error
+      await persist()
+      const captureStop = await Promise.allSettled([
+        session.capture === 'tab' ? browser.runtime.sendMessage({ target: 'subtitle-offscreen', type: 'stop', sessionId: session.id })
+          : browser.tabs.sendMessage(session.tabId, { type: 'subtitle-capture-stop', sessionId: session.id }, { frameId: session.frameId }),
+      ])
+      if (!error && (captureStop[0].status === 'rejected' || captureStop[0].value?.ok === false)) {
+        error = '音频尾部未能提交给字幕服务'
+        session.error = error
+      }
+      session.status = 'stopping'
+      await persist()
+      await Promise.allSettled([call('stop', session)])
+      if (!error) {
+        const deadline = Date.now() + 12000
+        let terminal = false
+        while (Date.now() < deadline) {
+          try {
+            const response = await call('poll', session, { after_sequence: session.sequence })
+            session.sequence = response.latest_sequence
+            if (response.events?.length) await notify(session, response.events)
+            if (response.status === 'stopped') { terminal = true; break }
+            if (response.status === 'failed') {
+              error = response.error || '字幕结束处理失败'
+              terminal = true
+              break
+            }
+          } catch {
+            error = '字幕结束状态读取失败'
+            break
+          }
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+        if (!terminal && !error) error = '字幕结束处理超时'
+      }
+      session.status = error ? 'failed' : 'stopped'
+      session.error = error
+      await persist()
+      await notify(session)
+    })()
+    stopping.set(session, operation)
+    void operation.catch(() => undefined)
+    return operation
   }
   const policy = async (pageUrl: string) => {
     const [local, temporary] = await Promise.all([browser.storage.local.get(SUBTITLE_SETTINGS_KEY), browser.storage.session.get(SUBTITLE_PAGES_KEY)])
@@ -135,15 +174,18 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
   }
   const inFlight = new Map<string, number>()
   const audio = async (session: Session, message: any) => {
-    if (session.status !== 'running' || !session.clock) return { ok: true }
+    const finalFlush = message.finalFlush === true
+    if (session.status !== 'running' && !finalFlush || !session.clock) return { ok: true }
     const prefetch = message.type === 'subtitle-prefetch-audio'
-    if (prefetch !== (session.capture === 'prefetch') || !prefetch && !session.clock.playing) return { ok: true }
+    if (prefetch !== (session.capture === 'prefetch') || !prefetch && !session.clock.playing && !finalFlush) return { ok: true }
     const clock = session.clock
     const at = Number(message.capturedAt)
     // 预取的是已录制音轨，消息排队不会使音频失效；它由下方的 epoch 和媒体位置校验。
-    if (!Number.isFinite(at) || !prefetch && (Math.abs(Date.now() - at) > 1500 || Math.abs(at - clock.at) > 1500)) throw new Error('字幕音频或播放器时钟已过期，请重新开始')
+    if (!Number.isFinite(at) || !prefetch && !finalFlush && (Math.abs(Date.now() - at) > 1500 || Math.abs(at - clock.at) > 1500)) throw new Error('字幕音频或播放器时钟已过期，请重新开始')
     if (prefetch && Number(message.epoch) !== clock.epoch) return { ok: true }
-    const position = prefetch ? Number(message.position) : Math.max(0, clock.position + (at - clock.at) / 1000 * clock.rate - .25 * clock.rate)
+    const position = prefetch ? Number(message.position) : finalFlush
+      ? Math.max(0, clock.position - .25 * clock.rate)
+      : Math.max(0, clock.position + (at - clock.at) / 1000 * clock.rate - .25 * clock.rate)
     const rate = prefetch ? Number(message.rate) : clock.rate
     // 暂停的后台网页会节流 clock 定时器；预取块携带同时读取的主播放器位置。
     const mainPosition = prefetch ? Number(message.mainPosition) : clock.position
@@ -216,9 +258,12 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
         return { ok: true, ...(await policy(pageUrl)) }
       })
       if (message.type === 'subtitle-provider' && trustedUI) return serialize(async () => {
-        const response = await call(message.request?.action === 'configure' ? 'configure' : 'configuration', undefined, message.request || {})
-        if (message.request?.action === 'configure') for (const live of Object.values(sessions)) await stop(live)
-        return response
+        if (message.request?.action === 'configure') {
+          for (const live of Object.values(sessions)) {
+            if (!['stopped', 'failed'].includes(live.status)) await stop(live)
+          }
+        }
+        return call(message.request?.action === 'configure' ? 'configure' : 'configuration', undefined, message.request || {})
       })
       if (message.type === 'subtitle-start' && (trustedUI || sender.tab)) return serialize(() => start(tabId, pageUrl,
         sender.tab && !trustedUI ? sender.frameId || 0 : message.frameId, String(message.mediaId || '') || undefined))
@@ -247,7 +292,11 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
       }
       if (message.type === 'audio' || message.type === 'subtitle-audio' || message.type === 'subtitle-prefetch-audio') {
         try { return await audio(live, message) }
-        catch (reason) { await stop(live, reason instanceof Error ? reason.message : String(reason)); return { ok: false } }
+        catch (reason) {
+          const error = reason instanceof Error ? reason.message : String(reason)
+          void stop(live, error).catch(() => undefined)
+          return { ok: false, error }
+        }
       }
       if (message.type === 'subtitle-capture-error') { await stop(live, String(message.error || '音轨读取失败').slice(0, 160)); return { ok: true } }
       if (message.type === 'heartbeat') { await persist(); schedulePoll(); return { ok: true } }

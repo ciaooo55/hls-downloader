@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from './hlsWorkerOwnership'
 
 describe('hls.js Worker media ownership', () => {
+  it('correlates dedicated hls.js 1.4 worker output without an instance number', () => {
+    const chunkMeta = { level: 0, sn: 12, id: 1, part: -1 }
+    const key = hlsWorkerChunkKey({ cmd: 'demux', chunkMeta })
+    expect(key).not.toBeNull()
+    expect(hlsWorkerChunkKey({ event: 'transmuxComplete', data: { chunkMeta } })).toBe(key)
+    expect(hlsWorkerChunkKey({ event: 'flush', data: chunkMeta })).toBe(key)
+    expect(hlsWorkerChunkKey({ instanceNo: 0, cmd: 'demux', chunkMeta })).not.toBe(key)
+    expect(hlsWorkerChunkKey({ instanceNo: null, chunkMeta })).toBeNull()
+  })
   it('correlates the same chunk across demux, completion and flush, separating workers and parts', () => {
     const chunkMeta = { level: 1, sn: 42, id: 3, part: -1 }
     const input = { instanceNo: 7, cmd: 'demux', chunkMeta }

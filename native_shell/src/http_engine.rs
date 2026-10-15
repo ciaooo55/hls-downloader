@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -203,6 +203,55 @@ pub fn write_progress(path: &Path, downloaded: u64, total: u64, speed: f64, stat
     let tmp = path.with_extension("json.tmp");
     if fs::write(&tmp, payload.to_string()).is_ok() {
         let _ = fs::rename(tmp, path);
+    }
+}
+
+pub(crate) fn write_media_progress(path: &Path, downloaded: u64, completed: u64, total: u64, live: bool) {
+    let payload = serde_json::json!({
+        "downloaded": downloaded, "total": 0, "speed": 0,
+        "completed_segments": completed, "total_segments": if live { 0 } else { total },
+        "status": if live { "recording" } else { "downloading" },
+    });
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, payload.to_string()).is_ok() {
+        let _ = fs::rename(tmp, path);
+    }
+}
+
+pub(crate) fn write_media_merging(path: &Path) {
+    let Ok(text) = fs::read_to_string(path) else { return; };
+    let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&text) else { return; };
+    payload["status"] = "merging".into();
+    payload["speed"] = 0.into();
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, payload.to_string()).is_ok() {
+        let _ = fs::rename(tmp, path);
+    }
+}
+
+// 分片间隙和恢复下载的已有字节不能变成零速率闪烁或瞬时尖峰。
+pub(crate) struct TransferRate {
+    samples: std::collections::VecDeque<(Instant, u64)>,
+}
+
+impl TransferRate {
+    pub(crate) fn new(bytes: u64) -> Self {
+        Self { samples: std::collections::VecDeque::from([(Instant::now(), bytes)]) }
+    }
+
+    pub(crate) fn sample(&mut self, bytes: u64) -> u64 {
+        let now = Instant::now();
+        if self.samples.back().is_some_and(|(_, previous)| bytes < *previous) {
+            self.samples.clear();
+            self.samples.push_back((now, bytes));
+        }
+        while self.samples.len() > 1 && now.duration_since(self.samples[1].0) >= Duration::from_secs(3) {
+            self.samples.pop_front();
+        }
+        let (at, baseline) = self.samples[0];
+        let speed = (bytes.saturating_sub(baseline) as f64 / now.duration_since(at).as_secs_f64().max(0.5)) as u64;
+        self.samples.push_back((now, bytes));
+        speed
     }
 }
 
@@ -964,7 +1013,7 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     }
     let mut buffer = vec![0u8; 64 * 1024];
     let mut downloaded = resume_from;
-    let started = Instant::now();
+    let mut rate = TransferRate::new(resume_from);
     let mut last_progress = Instant::now();
     loop {
         check_control(&job.control)?;
@@ -979,12 +1028,11 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
             .map_err(|err| EngineError::Failed(err.to_string()))?;
         downloaded += count as u64;
         if last_progress.elapsed() >= Duration::from_millis(200) {
-            let elapsed = started.elapsed().as_secs_f64().max(0.001);
             write_progress(
                 &job.progress,
                 downloaded,
-                job.total.max(downloaded),
-                downloaded as f64 / elapsed,
+                expected_downloaded.unwrap_or(0),
+                rate.sample(downloaded) as f64,
                 "downloading",
             );
             last_progress = Instant::now();
@@ -1067,7 +1115,6 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let completed = Arc::new(RangeCheckpoints::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
     let stop = Arc::new(AtomicBool::new(false));
-    let started = Instant::now();
     let mut handles = Vec::new();
     for worker_index in 0..workers {
         let job = job.clone();
@@ -1097,6 +1144,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let progress_path = job.progress.clone();
     let progress_control = job.control.clone();
     let progress_scheduler = Arc::clone(&scheduler);
+    let mut rate = TransferRate::new(downloaded.load(Ordering::SeqCst));
     let progress = thread::spawn(move || {
         while !progress_stop.load(Ordering::SeqCst) {
             if matches!(
@@ -1107,12 +1155,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
                 break;
             }
             let bytes = progress_downloaded.load(Ordering::SeqCst);
-            let elapsed = started.elapsed().as_secs_f64().max(0.001);
             write_progress(
                 &progress_path,
                 bytes,
                 total,
-                bytes as f64 / elapsed,
+                rate.sample(bytes) as f64,
                 "downloading",
             );
             write_active_ranges(&progress_path, &progress_scheduler.active_ranges());
@@ -1676,8 +1723,7 @@ fn fetch_range(
             if count == 0 {
                 break;
             }
-            let mut state = progress.lock().unwrap_or_else(|err| err.into_inner());
-            let current_stop = state.stop;
+            let current_stop = progress.lock().unwrap_or_else(|err| err.into_inner()).stop;
             let remain = current_stop.saturating_add(1).saturating_sub(cursor) as usize;
             let take = count.min(remain);
             if take > 0 {
@@ -1687,8 +1733,8 @@ fn fetch_range(
                 return Err(EngineErrorCode::Failed("write failed".into()));
             }
             cursor += take as u64;
-            state.cursor = cursor;
-            drop(state);
+            // 限速等待和磁盘写入不能占用进度锁，否则 active_ranges 会阻塞整个进度发布线程。
+            progress.lock().unwrap_or_else(|err| err.into_inner()).cursor = cursor;
             downloaded.fetch_add(take as u64, Ordering::SeqCst);
             if cursor.saturating_sub(durable_cursor) >= DURABLE_CHECKPOINT_BYTES {
                 scheduler.note_storage_latency(persist_range_progress(
@@ -1738,6 +1784,7 @@ enum Body {
         stream: TcpStream,
         remaining: Option<u64>,
     },
+    Chunked(ChunkedReader<Box<Body>>),
     /// curl-impersonate streams the entity straight to a temp file.  Reading it
     /// back into RAM (the only option before this variant existed) turned a
     /// multi-gigabyte media download into an equally large allocation, which
@@ -1784,9 +1831,90 @@ impl Read for Body {
                 Ok(count)
             }
             Self::File { file, .. } => file.read(buf),
+            Self::Chunked(body) => body.read(buf),
             #[cfg(windows)]
             Self::WinHttp(body) => body.read(buf),
         }
+    }
+}
+
+// 分块定界属于传输层，写盘和进度统计只能看到解码后的实体字节。
+struct ChunkedReader<R> {
+    reader: BufReader<R>,
+    remaining: u64,
+    need_crlf: bool,
+    finished: bool,
+}
+
+impl<R: Read> ChunkedReader<R> {
+    fn new(reader: R) -> Self {
+        Self { reader: BufReader::new(reader), remaining: 0, need_crlf: false, finished: false }
+    }
+
+    fn line(&mut self) -> std::io::Result<Vec<u8>> {
+        let mut line = Vec::new();
+        // 大小行和 trailer 有界；不按服务端声明的分块大小分配内存。
+        while line.len() < 8192 {
+            let mut byte = [0];
+            self.reader.read_exact(&mut byte)?;
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                if line.ends_with(b"\r\n") {
+                    line.truncate(line.len() - 2);
+                    return Ok(line);
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked line missing CRLF"));
+            }
+        }
+        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked line too long"))
+    }
+}
+
+impl<R: Read> Read for ChunkedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() || self.finished { return Ok(0); }
+        if self.remaining == 0 {
+            if self.need_crlf {
+                let mut crlf = [0; 2];
+                self.reader.read_exact(&mut crlf)?;
+                if crlf != *b"\r\n" {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked data missing CRLF"));
+                }
+                self.need_crlf = false;
+            }
+            let line = self.line()?;
+            let size = line.split(|byte| *byte == b';').next().unwrap_or_default();
+            let size = std::str::from_utf8(size).unwrap_or("").trim_end_matches([' ', '\t']);
+            if size.is_empty() || !size.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunked size"));
+            }
+            self.remaining = u64::from_str_radix(size, 16)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked size overflow"))?;
+            if self.remaining == 0 {
+                let mut trailer_bytes = 0;
+                loop {
+                    let line = self.line()?;
+                    trailer_bytes += line.len() + 2;
+                    if trailer_bytes > 64 * 1024 {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked trailers too long"));
+                    }
+                    if line.is_empty() { break; }
+                    if !line.contains(&b':') {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunked trailer"));
+                    }
+                }
+                self.finished = true;
+                return Ok(0);
+            }
+            self.need_crlf = true;
+        }
+        let want = (buf.len() as u64).min(self.remaining) as usize;
+        let count = self.reader.read(&mut buf[..want])?;
+        if count == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "chunked body truncated"));
+        }
+        self.remaining -= count as u64;
+        Ok(count)
     }
 }
 
@@ -2097,6 +2225,7 @@ fn fetch_via_curl_impersonate(
         .unwrap_or(0);
     let headers = fs::read_to_string(&header_path).unwrap_or_default();
     let meta = parse_header_meta(&headers);
+    record_download_type(job, status, &headers);
     // A body read failure must not look like an empty body: `unwrap_or_default`
     // silently turned a partial transfer into a truncated-but-"successful" file.
     // The entity itself stays on disk and is streamed (see `Body::File`), so only
@@ -2296,6 +2425,18 @@ fn header_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     }
 }
 
+fn record_download_type(job: &Job, status: u16, headers: &str) {
+    if !matches!(status, 200 | 206) || job.output.as_os_str().is_empty() {
+        return;
+    }
+    let value = |name| headers.lines().filter_map(|line| header_value(line, name)).last().unwrap_or("");
+    let metadata = serde_json::json!({
+        "content_type": value("Content-Type"),
+        "content_disposition": value("Content-Disposition"),
+    });
+    let _ = fs::write(job.progress.with_extension("response.json"), metadata.to_string());
+}
+
 #[derive(Default)]
 struct HeaderMeta {
     location: Option<String>,
@@ -2341,6 +2482,9 @@ fn parse_header_meta(head: &str) -> HeaderMeta {
             meta.content_encoding =
                 !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("identity");
         }
+    }
+    if meta.chunked {
+        meta.content_length = None;
     }
     meta
 }
@@ -2606,15 +2750,17 @@ fn http_get(
         .and_then(|code| code.parse::<u16>().ok())
         .unwrap_or(0);
     let meta = parse_header_meta(&head);
-    if meta.chunked && !matches!(status, 301 | 302 | 303 | 307 | 308) {
-        return Err(EngineError::Failed(
-            "chunked Transfer-Encoding unsupported".into(),
-        ));
+    record_download_type(job, status, &head);
+    for value in head.lines().filter_map(|line| header_value(line, "Transfer-Encoding")) {
+        if value.split(',').any(|coding| !coding.trim().eq_ignore_ascii_case("chunked")) {
+            return Err(EngineError::Failed("unsupported Transfer-Encoding".into()));
+        }
     }
     let accept_ranges = meta.accept_ranges || meta.content_range.is_some();
-    let remaining = meta
-        .content_length
-        .map(|total| total.saturating_sub(leftover.len() as u64));
+    let body = Body::Tcp { prefix: leftover, at: 0, stream, remaining: meta.content_length };
+    let body = if meta.chunked && !request_method(job).eq_ignore_ascii_case("HEAD") {
+        Body::Chunked(ChunkedReader::new(Box::new(body)))
+    } else { body };
     Ok((
         status,
         meta.location,
@@ -2623,12 +2769,7 @@ fn http_get(
         meta.etag,
         meta.last_modified,
         accept_ranges,
-        Body::Tcp {
-            prefix: leftover,
-            at: 0,
-            stream,
-            remaining,
-        },
+        body,
     ))
 }
 
@@ -2644,9 +2785,9 @@ mod winhttp {
         WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
         WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
         WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
-        WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_CONTENT_RANGE,
+        WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_RANGE,
         WINHTTP_QUERY_ETAG, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LAST_MODIFIED,
-        WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
+        WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE, WINHTTP_QUERY_RAW_HEADERS_CRLF,
     };
 
     // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY (stable WinHTTP ABI value).
@@ -2901,12 +3042,15 @@ mod winhttp {
                 return Err(EngineError::Failed(format!("WinHttpQueryHeaders {err}")));
             }
             let content_range = query_header_string(request, WINHTTP_QUERY_CONTENT_RANGE);
+            let raw_headers = query_header_string(request, WINHTTP_QUERY_RAW_HEADERS_CRLF).unwrap_or_default();
+            if !raw_headers.is_empty() {
+                super::record_download_type(job, status as u16, &raw_headers);
+            }
             let location = query_header_string(request, WINHTTP_QUERY_LOCATION);
             let etag = query_header_string(request, WINHTTP_QUERY_ETAG).unwrap_or_default();
             let last_modified =
                 query_header_string(request, WINHTTP_QUERY_LAST_MODIFIED).unwrap_or_default();
-            let content_length = query_header_string(request, WINHTTP_QUERY_CONTENT_LENGTH)
-                .and_then(|value| value.parse::<u64>().ok());
+            let content_length = super::parse_header_meta(&raw_headers).content_length;
             let accept_ranges =
                 query_header_string(request, WINHTTP_QUERY_ACCEPT_RANGES).is_some_and(|value| {
                     value
@@ -3816,14 +3960,12 @@ mod tests {
     }
 
     #[test]
-    fn chunked_body_is_rejected_instead_of_writing_framing() {
+    fn chunked_body_is_decoded_without_writing_framing() {
         let body: &'static [u8] = b"hello-chunked";
         let url = serve_chunked(body);
         let (job, dir) = temp_job(&url, true, 0, 1);
-        let err = run_job(&job).unwrap_err();
-        assert!(matches!(&err, EngineError::Failed(_)));
-        assert!(err.to_string().contains("chunked"));
-        assert!(!job.output.exists());
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), body);
         let _ = fs::remove_dir_all(dir);
     }
 

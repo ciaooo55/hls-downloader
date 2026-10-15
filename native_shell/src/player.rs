@@ -20,6 +20,9 @@ pub struct PlayerMetadata {
     pub position_seconds: f64,
     pub duration_seconds: f64,
     pub position_available: bool,
+    pub session_active: Option<bool>,
+    pub paused: Option<bool>,
+    pub speed: Option<f64>,
     pub audio_tracks: u32,
     pub subtitle_tracks: u32,
 }
@@ -64,6 +67,26 @@ struct MpvSession {
     terminate: unsafe extern "C" fn(*mut c_void),
     get_property_string: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_char>,
     free: Option<unsafe extern "C" fn(*mut c_void)>,
+    wait_event: unsafe extern "C" fn(*mut c_void, f64) -> *const MpvEvent,
+}
+
+#[repr(C)]
+struct MpvEvent {
+    event_id: i32,
+    error: i32,
+    reply_userdata: u64,
+    data: *mut c_void,
+}
+
+fn mpv_has_shutdown(session: &MpvSession) -> bool {
+    loop {
+        let event = unsafe { (session.wait_event)(session.handle, 0.0).as_ref() };
+        match event.map(|event| event.event_id) {
+            Some(1) => return true,
+            Some(0) | None => return false,
+            _ => {}
+        }
+    }
 }
 
 unsafe impl Send for MpvSession {}
@@ -78,13 +101,17 @@ impl Drop for MpvSession {
 }
 
 impl Player {
-    pub fn play(&self, url: &str) -> Result<(), String> {
+    pub fn play(&self, url: &str, title: &str) -> Result<(), String> {
         *self.last_url.lock().map_err(|_| "player lock")? = url.to_string();
         if null_backend_enabled() {
             return Ok(());
         }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
         self.ensure_backend(&mut inner)?;
+        let title: String = title.chars().filter(|ch| !ch.is_control()).collect();
+        let title = if title.trim().is_empty() { "视频" } else { title.trim() };
+        self.command_locked(&mut inner, &format!("set force-media-title {}", quote_mpv(title)?))?;
+        self.command_locked(&mut inner, "set pause no")?;
         self.command_locked(&mut inner, &format!("loadfile {} replace", quote_mpv(url)?))
     }
 
@@ -166,8 +193,11 @@ impl Player {
                 .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or_default();
         }
+        if matches!(&*inner, Backend::Mpv(session) if mpv_has_shutdown(session)) {
+            *inner = Backend::Idle;
+        }
         let Backend::Mpv(session) = &*inner else {
-            return PlayerMetadata::default();
+            return PlayerMetadata { session_active: Some(false), ..PlayerMetadata::default() };
         };
         let number = |name: &str| {
             property_string(session, name)
@@ -191,6 +221,13 @@ impl Player {
             position_seconds,
             duration_seconds,
             position_available: duration_seconds > 0.0,
+            session_active: Some(true),
+            paused: property_string(session, "pause").and_then(|value| match value.as_str() {
+                "yes" => Some(true),
+                "no" => Some(false),
+                _ => None,
+            }),
+            speed: Some(number("speed")).filter(|value| *value > 0.0),
             audio_tracks,
             subtitle_tracks,
         }
@@ -268,7 +305,24 @@ impl Player {
         }
     }
 
+    fn poll_shutdown(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            if matches!(&*inner, Backend::Mpv(session) if mpv_has_shutdown(session)) {
+                *inner = Backend::Idle;
+            }
+        }
+    }
+
     fn ensure_backend(&self, inner: &mut Backend) -> Result<(), String> {
+        // quit 后静态属性仍能读取，必须消费真正的 MPV_EVENT_SHUTDOWN。
+        let shutdown = if let Backend::Mpv(session) = inner {
+            mpv_has_shutdown(session)
+        } else {
+            false
+        };
+        if shutdown {
+            *inner = Backend::Idle;
+        }
         if matches!(inner, Backend::Mpv(_) | Backend::Child(_)) {
             return Ok(());
         }
@@ -388,9 +442,24 @@ impl PlayerChild {
 pub fn run_player_process() -> i32 {
     std::env::set_var("HLS_V7_PLAYER_CHILD", "1");
     let player = Player::default();
-    let stdin = std::io::stdin();
+    // 生产界面不轮询本地播放状态。stdin 不能阻塞 mpv 事件处理，否则点击关闭后
+    // SHUTDOWN 无人消费，窗口一直等客户端释放；此前主动查询 metadata 的测试掩盖了它。
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            if sender.send(line).is_err() { break; }
+        }
+    });
     let mut stdout = std::io::BufWriter::new(std::io::stdout());
-    for line in stdin.lock().lines() {
+    loop {
+        let line = match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(line) => line,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                player.poll_shutdown();
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         let line = match line {
             Ok(line) => line,
             Err(error) => {
@@ -494,10 +563,11 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                 let get_property_string =
                     GetProcAddress(module, b"mpv_get_property_string\0".as_ptr());
                 let free = GetProcAddress(module, b"mpv_free\0".as_ptr());
+                let wait_event = GetProcAddress(module, b"mpv_wait_event\0".as_ptr());
                 let set_option = GetProcAddress(module, b"mpv_set_option_string\0".as_ptr());
                 let terminate = GetProcAddress(module, b"mpv_terminate_destroy\0".as_ptr());
-                let (Some(create), Some(initialize), Some(command_string), Some(terminate)) =
-                    (create, initialize, command_string, terminate)
+                let (Some(create), Some(initialize), Some(command_string), Some(terminate), Some(set_option), Some(wait_event)) =
+                    (create, initialize, command_string, terminate, set_option, wait_event)
                 else {
                     last = format!("{} 缺少 mpv 符号", path.display());
                     continue;
@@ -508,6 +578,8 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                 let command_string: unsafe extern "C" fn(*mut c_void, *const c_char) -> i32 =
                     std::mem::transmute(command_string);
                 let terminate: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(terminate);
+                let wait_event: unsafe extern "C" fn(*mut c_void, f64) -> *const MpvEvent =
+                    std::mem::transmute(wait_event);
                 let get_property_string = get_property_string.map(|value| {
                     std::mem::transmute::<
                         _,
@@ -522,25 +594,39 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                     last = "mpv_create returned null".into();
                     continue;
                 }
-                if let Some(set_option) = set_option {
+                {
                     let set_option: unsafe extern "C" fn(
                         *mut c_void,
                         *const c_char,
                         *const c_char,
                     ) -> i32 = std::mem::transmute(set_option);
-                    let keep = CString::new("keep-open").unwrap();
-                    let yes = CString::new("yes").unwrap();
-                    let _ = set_option(handle, keep.as_ptr(), yes.as_ptr());
+                    let mut options = vec![("keep-open", "yes".to_string())];
                     if let Some(wid) = wid {
-                        let name = CString::new("wid").unwrap();
-                        let value = CString::new(wid.to_string()).unwrap();
-                        let force = CString::new("force-window").unwrap();
-                        let no = CString::new("no").unwrap();
-                        let _ = set_option(handle, name.as_ptr(), value.as_ptr());
-                        let _ = set_option(handle, force.as_ptr(), no.as_ptr());
+                        options.extend([("wid", wid.to_string()), ("force-window", "no".into())]);
                     } else {
-                        let force = CString::new("force-window").unwrap();
-                        let _ = set_option(handle, force.as_ptr(), yes.as_ptr());
+                        // libmpv 默认不启用 OSC 和输入；本地播放的控制必须在视频内。
+                        options.extend([
+                            ("force-window", "yes".into()),
+                            ("title", PLAYER_WINDOW_TITLE.into()),
+                            ("osc", "yes".into()),
+                            ("input-default-bindings", "yes".into()),
+                            ("input-vo-keyboard", "yes".into()),
+                            ("input-cursor", "yes".into()),
+                            ("border", "no".into()),
+                            ("ontop", "yes".into()),
+                            ("autofit", "70%x70%".into()),
+                            ("geometry", "50%:50%".into()),
+                            ("script-opts", "osc-layout=bottombar,osc-visibility=always,osc-vidscale=no,osc-boxvideo=yes,osc-windowcontrols=yes,osc-deadzonesize=0,osc-timetotal=yes,osc-custom_button_1_content=速,osc-custom_button_1_mbtn_left_command=cycle-values speed 1 1.25 1.5 2; show-text ${speed}x,osc-custom_button_1_mbtn_right_command=set speed 1; show-text ${speed}x".into()),
+                        ]);
+                    }
+                    for (name, value) in options {
+                        let option = CString::new(name).unwrap();
+                        let value = CString::new(value).unwrap();
+                        let code = set_option(handle, option.as_ptr(), value.as_ptr());
+                        if code < 0 {
+                            terminate(handle);
+                            return Err(format!("播放器选项 {name} 设置失败: {code}"));
+                        }
                     }
                 }
                 if initialize(handle) < 0 {
@@ -554,6 +640,7 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                     terminate,
                     get_property_string,
                     free,
+                    wait_event,
                 });
             }
         }
@@ -654,7 +741,7 @@ mod tests {
         let previous = std::env::var_os("HLS_V7_PLAYER_NULL");
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
         let player = Player::default();
-        player.play("http://127.0.0.1:9/media/task-1").unwrap();
+        player.play("http://127.0.0.1:9/media/task-1", "测试影片").unwrap();
         player.pause(true).unwrap();
         player.set_speed(1.5).unwrap();
         player.set_audio_track("1").unwrap();

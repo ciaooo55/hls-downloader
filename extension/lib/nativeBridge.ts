@@ -81,6 +81,7 @@ interface PendingRequest {
 
 export class NativeBridge {
   private port: NativePortLike | null = null
+  private portLastResponseAt = 0
   private active: PendingRequest | null = null
   private readonly queue: PendingRequest[] = []
   private closed = false
@@ -167,11 +168,18 @@ export class NativeBridge {
   }
 
   private ensurePort(): NativePortLike {
+    // Core 会在空闲 120 秒后关闭 IPC。字幕连接没有心跳，发送新请求前提前换连接。
+    if (this.port && Date.now() - this.portLastResponseAt >= 60_000) {
+      const expired = this.port
+      this.port = null
+      try { expired.disconnect() } catch {}
+    }
     if (this.port) return this.port
     const port = this.connect()
     port.onMessage.addListener(message => this.handleMessage(port, message))
     port.onDisconnect.addListener(() => this.handleDisconnect(port))
     this.port = port
+    this.portLastResponseAt = Date.now()
     return port
   }
 
@@ -221,6 +229,7 @@ export class NativeBridge {
     const response = message as Record<string, unknown>
     const responseId = String(response.__request_id || '')
     if (responseId !== request.requestId) return
+    this.portLastResponseAt = Date.now()
     if (request.timer) clearTimeout(request.timer)
     request.timer = undefined
     const resolvedResponse = String(request.message.op || '') === 'media_push_status'
@@ -235,6 +244,13 @@ export class NativeBridge {
     if (this.tryMediaPushAdmissionCheck(port, request, resolvedResponse)) return
     this.active = null
     this.queue.shift()
+    // Host 仍在运行不代表其 Core 管道有效。丢弃失效连接，让下一次操作重新握手；
+    // 已发送的开始/音频/下载请求不能自动重放，以免重复执行。
+    if (response.ok === false && /^Core (?:pipe|IPC|stream) (?:write|read|closed|frame|header)\b/i.test(String(response.error || ''))) {
+      this.port = null
+      try { port.disconnect() } catch {}
+      this.disconnected()
+    }
     request.resolve(resolvedResponse)
     this.pump()
   }

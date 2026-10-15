@@ -122,6 +122,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
+import java.awt.geom.RoundRectangle2D
 import java.awt.Dimension
 import java.awt.EventQueue
 import java.awt.KeyEventDispatcher
@@ -567,6 +570,21 @@ fun main() {
         undecorated = true,
         transparent = false,
     ) {
+        DisposableEffect(window, state.placement) {
+            val floating = state.placement == WindowPlacement.Floating
+            fun updateWindowShape() {
+                // 内容 clip 不会裁掉不透明 HWND 的方角；原生形状随窗口尺寸同步。
+                window.shape = if (floating && window.extendedState == java.awt.Frame.NORMAL && window.width > 0 && window.height > 0)
+                    RoundRectangle2D.Double(0.0, 0.0, window.width.toDouble(), window.height.toDouble(), 20.0, 20.0)
+                else null
+            }
+            val listener = object : ComponentAdapter() {
+                override fun componentResized(event: ComponentEvent) = updateWindowShape()
+            }
+            window.addComponentListener(listener)
+            updateWindowShape()
+            onDispose { window.removeComponentListener(listener) }
+        }
         // 拖动缩放时尺寸连续变化，用 collectLatest + delay 去抖，避免每个像素变化都写盘。
         // 最大化 / 全屏下的尺寸不记——否则下次会以一个"屏幕大小"的浮动窗口打开。
         LaunchedEffect(pinnedGeometry) {
@@ -759,7 +777,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         "cast_offline" -> UiSignal.Cast(true, "示例影片 1080p", "客厅电视", "OFFLINE", deviceKind = "dlna", supportedActions = listOf("status", "play", "pause", "seek_to", "stop"), paused = true, positionSeconds = 754, durationSeconds = 5420, positionAvailable = true)
         else -> null
     }) }
-    var playerSession by remember { mutableStateOf<UiSignal.Player?>(if (visualFixture in setOf("player", "media_stack")) UiSignal.Player(true, "示例影片 1080p", "visual-fixture", "PLAYING", speed = 1.25, durationSeconds = 632.0, positionSeconds = 218.0, positionAvailable = true, audioTracks = 2, subtitleTracks = 2) else null) }
     var duplicateResult by remember { mutableStateOf<UiSignal.Duplicate?>(null) }
     var updateResult by remember { mutableStateOf<UiSignal.Update?>(if (visualFixture == "update") UiSignal.Update(
         current = "7.0.0",
@@ -799,7 +816,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         castConnecting = false
     }
     var castControlBusy by remember { mutableStateOf(false) }
-    var playerControlBusy by remember { mutableStateOf(false) }
     var updateDownloadBusy by remember { mutableStateOf(false) }
     var castPollFailures by remember { mutableIntStateOf(0) }
     var destructiveRequest by remember { mutableStateOf<DestructiveRequest?>(null) }
@@ -1298,7 +1314,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                     mediaUrl = signal.mediaUrl.ifBlank { castSession?.mediaUrl.orEmpty() },
                                 )
                             }
-                            is UiSignal.Player -> playerSession = signal
+                            is UiSignal.Player -> Unit
                         }
                     })
                     if (attentionRequired) onAttention()
@@ -1351,6 +1367,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     LaunchedEffect(Unit) { shellFocus.requestFocus() }
     val taskActionLimiter = remember { Semaphore(8) }
     fun launchTaskActions(entries: List<Pair<String, String>>) {
+        if (entries.isEmpty()) {
+            notice = UiSignal.Notice("info", "当前没有支持此操作的任务")
+            return
+        }
         entries.forEach { (taskId, action) ->
             scope.launch {
                 taskActionLimiter.withPermit {
@@ -1360,6 +1380,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             result.events.forEach { envelope ->
                                 handleSignal(applyEngineEventHere(envelope.event)) { signal -> if (signal is UiSignal.Notice) notice = signal }
                             }
+                        }
+                        .onFailure { error ->
+                            notice = UiSignal.Notice("error", describeTaskActionFailure(error, "批量操作失败"))
                         }
                 }
             }
@@ -1381,7 +1404,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> taskStartAction(task.source)?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
             settingsEpoch++
             darkMode = !darkMode
-            scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("dark_mode", darkMode) } } }
+            val requestedDarkMode = darkMode
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("dark_mode", requestedDarkMode) } }
+                    .onFailure { notice = UiSignal.Notice("error", "主题已切换，但未能保存；重启后可能恢复原主题。${describeFailure(it, "主题保存失败")}") }
+            }
         })
         Row(Modifier.weight(1f).fillMaxWidth()) {
                 // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
@@ -1397,9 +1424,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().background(canvas)) {
                 ContentHeader(filter, visible.size, selected.isNotEmpty(), tasks.any { it.status == "已完成" }, { refreshKey++ }, {
-                    scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.clearCompleted() } }
-                            .onSuccess { refreshKey++ }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "清理已完成任务失败")) }
+                    val completedIds = tasks.filter { it.status == "已完成" }.map { it.id }.toSet()
+                    if (completedIds.isNotEmpty()) {
+                        destructiveRequest = DestructiveRequest("delete", completedIds)
                     }
                 }, onMore = { action ->
                     when (action) {
@@ -1439,7 +1466,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         val next = nextTaskSort(settings.taskSort, field)
                         settingsEpoch++
                         settings = settings.copy(taskSort = next)
-                        scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("task_sort", next) } } }
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("task_sort", next) } }
+                                .onFailure { notice = UiSignal.Notice("error", "排序已切换，但未能保存；重启后可能恢复原排序。${describeFailure(it, "排序保存失败")}") }
+                        }
                     },
                 ) { taskId, action -> performTaskAction(taskId, action) }
                 }
@@ -1982,18 +2012,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "执行电源动作失败")) }
         }
     }) }
-    LaunchedEffect(playerSession?.active) {
-        if (playerSession?.active != true) return@LaunchedEffect
-        while (true) {
-            delay(1_000)
-            if (!playerControlBusy) {
-                // 首次加载可能尚无元数据，播放期间持续刷新进度和轨道信息。
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.playerControl("status") } }
-                    .onFailure { UiDiagnostics.error("player.status", it) }
-            }
-        }
-    }
-    if (playerSession?.active == true || castSession?.active == true) {
+    if (castSession?.active == true) {
         Popup(alignment = Alignment.BottomEnd, offset = androidx.compose.ui.unit.IntOffset(-18, -46), properties = PopupProperties(focusable = false)) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 castSession?.takeIf { it.active }?.let { signal -> CastSessionHud(signal, tasks.firstOrNull { it.id == signal.taskId }, castControlBusy, onCopy = { value ->
@@ -2009,14 +2028,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         castControlBusy = false
                     }
                 } }
-                playerSession?.takeIf { it.active }?.let { signal -> PlayerSessionHud(signal, playerControlBusy) { action ->
-                    if (!playerControlBusy) scope.launch {
-                        playerControlBusy = true
-                        runCatching { withContext(Dispatchers.IO) { EnginePipeClient.playerControl(action) } }
-                            .onFailure { notice = UiSignal.Notice("error", describeFailure(it, "播放器控制失败")) }
-                        playerControlBusy = false
-                    }
-                } }
+
             }
         }
     }
@@ -2039,13 +2051,20 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
 }
 
 internal fun downloadTask(task: TaskDto): DownloadTask {
-    val progress = task.totalBytes?.takeIf { it > 0 }?.let { task.downloadedBytes.toFloat() / it } ?: 0f
+    val progress = when {
+        task.status in setOf("completed", "done") -> 1f
+        !task.isLive && task.resourceKind in setOf("hls", "dash") && task.totalRanges > 0 -> task.completedRanges.toFloat() / task.totalRanges
+        else -> task.totalBytes?.takeIf { it > 0 }?.let { task.downloadedBytes.toFloat() / it } ?: 0f
+    }.coerceIn(0f, 1f)
     val status = displayStatus(task.status)
     val completedRanges = if (status == "已完成") task.totalRanges else task.completedRanges
     val segments = if (task.totalRanges > 0) {
         "${completedRanges}/${task.totalRanges} ${if (task.resourceKind.equals("torrent", true)) "Piece" else "段"}"
     } else "—"
-    return DownloadTask(task.id, task.filename.ifBlank { task.title }, status, progress, formatRate(task.speedBytesPerSecond), task.speedBytesPerSecond, task.etaSeconds?.let(::formatEta) ?: "—", segments, "刚刚", task)
+    val processing = task.status in setOf("merging", "checking")
+    return DownloadTask(task.id, task.filename.ifBlank { task.title }, status, progress,
+        if (processing) "本地处理" else formatRate(task.speedBytesPerSecond), task.speedBytesPerSecond,
+        if (processing) "请稍候" else task.etaSeconds?.let(::formatEta) ?: "—", segments, "刚刚", task)
 }
 internal fun auditTasks(count: Int): List<DownloadTask> = List(count.coerceAtLeast(0)) { index ->
     val status = listOf("running", "queued", "paused", "completed", "failed")[index % 5]
@@ -2267,7 +2286,9 @@ internal fun downloadCategory(filename: String, resourceKind: String): TaskCateg
 internal fun taskCategory(task: DownloadTask) = downloadCategory(task.filename, task.source.resourceKind)
 internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, category: TaskCategory?, query: String, queueId: String? = null): List<DownloadTask> =
     tasks.filter { (filter == TaskFilter.ALL || (filter == TaskFilter.RUNNING && isActiveTaskStatus(it.status)) || it.status == filter.label) && (category == null || taskCategory(it) == category) && (queueId == null || it.source.queueId == queueId) && it.filename.contains(query, true) }
-private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "—"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(java.util.Locale.ROOT, bytes / 1024.0) }
+private fun taskProgressKnown(task: TaskDto): Boolean = task.status in setOf("completed", "done") || (task.totalBytes ?: 0) > 0 || (!task.isLive && task.resourceKind in setOf("hls", "dash") && task.totalRanges > 0)
+private fun taskProgressLabel(task: DownloadTask): String = if (taskProgressKnown(task.source)) "${(task.progress * 100).toInt()}%" else if (task.source.isLive) "录制中" else "大小待定"
+private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "0 KB/s"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(java.util.Locale.ROOT, bytes / 1024.0) }
 private fun formatEta(seconds: Long): String = when { seconds < 60 -> "${seconds}s"; seconds < 3600 -> "${seconds / 60} 分钟"; else -> "${seconds / 3600} 小时" }
 internal fun chooseDirectory(initialPath: String = "", title: String = "选择目录"): String? {
     val chooser = JFileChooser().apply {
@@ -2604,7 +2625,12 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
             }
             Spacer(Modifier.weight(1f))
             if (compact) {
-                ToolbarIcon(Icons.Outlined.DeleteSweep, "清理已完成") { if (hasCompleted) onClearCompleted() }; ToolbarIcon(Icons.Outlined.Refresh, "刷新", onRefresh)
+                WorkbenchTooltip("清理已完成") {
+                    IconButton(onClick = onClearCompleted, enabled = hasCompleted, modifier = Modifier.size(36.dp).reportControlBounds("content_header.clear_completed")) {
+                        Icon(Icons.Outlined.DeleteSweep, "清理已完成", tint = muted, modifier = Modifier.size(18.dp))
+                    }
+                }
+                ToolbarIcon(Icons.Outlined.Refresh, "刷新", onRefresh)
             } else {
                 TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.clear_completed")) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = TypeScale.caption) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.refresh")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
             }
@@ -3001,7 +3027,17 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
                 when (column.id) {
                     "name" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) { Checkbox(isSelected, { select(false, true) }, Modifier.size(18.dp), accessibilityLabel = "选择 ${task.filename}"); Spacer(Modifier.width(8.dp)); Icon(categoryIcon(taskCategory(task)), null, tint = muted, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); WorkbenchTooltip("${task.filename}\n${safeResourceLocation(task.source.url)}") { Column(Modifier.weight(1f).padding(end = 8.dp)) { Text(task.filename, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold); Text(listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter { it.isNotBlank() }.joinToString(" · "), color = faint, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) } } }
                     "progress" -> Column(Modifier.width(column.width).padding(end = 8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(Radius.tiny)), color = if (task.status == "已暂停") warningColor else blue, trackColor = surface3); Spacer(Modifier.width(8.dp)); Text("${(task.progress * 100).toInt()}%", color = faint, fontSize = TypeScale.micro) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val progressColor = when (task.status) {
+                                "已完成" -> successColor
+                                "已暂停" -> warningColor
+                                "失败", "下载失败" -> errorStrong
+                                else -> blue
+                            }
+                            if (!taskProgressKnown(task.source) && isActiveTaskStatus(task.status)) LinearProgressIndicator(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)), color = progressColor, trackColor = surface3)
+                            else LinearProgressIndicator(progress = { task.progress.coerceIn(0f, 1f) }, modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)), color = progressColor, trackColor = surface3)
+                            Spacer(Modifier.width(8.dp)); Text(taskProgressLabel(task), color = progressColor, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(52.dp))
+                        }
                         Text(
                             when {
                                 task.source.resourceKind.equals("torrent", true) -> "${task.segments} · ${task.source.peerCount} Peer"
@@ -3014,7 +3050,7 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
                     }
                     "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (isActiveTaskStatus(task.status)) task.remaining else "", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 1.dp)) }
                     "speed" -> Text(if (isActiveTaskStatus(task.status)) task.speed else "—", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption)
-                    "size" -> Text(task.source.totalBytes?.let(::formatBytes) ?: "—", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    "size" -> Text(task.source.totalBytes?.takeIf { it > 0 }?.let(::formatBytes) ?: "已下载 ${formatBytes(task.source.downloadedBytes)}", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     "actions" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
                         if (!columns.compact && queueOrder && task.status == "排队中") {
                             var dragY by remember { mutableFloatStateOf(0f) }
@@ -3202,11 +3238,14 @@ internal fun WorkbenchDialog(
                             content = content,
                         )
                         if (scrollable) {
-                            VerticalScrollbar(
-                                rememberScrollbarAdapter(dialogContentScroll),
-                                Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
-                                style = workbenchScrollbarStyle(),
-                            )
+                            // 覆盖层不参与内容高度测量，短对话框按内容收缩。
+                            Box(Modifier.matchParentSize()) {
+                                VerticalScrollbar(
+                                    rememberScrollbarAdapter(dialogContentScroll),
+                                    Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp),
+                                    style = workbenchScrollbarStyle(),
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(14.dp))
@@ -3664,7 +3703,25 @@ internal fun parseRequestHeaderLines(value: String): Map<String, String> {
     }
     return headers
 }
-@Composable private fun BatchAddDialog(onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) { var urls by remember { mutableStateOf("") }; val inputFocus = remember { FocusRequester() }; LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }; val entries = urls.lineSequence().map(String::trim).filter(String::isNotBlank).toList(); val valid = entries.filter { runCatching { EnginePipeClient.normalizeDownloadUrl(it) }.isSuccess }; WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，可一次创建多个任务", 620.dp, content = { DialogLabel("链接列表"); OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus, placeholder = { Text("https://example.com/file.zip") }, minLines = 7, maxLines = 10, shape = RoundedCornerShape(Radius.md)); Text("有效 ${valid.size} / 输入 ${entries.size} 条链接", color = if (entries.isNotEmpty() && valid.size != entries.size) warningColor else faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 7.dp)) }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建 ${valid.size} 个任务", valid.isNotEmpty()) { onCreate(valid) } }) }
+@Composable private fun BatchAddDialog(onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) {
+    var urls by remember { mutableStateOf("") }
+    val inputFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }
+    val entries = urls.lineSequence().map(String::trim).filter(String::isNotBlank).toList()
+    val invalidLines = urls.lineSequence().mapIndexedNotNull { index, line ->
+        (index + 1).takeIf { line.isNotBlank() && runCatching { EnginePipeClient.normalizeDownloadUrl(line.trim()) }.isFailure }
+    }.toList()
+    WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，请修正无效链接后创建", 620.dp, content = {
+        DialogLabel("链接列表")
+        OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus,
+            placeholder = { Text("https://example.com/file.zip") }, minLines = 7, maxLines = 10, shape = RoundedCornerShape(Radius.md))
+        Text(if (invalidLines.isEmpty()) "共 ${entries.size} 条链接" else "第 ${invalidLines.take(8).joinToString("、")} 行链接无效${if (invalidLines.size > 8) "等 ${invalidLines.size} 行" else ""}，请修正后创建",
+            color = if (invalidLines.isNotEmpty()) warningColor else faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 7.dp))
+    }, actions = {
+        DialogSecondary("取消", onDismiss)
+        DialogPrimary("创建 ${entries.size} 个任务", entries.isNotEmpty() && invalidLines.isEmpty()) { onCreate(entries) }
+    })
+}
 @Composable
 private fun HarvestDialog(
     onDismiss: () -> Unit,
@@ -3758,12 +3815,13 @@ private fun HarvestDialog(
     WorkbenchDialog(onDismiss, "任务详情", "进度、连接、速度和运行日志", 780.dp, content = {
         Text(task.filename, color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(12.dp))
-        LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(Radius.sm)), color = blue, trackColor = surface3)
+        if (!taskProgressKnown(task.source) && isActiveTaskStatus(task.status)) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(7.dp), color = blue, trackColor = surface3)
+        else LinearProgressIndicator(progress = { task.progress }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(Radius.sm)), color = blue, trackColor = surface3)
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             StatusBadge(task.status); Spacer(Modifier.width(9.dp))
             Text(
-                if (torrentTask) "${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments}"
-                else "${(task.progress * 100).toInt()}% · ${task.speed} · ${task.segments} · ${task.source.activeWorkers} 个连接",
+                if (torrentTask) "${taskProgressLabel(task)} · ${task.speed} · ${task.segments}"
+                else "${taskProgressLabel(task)} · ${task.speed} · ${task.segments} · ${task.source.activeWorkers} 个连接",
                 color = muted,
                 fontSize = TypeScale.caption,
             )
@@ -4622,7 +4680,18 @@ private fun HarvestResultDialog(
         UpdateVersionCell("可用版本", signal.latest, Modifier.weight(1f), emphasized = true)
     }
     Spacer(Modifier.height(12.dp))
-    if (signal.notes.isNotBlank()) Text(signal.notes, color = ink, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle, maxLines = 7, overflow = TextOverflow.Ellipsis)
+    if (signal.notes.isNotBlank()) {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            signal.notes.lineSequence().filter { it.isNotBlank() }.take(7).forEach { line ->
+                val heading = line.trimStart().startsWith("#")
+                val text = line.trim().trimStart('#').trim().removePrefix("- ").removePrefix("* ")
+                    .replace(Regex("\\[([^]]+)\\]\\([^)]+\\)"), "$1").replace("**", "").replace("`", "")
+                Text(text, color = if (heading) ink else muted, fontSize = TypeScale.body,
+                    fontWeight = if (heading) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
     Spacer(Modifier.height(12.dp))
     Surface(Modifier.fillMaxWidth(), color = surface2, shape = RoundedCornerShape(Radius.md)) {
         Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -4701,76 +4770,6 @@ private fun HarvestResultDialog(
     },
     actions = { DialogSecondary("取消操作", onCancel); DialogPrimary("立即执行", onClick = onConfirm) },
 )
-
-@Composable private fun PlayerSessionHud(signal: UiSignal.Player, busy: Boolean, onAction: (String) -> Unit) {
-    val speeds = listOf(1.0, 1.25, 1.5, 2.0)
-    val nextSpeed = speeds[(speeds.indexOfFirst { kotlin.math.abs(it - signal.speed) < 0.01 }.takeIf { it >= 0 } ?: 0).let { (it + 1) % speeds.size }]
-    var scrubPosition by remember(signal.positionSeconds) { mutableFloatStateOf(signal.positionSeconds.toFloat()) }
-    var audioMenu by remember { mutableStateOf(false) }
-    var subtitleMenu by remember { mutableStateOf(false) }
-        Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.lg), shadowElevation = Elevation.e3, border = BorderStroke(1.dp, border), modifier = Modifier.width(430.dp)) {
-            Column(Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(Modifier.size(34.dp), color = selectedSurface, shape = RoundedCornerShape(Radius.md)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.SmartDisplay, null, tint = blue, modifier = Modifier.size(19.dp)) } }
-                    Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) {
-                        Text(signal.title.ifBlank { "正在播放" }, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("本机播放器 · ${playerStatusLabel(signal.status)} · ${formatPlayerSpeed(signal.speed)}", color = muted, fontSize = TypeScale.micro)
-                    }
-                    if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = blue)
-                    IconButton(onClick = { if (!busy) onAction("stop") }, enabled = !busy) { Icon(Icons.Outlined.Stop, "停止播放", tint = muted) }
-                }
-                Spacer(Modifier.height(8.dp)); HorizontalDivider(color = border); Spacer(Modifier.height(7.dp))
-                if (signal.positionAvailable && signal.durationSeconds > 0.0) {
-                    Slider(
-                        value = scrubPosition.coerceIn(0f, signal.durationSeconds.toFloat()),
-                        onValueChange = { if (!busy) scrubPosition = it },
-                        onValueChangeFinished = { if (!busy) onAction("preview:${(scrubPosition / signal.durationSeconds * 100.0).coerceIn(0.0, 100.0)}") },
-                        valueRange = 0f..signal.durationSeconds.toFloat(),
-                        modifier = Modifier.fillMaxWidth().height(26.dp),
-                        colors = SliderDefaults.colors(thumbColor = blue, activeTrackColor = blue, inactiveTrackColor = surface3),
-                        accessibilityLabel = "播放位置",
-                    )
-                    Row(Modifier.fillMaxWidth()) {
-                        Text(formatClock(scrubPosition.toLong()), color = muted, fontSize = TypeScale.micro)
-                        Spacer(Modifier.weight(1f))
-                        Text(formatClock(signal.durationSeconds.toLong()), color = muted, fontSize = TypeScale.micro)
-                    }
-                    if (signal.audioTracks > 0 || signal.subtitleTracks > 0) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("音轨 ${signal.audioTracks} · 字幕 ${signal.subtitleTracks}", color = muted, fontSize = TypeScale.micro)
-                            Spacer(Modifier.weight(1f))
-                            if (signal.audioTracks > 0) Box {
-                                TextButton(onClick = { audioMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("player.audio_track").height(25.dp)) { Text("选择音轨", color = blue, fontSize = TypeScale.micro) }
-                                DropdownMenu(expanded = audioMenu, onDismissRequest = { audioMenu = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface) {
-                                    (1..signal.audioTracks).forEach { id -> DropdownMenuItem(text = { Text("音轨 $id", color = ink, fontSize = TypeScale.caption) }, onClick = { audioMenu = false; onAction("audio:$id") }) }
-                                }
-                            }
-                            if (signal.subtitleTracks > 0) Box {
-                                TextButton(onClick = { subtitleMenu = true }, enabled = !busy, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("player.subtitle").height(25.dp)) { Text("选择字幕", color = blue, fontSize = TypeScale.micro) }
-                                DropdownMenu(expanded = subtitleMenu, onDismissRequest = { subtitleMenu = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface) {
-                                    (1..signal.subtitleTracks).forEach { id -> DropdownMenuItem(text = { Text("字幕 $id", color = ink, fontSize = TypeScale.caption) }, onClick = { subtitleMenu = false; onAction("subtitle:$id") }) }
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                    ToolbarIcon(Icons.AutoMirrored.Outlined.VolumeDown, "降低音量") { if (!busy) onAction("vol_down") }
-                    ToolbarIcon(Icons.Outlined.Replay10, "后退 10 秒") { if (!busy) onAction("seek_back") }
-                    ToolbarIcon(if (signal.paused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, if (signal.paused) "继续播放" else "暂停") { if (!busy) onAction(if (signal.paused) "resume" else "pause") }
-                    ToolbarIcon(Icons.Outlined.Forward10, "前进 10 秒") { if (!busy) onAction("seek_fwd") }
-                    ToolbarIcon(Icons.AutoMirrored.Outlined.VolumeUp, "提高音量") { if (!busy) onAction("vol_up") }
-                    TextButton(onClick = { if (!busy) onAction("speed:$nextSpeed") }, enabled = !busy, contentPadding = PaddingValues(horizontal = 7.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("player.speed").height(34.dp)) { Text(formatPlayerSpeed(signal.speed), color = blue, fontSize = TypeScale.micro, fontWeight = FontWeight.SemiBold) }
-                    ToolbarIcon(Icons.Outlined.PictureInPictureAlt, "画中画") { if (!busy) onAction("pip") }
-                    ToolbarIcon(Icons.Outlined.Fullscreen, "全屏") { if (!busy) onAction("fullscreen") }
-                }
-            }
-        }
-}
-
-private fun formatPlayerSpeed(speed: Double) = if (kotlin.math.abs(speed - speed.toInt()) < 0.01) "${speed.toInt()}x" else "${"%.2f".format(java.util.Locale.ROOT, speed).trimEnd('0')}x"
-private fun playerStatusLabel(status: String) = when (status.uppercase()) { "PAUSED" -> "已暂停"; "FULLSCREEN" -> "全屏播放"; "PIP" -> "画中画"; "STOPPED" -> "已停止"; else -> "正在播放" }
 
 @Composable private fun CastSessionHud(signal: UiSignal.Cast, task: DownloadTask?, busy: Boolean, onCopy: (String) -> Unit, onAction: (String, Long) -> Unit) {
     var scrubPosition by remember(signal.positionSeconds) { mutableFloatStateOf(signal.positionSeconds.toFloat()) }

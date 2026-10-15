@@ -561,6 +561,18 @@ pub fn download_hls_with(
     control: &Path,
     options: HlsDownloadOptions,
 ) -> Result<PathBuf, String> {
+    download_hls_with_offset(url, headers, proxy, task_dir, control, options, (0, 0))
+}
+
+fn download_hls_with_offset(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    task_dir: &Path,
+    control: &Path,
+    options: HlsDownloadOptions,
+    progress_offset: (u64, u64),
+) -> Result<PathBuf, String> {
     let live = options.live;
     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
     let mut current = url.to_string();
@@ -583,6 +595,14 @@ pub fn download_hls_with(
         playlist = load_playlist(&current, headers, proxy)?;
     }
     apply_ad_policy(&mut playlist, options.skip_ads);
+    // 独立音轨也属于同一任务，视频完成不能提前把整个下载报成 100%。
+    let audio_segments = if !live && options.progress.is_some() {
+        if let Some(uri) = &audio_uri {
+            let mut audio_playlist = load_playlist(uri, headers, proxy)?;
+            apply_ad_policy(&mut audio_playlist, options.skip_ads);
+            pending_segments(&audio_playlist, &[]).len() as u64
+        } else { 0 }
+    } else { 0 };
     let seg_dir = task_dir.join("segments");
     fs::create_dir_all(&seg_dir).map_err(|error| error.to_string())?;
     let mut vod = VodCheckpoint::load(task_dir);
@@ -663,7 +683,9 @@ pub fn download_hls_with(
                         .entries
                         .iter()
                         .map(|entry| file_len(&entry.path))
-                        .sum::<u64>(),
+                        .sum::<u64>() + progress_offset.0,
+                    timeline.entries.len() as u64 + progress_offset.1,
+                    timeline.entries.len() as u64 + progress_offset.1 + prepared.len() as u64 + audio_segments,
                     live,
                 )
             }),
@@ -718,13 +740,8 @@ pub fn download_hls_with(
                 .iter()
                 .map(|entry| file_len(&entry.path))
                 .sum();
-            crate::http_engine::write_progress(
-                progress,
-                downloaded,
-                0,
-                0.0,
-                if live { "recording" } else { "downloading" },
-            );
+            let completed = progress_offset.1 + timeline.entries.len() as u64;
+            crate::http_engine::write_media_progress(progress, progress_offset.0 + downloaded, completed, completed + audio_segments, live);
         }
         if live_limit.is_some_and(|limit| recorded_duration >= limit) {
             break;
@@ -765,8 +782,16 @@ pub fn download_hls_with(
         audio_merged = recorder.finish()?;
     } else if let Some(audio) = audio_uri {
         let audio_dir = task_dir.join("audio");
-        audio_merged = Some(download_hls(
-            &audio, headers, proxy, &audio_dir, control, false,
+        audio_merged = Some(download_hls_with_offset(
+            &audio, headers, proxy, &audio_dir, control,
+            HlsDownloadOptions {
+                concurrency: options.concurrency,
+                skip_ads: options.skip_ads,
+                download_subtitles: false,
+                progress: options.progress.clone(),
+                ..HlsDownloadOptions::default()
+            },
+            (progress_offset.0 + timeline.entries.iter().map(|entry| file_len(&entry.path)).sum::<u64>(), progress_offset.1 + timeline.entries.len() as u64),
         )?);
     }
     let mut subtitles = Vec::new();
@@ -791,6 +816,9 @@ pub fn download_hls_with(
                 }
             }
         }
+    }
+    if let Some(progress) = &options.progress {
+        crate::http_engine::write_media_merging(progress);
     }
     let output = task_dir.join("merged.mp4");
     let files: Vec<PathBuf> = timeline
@@ -1249,7 +1277,7 @@ fn download_prepared_segments(
     proxy: &str,
     control: &Path,
     concurrency: usize,
-    progress: Option<(&Path, u64, bool)>,
+    progress: Option<(&Path, u64, u64, u64, bool)>,
 ) -> (HashSet<PathBuf>, Option<String>) {
     let queue: VecDeque<SegmentWork> = prepared
         .iter()
@@ -1260,6 +1288,10 @@ fn download_prepared_segments(
             key_bytes: item.key_bytes.clone(),
         })
         .collect();
+    let reused = prepared.iter().filter(|item| !item.needs_download).count() as u64;
+    if let Some((path, bytes, previous, total, live)) = progress {
+        crate::http_engine::write_media_progress(path, bytes + prepared.iter().filter(|item| !item.needs_download).map(|item| file_len(&item.path)).sum::<u64>(), previous + reused, total, live);
+    }
     if queue.is_empty() {
         return (HashSet::new(), None);
     }
@@ -1270,14 +1302,14 @@ fn download_prepared_segments(
     let replay = crate::credentials::scoped_replay_json();
     let throttle = crate::net_policy::current_throttle_context();
     // VOD 一次提交全部分片；不能等整批结束后才报告下载字节。
-    let downloaded = Mutex::new(
-        progress.map_or(0, |(_, bytes, _)| bytes)
+    let downloaded = Mutex::new((
+        progress.map_or(0, |(_, bytes, _, _, _)| bytes)
             + prepared
                 .iter()
                 .filter(|item| !item.needs_download)
                 .map(|item| file_len(&item.path))
-                .sum::<u64>(),
-    );
+                .sum::<u64>(), reused,
+    ));
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             let queue = Arc::clone(&queue);
@@ -1307,15 +1339,12 @@ fn download_prepared_segments(
                                 if let Ok(mut completed) = completed.lock() {
                                     completed.insert(work.path.clone());
                                 }
-                                if let Some((path, _, live)) = progress {
+                                if let Some((path, _, previous, total, live)) = progress {
                                     if let Ok(mut bytes) = downloaded.lock() {
-                                        *bytes += file_len(&work.path);
-                                        crate::http_engine::write_progress(
-                                            path,
-                                            *bytes,
-                                            0,
-                                            0.0,
-                                            if live { "recording" } else { "downloading" },
+                                        bytes.0 += file_len(&work.path);
+                                        bytes.1 += 1;
+                                        crate::http_engine::write_media_progress(
+                                            path, bytes.0, previous + bytes.1, total, live,
                                         );
                                     }
                                 }

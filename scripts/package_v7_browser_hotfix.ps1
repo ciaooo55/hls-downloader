@@ -57,7 +57,7 @@ try {
     $jdk = Join-Path $repo '.tool-cache\build-cache\jdk-21\bin\jpackage.exe'
     & $jdk --type msi --name HLSDownloader --app-version 7.0.3 --vendor 'HLS Downloader' `
         --app-image "$drive\image\HLSDownloader" --dest "$drive\delivery" --temp "$drive\tmp" `
-        --win-per-user-install --win-shortcut --win-menu --win-menu-group 'HLS Downloader' `
+        --win-per-user-install --win-dir-chooser --win-shortcut --win-menu --win-menu-group 'HLS Downloader' `
         --win-upgrade-uuid '1c80d5f7-a1ec-4bae-a4a6-e010c5a3ee6b' *> (Join-Path $evidencePath 'installer-build.log')
     if ($LASTEXITCODE -ne 0) { throw "jpackage failed: $LASTEXITCODE" }
     $built = Get-ChildItem -LiteralPath (Join-Path $stage 'delivery') -Filter '*.msi' | Select-Object -First 1

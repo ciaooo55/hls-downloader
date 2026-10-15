@@ -85,7 +85,7 @@ impl TaskPaths {
                 .unwrap_or("")
                 .to_ascii_lowercase();
             // 合流产物是 MP4，网页标题或清单名称不能直接作为无扩展名的最终文件。
-            if matches!(extension.as_str(), "" | "m3u8" | "m3u" | "mpd") {
+            if extension != "mp4" {
                 final_name = Path::new(&final_name)
                     .with_extension("mp4")
                     .to_string_lossy()
@@ -3274,6 +3274,8 @@ fn run_http_file(
         job.chunk_bytes = mb.clamp(1, 64) * 1024 * 1024;
     }
     let (sender, receiver) = mpsc::channel();
+    let (initial_bytes, _) = current_progress(&core, task_id);
+    let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
     let worker_job = job.clone();
     let throttle = crate::net_policy::current_throttle_context();
     thread::spawn(move || {
@@ -3312,7 +3314,7 @@ fn run_http_file(
                         task_id,
                         progress.downloaded,
                         (progress.total > 0).then_some(progress.total),
-                        progress.speed,
+                        rate.sample(progress.downloaded),
                         "transfer",
                         "downloading",
                     );
@@ -3410,6 +3412,11 @@ fn task_failure_from_error(
             _ => "服务器拒绝了下载请求，请检查资源地址和站点规则",
         };
         (format!("HTTP_{status}"), hint.to_string())
+    } else if lower.starts_with("ffmpeg ") {
+        (
+            "MEDIA_MERGE_FAILED".into(),
+            "分片已保留，请查看合流日志；修正问题后重试可复用已下载的分片".into(),
+        )
     } else if is_size_disagreement(&lower) {
         (
             "SIZE_MISMATCH".into(),
@@ -3506,7 +3513,9 @@ fn is_size_disagreement(lower: &str) -> bool {
 }
 fn failure_stage(current: &str, error: &str) -> String {
     let lower = error.to_ascii_lowercase();
-    if lower.contains("checksum") || lower.contains("校验") {
+    if lower.starts_with("ffmpeg ") {
+        "merging".into()
+    } else if lower.contains("checksum") || lower.contains("校验") {
         "checksum".into()
     } else if is_size_disagreement(&lower) {
         "size".into()
@@ -3681,8 +3690,15 @@ fn complete_payload(
     // re-queue it, downloading a file the user already has while the on-disk state
     // contradicts the reported status. finish_published_task logs instead.
     ensure_publish_allowed(&paths.control)?;
+    let metadata = fs::read(paths.progress.with_extension("response.json"))
+        .ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).unwrap_or_default();
+    let destination = crate::output_path::typed_output_path(
+        payload, &paths.final_output,
+        metadata.get("content_type").and_then(Value::as_str).unwrap_or(&spec.mime_type),
+        metadata.get("content_disposition").and_then(Value::as_str).unwrap_or(""),
+    )?;
     let published =
-        crate::output_path::publish_file(payload, &paths.final_output, &policy, keep_temp)?;
+        crate::output_path::publish_file(payload, &destination, &policy, keep_temp)?;
     remember_published(paths, &published);
     // Returns Ok by construction; the signature keeps the "must never fail" contract
     // visible and lets the regression test assert it directly.
@@ -3983,29 +3999,29 @@ where
         let _ = sender.send(result);
     });
     let status = if live { "recording" } else { "downloading" };
-    let mut last = 0u64;
-    let mut last_at = Instant::now();
+    let initial_bytes = core.lock().ok().and_then(|core| core.tasks().iter().find(|task| task.task_id == task_id).map(|task| task.downloaded_bytes)).unwrap_or(0);
+    let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
+    let mut last_downloaded = initial_bytes;
     loop {
         match receiver.recv_timeout(Duration::from_millis(200)) {
             Ok(result) => return result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(item) = read_progress(progress) {
-                    let elapsed = last_at.elapsed().as_secs_f64().max(0.001);
-                    let speed = if item.speed > 0 {
-                        item.speed
-                    } else {
-                        (item.downloaded.saturating_sub(last) as f64 / elapsed) as u64
-                    };
-                    last = item.downloaded;
-                    last_at = Instant::now();
+                    // 恢复时先枚举视频缓存再枚举音轨缓存，不能把未枚举完整的前缀当成进度倒退。
+                    if item.downloaded < last_downloaded {
+                        continue;
+                    }
+                    last_downloaded = item.downloaded;
+                    let merging = item.status == "merging";
+                    let speed = if merging { 0 } else { rate.sample(item.downloaded) };
                     let _ = mark_progress_speed(
                         core,
                         task_id,
                         item.downloaded,
                         (item.total > 0).then_some(item.total),
                         speed,
-                        "transfer",
-                        status,
+                        if merging { "merging" } else { "transfer" },
+                        if merging { "merging" } else { status },
                     );
                 }
             }
@@ -4282,13 +4298,24 @@ fn emit_player_session(
     let metadata = shared_player()
         .map(|player| player.metadata())
         .unwrap_or_default();
+    let paused = metadata.paused.unwrap_or(state.paused);
+    let active = metadata.session_active.unwrap_or(state.active);
+    let status = if !active {
+        "STOPPED"
+    } else if paused {
+        "PAUSED"
+    } else if state.status == "PAUSED" {
+        "PLAYING"
+    } else {
+        &state.status
+    };
     coordinator.lock()?.emit(CoreEvent::PlayerSession {
-        active: state.active,
+        active,
         title: state.title.clone(),
         task_id: state.task_id.clone(),
-        status: state.status.clone(),
-        paused: state.paused,
-        speed: state.speed,
+        status: status.into(),
+        paused,
+        speed: metadata.speed.unwrap_or(state.speed),
         position_seconds: metadata.position_seconds,
         duration_seconds: metadata.duration_seconds,
         position_available: metadata.position_available,
@@ -4303,15 +4330,12 @@ fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
-    let url = mount_task_url(coordinator, task_id)?;
-    shared_player()?.play(&url)?;
+    let url = mount_task_url(coordinator, task_id, shared_local_media()?)?;
+    let title = if spec.title.trim().is_empty() { spec.filename } else { spec.title };
+    shared_player()?.play(&url, &title)?;
     let state = PlayerUiState {
         active: true,
-        title: if spec.title.trim().is_empty() {
-            spec.filename
-        } else {
-            spec.title
-        },
+        title,
         task_id: task_id.to_string(),
         status: "PLAYING".into(),
         paused: false,
@@ -4323,14 +4347,13 @@ fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
     emit_player_session(coordinator, &state)
 }
 
-fn mount_task_url(coordinator: &CoreCoordinator, task_id: &str) -> Result<String, String> {
+fn mount_task_url(coordinator: &CoreCoordinator, task_id: &str, server: &crate::playback::MediaServer) -> Result<String, String> {
     let spec = coordinator
         .lock()?
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let paths = TaskPaths::for_task(task_id, &spec)?;
-    let server = shared_media()?;
     let token = crate::playback::random_mount_token();
     let url = if paths.final_output.exists() {
         server.mount(&token, paths.final_output);
@@ -4394,7 +4417,7 @@ fn cast_lan_host(device_id: &str) -> Result<String, String> {
 
 fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
     let host = cast_lan_host("")?;
-    let loopback = mount_task_url(coordinator, task_id)?;
+    let loopback = mount_task_url(coordinator, task_id, shared_media()?)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let server = shared_media()?;
     server.enable_lan();
@@ -4435,7 +4458,7 @@ fn cast_to_device(
     device_id: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
     let host = cast_lan_host(device_id)?;
-    let loopback = mount_task_url(coordinator, task_id)?;
+    let loopback = mount_task_url(coordinator, task_id, shared_media()?)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let spec = coordinator
         .lock()?
@@ -4900,7 +4923,7 @@ fn push_task_tvbox(
     coordinator: &CoreCoordinator,
     task_id: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
-    let loopback = mount_task_url(coordinator, task_id)?;
+    let loopback = mount_task_url(coordinator, task_id, shared_media()?)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let server = shared_media()?;
     server.enable_lan();
@@ -5381,6 +5404,14 @@ fn player_control_events(
     emit_player_session(coordinator, &state)
 }
 
+fn shared_local_media() -> Result<&'static crate::playback::MediaServer, String> {
+    static SERVER: OnceLock<Result<crate::playback::MediaServer, String>> = OnceLock::new();
+    match SERVER.get_or_init(crate::playback::MediaServer::start_local) {
+        Ok(server) => Ok(server),
+        Err(error) => Err(error.clone()),
+    }
+}
+
 fn shared_media() -> Result<&'static crate::playback::MediaServer, String> {
     static SERVER: std::sync::OnceLock<Result<crate::playback::MediaServer, String>> =
         std::sync::OnceLock::new();
@@ -5399,7 +5430,7 @@ fn shared_player() -> Result<&'static crate::player::Player, String> {
 struct Progress {
     downloaded: u64,
     total: u64,
-    speed: u64,
+    status: String,
 }
 
 fn read_progress(path: &Path) -> Option<Progress> {
@@ -5407,11 +5438,7 @@ fn read_progress(path: &Path) -> Option<Progress> {
     Some(Progress {
         downloaded: value.get("downloaded")?.as_u64()?,
         total: value.get("total").and_then(Value::as_u64).unwrap_or(0),
-        speed: value
-            .get("speed")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0)
-            .max(0.0) as u64,
+        status: value.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
     })
 }
 
@@ -5715,7 +5742,7 @@ mod tests {
                 ("episode.M3U8", "episode.mp4"),
                 ("episode.mpd", "episode.mp4"),
                 ("episode.mp4", "episode.mp4"),
-                ("custom.mkv", "custom.mkv"),
+                ("custom.mkv", "custom.mp4"),
             ] {
                 let spec = TaskSpec {
                     url: "https://cdn.test/stream".into(),

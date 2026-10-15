@@ -1,7 +1,7 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
     if inputs.is_empty() {
@@ -43,25 +43,26 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path) -> Result<(), String> {
     } else {
         return Err("local playlist missing for ffmpeg mux".into());
     };
-    let status = Command::new(ffmpeg)
+    let mut command = Command::new(ffmpeg);
+    command
         .args([
             "-y",
+            "-nostdin",
             "-loglevel",
             "error",
             "-protocol_whitelist",
             "file,crypto",
+            // 清单由本程序生成，仅引用已下载的本地分片；站点后缀可能是 jpeg/bin。
+            "-allowed_extensions",
+            "ALL",
+            "-extension_picky",
+            "0",
             "-i",
         ])
         .arg(&input)
         .args(["-c", "copy", "-movflags", "+faststart"])
-        .arg(output)
-        .status()
-        .map_err(|error| error.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("ffmpeg exited with {status}"))
-    }
+        .arg(output);
+    run_ffmpeg(&mut command, &task_dir.join("ffmpeg-merge.log"))
 }
 
 pub fn mux_av(
@@ -81,6 +82,7 @@ pub fn mux_av(
     command
         .args([
             "-y",
+            "-nostdin",
             "-loglevel",
             "error",
             "-protocol_whitelist",
@@ -102,11 +104,32 @@ pub fn mux_av(
         command.args(["-c:s", "mov_text"]);
     }
     command.args(["-movflags", "+faststart"]).arg(output);
-    let status = command.status().map_err(|error| error.to_string())?;
+    run_ffmpeg(&mut command, &output.with_extension("ffmpeg.log"))
+}
+
+fn run_ffmpeg(command: &mut Command, log_path: &Path) -> Result<(), String> {
+    // 写入文件避免后台 Core 的诊断管道关闭后丢失真正的合流错误。
+    let log = fs::File::create(log_path).map_err(|error| error.to_string())?;
+    let status = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log))
+        .status()
+        .map_err(|error| format!("ffmpeg 启动失败: {error}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("ffmpeg mux exited with {status}"))
+        let mut log = fs::File::open(log_path).map_err(|error| error.to_string())?;
+        let size = log.metadata().map_err(|error| error.to_string())?.len();
+        log.seek(SeekFrom::Start(size.saturating_sub(4096)))
+            .map_err(|error| error.to_string())?;
+        let mut tail = Vec::new();
+        log.read_to_end(&mut tail).map_err(|error| error.to_string())?;
+        Err(format!(
+            "ffmpeg 合流失败 ({status}): {}；完整日志: {}",
+            String::from_utf8_lossy(&tail).trim(),
+            log_path.display()
+        ))
     }
 }
 

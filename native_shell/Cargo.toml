@@ -16,6 +16,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+# WebSocket 的 rustls 默认关闭加密提供者，必须显式启用，否则 wss 握手会 panic。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = { version = "0.3", features = ["sink"] }
 base64 = "0.23"
 russh = { version = "0.63", default-features = false, features = ["flate2", "ring", "rsa"] }

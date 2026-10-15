@@ -36,7 +36,7 @@ private const val CORE_CONNECT_TIMEOUT_MS = 2000
 private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
-    const val version = "7.0.3"
+    const val version = "7.0.3-r3"
     const val engineStarting = "下载引擎 · 启动中"
     const val engineConnected = "下载引擎 · 已连接"
     const val engineReconnecting = "下载引擎 · 重连中"
@@ -523,7 +523,6 @@ object EnginePipeClient {
     fun installUpdate(workbenchPid: Long) = command(commandOf("install_update", "workbench_pid" to workbenchPid.coerceAtLeast(0)))
     fun confirmPowerAction() = command(commandOf("confirm_power_action"))
     fun cancelPowerAction() = command(commandOf("cancel_power_action"))
-    fun clearCompleted() = command(commandOf("clear_completed"))
 
     fun importPaths(paths: List<String>) = command(buildJsonObject {
         put("kind", "import_paths")

@@ -3,7 +3,7 @@
 use crate::http_engine::{fetch_bytes, run_job, Job};
 use crate::media::merge::merge_with_ffmpeg;
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -293,6 +293,9 @@ pub fn download_dash_selected(
             return Err("DASH representation produced no media segments".into());
         }
         let checkpoint = !manifest.dynamic;
+        let total_segments = video.iter().chain(audio.iter()).map(|track| {
+            track.init.iter().chain(track.media.iter()).collect::<HashSet<_>>().len() as u64
+        }).sum();
         if let Some(video) = video.as_ref() {
             if let Some(init) = &video.init {
                 if seen.insert(init.clone()) {
@@ -310,7 +313,7 @@ pub fn download_dash_selected(
                         checkpoint,
                         &mut vod,
                     )?);
-                    report_dash_progress(task_dir, &files, manifest.dynamic);
+                    report_dash_tracks_progress(task_dir, &files, &[], total_segments, manifest.dynamic);
                 }
             }
             for media in &video.media {
@@ -336,7 +339,7 @@ pub fn download_dash_selected(
                     checkpoint,
                     &mut vod,
                 )?);
-                report_dash_progress(task_dir, &files, manifest.dynamic);
+                report_dash_tracks_progress(task_dir, &files, &[], total_segments, manifest.dynamic);
             }
         } else if let Some(audio) = audio.as_ref() {
             if let Some(init) = &audio.init {
@@ -355,7 +358,7 @@ pub fn download_dash_selected(
                         checkpoint,
                         &mut vod,
                     )?);
-                    report_dash_progress(task_dir, &files, manifest.dynamic);
+                    report_dash_tracks_progress(task_dir, &files, &[], total_segments, manifest.dynamic);
                 }
             }
             for media in &audio.media {
@@ -381,7 +384,7 @@ pub fn download_dash_selected(
                     checkpoint,
                     &mut vod,
                 )?);
-                report_dash_progress(task_dir, &files, manifest.dynamic);
+                report_dash_tracks_progress(task_dir, &files, &[], total_segments, manifest.dynamic);
             }
         }
         if video.is_some() {
@@ -397,7 +400,7 @@ pub fn download_dash_selected(
         if manifest.dynamic {
             if let Some(audio) = recorded_audio.as_ref() {
                 let _ =
-                    pull_dash_audio_segments(audio, task_dir, headers, proxy, control, &mut vod);
+                    pull_dash_audio_segments(audio, task_dir, headers, proxy, control, &mut vod, &files, 0);
             }
             if download_subtitles {
                 save_dash_subtitles(task_dir, &recorded_subs, headers, proxy, control, &mut vod);
@@ -410,6 +413,8 @@ pub fn download_dash_selected(
             write_dash_playlist(task_dir, &files)?;
             return finish_dash(
                 task_dir,
+                &files,
+                total_segments,
                 recorded_audio,
                 recorded_subs,
                 headers,
@@ -438,6 +443,8 @@ pub fn download_dash_selected(
     write_dash_playlist(task_dir, &files)?;
     finish_dash(
         task_dir,
+        &files,
+        0,
         recorded_audio,
         recorded_subs,
         headers,
@@ -449,6 +456,8 @@ pub fn download_dash_selected(
 
 fn finish_dash(
     task_dir: &Path,
+    video_files: &[PathBuf],
+    total_segments: u64,
     audio: Option<Representation>,
     subtitles: Vec<Representation>,
     headers: &HashMap<String, String>,
@@ -459,9 +468,10 @@ fn finish_dash(
     let mut audio_merged = None;
     if let Some(audio) = audio {
         audio_merged = Some(fetch_dash_audio(
-            &audio, task_dir, headers, proxy, control, vod,
+            &audio, task_dir, headers, proxy, control, vod, video_files, total_segments,
         )?);
     }
+    crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
     let output = task_dir.join("merged.mp4");
     merge_with_ffmpeg(task_dir, &output)?;
     let published = if let Some(audio) = audio_merged {
@@ -515,6 +525,8 @@ fn pull_dash_audio_segments(
     proxy: &str,
     control: &Path,
     vod: &mut DashCheckpoint,
+    video_files: &[PathBuf],
+    total_segments: u64,
 ) -> Result<Vec<PathBuf>, String> {
     let audio_dir = task_dir.join("audio");
     fs::create_dir_all(&audio_dir).map_err(|error| error.to_string())?;
@@ -536,6 +548,7 @@ fn pull_dash_audio_segments(
             vod,
         )?;
         audio_files.push(path);
+        report_dash_tracks_progress(task_dir, video_files, &audio_files, total_segments, total_segments == 0);
     }
     for (index, media) in audio.media.iter().enumerate() {
         if read_control(control) != "run" {
@@ -556,6 +569,7 @@ fn pull_dash_audio_segments(
             vod,
         )?;
         audio_files.push(path);
+        report_dash_tracks_progress(task_dir, video_files, &audio_files, total_segments, total_segments == 0);
     }
     Ok(audio_files)
 }
@@ -567,14 +581,20 @@ fn fetch_dash_audio(
     proxy: &str,
     control: &Path,
     vod: &mut DashCheckpoint,
+    video_files: &[PathBuf],
+    total_segments: u64,
 ) -> Result<PathBuf, String> {
-    let audio_files = pull_dash_audio_segments(audio, task_dir, headers, proxy, control, vod)?;
+    let audio_files = pull_dash_audio_segments(audio, task_dir, headers, proxy, control, vod, video_files, total_segments)?;
+    if read_control(control) != "run" {
+        return Err(control_stop_error(control));
+    }
     if audio_files.is_empty() {
         return Err("DASH audio track has no downloadable segments".into());
     }
     let audio_dir = task_dir.join("audio");
     write_dash_playlist(&audio_dir, &audio_files)?;
     let audio_out = audio_dir.join("merged.m4a");
+    crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
     merge_with_ffmpeg(&audio_dir, &audio_out)?;
     Ok(audio_out)
 }
@@ -822,18 +842,13 @@ fn control_stop_error(control: &Path) -> String {
     }
 }
 
-fn report_dash_progress(task_dir: &Path, files: &[PathBuf], live: bool) {
+fn report_dash_tracks_progress(task_dir: &Path, files: &[PathBuf], audio_files: &[PathBuf], total: u64, live: bool) {
     let downloaded: u64 = files
         .iter()
+        .chain(audio_files.iter())
         .map(|path| fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
         .sum();
-    crate::http_engine::write_progress(
-        &task_dir.join("progress.json"),
-        downloaded,
-        0,
-        0.0,
-        if live { "recording" } else { "downloading" },
-    );
+    crate::http_engine::write_media_progress(&task_dir.join("progress.json"), downloaded, (files.len() + audio_files.len()) as u64, total, live);
 }
 
 fn write_dash_playlist(task_dir: &Path, files: &[PathBuf]) -> Result<(), String> {

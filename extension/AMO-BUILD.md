@@ -78,8 +78,8 @@ No analytics, advertising, telemetry, or remote code is used. URLs and optionall
 authorized cookies are sent only to the Native Messaging application on the same
 Windows computer. When the user explicitly starts subtitle translation, captured
 webpage audio is sent to the local desktop application, which connects to the
-user-configured Alibaba Cloud Bailian service. Translation is disabled by default.
-The user provides the service workspace and API key; no developer-hosted
+user-configured QwenCloud or Alibaba Cloud Bailian service. Translation is disabled by default.
+The user provides the service API key and, for Bailian, a workspace; no developer-hosted
 translation service or shared credentials are used. `PRIVACY.md` describes these
 extension-specific flows.
 
@@ -92,7 +92,7 @@ extension displays its desktop-disconnected state.
 
 Download detection, confirmation, cancellation, retry, popup controls, and
 authenticated handoff can be exercised without a subtitle API key. Cloud subtitle
-translation requires the user's own Bailian account. Local capture and message
+translation requires the user's own service account. Local capture and message
 handling tests use a fixture; those tests do not claim that a real cloud service
 request succeeded.
 

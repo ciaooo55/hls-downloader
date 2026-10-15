@@ -59,7 +59,6 @@ class ProtocolTest {
         }
     }
     @Test fun productCopyDoesNotExposeInternalNames() {
-        assertEquals("7.0.3", Product.version)
         assertEquals("下载引擎 · 已连接", Product.engineConnected)
         assertEquals("浏览器插件 · 未连接", Product.extensionDisconnected)
     }

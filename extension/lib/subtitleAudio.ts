@@ -7,7 +7,7 @@ export async function waitForSubtitleAudio(start: Promise<void>): Promise<void> 
     })])
   } finally { clearTimeout(timer) }
 }
-export async function captureSubtitleAudio(stream: MediaStream, audible: boolean, send: (audio: string, capturedAt: number) => void): Promise<() => void> {
+export async function captureSubtitleAudio(stream: MediaStream, audible: boolean, send: (audio: string, capturedAt: number, finalFlush: boolean) => void | Promise<unknown>): Promise<() => Promise<void>> {
   const context = new AudioContext()
   try {
     if (!context.audioWorklet) throw new Error('当前页面无法处理音频，请使用 HTTPS 页面或 Chrome / Edge 标签页采集')
@@ -19,18 +19,45 @@ export async function captureSubtitleAudio(stream: MediaStream, audible: boolean
     if (audible) source.connect(context.destination)
     const silence = context.createGain(); silence.gain.value = 0
     worklet.connect(silence); silence.connect(context.destination)
+    const pendingSends = new Set<Promise<unknown>>()
+    let flushComplete: (() => void) | undefined
+    let sendError: unknown
     worklet.port.onmessage = event => {
+      if (event.data?.type === 'flushed') { flushComplete?.(); flushComplete = undefined; return }
       const bytes = new Uint8Array(event.data as ArrayBuffer)
       let text = ''
       for (const byte of bytes) text += String.fromCharCode(byte)
-      send(btoa(text), Date.now())
+      const pending = Promise.resolve(send(btoa(text), Date.now(), flushComplete !== undefined)).catch(reason => { sendError = reason })
+      pendingSends.add(pending)
+      void pending.finally(() => pendingSends.delete(pending))
     }
     await waitForSubtitleAudio(context.resume())
+    let cleanup: Promise<void> | undefined
     return () => {
-      worklet.port.onmessage = null
-      source.disconnect(); worklet.disconnect()
-      stream.getTracks().forEach(track => track.stop())
-      void context.close()
+      if (cleanup) return cleanup
+      cleanup = (async () => {
+        let flushError: unknown
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              flushComplete = undefined
+              reject(new Error('音频尾部处理超时'))
+            }, 2000)
+            flushComplete = () => { clearTimeout(timer); resolve() }
+            worklet.port.postMessage({ type: 'flush' })
+          })
+        } catch (reason) { flushError = reason }
+        try {
+          await Promise.all([...pendingSends])
+          if (sendError || flushError) throw sendError || flushError
+        } finally {
+          worklet.port.onmessage = null
+          source.disconnect(); worklet.disconnect()
+          stream.getTracks().forEach(track => track.stop())
+          await context.close()
+        }
+      })()
+      return cleanup
     }
   } catch (error) {
     stream.getTracks().forEach(track => track.stop())

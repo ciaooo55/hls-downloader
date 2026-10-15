@@ -171,10 +171,16 @@ def confirmation_rendered(handle):
         include_layered_windows=True, all_screens=True))
 
 
-def click_download_confirmation(accept=True, input_mode='system', evidence_path=None):
-    handle = wait(presenter_window, 'Desktop confirmation did not appear', 10)
-    user32.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+def click_download_confirmation(accept=True, input_mode='system', evidence_path=None, runtime=None):
+    handle = wait(lambda: presenter_window(runtime=runtime), 'Desktop confirmation did not appear', 10)
+    # 隔离浏览器的系统通知位于右下角；将测试窗口移到左上角，保留真实按钮输入。
+    user32.SetWindowPos(handle, wintypes.HWND(-1), 24, 12, 0, 0, 0x0001 | 0x0040)
     user32.SetForegroundWindow(handle)
+    # Slint 只重绘变化区域；先正常悬停确认按钮，才能从 PrintWindow 读取该按钮的最新帧。
+    hover_rect = wintypes.RECT()
+    user32.GetWindowRect(handle, ctypes.byref(hover_rect))
+    hover_scale = user32.GetDpiForWindow(handle) / 96
+    user32.SetCursorPos(hover_rect.right-round(54*hover_scale), hover_rect.bottom-round(35*hover_scale))
     try:
         wait(lambda:confirmation_rendered(handle), 'Desktop confirmation button has not rendered', 8)
     except TimeoutError:
@@ -182,6 +188,7 @@ def click_download_confirmation(accept=True, input_mode='system', evidence_path=
             rect = wintypes.RECT()
             user32.GetWindowRect(handle, ctypes.byref(rect))
             capture(handle, Path(evidence_path).with_suffix('.png'))
+            ImageGrab.grab(all_screens=True).save(Path(evidence_path).with_suffix('.desktop.png'))
             Path(evidence_path).write_text(json.dumps({
                 'handle': handle, 'rendered': False,
                 'bounds': [rect.left, rect.top, rect.right, rect.bottom],
@@ -300,7 +307,8 @@ def run(args):
         return presenter_window(title, args.runtime)
 
     def reject_confirmation():
-        click_download_confirmation(accept=False)
+        click_download_confirmation(accept=False, runtime=args.runtime,
+            evidence_path=args.report.with_name(f'cancel-{len(report["checks"])}.json'))
 
     def media_button():
         return driver.execute_script("return document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download:not(.identifying)') || null")
@@ -390,7 +398,8 @@ def run(args):
             assert not created
             record('desktop-cancel-leaves-no-task-and-allows-retry')
             click_media()
-            click_download_confirmation()
+            click_download_confirmation(runtime=args.runtime,
+                evidence_path=args.report.with_name(f'accept-{len(report["checks"])}.json'))
 
             def completed():
                 task = next((t for t in tasks() if t['url'] == unique_url and t['task_id'] not in initial), None)
@@ -415,7 +424,7 @@ def run(args):
             driver.switch_to.new_window('tab')
             driver.get(popup_url)
             button = wait(lambda: next((b for b in driver.find_elements(By.TAG_NAME, 'button') if b.is_displayed() and b.text.strip() == '下载'), None), 'Popup media action missing', 15)
-            ActionChains(driver).move_to_element(button).click().perform()
+            button.click()
             handle = wait(popup_window, 'Popup download did not display confirmation', 10)
             capture(handle, args.report.with_name('popup-confirmation.png'))
             reject_confirmation()
@@ -449,7 +458,7 @@ def run(args):
                     before=wintypes.RECT()
                     user32.GetWindowRect(handle,ctypes.byref(before))
                     capture(handle,args.report.with_name(f'stress-{index}-before.png'))
-                    click_download_confirmation()
+                    click_download_confirmation(runtime=args.runtime)
                     task=wait(completed,'Unmoved pointer failed to confirm download',30)
                     assert hashlib.sha256(Path(task['output_path']).read_bytes()).hexdigest()==SHA256
                     wait(lambda:popup_window('下载完成'),'Lifecycle completion HUD missing',10)

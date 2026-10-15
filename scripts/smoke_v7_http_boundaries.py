@@ -21,6 +21,7 @@ from smoke_v7_transfer_performance import free_port
 def run(args):
     result={'passed':False,'checks':[],'engine_sha256':hashlib.sha256(args.engine.read_bytes()).hexdigest()}
     args.report.parent.mkdir(parents=True,exist_ok=True)
+    (Path.cwd()/'.tool-cache/test-tmp').mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='http-boundaries-',dir=Path.cwd()/'.tool-cache/test-tmp') as tmp:
         root=Path(tmp); payload=b'\x00\x00\x00\x18ftypmp42'+bytes(range(256))*2048
         recover=False

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+// MSI 保留三段产品版本；发布修订用于比较同一产品版本的修复包。
+pub const CURRENT_VERSION: &str = "7.0.3-r3";
 const LATEST_API: &str = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -378,7 +379,12 @@ fn validate_installer_identity_fields(
     if identity.product_name != EXPECTED_PRODUCT_NAME {
         return Err(format!("安装包产品名不匹配: {}", identity.product_name));
     }
-    if identity.product_version != expected_version.trim().trim_start_matches('v') {
+    let release_version = expected_version.trim().trim_start_matches('v');
+    let product_version = match release_version.rsplit_once("-r") {
+        Some((base, revision)) if !revision.is_empty() && revision.chars().all(|ch| ch.is_ascii_digit()) => base,
+        _ => release_version,
+    };
+    if identity.product_version != product_version {
         return Err(format!(
             "安装包版本不匹配: 预期 {}，实际 {}",
             expected_version, identity.product_version
@@ -1041,6 +1047,9 @@ mod tests {
         assert!(is_newer_version("v1.2.0", "1.1.9"));
         assert!(!is_newer_version("1.2", "1.2.0"));
         assert!(!is_newer_version("1.1.9", "1.2.0"));
+        assert!(!is_newer_version("7.0.3-r2", CURRENT_VERSION));
+        assert!(is_newer_version("7.0.3-r4", CURRENT_VERSION));
+        assert!(is_newer_version("7.0.4", CURRENT_VERSION));
     }
 
     #[test]
@@ -1145,6 +1154,8 @@ mod tests {
             per_user: true,
         };
         assert!(validate_installer_identity_fields(&valid, "v7.1.0").is_ok());
+        assert!(validate_installer_identity_fields(&valid, "v7.1.0-r3").is_ok());
+        assert!(validate_installer_identity_fields(&valid, "v7.1.0-preview").is_err());
         let mut invalid = valid.clone();
         invalid.product_name = "AnotherDownloader".into();
         assert!(validate_installer_identity_fields(&invalid, "7.1.0").is_err());

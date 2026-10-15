@@ -35,17 +35,29 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   const start = node('button', '开始翻译'); start.className = 'hlsd-button primary'; start.dataset.subtitleStart = 'true'
   const actionRow = node('div'); actionRow.className = 'subtitle-row'; actionRow.append(player, start)
   const tracks = node('small')
-  const provider = node('details'); provider.append(node('summary', '翻译服务设置（百炼）'))
+  const provider = node('details'); provider.append(node('summary', '翻译服务设置'))
   const form = node('form'); form.className = 'subtitle-provider'
-  const workspace = node('input'); workspace.placeholder = '百炼业务空间 ID'; workspace.setAttribute('aria-label', '百炼业务空间 ID'); workspace.required = true
+  const service = node('select'); service.setAttribute('aria-label', '翻译服务')
+  service.append(new Option('阿里云百炼', 'dashscope'), new Option('QwenCloud 实时翻译', 'qwencloud'))
+  const workspace = node('input'); workspace.placeholder = '百炼业务空间 ID'; workspace.setAttribute('aria-label', '百炼业务空间 ID')
   const region = node('select'); region.setAttribute('aria-label', '翻译服务地域')
   region.append(new Option('华北 2（北京）', 'cn-beijing'), new Option('新加坡', 'ap-southeast-1'))
+  const dashscopeFields = node('div'); dashscopeFields.className = 'subtitle-provider-fields'; dashscopeFields.append(workspace, region)
   const key = node('input'); key.type = 'password'; key.autocomplete = 'off'; key.placeholder = 'API Key'; key.setAttribute('aria-label', '字幕服务 API Key')
   const save = node('button', '保存服务设置'); save.type = 'submit'; save.className = 'hlsd-button'
   const clear = node('button', '清除 Key'); clear.type = 'button'; clear.className = 'hlsd-button subtle'
   const keyState = node('small', '正在读取服务配置…')
   const keyActions = node('div'); keyActions.className = 'subtitle-row'; keyActions.append(save, clear)
-  form.append(workspace, region, key, keyActions, keyState, node('small', '点击开始后上传采集的网页音频；开启预翻译后会提前读取当前音轨。Key 由桌面端加密保存。'))
+  const providerHelp = node('small')
+  form.append(service, dashscopeFields, key, keyActions, keyState, providerHelp)
+  const updateProviderFields = () => {
+    const dashscope = service.value === 'dashscope'
+    dashscopeFields.hidden = !dashscope
+    workspace.required = dashscope
+    providerHelp.textContent = `${dashscope ? '百炼需要业务空间 ID 和地域。' : 'QwenCloud 使用固定官方实时翻译服务。'}点击开始后上传采集的网页音频；开启预翻译后会提前读取当前音轨。API Key 由桌面端加密保存。`
+  }
+  service.onchange = updateProviderFields
+  updateProviderFields()
   provider.append(form)
   root.append(heading, row, languageRow, originalLabel, prefetchLabel, prefetchHelp, actionRow, tracks, error, provider)
   let state: any
@@ -126,6 +138,8 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       .finally(() => { busy = false; void refresh() })
   }
   const loadProvider = (config: any) => {
+    service.value = config.provider === 'qwencloud' ? 'qwencloud' : 'dashscope'
+    updateProviderFields()
     workspace.value = config.workspace || ''; region.value = config.region || 'cn-beijing'
     key.value = ''; key.placeholder = config.has_key ? '已配置，留空保留原 Key' : 'API Key'
     keyState.textContent = config.has_key ? 'API Key 已加密保存' : '尚未配置 API Key'
@@ -133,8 +147,12 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   }
   const configure = (clearKey = false) => {
     busy = true; save.disabled = true; clear.disabled = true; report('')
-    void send({ type: 'subtitle-provider', request: { action: 'configure', workspace: workspace.value.trim(), region: region.value, api_key: clearKey ? '' : key.value, clear_key: clearKey } })
-      .then(loadProvider).catch(reason => report(reason instanceof Error ? reason.message : String(reason)))
+    const request: Record<string, unknown> = { action: 'configure', provider: service.value,
+      api_key: clearKey ? '' : key.value, clear_key: clearKey }
+    if (service.value === 'dashscope') { request.workspace = workspace.value.trim(); request.region = region.value }
+    void send({ type: 'subtitle-provider', request })
+      .then(config => { loadProvider(config); keyState.textContent = clearKey ? 'API Key 已清除' : '服务设置已保存；API Key 已由桌面端加密保存' })
+      .catch(reason => report(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => { key.value = ''; busy = false; save.disabled = false; void refresh() })
   }
   form.onsubmit = event => { event.preventDefault(); configure() }

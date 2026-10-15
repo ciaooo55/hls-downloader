@@ -85,6 +85,8 @@ footer { display: flex; align-items: center; justify-content: center; gap: 8px; 
 .subtitle-panel details { margin-top: 8px; }
 .subtitle-panel summary { cursor: pointer; }
 .subtitle-provider { display: grid; gap: 6px; margin-top: 8px; }
+.subtitle-provider-fields { display: grid; gap: 6px; }
+.subtitle-provider-fields[hidden] { display: none; }
 .subtitle-error { color: var(--red-ink); margin: 6px 0; white-space: pre-wrap; }
 .restore-site-prompts { overflow: hidden; max-width: 116px; padding: 0; border: 0; background: transparent; color: var(--primary); cursor: pointer; font: inherit; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease; }
 .restore-site-prompts:hover { color: var(--primary-hover); text-decoration: underline; }

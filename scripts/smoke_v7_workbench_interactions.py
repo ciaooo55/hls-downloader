@@ -302,64 +302,80 @@ def run(args):
                 return False
         wait(ready, "Installed UI did not connect", 90)
         hwnd, _ = client.find_window("HLS Downloader", 15)
-        if args.start_at == "extras" and args.verify_player_output:
-            from ctypes import wintypes
-            user32 = ctypes.windll.user32
-            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                                            ctypes.c_int, ctypes.c_int, wintypes.UINT]
-            user32.SetWindowPos.restype = wintypes.BOOL
-            screen_width = user32.GetSystemMetrics(0)
-            screen_height = user32.GetSystemMetrics(1)
-            current = ui("window")
-            margin = 16
-            width = min(current["deviceWidth"], screen_width - 2 * margin)
-            height = min(current["deviceHeight"], screen_height - 2 * margin)
-            x = max(margin, min(current["deviceX"], screen_width - width - margin))
-            y = max(margin, min(current["deviceY"], screen_height - height - margin))
-            assert width > 0 and height > 0, "Desktop is too small for the player-output workbench"
-            assert user32.SetWindowPos(wintypes.HWND(hwnd), None, x, y, width, height, 0x0014), \
-                "Could not fit player-output workbench to the guest desktop"
-            time.sleep(.5)
-            report["player_output_window_fit"] = {
-                "screen": [screen_width, screen_height], "window": ui("window")}
-            save()
-        startup_state = ui("state")
         startup_modal_prefixes = (
             "dialog.", "newtask.", "batch.", "harvest.", "settings.", "device.",
             "queue.", "extension.", "torrent.", "duplicate.", "update.",
         )
+        startup_state = ui("state")
+        modal_deadline = time.monotonic() + 8
+        while not any(
+            name.startswith(startup_modal_prefixes)
+            for name in startup_state["controlBounds"]
+        ) and time.monotonic() < modal_deadline:
+            time.sleep(.25)
+            startup_state = ui("state")
         startup_modal_controls = {
             name: bounds for name, bounds in startup_state["controlBounds"].items()
             if name.startswith(startup_modal_prefixes)
         }
         if startup_modal_controls:
-            from PIL import ImageGrab
-            before_path = evidence / "startup-before.png"
-            ImageGrab.grab(all_screens=True).save(before_path)
-            diagnostic = {
-                "title_candidates": [],
-                "control_bounds": startup_modal_controls,
-                "screenshot": before_path.name,
-            }
+            startup_tree = []
             try:
                 startup_tree = tree()
-                diagnostic["title_candidates"] = [
-                    item["name"] for item in startup_tree
-                    if item["name"] and item["role"] == "label" and
-                    any(marker in item["name"] for marker in (
-                        "选择", "新建", "设置", "导入", "导出", "批量", "抓取", "确认", "设备", "队列",
-                    ))
-                ]
-                diagnostic["accessibility_tree"] = startup_tree
             except Exception as error:
-                diagnostic["accessibility_error"] = str(error)
-            report["unexpected_startup_modal"] = diagnostic
-            save()
-            startup_modal_failure = True
-            raise AssertionError(
-                "Unexpected modal after workbench startup: " +
-                ", ".join(diagnostic["title_candidates"] or startup_modal_controls)
+                startup_tree_error = str(error)
+            else:
+                startup_tree_error = None
+            update_dialog = (
+                set(startup_modal_controls) == {
+                    "dialog.secondary.稍后",
+                    "dialog.secondary.查看发布页",
+                    "dialog.primary.下载更新",
+                }
             )
+            if update_dialog:
+                bounds = startup_modal_controls["dialog.secondary.稍后"]
+                action("click", x=(bounds[0] + bounds[2]) // 2, y=(bounds[1] + bounds[3]) // 2)
+                wait(
+                    lambda: not any(
+                        name.startswith(startup_modal_prefixes)
+                        for name in ui("state")["controlBounds"]
+                    ),
+                    "Expected update notice did not close after clicking 稍后",
+                    10,
+                )
+                report["dismissed_startup_update"] = {
+                    "title": "发现新版本",
+                    "button": "稍后",
+                    "download_requested": False,
+                }
+                save()
+                record("dismiss expected startup update notice without downloading")
+            else:
+                from PIL import ImageGrab
+                before_path = evidence / "startup-before.png"
+                ImageGrab.grab(all_screens=True).save(before_path)
+                diagnostic = {
+                    "title_candidates": [
+                        item["name"] for item in startup_tree
+                        if item["name"] and item["role"] == "label" and
+                        any(marker in item["name"] for marker in (
+                            "选择", "新建", "设置", "导入", "导出", "批量", "抓取", "确认", "设备", "队列",
+                        ))
+                    ],
+                    "control_bounds": startup_modal_controls,
+                    "screenshot": before_path.name,
+                    "accessibility_tree": startup_tree,
+                }
+                if startup_tree_error:
+                    diagnostic["accessibility_error"] = startup_tree_error
+                report["unexpected_startup_modal"] = diagnostic
+                save()
+                startup_modal_failure = True
+                raise AssertionError(
+                    "Unexpected modal after workbench startup: " +
+                    ", ".join(diagnostic["title_candidates"] or startup_modal_controls)
+                )
         node("新建", True)
         # 前一组隔离浏览器已经退出时，旧租约可在 UI 启动期间到期；只验证仍在线的客户端。
         if initial_browser_connected and core({"type":"snapshot", "request_id":2}).get("browser_connected", False):
@@ -478,7 +494,11 @@ def run(args):
                 if "enabled" in n["states"]:
                     click(label)
                     record("queue-manager draft action: " + label)
-            click("取消")
+            cancel_bounds = wait(
+                lambda: ui("state")["controlBounds"].get("dialog.secondary.取消"),
+                "Queue manager cancel bounds are missing", 5)
+            action("click", x=(cancel_bounds[0]+cancel_bounds[2])//2,
+                   y=(cancel_bounds[1]+cancel_bounds[3])//2)
             wait(lambda: not any(n["name"] == "保存队列" and "showing" in n["states"] for n in tree()),
                  "Queue manager did not close after cancel", 5)
 
@@ -774,16 +794,14 @@ def run(args):
                 "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000",
                 "-f", "srt", "-i", str(subtitle_path),
             ]
-            if args.verify_player_output:
-                subtitle_path2.write_text(
-                    f"1\n00:00:00,200 --> 00:00:07,500\n{verify_token}\n",
-                    encoding="ascii")
-                ffmpeg_args.extend(["-f", "srt", "-i", str(subtitle_path2)])
+            subtitle_path2.write_text(
+                f"1\n00:00:00,200 --> 00:00:07,500\n{verify_token}\n",
+                encoding="ascii")
+            ffmpeg_args.extend(["-f", "srt", "-i", str(subtitle_path2)])
             ffmpeg_args.extend([
                 "-t", "8", "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0", "-map", "3:0",
             ])
-            if args.verify_player_output:
-                ffmpeg_args.extend(["-map", "4:0"])
+            ffmpeg_args.extend(["-map", "4:0"])
             ffmpeg_args.extend([
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "64k",
                 "-c:s", "srt", "-metadata:s:a:0", "title=Audio 1", "-metadata:s:a:1", "title=Audio 2",
@@ -873,215 +891,13 @@ def run(args):
             pointer("taskrow."+ours[2]["task_id"])
             wait(lambda: ui("state")["selectedTaskIds"]==[ours[2]["task_id"]],"Media row selection failed",10)
             pointer("toolbar.播放")
-            wait(lambda:"player.audio_track" in ui("state")["controlBounds"],"Player did not refresh real metadata",60)
-            pointer("toolbar.暂停")
-            node("本机播放器 · 已暂停")
-            for control in ("toolbar.降低音量","toolbar.后退 10 秒","toolbar.前进 10 秒","toolbar.提高音量","player.speed"):
-                feedback(control,"player HUD")
-                pointer(control)
-            node("1.25x")
-            click("选择音轨")
-            click("音轨 2")
-            click("选择音轨")
-            click("音轨 1")
-            click("选择字幕")
-            click("字幕 1")
-            wait(lambda: 'enabled' in node('1.25x', True)['states'], 'Player controls did not become available after track choices', 15)
-            expected_metadata = "音轨 2 · 字幕 2" if args.verify_player_output else "音轨 2 · 字幕 1"
-            assert node(expected_metadata), "Player track-count metadata changed after track choices"
-            if args.verify_player_output:
-                import numpy as np
-                import soundcard as sc
-                from PIL import ImageGrab
-
-                speaker = sc.default_speaker()
-                if speaker is None:
-                    raise RuntimeError("No default speaker is available for player output verification")
-                loopback = sc.get_microphone(speaker.id, include_loopback=True)
-                assert loopback.isloopback, "Default speaker loopback is unavailable"
-
-                def player_control(action_name):
-                    core({"type": "command", "request_id": 300,
-                          "command": {"kind": "player_control", "action": action_name}})
-
-                def verify_audio_track(track_name, frequency, other_frequency, preview):
-                    click("选择音轨")
-                    click(track_name)
-                    try:
-                        player_control("preview:" + str(preview))
-                        player_control("speed:1.0")
-                        player_control("resume")
-                        time.sleep(.2)
-                        with loopback.recorder(samplerate=48000, channels=2) as recorder:
-                            samples = recorder.record(numframes=48000)
-                    finally:
-                        player_control("pause")
-                    samples = np.asarray(samples, dtype=np.float64)
-                    if samples.ndim != 2 or samples.shape[1] < 2:
-                        raise AssertionError("SoundCard loopback did not return stereo samples")
-                    mono = samples[:, :2].mean(axis=1)
-                    mono -= mono.mean()
-                    rms = float(np.sqrt(np.mean(mono ** 2)))
-                    assert rms > 1e-4, {"track": track_name, "rms": rms, "device": loopback.name}
-                    spectrum = np.abs(np.fft.rfft(mono * np.hanning(len(mono)))) ** 2
-                    bins = np.fft.rfftfreq(len(mono), d=1 / 48000)
-
-                    def energy_at(target):
-                        return float(spectrum[(bins >= target - 25) & (bins <= target + 25)].sum())
-
-                    target_energy, other_energy = energy_at(frequency), energy_at(other_frequency)
-                    ratio = target_energy / max(other_energy, 1e-30)
-                    assert ratio >= 4.0, {
-                        "track": track_name, "expected_hz": frequency, "other_hz": other_frequency,
-                        "expected_energy": target_energy, "other_energy": other_energy, "ratio": ratio,
-                    }
-                    record("actual player audio output: " + track_name,
-                           {"expected_hz": frequency, "other_hz": other_frequency,
-                            "expected_energy": target_energy, "other_energy": other_energy,
-                            "ratio": ratio, "rms": rms, "loopback_device": loopback.name})
-
-                verify_audio_track("音轨 1", 440, 660, 20)
-                verify_audio_track("音轨 2", 660, 440, 50)
-                click("选择字幕")
-                click("字幕 2")
-                from ctypes import wintypes
-
-                user32 = ctypes.windll.user32
-                user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-                user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-                user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-                user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-                user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-                user32.IsWindowVisible.argtypes = [wintypes.HWND]
-                user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-                user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                                                ctypes.c_int, ctypes.c_int, wintypes.UINT]
-                user32.SetWindowPos.restype = wintypes.BOOL
-                user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-                user32.SetForegroundWindow.restype = wintypes.BOOL
-                user32.GetForegroundWindow.restype = wintypes.HWND
-                user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
-                user32.SetCursorPos.restype = wintypes.BOOL
-                user32.mouse_event.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
-                                               wintypes.DWORD, ctypes.c_size_t]
-                user32.WindowFromPoint.argtypes = [wintypes.POINT]
-                user32.WindowFromPoint.restype = wintypes.HWND
-                user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
-                user32.GetAncestor.restype = wintypes.HWND
-                user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
-                                               wintypes.LPARAM]
-                user32.EnumWindows.restype = wintypes.BOOL
-
-                def locate_player_window():
-                    player_pids = set()
-                    engine_path = (runtime / "app/resources/HLSDownloaderEngine.exe").resolve()
-                    for process in runtime_processes(runtime):
-                        if Path(process["exe"]).resolve() != engine_path:
-                            continue
-                        try:
-                            if "--player-process" in psutil.Process(process["pid"]).cmdline():
-                                player_pids.add(process["pid"])
-                        except psutil.Error:
-                            continue
-                    windows = []
-
-                    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-                    def visit(handle, _):
-                        owner = wintypes.DWORD()
-                        user32.GetWindowThreadProcessId(handle, ctypes.byref(owner))
-                        if owner.value not in player_pids:
-                            return True
-                        title = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(handle) + 1)
-                        class_name = ctypes.create_unicode_buffer(256)
-                        rect = wintypes.RECT()
-                        user32.GetWindowTextW(handle, title, len(title))
-                        user32.GetClassNameW(handle, class_name, len(class_name))
-                        user32.GetWindowRect(handle, ctypes.byref(rect))
-                        bounds = [rect.left, rect.top, rect.right, rect.bottom]
-                        windows.append({"hwnd": int(handle), "pid": owner.value,
-                                        "visible": bool(user32.IsWindowVisible(handle)),
-                                        "class": class_name.value, "title": title.value,
-                                        "rect": bounds})
-                        return True
-
-                    user32.EnumWindows(visit, 0)
-                    filename = ours[2]["filename"].casefold()
-                    candidates = [window for window in windows
-                                  if window["visible"]
-                                  and window["rect"][2] - window["rect"][0] >= 320
-                                  and window["rect"][3] - window["rect"][1] >= 180
-                                  and ("mpv" in window["class"].casefold()
-                                       or filename in window["title"].casefold())]
-                    report["player_window_probe"] = {
-                        "player_pids": sorted(player_pids), "windows": windows,
-                        "candidate_hwnds": [window["hwnd"] for window in candidates],
-                    }
-                    if not candidates:
-                        return None
-                    return {"player_pids": sorted(player_pids), "windows": windows,
-                            "target": max(candidates,
-                                          key=lambda window: (window["rect"][2] - window["rect"][0])
-                                          * (window["rect"][3] - window["rect"][1]))}
-
-                try:
-                    player_control("fullscreen")
-                    player_control("resume")
-                    located = wait(locate_player_window,
-                                   "No visible native mpv window owned by the installed player process", 10)
-                    target_window = located["target"]
-                    video_hwnd = wintypes.HWND(target_window["hwnd"])
-                    user32.ShowWindow(video_hwnd, 9)
-                    assert user32.SetWindowPos(video_hwnd, wintypes.HWND(-1), 0, 0, 0, 0,
-                                               0x0001 | 0x0002 | 0x0040), "Could not raise native mpv window"
-                    time.sleep(.2)
-                    rect = wintypes.RECT()
-                    if not user32.GetWindowRect(video_hwnd, ctypes.byref(rect)):
-                        raise ctypes.WinError()
-                    center = wintypes.POINT((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
-                    assert user32.SetCursorPos(center.x, center.y), ("mpv center SetCursorPos failed", center.x, center.y)
-                    hit = user32.WindowFromPoint(center)
-                    hit_root = user32.GetAncestor(hit, 2) if hit else None
-                    failure_image = evidence / "mpv-focus-failure.png"
-                    if not hit or int(hit_root) != target_window["hwnd"]:
-                        ImageGrab.grab().save(failure_image)
-                        raise AssertionError({
-                            "video_window": target_window, "window_from_point": int(hit or 0),
-                            "root_window_from_point": int(hit_root or 0),
-                            "failure_screenshot": str(failure_image),
-                        })
-                    user32.mouse_event(0x0002, 0, 0, 0, 0)
-                    user32.mouse_event(0x0004, 0, 0, 0, 0)
-                    try:
-                        wait(lambda: int(user32.GetForegroundWindow() or 0) == target_window["hwnd"],
-                             "Native mpv window did not become foreground after a real center click", 5)
-                    except TimeoutError:
-                        ImageGrab.grab().save(failure_image)
-                        raise
-                    time.sleep(.7)
-                    ImageGrab.grab().save(evidence / "player-subtitle-track-2.png")
-                    player_window_evidence = {
-                        **target_window,
-                        "foreground_hwnd": int(user32.GetForegroundWindow() or 0),
-                        "window_from_point": int(hit),
-                        "root_window_from_point": int(hit_root),
-                        "screenshot": str(evidence / "player-subtitle-track-2.png"),
-                    }
-                finally:
-                    if 'video_hwnd' in locals():
-                        user32.SetWindowPos(video_hwnd, wintypes.HWND(-2), 0, 0, 0, 0,
-                                            0x0001 | 0x0002 | 0x0010)
-                    player_control("pause")
-                    player_control("windowed")
-                    user32.SetForegroundWindow(hwnd)
-                record("actual player subtitle track 2 rendered in native mpv window",
-                       {"subtitle": 2, "token": verify_token, **player_window_evidence})
-            click("画中画")
-            node("本机播放器 · 画中画")
-            click("全屏")
-            node("本机播放器 · 全屏播放")
-            click("停止播放")
-            wait(lambda: "player.speed" not in ui("state")["controlBounds"],"Stop did not remove player HUD",10)
-            record("real player HUD pause, volume, seeking, speed, audio/subtitle menu choices, PIP, fullscreen and stop")
+            def player_status():
+                response = core({"type": "command", "request_id": 36, "command": {"kind": "player_control", "action": "status"}})
+                return next((e["event"] for e in response.get("events", []) if e["event"].get("kind") == "player_session"), {})
+            wait(lambda: player_status().get("position_available"), "Local video did not open", 60)
+            assert not any(key.startswith("player.") for key in ui("state")["controlBounds"]), "Local playback opened a detached control HUD"
+            core({"type": "command", "request_id": 37, "command": {"kind": "player_control", "action": "stop"}})
+            record("local video opens without a detached control HUD; in-video controls require the Sandbox player acceptance")
             settings_to_restore["completion_sound_enabled"] = original_settings["completion_sound_enabled"]
             pointer("toolbar.设置")
             click("完成提示音")
@@ -1319,7 +1135,8 @@ public class DragFixture {
             time.sleep(.3)
             try:
                 with (evidence/"drag-fixture.log").open("wb") as log:
-                    drop_helper=subprocess.Popen([str(Path(__file__).resolve().parents[1]/".tool-cache/build-cache/jdk-21/bin/java.exe"),
+                    java_exe=os.environ.get("HLS_JAVA_EXE", str(Path(__file__).resolve().parents[1]/".tool-cache/build-cache/jdk-21/bin/java.exe"))
+                    drop_helper=subprocess.Popen([java_exe,
                         "-Djava.io.tmpdir="+str(temporary),str(helper),str(dropped)],stdout=log,stderr=log,
                         creationflags=subprocess.CREATE_NO_WINDOW)
                 try:
@@ -1649,8 +1466,6 @@ if __name__ == "__main__":
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--extras-stage", choices=("all", "selection"), default="all")
-    parser.add_argument("--verify-player-output", action="store_true",
-                        help="Verify selected audio via loopback and save native subtitle evidence")
     parser.add_argument("--functional-stage", choices=("all", "resume", "batch", "queue"), default="all")
     parser.add_argument("--settings-start-tab", default="通用")
     parser.add_argument("--torrent-source", choices=("torrent", "magnet"), default="torrent")

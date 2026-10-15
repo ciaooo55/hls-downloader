@@ -644,6 +644,21 @@ describe('resource rules', () => {
 
     expect(playerPlaybackResources([manifest], blobPlayback)).toEqual([])
   })
+  it('binds a preloaded manifest after a long pause only with player-specific bytes', () => {
+    const now = Date.now()
+    const manifest = resource({
+      id: 'preloaded', kind: 'hls', url: 'https://cdn.test/movie/master.m3u8',
+      playbackUrls: ['https://cdn.test/movie/segment-42.ts'], seenAt: now - 10 * 60_000,
+    })
+    const playback = { sourceUrls: ['blob:https://site.test/player'], startedAt: now }
+    expect(playerPlaybackResources([manifest], playback)).toEqual([])
+    expect(playerPlaybackResources([manifest], {
+      ...playback, mseResourceUrls: ['https://cdn.test/movie/segment-42.ts'],
+    }).map(item => item.id)).toEqual(['preloaded'])
+    expect(playerPlaybackResources([manifest], {
+      ...playback, mseResourceUrls: ['https://cdn.test/other/segment-42.ts'],
+    })).toEqual([])
+  })
   it('never places a recent adaptive stream beside a different direct video', () => {
     const now = Date.now()
     const manifest = resource({

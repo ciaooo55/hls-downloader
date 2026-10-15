@@ -34,14 +34,19 @@ from smoke_v7_transfer_performance import free_port
 def run(args):
     args.report.parent.mkdir(parents=True, exist_ok=True)
     result = {"passed": False, "engine_sha256": hashlib.sha256(args.engine.read_bytes()).hexdigest(), "checks": []}
-    with tempfile.TemporaryDirectory(prefix="protocol-features-", dir=Path.cwd()/".tool-cache/test-tmp") as tmp:
+    cache = Path.cwd()/".tool-cache/test-tmp"
+    cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="protocol-features-", dir=cache) as tmp:
         root = Path(tmp)
         engine = root/'HLSDownloaderEngine.exe'
         shutil.copy2(args.engine, engine)
+        runtime_dll = args.engine.parent / 'vcruntime140.dll'
+        if runtime_dll.is_file():
+            shutil.copy2(runtime_dll, root / runtime_dll.name)
         vm_acceptance = os.environ.get("HLS_VM_ACCEPTANCE") == "1"
         firewall_rule = None
         firewall_add_attempted = False
-        if vm_acceptance:
+        if vm_acceptance and not args.no_firewall_rule:
             firewall_rule = {
                 "name": f"HLS-v7-protocol-features-{root.name}",
                 "program": str(engine.resolve()),
@@ -769,4 +774,5 @@ if __name__ == "__main__":
     parser.add_argument("--only", default="", help="Run checks whose name contains this text")
     parser.add_argument("--public-ftps", action="store_true")
     parser.add_argument("--local-ftps", action="store_true")
+    parser.add_argument("--no-firewall-rule", action="store_true", help="Leave firewall settings unchanged for loopback-only acceptance")
     raise SystemExit(run(parser.parse_args()))

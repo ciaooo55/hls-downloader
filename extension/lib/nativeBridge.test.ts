@@ -16,6 +16,60 @@ class FakePort implements NativePortLike {
 }
 
 describe('persistent native bridge', () => {
+  it('reopens an idle subtitle port before sending a new start request', async () => {
+    vi.useFakeTimers()
+    const first = new FakePort(), second = new FakePort()
+    const bridge = new NativeBridge(vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second))
+    try {
+      const settings = bridge.request({ op: 'subtitle', request: { action: 'settings' } })
+      first.onMessage.emit({ ok: true, __request_id: first.posted[0].__request_id })
+      await settings
+      await vi.advanceTimersByTimeAsync(121_000)
+      const start = bridge.request({ op: 'subtitle', request: { action: 'start' } })
+      expect(first.disconnect).toHaveBeenCalledOnce()
+      expect(first.posted.map(message => (message.request as any).action)).toEqual(['settings'])
+      expect(second.posted[0]).toMatchObject({ request: { action: 'start' } })
+      first.onMessage.emit({ ok: true, stale: true, __request_id: second.posted[0].__request_id })
+      second.onMessage.emit({ ok: true, started: true, __request_id: second.posted[0].__request_id })
+      await expect(start).resolves.toMatchObject({ started: true })
+    } finally { bridge.close(); vi.useRealTimers() }
+  })
+
+  it('keeps a long in-flight request and measures idle time from its response', async () => {
+    vi.useFakeTimers()
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port, 180_000)
+    try {
+      const start = bridge.request({ op: 'subtitle', request: { action: 'start' } })
+      await vi.advanceTimersByTimeAsync(61_000)
+      const audio = bridge.request({ op: 'subtitle', request: { action: 'audio' } })
+      expect(port.disconnect).not.toHaveBeenCalled()
+      port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
+      await start
+      expect(port.posted).toHaveLength(2)
+      port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
+      await audio
+      expect(port.disconnect).not.toHaveBeenCalled()
+    } finally { bridge.close(); vi.useRealTimers() }
+  })
+
+  it('drops a broken Core pipe without replaying the failed audio request', async () => {
+    const first = new FakePort(), second = new FakePort()
+    const bridge = new NativeBridge(vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second))
+    try {
+      const audio = bridge.request({ op: 'subtitle', request: { action: 'audio' } })
+      first.onMessage.emit({ ok: false, error: 'Core pipe write: 管道正在被关闭。 (os error 232)', __request_id: first.posted[0].__request_id })
+      await expect(audio).resolves.toMatchObject({ ok: false })
+      const start = bridge.request({ op: 'subtitle', request: { action: 'start' } })
+      expect(first.disconnect).toHaveBeenCalledOnce()
+      expect(first.posted).toHaveLength(1)
+      expect(second.posted).toHaveLength(1)
+      expect(second.posted[0]).toMatchObject({ request: { action: 'start' } })
+      second.onMessage.emit({ ok: true, __request_id: second.posted[0].__request_id })
+      await start
+    } finally { bridge.close() }
+  })
+
   it('keeps subtitle PCM on the same host while an earlier poll is pending', async () => {
     const port = new FakePort()
     const bridge = new NativeBridge(() => port)

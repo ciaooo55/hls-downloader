@@ -28,16 +28,38 @@ pub fn default_v7_download_dir() -> PathBuf {
     if let Some(root) = env_override("HLS_V7_DOWNLOAD_DIR") {
         return root;
     }
-    if let Some(root) = portable_v7_root() {
-        return root.join("downloads");
+    #[cfg(windows)]
+    if let Some(path) = windows_downloads_folder() {
+        return path;
     }
-    if let Some(root) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(root)
-            .join("HLS Downloader")
-            .join("v7")
-            .join("downloads");
+    env_override("USERPROFILE")
+        .or_else(|| env_override("HOME"))
+        .unwrap_or_else(env::temp_dir)
+        .join("Downloads")
+}
+
+#[cfg(windows)]
+fn windows_downloads_folder() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_Downloads, KF_FLAG_DONT_VERIFY};
+
+    // 系统 API 会跟随用户移动后的“下载”文件夹，不能从用户名或安装目录拼接。
+    unsafe {
+        let mut path = std::ptr::null_mut();
+        let result = SHGetKnownFolderPath(&FOLDERID_Downloads, KF_FLAG_DONT_VERIFY as u32, std::ptr::null_mut(), &mut path);
+        let folder = if result >= 0 && !path.is_null() {
+            let mut len = 0;
+            while *path.add(len) != 0 {
+                len += 1;
+            }
+            (len > 0).then(|| PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(path, len))))
+        } else {
+            None
+        };
+        CoTaskMemFree(path.cast());
+        folder
     }
-    PathBuf::from("downloads")
 }
 
 fn env_override(key: &str) -> Option<PathBuf> {

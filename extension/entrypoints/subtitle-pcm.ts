@@ -23,7 +23,13 @@ export default defineUnlistedScript(() => {
       super()
       this.port.onmessage = event => {
         if (event.data?.type === 'window') { this.limit = event.data.limit; return }
+        if (event.data?.type === 'flush') {
+          this.pcm.flush()
+          this.port.postMessage({ type: 'flushed' })
+          return
+        }
         if (event.data?.type !== 'timeline') return
+        this.pcm.flush()
         this.epoch = event.data.epoch; this.enabled = event.data.enabled === true
         this.position = event.data.position; this.rate = event.data.rate; this.limit = event.data.limit
         this.pcm = this.createPcm()

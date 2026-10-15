@@ -43,7 +43,15 @@ enum Mount {
 
 impl MediaServer {
     pub fn start() -> Result<Self, String> {
-        let listener = TcpListener::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
+        Self::bind("0.0.0.0:0")
+    }
+
+    pub fn start_local() -> Result<Self, String> {
+        Self::bind("127.0.0.1:0")
+    }
+
+    fn bind(address: &str) -> Result<Self, String> {
+        let listener = TcpListener::bind(address).map_err(|error| error.to_string())?;
         listener
             .set_nonblocking(true)
             .map_err(|error| error.to_string())?;

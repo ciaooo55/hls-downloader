@@ -6,14 +6,17 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest, protocol::WebSocketConfig, Message,
 };
 
 const KEY_REF: &str = "subtitle:dashscope";
 const PROVIDER_SETTING: &str = "subtitle_provider";
+const DASHSCOPE: &str = "dashscope";
+const QWENCLOUD: &str = "qwencloud";
 const MODEL: &str = "qwen3.5-livetranslate-flash-realtime";
+const QWENCLOUD_ENDPOINT: &str = "wss://maas.qwencloudapi.com/api-ws/v1/realtime";
 const LANGUAGES: &[&str] = &[
     "zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th",
 ];
@@ -26,6 +29,7 @@ pub(crate) struct SubtitleService {
 struct Session {
     owner: String,
     input: mpsc::Sender<Input>,
+    stop: Arc<Notify>,
     state: Arc<Mutex<State>>,
 }
 
@@ -37,7 +41,6 @@ enum Input {
         epoch: u64,
     },
     Reset(u64),
-    Stop,
 }
 
 struct State {
@@ -70,18 +73,25 @@ impl SubtitleService {
         match string(request, "action") {
             "configuration" => return configuration(core),
             "configure" => {
+                let provider = match string(request, "provider") {
+                    "" | DASHSCOPE => DASHSCOPE,
+                    QWENCLOUD => QWENCLOUD,
+                    _ => return Err("不支持的字幕服务提供方".into()),
+                };
                 let workspace = string(request, "workspace");
-                if workspace.is_empty()
-                    || workspace.len() > 128
-                    || !workspace
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                {
-                    return Err("请填写有效的百炼业务空间 ID".into());
-                }
                 let region = string(request, "region");
-                if !matches!(region, "cn-beijing" | "ap-southeast-1") {
-                    return Err("不支持的服务地域".into());
+                if provider == DASHSCOPE {
+                    if workspace.is_empty()
+                        || workspace.len() > 128
+                        || !workspace
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                    {
+                        return Err("请填写有效的百炼业务空间 ID".into());
+                    }
+                    if !matches!(region, "cn-beijing" | "ap-southeast-1") {
+                        return Err("不支持的服务地域".into());
+                    }
                 }
                 let key = string(request, "api_key").trim();
                 if key.len() > 4096 || key.contains(['\r', '\n']) {
@@ -107,12 +117,14 @@ impl SubtitleService {
                             kind: "subtitle_api_key",
                         })
                 };
+                let mut settings = json!({"provider": provider});
+                if provider == DASHSCOPE {
+                    settings["workspace"] = json!(workspace);
+                    settings["region"] = json!(region);
+                }
                 locked.store_mut().apply_credential_with_settings(
                     write,
-                    &BTreeMap::from([(
-                        PROVIDER_SETTING.into(),
-                        json!(json!({"workspace": workspace, "region": region}).to_string()),
-                    )]),
+                    &BTreeMap::from([(PROVIDER_SETTING.into(), json!(settings.to_string()))]),
                 )?;
                 drop(locked);
                 self.stop_all();
@@ -145,8 +157,9 @@ impl SubtitleService {
                 return Err("字幕语种不受支持".into());
             }
             let config = configuration(core)?;
+            let provider = string(&config, "provider");
             let workspace = string(&config, "workspace");
-            if workspace.is_empty() {
+            if provider == DASHSCOPE && workspace.is_empty() {
                 return Err("请先在插件字幕设置中配置百炼业务空间和 API Key".into());
             }
             let key = core
@@ -156,11 +169,7 @@ impl SubtitleService {
             if key.is_empty() {
                 return Err("请先配置字幕服务 API Key".into());
             }
-            let endpoint = format!(
-                "wss://{}.{}.maas.aliyuncs.com/api-ws/v1/realtime?model={MODEL}",
-                workspace,
-                string(&config, "region")
-            );
+            let endpoint = realtime_endpoint(provider, workspace, string(&config, "region"))?;
             let epoch = request.get("epoch").and_then(Value::as_u64).unwrap_or(0);
             let state = Arc::new(Mutex::new(State {
                 status: "connecting",
@@ -171,11 +180,13 @@ impl SubtitleService {
                 last_seen: Instant::now(),
             }));
             let (input, receiver) = mpsc::channel(16);
+            let stop = Arc::new(Notify::new());
             sessions.insert(
                 id.into(),
                 Session {
                     owner: owner.into(),
                     input,
+                    stop: stop.clone(),
                     state: state.clone(),
                 },
             );
@@ -193,6 +204,7 @@ impl SubtitleService {
                             &source,
                             &target,
                             receiver,
+                            stop,
                             state.clone(),
                         ))
                     });
@@ -266,7 +278,9 @@ impl SubtitleService {
                     .input
                     .try_send(Input::Reset(epoch))
                     .map_err(|_| "无法重置字幕连接")?;
-                session.state.lock().unwrap().epoch = epoch;
+                let mut state = session.state.lock().unwrap();
+                state.epoch = epoch;
+                state.status = "connecting";
                 Ok(json!({"ok": true}))
             }
             "poll" => {
@@ -292,11 +306,13 @@ impl SubtitleService {
                 )
             }
             "stop" => {
-                let session = sessions.remove(id).unwrap();
-                session.state.lock().unwrap().status = "stopped";
-                // 丢弃积压音频；关闭所有发送端也会唤醒接收循环。
-                let _ = session.input.try_send(Input::Stop);
-                Ok(json!({"ok": true, "status": "stopped"}))
+                let session = sessions.get(id).unwrap();
+                let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+                if !matches!(state.status, "stopped" | "failed") {
+                    state.status = "stopping";
+                    session.stop.notify_one();
+                }
+                Ok(json!({"ok": true, "status": state.status}))
             }
             _ => Err("不支持的字幕操作".into()),
         }
@@ -305,8 +321,12 @@ impl SubtitleService {
     pub(crate) fn stop_all(&self) {
         if let Ok(mut sessions) = self.sessions.lock() {
             for (_, session) in std::mem::take(&mut *sessions) {
-                session.state.lock().unwrap().status = "stopped";
-                let _ = session.input.try_send(Input::Stop);
+                if let Ok(mut state) = session.state.lock() {
+                    if !matches!(state.status, "stopped" | "failed") {
+                        state.status = "stopping";
+                        session.stop.notify_one();
+                    }
+                }
             }
         }
     }
@@ -316,9 +336,27 @@ fn configuration(core: &CoreCoordinator) -> Result<Value, String> {
     let locked = core.lock()?;
     let raw = locked.store().setting_string(PROVIDER_SETTING, "{}")?;
     let value: Value = serde_json::from_str(&raw).map_err(|_| "字幕配置损坏")?;
-    Ok(json!({"ok": true, "workspace": string(&value, "workspace"),
+    let provider = match string(&value, "provider") {
+        "" | DASHSCOPE => DASHSCOPE,
+        QWENCLOUD => QWENCLOUD,
+        _ => return Err("字幕配置损坏".into()),
+    };
+    Ok(
+        json!({"ok": true, "provider": provider, "workspace": string(&value, "workspace"),
         "region": value.get("region").and_then(Value::as_str).unwrap_or("cn-beijing"),
-        "has_key": locked.store().load_credential(KEY_REF)?.is_some() }))
+        "has_key": locked.store().load_credential(KEY_REF)?.is_some() }),
+    )
+}
+
+fn realtime_endpoint(provider: &str, workspace: &str, region: &str) -> Result<String, String> {
+    let base = match provider {
+        DASHSCOPE if !workspace.is_empty() && matches!(region, "cn-beijing" | "ap-southeast-1") => {
+            format!("wss://{workspace}.{region}.maas.aliyuncs.com/api-ws/v1/realtime")
+        }
+        QWENCLOUD => QWENCLOUD_ENDPOINT.into(),
+        _ => return Err("字幕服务配置无效".into()),
+    };
+    Ok(format!("{base}?model={MODEL}"))
 }
 
 fn string<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -472,14 +510,18 @@ async fn run(
     source: &str,
     target: &str,
     mut input: mpsc::Receiver<Input>,
+    stop: Arc<Notify>,
     state: Arc<Mutex<State>>,
 ) -> Result<(), String> {
     let mut epoch = state.lock().unwrap().epoch;
     'connection: loop {
-        if state.lock().unwrap().status == "stopped" {
-            return Ok(());
+        {
+            let mut state = state.lock().unwrap();
+            if matches!(state.status, "stopped" | "stopping") {
+                return Ok(());
+            }
+            state.status = "connecting";
         }
-        state.lock().unwrap().status = "connecting";
         let mut request = endpoint
             .into_client_request()
             .map_err(|_| "字幕服务地址无效")?;
@@ -493,12 +535,16 @@ async fn run(
             .max_message_size(Some(128 * 1024))
             .max_frame_size(Some(128 * 1024));
         let connect = tokio_tungstenite::connect_async_with_config(request, Some(config), false);
-        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(15), connect)
-            .await
+        let connected = tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(15), connect) => result,
+            _ = stop.notified() => return Ok(()),
+        };
+        let (mut socket, _) = connected
             .map_err(|_| "字幕连接超时，请检查网络")?
-            .map_err(|_| "字幕服务连接失败，请检查业务空间、地域、API Key 和网络")?;
+            .map_err(|_| "字幕服务连接失败，请检查服务配置、API Key 和网络")?;
         send(&mut socket, setup(source, target)).await?;
-        let ready = tokio::time::timeout(Duration::from_secs(8), async {
+        let ready_result = tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(8), async {
             while let Some(frame) = socket.next().await {
                 match frame.map_err(|_| "字幕连接中断")? {
                     Message::Text(text) => {
@@ -518,19 +564,48 @@ async fn run(
                 }
             }
             Err("字幕服务在初始化时断开".into())
-        })
-        .await
-        .map_err(|_| "字幕服务初始化超时")?;
+            }) => result,
+            _ = stop.notified() => { let _ = socket.close(None).await; return Ok(()) },
+        };
+        let ready = ready_result.map_err(|_| "字幕服务初始化超时")?;
         ready?;
         if state.lock().unwrap().status == "stopped" {
             let _ = socket.close(None).await;
             return Ok(());
         }
-        state.lock().unwrap().status = "running";
+        {
+            let mut session_state = state.lock().unwrap();
+            if session_state.status != "stopping" {
+                session_state.status = "running";
+            }
+        }
         let mut decoder = Decoder::default();
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         let mut last_received = Instant::now();
         loop {
+            if state.lock().unwrap().status == "stopping" && input.is_empty() {
+                send(&mut socket, json!({"type": "session.finish"})).await?;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        let frame = socket
+                            .next()
+                            .await
+                            .ok_or("字幕服务在结束会话时断开")?
+                            .map_err(|_| "字幕连接中断")?;
+                        let Message::Text(text) = frame else { continue };
+                        let event: Value =
+                            serde_json::from_str(&text).map_err(|_| "字幕服务返回无效数据")?;
+                        if string(&event, "type") == "session.finished" {
+                            return Ok::<_, String>(());
+                        }
+                        accept_event(&event, &mut decoder, &state, epoch)?;
+                    }
+                })
+                .await
+                .map_err(|_| "字幕结束处理超时")??;
+                let _ = socket.close(None).await;
+                return Ok(());
+            }
             tokio::select! {
                 message = input.recv() => match message {
                     Some(Input::Audio { pcm, position, rate, epoch: audio_epoch }) => {
@@ -544,30 +619,16 @@ async fn run(
                         let _ = socket.close(None).await;
                         continue 'connection;
                     }
-                    Some(Input::Stop) | None => {
-                        let _ = send(&mut socket, json!({"type": "session.finish"})).await;
-                        let _ = tokio::time::timeout(Duration::from_secs(2), async {
-                            while let Some(Ok(Message::Text(text))) = socket.next().await {
-                                if serde_json::from_str::<Value>(&text).ok().is_some_and(|v| string(&v, "type") == "session.finished") { break; }
-                            }
-                        }).await;
-                        let _ = socket.close(None).await;
-                        return Ok(());
-                    }
+                    None => {},
                 },
+                _ = stop.notified() => {},
                 frame = socket.next() => {
                     let frame = frame.ok_or("字幕连接已关闭，请重新开始")?.map_err(|_| "字幕连接中断，请重新开始")?;
                     last_received = Instant::now();
                     match frame {
                         Message::Text(text) => {
                             let event: Value = serde_json::from_str(&text).map_err(|_| "字幕服务返回无效数据")?;
-                            if string(&event, "type") == "error" || string(&event, "type").ends_with(".failed") {
-                                return Err("字幕服务处理失败，请检查额度、模型权限和输入音频".into());
-                            }
-                            if let Some(cue) = decoder.decode(&event) {
-                                let mut state = state.lock().unwrap();
-                                if state.epoch == epoch { state.push(cue); }
-                            }
+                            accept_event(&event, &mut decoder, &state, epoch)?;
                         }
                         Message::Close(_) => return Err("字幕服务已断开，请重新开始".into()),
                         _ => {}
@@ -582,6 +643,25 @@ async fn run(
             }
         }
     }
+}
+
+fn accept_event(
+    event: &Value,
+    decoder: &mut Decoder,
+    state: &Arc<Mutex<State>>,
+    epoch: u64,
+) -> Result<(), String> {
+    let kind = string(event, "type");
+    if kind == "error" || kind.ends_with(".failed") {
+        return Err("字幕服务处理失败，请检查额度、模型权限和输入音频".into());
+    }
+    if let Some(cue) = decoder.decode(event) {
+        let mut state = state.lock().unwrap();
+        if state.epoch == epoch {
+            state.push(cue);
+        }
+    }
+    Ok(())
 }
 
 async fn send<S>(
@@ -605,6 +685,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rustls_client_config_uses_a_crypto_provider() {
+        let _config = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+    }
+
+    #[test]
+    fn provider_configuration_validation_and_endpoints_are_provider_specific() {
+        let service = SubtitleService::default();
+        let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        assert_eq!(configuration(&core).unwrap()["provider"], DASHSCOPE);
+        assert!(realtime_endpoint(DASHSCOPE, "space", "cn-beijing")
+            .unwrap()
+            .starts_with("wss://space.cn-beijing.maas.aliyuncs.com/"));
+        assert_eq!(
+            realtime_endpoint(QWENCLOUD, "", "").unwrap(),
+            format!("{QWENCLOUD_ENDPOINT}?model={MODEL}")
+        );
+        assert!(realtime_endpoint("unknown", "space", "cn-beijing").is_err());
+
+        assert!(service
+            .dispatch(&core, &json!({"action":"configure","provider":"unknown"}))
+            .is_err());
+        assert!(service
+            .dispatch(&core, &json!({"action":"configure","provider":"dashscope","workspace":"","region":"cn-beijing"}))
+            .is_err());
+        assert!(service
+            .dispatch(&core, &json!({"action":"configure","provider":"dashscope","workspace":"space","region":"unknown"}))
+            .is_err());
+        let configured = service
+            .dispatch(&core, &json!({"action":"configure","provider":"qwencloud"}))
+            .unwrap();
+        assert_eq!(configured["provider"], QWENCLOUD);
+        assert_eq!(configured["workspace"], "");
+        assert!(service
+            .dispatch(&core, &json!({"action":"configure","provider":"dashscope","workspace":"","region":"cn-beijing"}))
+            .is_err());
+        assert_eq!(configuration(&core).unwrap()["provider"], QWENCLOUD);
+    }
+
+    #[test]
     fn hostile_requests_cannot_change_another_owner_or_reset_a_full_queue() {
         let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
         let service = SubtitleService::default();
@@ -617,11 +738,13 @@ mod tests {
             last_seen: Instant::now(),
         }));
         let (input, mut receiver) = mpsc::channel(1);
+        let stop = Arc::new(Notify::new());
         service.sessions.lock().unwrap().insert(
             "test".into(),
             Session {
                 owner: "owner".into(),
                 input,
+                stop: stop.clone(),
                 state: state.clone(),
             },
         );
@@ -673,11 +796,27 @@ mod tests {
         service
             .dispatch(
                 &core,
+                &json!({"action":"audio","session_id":"test","owner":"owner",
+            "audio":STANDARD.encode([0,0]),"position":121,"rate":1,"epoch":8}),
+            )
+            .unwrap();
+        state.lock().unwrap().push(json!({"type":"cue","text":"尾部字幕"}));
+        service
+            .dispatch(
+                &core,
                 &json!({"action":"stop","session_id":"test","owner":"owner"}),
             )
             .unwrap();
-        assert!(matches!(receiver.try_recv().unwrap(), Input::Stop));
-        assert_eq!(state.lock().unwrap().status, "stopped");
+        assert_eq!(state.lock().unwrap().status, "stopping");
+        assert_eq!(service.sessions.lock().unwrap().len(), 1);
+        assert!(matches!(receiver.try_recv().unwrap(), Input::Audio { epoch: 8, .. }));
+        let polled = service
+            .dispatch(
+                &core,
+                &json!({"action":"poll","session_id":"test","owner":"owner","after_sequence":0}),
+            )
+            .unwrap();
+        assert_eq!(polled["events"][0]["text"], "尾部字幕");
     }
 
     #[test]
@@ -701,6 +840,7 @@ mod tests {
             Session {
                 owner: "owner".into(),
                 input,
+                stop: Arc::new(Notify::new()),
                 state: Arc::new(Mutex::new(state)),
             },
         );
@@ -769,7 +909,7 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                    assert!(run(&endpoint, "test", "auto", "zh", rx, state.clone())
+                    assert!(run(&endpoint, "test", "auto", "zh", rx, Arc::new(Notify::new()), state.clone())
                         .await
                         .is_err());
                     assert!(state.lock().unwrap().events.is_empty());
@@ -789,6 +929,11 @@ mod tests {
         d.decode(&json!({"type":"input_audio_buffer.speech_started","item_id":"speech","audio_start_ms":100}));
         d.decode(&json!({"type":"input_audio_buffer.speech_stopped","item_id":"speech","audio_end_ms":400}));
         d.decode(&json!({"type":"conversation.item.created","item":{"id":"answer","role":"assistant"},"previous_item_id":"speech"}));
+        let partial = d
+            .decode(&json!({"type":"response.text.text","item_id":"answer","text":"你好"}))
+            .unwrap();
+        assert_eq!(partial["text"], "你好");
+        assert_eq!(partial["final"], false);
         let t = d
             .decode(&json!({"type":"response.text.done","item_id":"answer","text":"你好"}))
             .unwrap();
@@ -803,7 +948,13 @@ mod tests {
     fn configuration_does_not_return_the_key_and_clear_removes_it() {
         let service = SubtitleService::default();
         let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
-        let configured = service.dispatch(&core, &json!({"action":"configure","workspace":"test-space","region":"cn-beijing","api_key":"secret-for-test"})).unwrap();
+        let configured = service
+            .dispatch(
+                &core,
+                &json!({"action":"configure","provider":"qwencloud","api_key":"secret-for-test"}),
+            )
+            .unwrap();
+        assert_eq!(configured["provider"], QWENCLOUD);
         assert_eq!(configured["has_key"], true);
         assert!(!configured.to_string().contains("secret-for-test"));
         assert!(core
@@ -811,7 +962,12 @@ mod tests {
             .unwrap()
             .unwrap()
             .starts_with("dpapi:"));
-        let cleared = service.dispatch(&core, &json!({"action":"configure","workspace":"test-space","region":"cn-beijing","clear_key":true})).unwrap();
+        let cleared = service
+            .dispatch(
+                &core,
+                &json!({"action":"configure","provider":"qwencloud","clear_key":true}),
+            )
+            .unwrap();
         assert_eq!(cleared["has_key"], false);
     }
 
@@ -848,14 +1004,17 @@ mod tests {
                                 break;
                             }
                         }
-                        for event in [
+                        let events = [
                             json!({"type":"input_audio_buffer.speech_started","item_id":"source","audio_start_ms":0}),
                             json!({"type":"input_audio_buffer.speech_stopped","item_id":"source","audio_end_ms":250}),
                             json!({"type":"conversation.item.created","item":{"id":"target","role":"assistant"},"previous_item_id":"source"}),
                             json!({"type":"response.text.done","item_id":"target","text":"真实链路"}),
                             json!({"type":"conversation.item.input_audio_transcription.completed","item_id":"source","transcript":"transport"}),
-                        ] { socket.send(Message::Text(event.to_string().into())).await.unwrap(); }
+                        ];
                         if epoch == 0 {
+                            for event in events.iter().cloned() {
+                                socket.send(Message::Text(event.to_string().into())).await.unwrap();
+                            }
                             while let Some(Ok(frame)) = socket.next().await { if matches!(frame, Message::Close(_)) { break; } }
                         } else {
                             loop {
@@ -864,6 +1023,9 @@ mod tests {
                                     if event["type"] == "session.finish" { break; }
                                 }
                             }
+                            for event in events {
+                                socket.send(Message::Text(event.to_string().into())).await.unwrap();
+                            }
                             socket.send(Message::Text(json!({"type":"session.finished"}).to_string().into())).await.unwrap();
                         }
                     }
@@ -871,30 +1033,49 @@ mod tests {
                 let state = Arc::new(Mutex::new(State { status:"connecting", error:String::new(), epoch:0, sequence:0, events:VecDeque::new(), last_seen:Instant::now() }));
                 let (tx, rx) = mpsc::channel(16);
                 let worker_state = state.clone();
-                let worker = tokio::spawn(async move { run(&endpoint,"test-secret","auto","zh",rx,worker_state).await });
+                let stop = Arc::new(Notify::new());
+                let worker_stop = stop.clone();
+                let worker = tokio::spawn(async move { run(&endpoint,"test-secret","auto","zh",rx,worker_stop,worker_state).await });
                 for epoch in 0..2 {
                     if epoch > 0 {
-                        state.lock().unwrap().epoch = epoch;
+                        {
+                            let mut state = state.lock().unwrap();
+                            state.epoch = epoch;
+                            state.status = "connecting";
+                        }
                         tx.send(Input::Reset(epoch)).await.unwrap();
+                        while state.lock().unwrap().status != "running" {
+                            tokio::task::yield_now().await;
+                        }
                     }
                     tx.send(Input::Audio { pcm:vec![0;8000], position:if epoch == 0 { 10.0 } else { 120.0 }, rate:1.0, epoch }).await.unwrap();
-                    loop {
-                        let received = {
-                            let state = state.lock().unwrap();
-                            state.events.iter().filter(|e| e["epoch"] == epoch).cloned().collect::<Vec<_>>()
-                        };
-                        if received.len() >= 2 {
-                            assert_eq!(received[0]["text"], "真实链路");
-                            assert_eq!(received[0]["id"], received[1]["id"]);
-                            assert_eq!(received[0]["start"], if epoch == 0 { 10.0 } else { 120.0 });
-                            break;
+                    if epoch == 0 {
+                        loop {
+                            let received = {
+                                let state = state.lock().unwrap();
+                                state.events.iter().filter(|e| e["epoch"] == epoch).cloned().collect::<Vec<_>>()
+                            };
+                            if received.len() >= 2 {
+                                assert_eq!(received[0]["text"], "真实链路");
+                                assert_eq!(received[0]["id"], received[1]["id"]);
+                                assert_eq!(received[0]["start"], 10.0);
+                                break;
+                            }
+                            tokio::task::yield_now().await;
                         }
-                        tokio::task::yield_now().await;
                     }
                 }
-                tx.send(Input::Stop).await.unwrap();
+                state.lock().unwrap().status = "stopping";
+                stop.notify_one();
                 worker.await.unwrap().unwrap();
                 provider.await.unwrap();
+                let received = state.lock().unwrap().events.iter()
+                    .filter(|event| event["epoch"] == 1)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                assert_eq!(received.len(), 2);
+                assert_eq!(received[0]["text"], "真实链路");
+                assert_eq!(received[0]["id"], received[1]["id"]);
             }).await.expect("subtitle transport test timed out");
         });
     }

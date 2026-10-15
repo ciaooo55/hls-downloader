@@ -6,6 +6,8 @@ param(
     [string]$EngineReplacement = '',
     [string]$NativeHostReplacement = '',
     [string]$PresenterReplacement = '',
+    [string]$UpdaterReplacement = '',
+    [string]$DesktopJarReplacement = '',
     [string]$ProvenanceReplacement = '',
     [string]$ExtensionArchivesDirectory = '',
     [string]$NativeDependenciesDirectory = ''
@@ -31,6 +33,27 @@ try {
     [IO.File]::WriteAllText($wxs, $text, (New-Object Text.UTF8Encoding($false)))
     # 修复单个 Core 时复用已验收安装包的其他文件，不再构建整套应用镜像。
     [xml]$model = $text
+    # 部分旧基础包没有安装向导；补上目录选择，不能只支持命令行 INSTALLDIR。
+    if ($model.SelectNodes("//*[local-name()='Dialog']").Count -eq 0) {
+        $namespace = $model.DocumentElement.NamespaceURI
+        $product = $model.Wix.Product
+        $ui = $model.CreateElement('UIRef', $namespace)
+        $ui.SetAttribute('Id', 'WixUI_InstallDir')
+        $product.AppendChild($ui) | Out-Null
+        $property = $model.CreateElement('Property', $namespace)
+        $property.SetAttribute('Id', 'WIXUI_INSTALLDIR')
+        $property.SetAttribute('Value', 'INSTALLDIR')
+        $product.AppendChild($property) | Out-Null
+        $license = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../LICENSE'))
+        $license = $license.Replace('\', '\\').Replace('{', '\{').Replace('}', '\}')
+        $license = [regex]::Replace($license, '\r?\n', '\par ')
+        $licensePath = Join-Path $work 'License.rtf'
+        [IO.File]::WriteAllText($licensePath, '{\rtf1\ansi\deff0 {\fonttbl {\f0 Segoe UI;}}\f0\fs20 ' + $license + '}', [Text.Encoding]::ASCII)
+        $variable = $model.CreateElement('WixVariable', $namespace)
+        $variable.SetAttribute('Id', 'WixUILicenseRtf')
+        $variable.SetAttribute('Value', $licensePath)
+        $product.AppendChild($variable) | Out-Null
+    }
     # 标准 FindRelatedProducts 已支持三段版本；jpackage 自定义检测会错误清空已找到的旧产品。
     foreach ($node in @($model.SelectNodes("//*[local-name()='Custom' and @Action='JpFindRelatedProducts'] | //*[local-name()='CustomAction' and @Id='JpFindRelatedProducts']"))) {
         $node.ParentNode.RemoveChild($node) | Out-Null
@@ -81,6 +104,8 @@ try {
         @('HLSDownloaderEngine.exe', $EngineReplacement),
         @('HLSDownloaderNativeHost.exe', $NativeHostReplacement),
         @('HLSDownloaderPresenter.exe', $PresenterReplacement),
+        @('HLSDownloaderUpdater.exe', $UpdaterReplacement),
+        @('HLSDownloaderDesktop-7.0.3.jar', $DesktopJarReplacement),
         @('BUILD-PROVENANCE.json', $ProvenanceReplacement)
     )) {
         if ([string]::IsNullOrWhiteSpace($replacement[1])) { continue }

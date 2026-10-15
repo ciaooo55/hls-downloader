@@ -1021,7 +1021,7 @@ def run_real(args) -> dict[str, Any]:
                 before={t['task_id'] for t in tasks()}
                 _click_download(driver,page,name)
                 wait(lambda:presenter_window(runtime=runtime),f'{name} confirmation missing',20)
-                click_download_confirmation(evidence_path=args.report.with_name(f'{name}-click.json'))
+                click_download_confirmation(evidence_path=args.report.with_name(f'{name}-click.json'), runtime=runtime)
                 def completed():
                     found=[t for t in tasks() if t['task_id'] not in before
                         and (f'/{path or name + ".bin"}' in t['url'] if path else
@@ -1063,7 +1063,7 @@ def run_real(args) -> dict[str, Any]:
                 _click_download(driver,page,element_id)
                 wait(lambda:presenter_window(runtime=runtime),f'{name} confirmation missing',20)
                 click_download_confirmation(accept=accepted,
-                    evidence_path=args.report.with_name(f'{name}-click.json'))
+                    evidence_path=args.report.with_name(f'{name}-click.json'), runtime=runtime)
                 payload=_fixture_bytes(SMALL_SIZE)
                 expected=hashlib.sha256(payload).hexdigest()
                 if accepted:
@@ -1141,7 +1141,7 @@ def run_real(args) -> dict[str, Any]:
                 _click_download(driver,page,'generated_blob_reject')
                 wait(lambda:presenter_window(runtime=runtime),'Generated Blob rejection confirmation missing',20)
                 click_download_confirmation(accept=False,
-                    evidence_path=args.report.with_name('generated-blob-reject-click.json'))
+                    evidence_path=args.report.with_name('generated-blob-reject-click.json'), runtime=runtime)
                 def rejected_blob_completed():
                     matches=[item for item in _download_items(driver,inspector)
                         if Path(str(item.get('filename',''))).name==rejected_blob_filename]
@@ -1261,7 +1261,7 @@ def run_real(args) -> dict[str, Any]:
                 name = 'reject' if args.real_scenario == 'rejection' else 'fallback'
                 _click_download(driver,page,name)
                 wait(lambda:presenter_window(runtime=runtime),'Targeted confirmation missing',20)
-                click_download_confirmation(accept=name=='fallback', evidence_path=args.report.with_name(name+'-click.json'))
+                click_download_confirmation(accept=name=='fallback', evidence_path=args.report.with_name(name+'-click.json'), runtime=runtime)
                 if name == 'fallback':
                     def targeted_failure():
                         found=[t for t in tasks() if t['task_id'] not in initial and name+'.bin' in t['url']]
@@ -1292,7 +1292,7 @@ def run_real(args) -> dict[str, Any]:
                 assert paused and paused['paused'], paused
             assert before=={t['task_id'] for t in tasks()}, 'Task began before confirmation'
             record('real-takeover-blocks-before-desktop-confirmation' if args.browser=='firefox' else 'real-takeover-pauses-before-desktop-confirmation',paused)
-            click_download_confirmation(evidence_path=args.report.with_name('accept-click.json'))
+            click_download_confirmation(evidence_path=args.report.with_name('accept-click.json'), runtime=runtime)
             def completed():
                 found=[t for t in tasks() if t['task_id'] not in before and 'accept.bin' in t['url']]
                 created.update(t['task_id'] for t in found)
@@ -1310,7 +1310,7 @@ def run_real(args) -> dict[str, Any]:
             wait(lambda:presenter_window(runtime=runtime),'Reject confirmation missing',20)
             result['reject_before_confirmation'] = _download_items(driver, inspector)
             args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf8')
-            click_download_confirmation(accept=False, evidence_path=args.report.with_name('reject-click.json'))
+            click_download_confirmation(accept=False, evidence_path=args.report.with_name('reject-click.json'), runtime=runtime)
             record('real-desktop-rejection-browser-resumes-sha256',_assert_browser_completed(driver,inspector,'reject.bin'))
             single_resolved_handoff('reject')
             assert len(created)==len([t for t in tasks() if t['task_id'] not in initial]), 'Rejected takeover created another task'
@@ -1318,7 +1318,7 @@ def run_real(args) -> dict[str, Any]:
             wait(lambda:presenter_window(runtime=runtime),'Fallback confirmation missing',20)
             result['fallback_before_confirmation'] = _download_items(driver, inspector)
             args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf8')
-            click_download_confirmation(evidence_path=args.report.with_name('fallback-click.json'))
+            click_download_confirmation(evidence_path=args.report.with_name('fallback-click.json'), runtime=runtime)
             def failed():
                 found=[t for t in tasks() if t['task_id'] not in initial and 'fallback.bin' in t['url']]
                 created.update(t['task_id'] for t in found)
@@ -1348,7 +1348,7 @@ def run_real(args) -> dict[str, Any]:
             assert stopped, 'No live browser Native Host was interrupted'
             result['interrupted_host_pids']=stopped
             result['disconnect_after_host_stop'] = _download_items(driver, inspector)
-            click_download_confirmation(accept=False)
+            click_download_confirmation(accept=False, runtime=runtime)
             result['disconnect_after_reject'] = _download_items(driver, inspector)
             args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
             record('actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256',_assert_browser_completed(driver,inspector,'disconnect.bin'))

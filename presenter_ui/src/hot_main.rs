@@ -3,10 +3,10 @@
 slint::include_modules!();
 
 use hls_native_shell::{
-    activate_window_by_title, begin_caption_drag, center_window_by_title,
+    activate_window_by_title, center_window_by_title,
     claim_v7_presenter_instance, completion_sound, hide_window_from_taskbar_by_title, install_root,
     is_already_running_error, os_reduce_motion, spawn_core, spawn_desktop_ui,
-    window_work_area_size_by_title, CoreCommand, CoreEvent, CoreIpcClient, CorePipeResponse,
+    CoreCommand, CoreEvent, CoreIpcClient, CorePipeResponse,
     EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
@@ -154,6 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.iter().any(|arg| arg == "--self-test") {
         let confirm = ConfirmWindow::new()?;
+    confirm.on_move_window({ let weak = confirm.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
         confirm.set_window_title(CONFIRM.into());
         confirm.hide()?;
         attach_parent_console();
@@ -188,8 +189,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let initial_runtime = *runtime_settings.borrow();
 
     let confirm = ConfirmWindow::new()?;
+    confirm.on_move_window({ let weak = confirm.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
     let progress = ProgressWindow::new()?;
+    progress.on_move_window({ let weak = progress.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
     let complete = CompleteWindow::new()?;
+    complete.on_move_window({ let weak = complete.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
     correct_native_click_position(confirm.window());
     correct_native_click_position(progress.window());
     correct_native_click_position(complete.window());
@@ -278,10 +282,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let command = command.to_string();
             trace(&format!("confirm command: {command}"));
             match command.as_str() {
-                "drag" => {
-                    let _ = begin_caption_drag(CONFIRM);
-                    return;
-                }
                 "accept" => {
                     let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned())
                     else {
@@ -410,29 +410,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     complete.on_command({
-        let client = Rc::clone(&client);
         let completed_task = Rc::clone(&completed_task);
         let window = complete.as_weak();
         move |command| {
-            if command == "cancel_power" {
-                let _ = command_with_reconnect(&client, CoreCommand::CancelPowerAction);
-                if let Some(item) = window.upgrade() {
-                    item.set_power_hint("".into());
-                }
+            let Some(item) = window.upgrade() else { return };
+            if command == "hide_complete" {
+                let _ = item.hide();
                 return;
             }
-            if let Some(task_id) = completed_task.borrow().clone() {
-                let folder = command == "open_folder";
-                if folder || command == "open_file" {
-                    let _ = command_with_reconnect(
-                        &client,
-                        CoreCommand::OpenCompleted { task_id, folder },
-                    );
-                }
-            }
-            if let Some(item) = window.upgrade() {
-                let _ = item.hide();
-            }
+            if item.get_action_busy() { return; }
+            let cancel_power = command == "cancel_power";
+            let task_id = completed_task.borrow().clone();
+            let request = if cancel_power {
+                CoreCommand::CancelPowerAction
+            } else if command == "open_file" || command == "open_folder" {
+                let Some(task_id) = task_id.clone() else {
+                    item.set_action_text("无法找到已完成任务，请在主窗口打开任务详情".into());
+                    return;
+                };
+                CoreCommand::OpenCompleted { task_id, folder: command == "open_folder" }
+            } else {
+                return;
+            };
+            item.set_action_busy(true);
+            item.set_action_text("".into());
+            let result_window = window.clone();
+            thread::spawn(move || {
+                let result = CoreIpcClient::connect().and_then(|mut client| client.command(request));
+                let _ = result_window.upgrade_in_event_loop(move |item| {
+                    // 下一项下载完成后，旧窗口的操作结果不能隐藏新通知。
+                    if item.get_task_id().as_str() != task_id.as_deref().unwrap_or("") { return; }
+                    item.set_action_busy(false);
+                    match result {
+                        Ok(_) if cancel_power => item.set_power_hint("".into()),
+                        Ok(_) => { let _ = item.hide(); }
+                        Err(error) => item.set_action_text(format!("操作失败：{error}").into()),
+                    }
+                });
+            });
         }
     });
 
@@ -617,13 +632,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// by `--self-test`, which intentionally checks only component construction.
 fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::Error>> {
     let quit_timer = Timer::default();
-    quit_timer.start(TimerMode::SingleShot, Duration::from_secs(20), || {
+    let fixture_seconds = env::var("HLS_V7_PRESENTER_FIXTURE_SECONDS").ok()
+        .and_then(|value| value.parse::<u64>().ok()).unwrap_or(20).clamp(1, 600);
+    quit_timer.start(TimerMode::SingleShot, Duration::from_secs(fixture_seconds), || {
         let _ = slint::quit_event_loop();
     });
 
     match kind {
         "confirm" | "confirm-error" => {
             let window = ConfirmWindow::new()?;
+    window.on_move_window({ let weak = window.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
             window.set_window_title(CONFIRM.into());
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
@@ -633,10 +651,10 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_source_url("video.example.test/watch/42".into());
             window.set_source_host("video.example.test".into());
             window.set_download_host("media.example.test".into());
-            window.set_resource_meta("HTTP · .mp4 · video/mp4 · 128.0 MB".into());
+            window.set_resource_meta("HTTP · .mp4 · 128.0 MB".into());
             window.set_request_context("已安全继承网页凭据".into());
             window.set_request_details(
-                "GET · 支持 Referer / Origin / User-Agent / Cookie / Authorization".into(),
+                "请求方式：GET · 内容类型：video/mp4".into(),
             );
             window.set_category("media".into());
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
@@ -651,39 +669,47 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                     let _ = slint::quit_event_loop();
                 }
             });
+            correct_native_click_position(window.window());
             window.show()?;
+            round_native_window(window.window());
             fit_confirm_window(&window);
-            let _ = center_window_by_title(CONFIRM);
             let _ = activate_window_by_title(CONFIRM);
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
         "progress" => {
             let window = ProgressWindow::new()?;
+    window.on_move_window({ let weak = window.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.set_headline(PROGRESS_HEADLINE.into());
             window.set_filename("示例视频 · 1080p.mp4".into());
             window.set_speed("18.6 MB/s".into());
             window.set_progress(0.64);
-            window.on_command(|_| {
-                let _ = slint::quit_event_loop();
-            });
+            window.set_progress_known(true);
+            window.set_transferred("81.9 MB / 128.0 MB · 分片 64 / 100".into());
+            window.set_stage_label("正在下载".into());
+            window.set_remaining("剩余约 3 秒".into());
+            correct_native_click_position(window.window());
+            window.on_command(|_| { let _ = slint::quit_event_loop(); });
             window.show()?;
+            round_native_window(window.window());
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
         "complete" => {
             let window = CompleteWindow::new()?;
+    window.on_move_window({ let weak = window.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
             window.set_window_title(COMPLETE.into());
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.set_filename("示例视频 · 1080p.mp4".into());
+            window.set_details("128.0 MB · 已保存到本地".into());
             window.set_power_hint("将在 5 分钟后关机".into());
-            window.on_command(|_| {
-                let _ = slint::quit_event_loop();
-            });
+            correct_native_click_position(window.window());
+            window.on_command(|_| { let _ = slint::quit_event_loop(); });
             window.show()?;
+            round_native_window(window.window());
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
@@ -982,30 +1008,52 @@ fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
         })
 }
 
-// 输入为 rcWork 的物理尺寸；不抬高工作区上限，正常区域保持 620×584。
+// 输入为 rcWork 的物理尺寸；紧凑窗口不能超出可用工作区。
 fn confirm_window_logical_size(work_area: (u32, u32), scale_factor: f32) -> Option<(f32, f32)> {
     if work_area.0 == 0 || work_area.1 == 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
         return None;
     }
     Some((
-        (work_area.0 as f32 / scale_factor).min(620.0),
-        (work_area.1 as f32 / scale_factor).min(584.0),
+        (work_area.0 as f32 / scale_factor).min(520.0),
+        (work_area.1 as f32 / scale_factor).min(400.0),
     ))
 }
 
 // 仅在真实确认或 fixture 的 show() 成功后调用；离屏预热不参与尺寸适配。
 fn fit_confirm_window(confirm: &ConfirmWindow) {
-    let Some(work_area) = window_work_area_size_by_title(CONFIRM) else {
-        trace("无法读取确认窗工作区，未调整尺寸");
-        return;
-    };
-    let window = confirm.window();
-    let Some((width, height)) = confirm_window_logical_size(work_area, window.scale_factor())
-    else {
-        trace("确认窗工作区或缩放无效，未调整尺寸");
-        return;
-    };
-    window.set_size(slint::LogicalSize::new(width, height));
+    #[cfg(windows)] {
+        let weak = confirm.as_weak();
+        // show() 和首个计时器都可能早于 HWND 创建，等待 Winit 的实际创建通知。
+        let _ = slint::spawn_local(async move {
+            let Some(confirm) = weak.upgrade() else { return; };
+            use slint::winit_030::{winit::{dpi::{PhysicalPosition, PhysicalSize}, raw_window_handle::{HasWindowHandle, RawWindowHandle}}, WinitWindowAccessor};
+            use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+            let native = match confirm.window().winit_window().await {
+                Ok(native) => native,
+                Err(error) => { trace(&format!("fit confirm: {error}")); return; }
+            };
+            let Ok(handle) = native.window_handle() else { return; };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else { return; };
+            let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            let monitor = unsafe { MonitorFromWindow(handle.hwnd.get() as _, MONITOR_DEFAULTTONEAREST) };
+            if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 { trace(&format!("fit confirm: monitor query failed {}", std::io::Error::last_os_error())); return; }
+            let work_width = (info.rcWork.right - info.rcWork.left) as u32;
+            let work_height = (info.rcWork.bottom - info.rcWork.top) as u32;
+            let scale = native.scale_factor() as f32;
+            let Some((width, height)) = confirm_window_logical_size((work_width, work_height), scale) else { return; };
+            let width = (width * scale).round() as u32;
+            let height = (height * scale).round() as u32;
+            trace(&format!("fit confirm work={work_width}x{work_height} scale={scale} size={width}x{height}"));
+            let _ = native.request_inner_size(PhysicalSize::new(width, height));
+            native.set_outer_position(PhysicalPosition::new(
+                info.rcWork.left + ((work_width - width) / 2) as i32,
+                info.rcWork.top + ((work_height - height) / 2) as i32,
+            ));
+            round_native_window(confirm.window());
+        });
+    }
+    #[cfg(not(windows))] let _ = confirm;
 }
 
 fn show_next_offer(
@@ -1070,12 +1118,15 @@ fn show_next_offer(
     item.set_request_context(
         if offer.credential_ref.is_some() || offer.replay_context_ref.is_some() {
             "已安全继承网页凭据".into()
+        } else if !offer.source_page_url.trim().is_empty() {
+            "来自浏览器页面".into()
         } else {
-            "已继承来源页面".into()
+            "直接下载链接".into()
         },
     );
     item.set_request_details(format_request_details(&offer).into());
     item.set_duplicate_text(duplicate_text.into());
+    item.set_details_expanded(false);
     item.set_remember_directory(true);
     item.set_suppress_site_kind(false);
     item.set_busy(false);
@@ -1116,7 +1167,6 @@ fn show_next_offer(
         }
         let _ = hide_window_from_taskbar_by_title(CONFIRM);
         fit_confirm_window(&item);
-        let _ = center_window_by_title(CONFIRM);
         let _ = activate_window_by_title(CONFIRM);
     } else if let Ok(mut active) = active_handoff.lock() {
         *active = None;
@@ -1176,19 +1226,103 @@ fn trace(message: &str) {
     }
 }
 
+#[cfg(windows)]
+unsafe extern "system" fn frameless_window_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    subclass_id: usize,
+    _data: usize,
+) -> isize {
+    use windows_sys::Win32::UI::{Shell::{DefSubclassProc, RemoveWindowSubclass}, WindowsAndMessaging::{GWL_STYLE, STYLESTRUCT, WM_STYLECHANGING, WM_NCACTIVATE, WM_NCPAINT, WM_NCDESTROY, WS_CAPTION}};
+    match message {
+        // 保留 Winit 的焦点状态更新，但禁止 DefWindowProc 在失焦时绘制系统标题和白边。
+        WM_NCACTIVATE => DefSubclassProc(hwnd, message, wparam, -1),
+        WM_NCPAINT => 0,
+        // Winit 在更新置顶/可见状态时会重新加上 WS_CAPTION；这些自绘浮窗不使用系统标题栏。
+        WM_STYLECHANGING if wparam as i32 == GWL_STYLE => {
+            (*(lparam as *mut STYLESTRUCT)).styleNew &= !WS_CAPTION;
+            0
+        }
+        WM_NCDESTROY => {
+            RemoveWindowSubclass(hwnd, Some(frameless_window_proc), subclass_id);
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+        _ => DefSubclassProc(hwnd, message, wparam, lparam),
+    }
+}
+
+fn round_native_window(window: &slint::Window) {
+    #[cfg(windows)] {
+        use slint::winit_030::{winit::raw_window_handle::{HasWindowHandle, RawWindowHandle}, WinitWindowAccessor};
+        use windows_sys::Win32::{Foundation::RECT, Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn}, UI::WindowsAndMessaging::{GetWindowRect, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, WS_CAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE}};
+        let _ = window.with_winit_window(|native| {
+            let Ok(handle) = native.window_handle() else { return; };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else { return; };
+            unsafe {
+                let hwnd = handle.hwnd.get() as _;
+                windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(frameless_window_proc), 1, 0);
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                if style & WS_CAPTION as isize != 0 {
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, style & !(WS_CAPTION as isize));
+                    SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
+                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                let mut bounds: RECT = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut bounds) == 0 { return; }
+                let diameter = (28.0 * window.scale_factor()).round() as i32;
+                let region = CreateRoundRectRgn(0, 0, bounds.right - bounds.left + 1, bounds.bottom - bounds.top + 1, diameter, diameter);
+                if !region.is_null() && SetWindowRgn(hwnd, region, 1) == 0 {
+                    DeleteObject(region);
+                }
+            }
+        });
+    }
+    #[cfg(not(windows))] let _ = window;
+}
+
+fn move_window(window: &slint::Window, dx: f32, dy: f32) {
+    let position = window.position();
+    let scale = window.scale_factor();
+    trace(&format!("move window by {dx},{dy} from {},{}", position.x, position.y));
+    window.set_position(slint::PhysicalPosition::new(
+        position.x + (dx * scale).round() as i32,
+        position.y + (dy * scale).round() as i32,
+    ));
+}
+
 fn correct_native_click_position(window: &slint::Window) {
     #[cfg(windows)]
     {
         use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
         use windows_sys::Win32::Foundation::POINT;
         use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
         use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-        // Winit 的多窗口事件循环复用鼠标位置；Windows 会过滤同坐标的移动事件。
-        // 确认窗再次出现时，点击可能被当成上一进度窗的标题栏点击。
-        // 按当前 HWND 的客户区坐标派发真实鼠标按下/释放，保持原有按钮回调。
-        window.on_winit_window_event(|window, event| {
+        // Winit 跨窗口复用并合并鼠标位置。每个窗口立即派发移动，避免按钮坐标串窗，
+        // 也避免事件排队时 GetCursorPos 已变成拖动终点，导致按下位置落在标题栏外。
+        let cursor_position = std::cell::Cell::new(None::<slint::LogicalPosition>);
+        let left_pressed = std::cell::Cell::new(false);
+        window.on_winit_window_event(move |window, event| {
+            if matches!(event, winit::event::WindowEvent::Resized(_) | winit::event::WindowEvent::ScaleFactorChanged { .. }) {
+                round_native_window(window);
+            }
+            if let winit::event::WindowEvent::CursorMoved { position, .. } = event {
+                let position = slint::LogicalPosition::new(
+                    position.x as f32 / window.scale_factor(),
+                    position.y as f32 / window.scale_factor(),
+                );
+                cursor_position.set(Some(position));
+                let _ = window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                return EventResult::PreventDefault;
+            }
+            if matches!(event, winit::event::WindowEvent::CursorLeft { .. }) && left_pressed.get() {
+                // 鼠标已捕获，离开窗口不代表取消拖动；Winit 的默认按下状态被拦截了。
+                return EventResult::PreventDefault;
+            }
             let winit::event::WindowEvent::MouseInput {
                 state,
                 button: winit::event::MouseButton::Left,
@@ -1197,31 +1331,40 @@ fn correct_native_click_position(window: &slint::Window) {
             else {
                 return EventResult::Propagate;
             };
-            let position = window
+            let native_position = window
                 .with_winit_window(|native| {
                     let RawWindowHandle::Win32(handle) = native.window_handle().ok()?.as_raw()
                     else {
                         return None;
                     };
-                    let mut point = POINT { x: 0, y: 0 };
-                    unsafe {
-                        if GetCursorPos(&mut point) == 0
-                            || ScreenToClient(handle.hwnd.get() as _, &mut point) == 0
-                        {
-                            return None;
+                    let position = if let Some(position) = cursor_position.get() {
+                        position
+                    } else {
+                        let mut point = POINT { x: 0, y: 0 };
+                        unsafe {
+                            if GetCursorPos(&mut point) == 0
+                                || ScreenToClient(handle.hwnd.get() as _, &mut point) == 0
+                            {
+                                return None;
+                            }
                         }
-                    }
-                    Some(slint::LogicalPosition::new(
-                        point.x as f32 / window.scale_factor(),
-                        point.y as f32 / window.scale_factor(),
-                    ))
+                        slint::LogicalPosition::new(
+                            point.x as f32 / window.scale_factor(),
+                            point.y as f32 / window.scale_factor(),
+                        )
+                    };
+                    Some((handle.hwnd.get() as windows_sys::Win32::Foundation::HWND, position))
                 })
                 .flatten();
-            let Some(position) = position else {
+            let Some((hwnd, position)) = native_position else {
                 return EventResult::Propagate;
             };
-            let _ =
-                window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+            if *state == winit::event::ElementState::Pressed {
+                // 默认鼠标事件被下方拦截，需自行捕获才能在拖出窗口后继续收到移动和释放。
+                unsafe { SetCapture(hwnd); }
+                left_pressed.set(true);
+                let _ = window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+            }
             let button = slint::platform::PointerEventButton::Left;
             let event = if *state == winit::event::ElementState::Pressed {
                 slint::platform::WindowEvent::PointerPressed { position, button }
@@ -1233,6 +1376,13 @@ fn correct_native_click_position(window: &slint::Window) {
                 position.x, position.y
             ));
             let _ = window.try_dispatch_event(event);
+            if *state == winit::event::ElementState::Released {
+                unsafe { ReleaseCapture(); }
+                left_pressed.set(false);
+                cursor_position.set(None);
+                let _ = window.take_snapshot();
+                window.request_redraw();
+            }
             EventResult::PreventDefault
         });
     }
@@ -1396,14 +1546,21 @@ fn update_task_windows(
             .insert(snapshot.task_id.clone())
     {
         *completed_task.borrow_mut() = Some(snapshot.task_id.clone());
+        if let Some(item) = complete.upgrade() {
+            item.set_task_id(snapshot.task_id.clone().into());
+            item.set_action_busy(false);
+            item.set_action_text("".into());
+        }
         if settings.sound_enabled {
             completion_sound();
         }
         if settings.show_complete {
             if let Some(item) = complete.upgrade() {
+                item.set_details(format!("{} · 已保存到本地", format_bytes(snapshot.downloaded_bytes)).into());
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
                 if item.show().is_ok() {
+                    round_native_window(item.window());
                     let _ = hide_window_from_taskbar_by_title(COMPLETE);
                     let _ = center_window_by_title(COMPLETE);
                     let _ = activate_window_by_title(COMPLETE);
@@ -1459,13 +1616,28 @@ fn render_progress_hud(
         },
     );
     item.set_filename(snapshot.filename.clone().into());
-    item.set_speed(if snapshot.speed_bytes_per_sec > 0 {
-        format_speed(snapshot.speed_bytes_per_sec).into()
-    } else {
-        snapshot.stage.clone().into()
-    });
+    let processing = matches!(snapshot.status.as_str(), "merging" | "checking");
+    item.set_processing(processing);
+    item.set_speed(if processing { "本地处理中".into() } else { format_speed(snapshot.speed_bytes_per_sec).into() });
+    item.set_remaining(if processing {
+        "请稍候".into()
+    } else if snapshot.speed_bytes_per_sec > 0 {
+        snapshot.total_bytes.filter(|total| *total > snapshot.downloaded_bytes)
+            .map(|total| {
+                let seconds = (total - snapshot.downloaded_bytes).div_ceil(snapshot.speed_bytes_per_sec);
+                if seconds >= 60 { format!("剩余约 {} 分 {} 秒", seconds / 60, seconds % 60) }
+                else { format!("剩余约 {seconds} 秒") }
+            }).unwrap_or_default().into()
+    } else { "".into() });
+    item.set_stage_label(match snapshot.status.as_str() {
+        "merging" => "正在合并音视频",
+        "checking" => "正在校验文件",
+        "recording" => "正在录制",
+        _ => "正在下载",
+    }.into());
     item.set_progress(task_progress(snapshot));
-    item.set_total_known(snapshot.total_bytes.is_some_and(|total| total > 0));
+    item.set_progress_known(snapshot.total_bytes.is_some_and(|total| total > 0)
+        || (!snapshot.is_live && matches!(snapshot.resource_kind, ResourceKind::Hls | ResourceKind::Dash) && snapshot.total_ranges > 0));
     item.set_transferred(match snapshot.total_bytes.filter(|total| *total > 0) {
         Some(total) => format!(
             "已下载 {} / {}",
@@ -1473,11 +1645,19 @@ fn render_progress_hud(
             format_bytes(total)
         )
         .into(),
+        None if !snapshot.is_live && snapshot.total_ranges > 0 => format!("{} · 分片 {} / {}", format_bytes(snapshot.downloaded_bytes), snapshot.completed_ranges, snapshot.total_ranges).into(),
         None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
     });
-    if item.show().is_ok() {
+    let first_show = !item.window().is_visible();
+    if first_show && item.show().is_ok() {
+        round_native_window(item.window());
+        let _ = center_window_by_title(item.get_headline().as_str());
         let _ = hide_window_from_taskbar_by_title(item.get_headline().as_str());
     }
+    // Win32 移动/隐藏后 softbuffer 的缓冲年龄可能仍为 1，局部绘制会丢掉标题和按钮。
+    // 软件快照重置绘制缓存；小浮窗随后重画完整一帧，不能只刷新变化的速度区域。
+    let _ = item.window().take_snapshot();
+    item.window().request_redraw();
 }
 
 fn filename_from_url(url: &str) -> String {
@@ -1611,24 +1791,26 @@ fn format_resource_meta(offer: &ResourceOffer, filename: &str) -> String {
     } else {
         "大小未知".into()
     };
-    let mime = offer.mime_type.trim();
-    let mut parts = vec![
+    let parts = [
         resource_kind_label(offer.resource_kind).to_string(),
         extension,
+        size,
     ];
-    if !mime.is_empty() {
-        parts.push(mime.chars().take(64).collect());
-    }
-    parts.push(size);
     parts.join(" · ")
 }
 
 fn format_request_details(offer: &ResourceOffer) -> String {
     let method = offer.request_method.trim().to_ascii_uppercase();
-    format!(
-        "{} · 支持 Referer / Origin / User-Agent / Cookie / Authorization",
+    let request = format!(
+        "请求方式：{}",
         if method.is_empty() { "GET" } else { &method }
-    )
+    );
+    let mime = offer.mime_type.trim();
+    if mime.is_empty() {
+        request
+    } else {
+        format!("{request} · 内容类型：{mime}")
+    }
 }
 
 fn canonical_url(value: &str) -> &str {
@@ -1673,6 +1855,12 @@ fn pick_folder(_initial: &str) -> Result<Option<String>, String> {
 }
 
 fn task_progress(task: &TaskSnapshot) -> f32 {
+    if matches!(task.status.as_str(), "completed" | "done") {
+        return 1.0;
+    }
+    if !task.is_live && matches!(task.resource_kind, ResourceKind::Hls | ResourceKind::Dash) && task.total_ranges > 0 {
+        return (task.completed_ranges as f32 / task.total_ranges as f32).clamp(0.0, 1.0);
+    }
     task.total_bytes
         .filter(|total| *total > 0)
         .map(|total| task.downloaded_bytes as f32 / total as f32)
@@ -1704,6 +1892,7 @@ fn power_label(action: &str) -> &'static str {
     match action {
         "shutdown" => "关机",
         "sleep" => "睡眠",
+        "hibernate" => "休眠",
         _ => "系统操作",
     }
 }
@@ -1734,16 +1923,16 @@ mod tests {
     fn confirm_window_size_matches_work_area_height_at_each_dpi() {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             for (logical_height, expected_height) in [
-                (480.0_f32, 480.0),
-                (516.0, 516.0),
-                (568.0, 568.0),
-                (584.0, 584.0),
-                (816.0, 584.0),
+                (240.0_f32, 240.0),
+                (320.0, 320.0),
+                (360.0, 360.0),
+                (400.0, 400.0),
+                (816.0, 400.0),
             ] {
                 let physical = ((960.0 * scale) as u32, (logical_height * scale) as u32);
                 assert_eq!(
                     confirm_window_logical_size(physical, scale),
-                    Some((620.0, expected_height)),
+                    Some((520.0, expected_height)),
                     "工作区={physical:?}，缩放={scale}"
                 );
             }
@@ -1753,13 +1942,13 @@ mod tests {
     #[test]
     fn confirm_window_size_keeps_preferred_size_when_it_fits() {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
-            for (width, height) in [(620.0, 584.0), (960.0, 816.0), (1920.0, 1080.0)] {
+            for (width, height) in [(520.0, 400.0), (960.0, 816.0), (1920.0, 1080.0)] {
                 assert_eq!(
                     confirm_window_logical_size(
                         ((width * scale) as u32, (height * scale) as u32),
                         scale,
                     ),
-                    Some((620.0, 584.0))
+                    Some((520.0, 400.0))
                 );
             }
         }
@@ -1770,17 +1959,17 @@ mod tests {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             assert_eq!(
                 confirm_window_logical_size(
-                    ((600.0 * scale) as u32, (320.0 * scale) as u32),
+                    ((480.0 * scale) as u32, (320.0 * scale) as u32),
                     scale
                 ),
-                Some((600.0, 320.0))
+                Some((480.0, 320.0))
             );
         }
         // 物理像素不能整除缩放时，也不能向上取整越过工作区。
-        let (width, height) = confirm_window_logical_size((901, 719), 1.5).unwrap();
-        assert!((width - 901.0 / 1.5).abs() < 0.001);
-        assert!((height - 719.0 / 1.5).abs() < 0.001);
-        assert!(width * 1.5 <= 901.001 && height * 1.5 <= 719.001);
+        let (width, height) = confirm_window_logical_size((751, 479), 1.5).unwrap();
+        assert!((width - 751.0 / 1.5).abs() < 0.001);
+        assert!((height - 479.0 / 1.5).abs() < 0.001);
+        assert!(width * 1.5 <= 751.001 && height * 1.5 <= 479.001);
     }
 
     #[test]
@@ -1788,10 +1977,10 @@ mod tests {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             assert_eq!(
                 confirm_window_logical_size(
-                    ((600.0 * scale) as u32, (816.0 * scale) as u32),
+                    ((480.0 * scale) as u32, (816.0 * scale) as u32),
                     scale
                 ),
-                Some((600.0, 584.0)),
+                Some((480.0, 400.0)),
                 "仅宽度受限，缩放={scale}"
             );
         }
@@ -1801,11 +1990,11 @@ mod tests {
     fn confirm_window_size_converts_physical_work_area_before_clamping() {
         // 直接给出物理工作区，防止把物理像素当成逻辑尺寸或重复应用 DPI。
         for (physical, scale, expected) in [
-            ((1366, 720), 1.5_f32, (620.0, 480.0)),
-            ((1920, 1032), 2.0, (620.0, 516.0)),
-            ((1600, 852), 1.5, (620.0, 568.0)),
-            ((1280, 730), 1.25, (620.0, 584.0)),
-            ((1920, 1020), 1.25, (620.0, 584.0)),
+            ((750, 480), 1.5_f32, (500.0, 320.0)),
+            ((960, 640), 2.0, (480.0, 320.0)),
+            ((1600, 852), 1.5, (520.0, 400.0)),
+            ((650, 450), 1.25, (520.0, 360.0)),
+            ((1920, 1020), 1.25, (520.0, 400.0)),
         ] {
             assert_eq!(
                 confirm_window_logical_size(physical, scale),
@@ -1869,9 +2058,12 @@ mod tests {
         assert_eq!(file_extension("movie.M3U8?token=secret"), "m3u8");
         assert_eq!(
             format_resource_meta(&offer, "movie.m3u8"),
-            "HLS · .m3u8 · application/vnd.apple.mpegurl · 128.0 MB"
+            "HLS · .m3u8 · 128.0 MB"
         );
-        assert!(format_request_details(&offer).contains("Referer / Origin / User-Agent"));
+        assert_eq!(
+            format_request_details(&offer),
+            "请求方式：GET · 内容类型：application/vnd.apple.mpegurl"
+        );
         assert_eq!(
             download_category("setup.exe", ResourceKind::File),
             "program"

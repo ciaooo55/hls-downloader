@@ -14,7 +14,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   let status = 'stopped'
   let error = ''
   let epoch = 0
-  let stopCapture: (() => void) | undefined
+  let stopCapture: (() => void | Promise<void>) | undefined
   let prefetch: PrefetchAudio | undefined
   let capture = ''
   let note = ''
@@ -127,7 +127,10 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
         pageUrl = nextPage
       }
       if (selected && (!selected.isConnected || selected.currentSrc !== sourceUrl)) {
-        stopCapture?.(); stopCapture = undefined
+        const cleanup = stopCapture; stopCapture = undefined
+        try { await cleanup?.() } catch {
+          void send({ type: 'subtitle-capture-error', sessionId, error: '音频尾部未能提交给字幕服务' })
+        }
         clearInterval(clockTimer); clockTimer = undefined
         selected.removeEventListener('seeking', reset); selected.removeEventListener('ratechange', reset)
         void send({ type: 'subtitle-stop' }); selected = undefined; sessionId = ''; cues.clear(); live = undefined
@@ -139,8 +142,8 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     if (invalidated) return
     for (const [media, ui] of players) {
       const rect = media.getBoundingClientRect()
-      const audio = media instanceof HTMLAudioElement
-      const visible = rect.width >= 180 && rect.height >= (audio ? 24 : 60) && rect.bottom > 0 && rect.top < innerHeight
+      // Firefox 的原生音频文档以 40px VIDEO 呈现，紧凑控件也需要字幕显示空间。
+      const visible = rect.width >= 180 && rect.height >= 24 && rect.bottom > 0 && rect.top < innerHeight
       ui.host.style.display = visible ? 'block' : 'none'
       const fullscreen = document.fullscreenElement
       let ancestor: Node = media
@@ -148,7 +151,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       const container = fullscreen && fullscreen.contains(ancestor) && fullscreen !== media ? fullscreen : document.documentElement
       if (ui.host.parentElement !== container) container.append(ui.host)
       ui.host.style.left = `${rect.left}px`; ui.host.style.top = `${rect.top}px`
-      ui.host.style.width = `${rect.width}px`; ui.host.style.height = `${audio ? Math.max(rect.height, 110) : rect.height}px`
+      ui.host.style.width = `${rect.width}px`; ui.host.style.height = `${Math.max(rect.height, 110)}px`
       const active = selected === media && !['stopped', 'failed'].includes(status)
       ui.back.hidden = ui.next.hidden = !allowed || !active && !(selected === media && cues.size)
       ui.earlier.hidden = ui.later.hidden = !active
@@ -209,8 +212,10 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
         const stream = capture.call(media)
         if (!stream.getAudioTracks().length) { stream.getTracks().forEach(t => t.stop()); throw new Error('播放器未提供可采集音轨，请开始播放或使用 Edge / Chrome') }
         // AudioContext 只读取音频；保持采集流完整，统一在结束时释放各轨道。
-        const cleanup = await captureSubtitleAudio(stream, false, (audio, capturedAt) => {
-          if (id === sessionId) void send({ type: 'subtitle-audio', sessionId: id, audio, capturedAt }).catch(() => undefined)
+        const cleanup = await captureSubtitleAudio(stream, false, (audio, capturedAt, finalFlush) => {
+          if (id === sessionId) return send({ type: 'subtitle-audio', sessionId: id, audio, capturedAt, finalFlush }).then(response => {
+            if (!response?.ok) throw new Error('音频尾部未能提交给字幕服务')
+          })
         })
         if (id !== sessionId) { cleanup(); return }
         stopCapture = cleanup
@@ -218,7 +223,11 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       })().then(() => respond({ ok: true })).catch(reason => respond({ ok: false, error: reason instanceof Error ? reason.message : '播放器音频采集失败' }))
       return true
     }
-    if (message?.type === 'subtitle-capture-stop' && message.sessionId === sessionId) { stopCapture?.(); stopCapture = undefined; respond({ ok: true }); return }
+    if (message?.type === 'subtitle-capture-stop' && message.sessionId === sessionId) {
+      const cleanup = stopCapture; stopCapture = undefined
+      void Promise.resolve(cleanup?.()).then(() => respond({ ok: true }), () => respond({ ok: false, error: '音频尾部未能提交给字幕服务' }))
+      return true
+    }
     if (message?.type !== 'subtitle-state' || message.sessionId !== sessionId) return
     status = message.status; error = message.error || ''; capture = message.capture || ''; note = message.note || ''
     if (['failed', 'stopped'].includes(status)) {

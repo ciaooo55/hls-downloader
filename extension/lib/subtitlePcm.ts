@@ -5,6 +5,11 @@ export class SubtitlePcm {
   private chunk = new Int16Array(4000)
   private used = 0
   constructor(private readonly inputRate: number, private readonly emit: (pcm: Int16Array) => void) {}
+  flush(): void {
+    if (!this.used) return
+    this.emit(this.chunk.slice(0, this.used))
+    this.chunk = new Int16Array(4000); this.used = 0
+  }
   push(channels: Float32Array[]): void {
     if (!channels.length) return
     const ratio = this.inputRate / 16000

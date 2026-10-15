@@ -5,14 +5,7 @@ fn window_long_ptr_call_succeeded(value: isize, last_error: u32) -> bool {
     value != 0 || last_error == 0
 }
 
-/// 把一个轴上居中到工作区，**并把偏移夹到非负**。
-///
-/// 不夹会怎样：窗口比工作区还高时 `(工作区高 − 窗口高) / 2` 是负数，
-/// 窗口顶边被推到工作区上方，标题栏和关闭按钮都够不到，用户只能改缩放或拖任务栏。
-/// presenter 的窗口尺寸是写死的逻辑值（`hot.slint` 里 620×584 / 400×204 / 440×188），
-/// 在 1366×768@150%（工作区约 911×480）、1600×900@150%（约 1067×568）这类档位上确实会大于工作区。
-///
-/// 夹取后窗口仍可能比工作区大，但至少**顶边/左边贴着工作区**，标题栏可见可点。
+/// 超出工作区时仍保留左上角，避免标题栏被居中到屏幕外。
 #[cfg(any(windows, test))]
 fn clamp_centered_axis(work_start: i32, work_size: i32, window_size: i32) -> i32 {
     work_start + ((work_size - window_size) / 2).max(0)
@@ -185,13 +178,14 @@ pub fn center_window_by_title(title: &str) -> bool {
 /// globally always-on-top. Windows may ignore a plain `show()` when another
 /// process owns the foreground; a TOPMOST -> NOTOPMOST pulse makes the user
 /// initiated browser confirmation or completion notice visible, then restores
-/// normal z-order immediately.
+/// normal z-order immediately for windows that were not already always-on-top.
 pub fn activate_window_by_title(title: &str) -> bool {
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            BringWindowToTop, SetForegroundWindow, SetWindowPos, ShowWindow, HWND_NOTOPMOST,
-            HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE,
+            BringWindowToTop, GetWindowLongPtrW, SetForegroundWindow, SetWindowPos, ShowWindow,
+            GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+            SW_RESTORE, WS_EX_TOPMOST,
         };
 
         let Some(raw_hwnd) = window_handle_by_title(title) else {
@@ -199,6 +193,8 @@ pub fn activate_window_by_title(title: &str) -> bool {
         };
         let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
         unsafe {
+            // Slint 已声明置顶的弹窗必须保留该状态；否则主界面下一次获得焦点就会遮住它。
+            let was_topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
             ShowWindow(hwnd, SW_RESTORE);
             let raised = SetWindowPos(
                 hwnd,
@@ -213,7 +209,7 @@ pub fn activate_window_by_title(title: &str) -> bool {
             let focused = SetForegroundWindow(hwnd) != 0;
             let restored = SetWindowPos(
                 hwnd,
-                HWND_NOTOPMOST,
+                if was_topmost { HWND_TOPMOST } else { HWND_NOTOPMOST },
                 0,
                 0,
                 0,

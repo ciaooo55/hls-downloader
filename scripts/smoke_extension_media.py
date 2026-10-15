@@ -81,7 +81,7 @@ function mseSlicedVideo() {
     if (source.readyState === 'open') source.endOfStream(); await value.play();
   }, {once:true});
 }
-function mseWorkerVideo() {
+function mseWorkerVideo(channel='worker', dedicated=false) {
   const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
   source.addEventListener('sourceopen', async () => {
     const buffer=source.addSourceBuffer('video/mp4; codecs="avc1.64001e, mp4a.40.2"');
@@ -89,10 +89,10 @@ function mseWorkerVideo() {
     const chunkMeta={level:0,sn:1,id:0,part:-1};
     const output=new Promise(resolve=>worker.addEventListener('message',event=>resolve(event.data.data.remuxResult.video.data1),{once:true}));
     const bytes=await new Promise(resolve=>{
-      const xhr=new XMLHttpRequest(); xhr.open('GET','/stream.mp4?channel=worker'); xhr.responseType='arraybuffer';
+      const xhr=new XMLHttpRequest(); xhr.open('GET','/stream.mp4?channel='+encodeURIComponent(channel)); xhr.responseType='arraybuffer';
       xhr.onreadystatechange=()=>{if(xhr.readyState===4 && xhr.status===200) resolve(xhr.response);}; xhr.send();
     });
-    worker.postMessage({cmd:'demux',instanceNo:0,chunkMeta,data:bytes},[bytes]);
+    worker.postMessage({cmd:'demux',...(dedicated ? {} : {instanceNo:0}),chunkMeta,data:bytes},[bytes]);
     const transformed=new Uint8Array(await output); const combined=new Uint8Array(transformed.length); combined.set(transformed);
     await append(buffer,combined); worker.terminate();
     if(source.readyState==='open') source.endOfStream(); await value.play();
@@ -168,6 +168,10 @@ if (mode === 'dual-source') {
   mseSlicedVideo();
 } else if (mode === 'mse-worker') {
   mseWorkerVideo();
+} else if (mode === 'mse-worker-dedicated') {
+  mseWorkerVideo('worker-dedicated',true);
+} else if (mode === 'multi-worker') {
+  mseWorkerVideo('worker-one',true); mseWorkerVideo('worker-two',true);
 } else if (mode === 'multi-mse') {
   mseVideo('one'); mseVideo('two');
 } else if (mode === 'hls-mse') {
@@ -510,7 +514,7 @@ def run(
                 driver.install_addon(str(resolved_addon), temporary=True)
             for mode in modes or (
                 "direct", "dual-source", "srcdoc", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
-                "ad-direct", "spa", "mse", "mse-sliced", "mse-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+                "ad-direct", "spa", "mse", "mse-sliced", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
                 "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
             ):
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")
@@ -523,7 +527,7 @@ def run(
                 state: dict = {}
                 while time.monotonic() < deadline:
                     state = _overlay_state(driver)
-                    expected = 2 if mode in {"multi-mse", "multi-dash-mse"} else 1
+                    expected = 2 if mode in {"multi-mse", "multi-dash-mse", "multi-worker"} else 1
                     playing = sum(not item.get("paused") and float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) == expected
                     actionable = state.get("labels", []).count("下载视频") == (0 if mode == "dash-unknown-mse" else expected)
                     expected_player = "main" if mode == "ad-direct" else "spa-two" if mode == "spa" else ""
@@ -546,7 +550,7 @@ def run(
                     raise AssertionError(f"{mode}: 子 frame content script 未就绪: {state}")
                 if state.get("browserErrors"):
                     raise AssertionError(f"{mode}: 页面或扩展产生浏览器错误: {state}")
-                expected = 2 if mode in {"multi-mse", "multi-dash-mse"} else 1
+                expected = 2 if mode in {"multi-mse", "multi-dash-mse", "multi-worker"} else 1
                 if sum(float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) != expected:
                     raise AssertionError(f"{mode}: 视频没有开始播放: {state}")
                 if mode == "dash-unknown-mse":
@@ -583,7 +587,7 @@ def run(
                     main_url = next((item["src"] for item in state["videos"] if "player=spa-two" in item.get("src", "")), "")
                     if state.get("resourceIds") != [_resource_id(main_url)]:
                         raise AssertionError(f"{mode}: pushState 后按钮仍绑定旧资源: {state}")
-                if mode in {"multi-mse", "multi-dash-mse"}:
+                if mode in {"multi-mse", "multi-dash-mse", "multi-worker"}:
                     resource_ids = [value for value in state.get("resourceIds", []) if value]
                     if len(resource_ids) != 2 or len(set(resource_ids)) != 2:
                         raise AssertionError(f"{mode}: 两个播放器没有绑定两个不同资源: {state}")

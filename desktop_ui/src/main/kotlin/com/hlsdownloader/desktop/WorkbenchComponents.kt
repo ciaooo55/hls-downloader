@@ -668,12 +668,23 @@ internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifi
 
 @Composable
 internal fun LinearProgressIndicator(
-    progress: () -> Float,
+    progress: (() -> Float)? = null,
     modifier: Modifier = Modifier,
     color: Color = blue,
     trackColor: Color = surface3,
 ) {
     val reduceMotion by MotionPreferences.reduceMotion
+    if (progress == null) {
+        val offset = if (reduceMotion) 0.35f else rememberInfiniteTransition(label = "unknown-progress").animateFloat(
+            initialValue = -0.3f, targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1_800, easing = LinearEasing)),
+            label = "unknown-progress-offset",
+        ).value
+        androidx.compose.foundation.Canvas(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate }.background(trackColor).clip(RoundedCornerShape(4.dp))) {
+            drawRect(color, topLeft = Offset(size.width * offset, 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.3f, size.height))
+        }
+        return
+    }
     val value by animateFloatAsState(
         progress().coerceIn(0f, 1f),
         animationSpec = tween(motionDurationMillis(reduceMotion, 180)),

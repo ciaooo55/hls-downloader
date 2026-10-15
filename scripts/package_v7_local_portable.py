@@ -65,7 +65,7 @@ def run(args):
         "Register-Browser.cmd": b'@echo off\r\n"%~dp0app\\resources\\HLSDownloaderEngine.exe" --register-native-host\r\nif errorlevel 1 pause\r\n',
         "README.txt": (
             "HLS Downloader 7.0.2 本地便携验证版\n\n"
-            "解压后双击 HLSDownloader.exe。首次运行会在本目录创建 data 和 downloads。\n"
+            "解压后双击 HLSDownloader.exe。任务与设置保存在本目录的 data，默认下载到当前用户的系统下载文件夹；可在设置中更改。\n"
             "接入浏览器：先运行 Register-Browser.cmd（当前用户注册，无需管理员），再加载 extensions/Chromium 中的插件。\n"
             "Chrome/Edge：扩展管理页开启开发者模式，选择加载已解压的扩展。移动整个目录后重新运行 Register-Browser.cmd。\n"
             "Firefox 的当前开发插件目录在 extensions/Firefox；这是未签名源码构建，开发加载不会自动成为持久安装。\n"

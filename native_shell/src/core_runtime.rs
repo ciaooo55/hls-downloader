@@ -748,6 +748,13 @@ impl CoreRuntime {
                     .unwrap_or_else(|_| {
                         root.join(".hls-tasks").join(task_id).join("progress.json")
                     });
+                let media_counts = std::fs::read_to_string(&progress).ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|value| Some((value.get("completed_segments")?.as_u64()?, value.get("total_segments")?.as_u64()?)));
+                if let Some((completed, total)) = media_counts {
+                    snapshot.completed_ranges = completed;
+                    snapshot.total_ranges = total;
+                }
                 let downloading = matches!(effective_status.as_str(), "downloading" | "recording");
                 let parts = crate::paint_from_progress(
                     &progress,
@@ -755,7 +762,10 @@ impl CoreRuntime {
                     snapshot.total_bytes.unwrap_or(0),
                     downloading,
                 );
-                if !parts.is_empty() {
+                if media_counts.is_none()
+                    && !matches!(spec.resource_kind, ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live)
+                    && !parts.is_empty()
+                {
                     let (workers, completed, total, hint) = crate::summarize_parts(&parts);
                     snapshot.active_workers = if downloading {
                         crate::active_worker_count(&progress).max(workers)
@@ -767,6 +777,10 @@ impl CoreRuntime {
                     snapshot.connection_hint = hint;
                     snapshot.connection_parts = parts;
                 }
+            }
+            if matches!(effective_status.as_str(), "completed" | "done") {
+                snapshot.completed_ranges = snapshot.total_ranges;
+                snapshot.active_workers = 0;
             }
             if snapshot.connection_hint.is_empty() {
                 snapshot.connection_hint = if snapshot.total_ranges > 0 {
@@ -852,6 +866,12 @@ impl CoreRuntime {
     pub fn set_output_path(&mut self, task_id: &str, path: String) {
         if let Some(snapshot) = self.tasks.get_mut(task_id) {
             if snapshot.output_path != path {
+                if let Some(filename) = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()) {
+                    if snapshot.title == snapshot.filename {
+                        snapshot.title = filename.to_string();
+                    }
+                    snapshot.filename = filename.to_string();
+                }
                 snapshot.output_path = path;
                 let updated = snapshot.clone();
                 self.publish(CoreEvent::TaskUpdated { snapshot: updated });
