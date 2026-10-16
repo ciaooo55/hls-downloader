@@ -49,7 +49,9 @@ def run(args):
             (folder / 'index.m3u8').write_text(playlist.replace('.ts', '.' + suffix))
         dash = fixture / 'dash'
         dash.mkdir()
-        generated = ff('-i', fixture / 'base.m3u8', '-c', 'copy', '-f', 'dash',
+        generated = ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=10',
+                       '-f', 'lavfi', '-i', 'sine=sample_rate=48000', '-t', '3',
+                       '-c:v', 'libx264', '-g', '10', '-c:a', 'aac', '-f', 'dash',
                        '-seg_duration', '1', dash / 'index.mpd')
         assert generated.returncode == 0, generated.stderr.decode(errors='replace')
         subtitles = fixture / 'subtitles'
