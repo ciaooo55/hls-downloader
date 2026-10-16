@@ -2,6 +2,7 @@
 from pathlib import Path
 import argparse
 from collections import Counter
+import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -40,12 +41,24 @@ def run(args):
                        '-hls_segment_filename', fixture / '%d.ts', fixture / 'base.m3u8')
         assert generated.returncode == 0, generated.stderr.decode(errors='replace')
         playlist = (fixture / 'base.m3u8').read_text()
-        for suffix in ('jpeg', 'png', 'bin'):
+        for suffix in ('jpeg', 'png', 'bin', 'keep', 'live'):
             folder = fixture / suffix
             folder.mkdir(exist_ok=True)
             for segment in fixture.glob('*.ts'):
                 shutil.copyfile(segment, folder / (segment.stem + '.' + suffix))
             (folder / 'index.m3u8').write_text(playlist.replace('.ts', '.' + suffix))
+        dash = fixture / 'dash'
+        dash.mkdir()
+        generated = ff('-i', fixture / 'base.m3u8', '-c', 'copy', '-f', 'dash',
+                       '-seg_duration', '1', dash / 'index.mpd')
+        assert generated.returncode == 0, generated.stderr.decode(errors='replace')
+        subtitles = fixture / 'subtitles'
+        subtitles.mkdir()
+        (subtitles / 'index.m3u8').write_text(
+            '#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",URI="subs.m3u8"\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=500000,SUBTITLES="subs"\n../base.m3u8\n')
+        (subtitles / 'subs.m3u8').write_text('#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:3,\nen.vtt\n#EXT-X-ENDLIST\n')
+        (subtitles / 'en.vtt').write_text('WEBVTT\n\n00:00:00.000 --> 00:00:02.500\nCleanup subtitle fixture\n')
         bad = fixture / 'bad'
         bad.mkdir(exist_ok=True)
         (bad / 'index.m3u8').write_text('#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nx.jpeg\n#EXT-X-ENDLIST\n')
@@ -81,14 +94,15 @@ def run(args):
                 'legal_terms_accepted': True, 'legal_terms_version': '2026-08-06-cn-1',
                 'download_complete_popup_enabled': False, 'download_progress_window_enabled': False,
                 'av_scan_enabled': False, 'auto_retry_failed_max': 0}})
+            work_root = root / 'downloads'
 
             def command(value):
                 return send(ipc, {'type': 'command', 'request_id': 2, 'command': value})
 
-            def create(suffix):
+            def create(suffix, kind='hls', playlist_name='index.m3u8', filename=None):
                 response = command({'kind': 'create_task', 'spec': {
-                    'url': f'http://127.0.0.1:{server.server_port}/{suffix}/index.m3u8',
-                    'filename': suffix + '-video.mp4', 'resource_kind': 'hls', 'concurrency': 2,
+                    'url': f'http://127.0.0.1:{server.server_port}/{suffix}/{playlist_name}',
+                    'filename': filename or suffix + '-video.mp4', 'resource_kind': kind, 'concurrency': 2,
                     'proxy': 'hls-downloader://direct-proxy'}})
                 return next(e['event']['snapshot']['task_id'] for e in response['events']
                             if e['event']['kind'] == 'task_created')
@@ -96,7 +110,7 @@ def run(args):
             def settled(tid):
                 return wait_task(ipc, tid, lambda t: t['status'] in ('failed', 'completed'), 90)
 
-            def verify(task):
+            def verify(task, keep_temp=False):
                 assert task['status'] == 'completed', task.get('error_message')
                 output = Path(task['output_path'])
                 meta = json.loads(subprocess.check_output([
@@ -107,6 +121,17 @@ def run(args):
                 assert float(meta['format']['duration']) >= 2.9
                 decoded = ff('-xerror', '-i', output, '-f', 'null', 'NUL')
                 assert decoded.returncode == 0, decoded.stderr.decode(errors='replace')
+                work = work_root / '.hls-tasks' / task['task_id']
+                assert (work / 'published.path').is_file(), 'Published output marker was lost'
+                temporary = [work / name for name in (
+                    'segments', 'audio', 'subs', 'live-subtitles', 'merged.mp4', 'muxed.mp4',
+                    'local.m3u8', 'init.mp4', 'vod_segments.json', 'dash_vod_segments.json')]
+                temporary += list(work.glob('seg-*.m4s'))
+                if keep_temp:
+                    assert (work / 'segments').is_dir(), 'Opted-in segments were deleted'
+                else:
+                    assert not any(path.exists() for path in temporary), f'Media cache remains: {work}'
+                return output
 
             tid = create('jpeg')
             assert requested.wait(20), 'JPEG fixture not requested'
@@ -125,14 +150,33 @@ def run(args):
             command({'kind': 'task_action', 'task_id': tid, 'action': 'retry'})
             verify(settled(tid))
             assert segment_counts == {k: v for k, v in counts.items() if k.endswith('.jpeg')}, 'Retry downloaded cached segments again'
-            report['checks'].append('jpeg: real MP4 with audio/video; failed merge log; cached retry without segment downloads')
-            for suffix in ('png', 'bin'):
-                verify(settled(create(suffix)))
-                report['checks'].append(suffix + ': MP4 format, audio/video and full decode')
+            report['checks'].append('jpeg: MP4 full decode; failed merge preserves segments; retry reuses and then cleans segments')
+            original = root / 'downloads' / 'jpeg-video.mp4'
+            original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+            renamed = verify(settled(create('png', filename='jpeg-video.mp4')))
+            assert renamed.name == 'jpeg-video_1.mp4', renamed
+            assert hashlib.sha256(original.read_bytes()).hexdigest() == original_hash
+            report['checks'].append('png: full decode; renamed output still resolves; existing output preserved; cache cleaned')
+            verify(settled(create('bin')))
+            report['checks'].append('bin: MP4 format, audio/video, full decode and cache cleanup')
+            verify(settled(create('live', kind='live')))
+            report['checks'].append('ended live HLS: full decode and cache cleanup')
+            subtitle_output = verify(settled(create('subtitles')))
+            sidecars = list(subtitle_output.parent.glob(subtitle_output.stem + '.*.vtt'))
+            assert sidecars and any('Cleanup subtitle fixture' in p.read_text() for p in sidecars)
+            report['checks'].append('HLS subtitles copied beside output before subtitle cache cleanup')
+            send(ipc, {'type': 'store_settings', 'request_id': 3, 'values': {'keep_temp_files': True}})
+            verify(settled(create('keep')), keep_temp=True)
+            report['checks'].append('keep_temp_files=true preserves media segments')
+            work_root = root / 'custom-work'
+            send(ipc, {'type': 'store_settings', 'request_id': 4, 'values': {
+                'keep_temp_files': False, 'temp_dir': str(work_root)}})
+            verify(settled(create('dash', kind='dash', playlist_name='index.mpd')))
+            report['checks'].append('DASH: custom work directory; full decode; video/audio fragments and merged intermediates cleaned')
             failed = settled(create('bad'))
             assert failed['status'] == 'failed' and failed['error_code'] == 'MEDIA_MERGE_FAILED', failed
             assert failed['error_stage'] == 'merging' and 'Output file does not contain any stream' in failed['error_message'], failed
-            assert list((root / 'downloads' / '.hls-tasks' / failed['task_id'] / 'segments').iterdir())
+            assert list((work_root / '.hls-tasks' / failed['task_id'] / 'segments').iterdir())
             report['checks'].append('invalid media fails at merging, exposes stderr and retains segments')
         report['passed'] = True
     except Exception:

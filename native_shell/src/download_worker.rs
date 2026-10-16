@@ -3792,6 +3792,29 @@ fn finish_published_task(
     download_subtitles: bool,
 ) -> Result<(), String> {
     let total = total.or_else(|| fs::metadata(published).ok().map(|meta| meta.len()));
+    crate::motw::mark_downloaded_file(published, &spec.url);
+    let mut keep_subtitles = false;
+    if download_subtitles {
+        if let Err(error) = copy_subtitle_sidecars(&paths.task_dir(), published) {
+            keep_subtitles = true;
+            let _ = writeln!(std::io::stderr(), "v7 task {task_id} subtitle copy failed: {error}");
+        }
+    }
+    if matches!(
+        spec.resource_kind,
+        crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
+    ) {
+        // 无法读取设置时保留现场；不能把读取失败当成用户允许删除临时文件。
+        let keep_temp = core.lock().ok().and_then(|guard| {
+            guard.store().setting_bool("keep_temp_files", false).ok()
+        }).unwrap_or(true);
+        if !keep_temp {
+            if let Err(error) = cleanup_completed_media(paths, published, keep_subtitles) {
+                let _ = writeln!(std::io::stderr(), "v7 task {task_id} temporary media cleanup failed: {error}");
+            }
+        }
+    }
+    // 先完成字幕和清理，再通知 UI；收到 completed 时媒体工作目录已收尾。
     match core.lock() {
         Ok(mut guard) => {
             if let Err(error) =
@@ -3823,10 +3846,6 @@ fn finish_published_task(
             );
         }
     }
-    crate::motw::mark_downloaded_file(published, &spec.url);
-    if download_subtitles {
-        copy_subtitle_sidecars(&paths.task_dir(), published);
-    }
     if let Err(error) = maybe_schedule_power(core, spec) {
         let _ = writeln!(
             std::io::stderr(),
@@ -3834,6 +3853,58 @@ fn finish_published_task(
         );
     }
     Ok(())
+}
+
+fn cleanup_completed_media(
+    paths: &TaskPaths,
+    published: &Path,
+    keep_subtitles: bool,
+) -> Result<(), String> {
+    let task_dir = paths.task_dir();
+    let root = logical_canonical(&task_dir);
+    let published = logical_canonical(published);
+    // 成品不存在时不能销毁仅存的分片；即使成品被配置在工作目录内，也必须保留。
+    if !published.is_file() {
+        return Err("published media is missing; retaining temporary files".into());
+    }
+    let entries = fs::read_dir(&task_dir).map_err(|error| error.to_string())?;
+    let mut first_error = None;
+    for entry in entries {
+        let result = (|| -> Result<(), String> {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // 只删媒体引擎生成的内容；保留成品定位、进度统计和未知文件。
+            let temporary = matches!(name.as_ref(),
+                "segments" | "audio" | "subs" | "live-subtitles" |
+                "payload.downloading" | "merged.mp4" | "muxed.mp4" | "init.mp4" |
+                "local.m3u8" | "vod_segments.json" | "dash_vod_segments.json" |
+                "live_state.json" | "live_subtitles.json"
+            ) || (name.starts_with("seg-") && name.ends_with(".m4s"));
+            if !temporary || (keep_subtitles && name == "subs") {
+                return Ok(());
+            }
+            let path = entry.path();
+            let canonical = logical_canonical(&path);
+            if !canonical.starts_with(&root) || published.starts_with(&canonical) {
+                return Ok(());
+            }
+            let result = if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            result.map_err(|error| format!("{}: {error}", path.display()))
+        })();
+        // 单个文件被占用时继续清理其它分片，不让一次失败保留整个视频的缓存。
+        if let Err(error) = result {
+            first_error.get_or_insert(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn ensure_publish_allowed(control: &Path) -> Result<(), String> {
@@ -3886,17 +3957,20 @@ fn published_path_allowed(candidate: &Path, paths: &TaskPaths) -> bool {
         .any(|root| canon == *root || canon.starts_with(root))
 }
 
-fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) {
+fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) -> Result<(), String> {
     let subs = task_dir.join("subs");
-    let Ok(entries) = fs::read_dir(subs) else {
-        return;
+    let entries = match fs::read_dir(subs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
     };
     let stem = published
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("download");
     let parent = published.parent().unwrap_or(Path::new("."));
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
         let ext = path
             .extension()
@@ -3911,16 +3985,17 @@ fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) {
             .and_then(|value| value.to_str())
             .unwrap_or("und");
         if lang.contains(['/', '\\', ':']) || lang.contains("..") {
-            continue;
+            return Err(format!("invalid subtitle filename: {}", path.display()));
         }
         let dest = parent.join(format!("{stem}.{lang}.{ext}"));
         let parent_canon = logical_canonical(parent);
         let dest_canon = logical_canonical(&dest);
         if dest_canon != parent_canon && !dest_canon.starts_with(&parent_canon) {
-            continue;
+            return Err(format!("subtitle destination escapes output directory: {}", dest.display()));
         }
-        let _ = fs::copy(&path, dest);
+        fs::copy(&path, &dest).map_err(|error| format!("copy subtitle {}: {error}", path.display()))?;
     }
+    Ok(())
 }
 
 fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> Result<(), String> {
@@ -9355,9 +9430,6 @@ fn stopping_cast_revokes_the_active_media_mount() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-// 只服务于下面三个 #[test]，却少了 #[cfg(test)]：于是每次不带 cfg(test) 的构建
-// （例如 `cargo test --bin HLSDownloaderUpdater` 里作为依赖编译的 lib）都会拿到
-// 两个"从未使用"的死函数告警。测试助手必须跟测试一起消失。
 #[cfg(test)]
 fn published_task_fixture(
     label: &str,
@@ -9418,6 +9490,111 @@ fn a_published_payload_is_recorded_not_failed() {
         published.to_string_lossy().into_owned()
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn completed_media_cleans_segments_and_keeps_published_files() {
+    for kind in [crate::ResourceKind::Hls, crate::ResourceKind::Dash, crate::ResourceKind::Live] {
+        let (core, paths, original, root) = published_task_fixture("media-cleanup");
+        let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+        let mut spec = task_spec_for(&core, &task_id);
+        spec.resource_kind = kind;
+        spec.expected_size = Some(b"temporary media".len() as u64);
+        let published = root.join("movie_1.mp4");
+        for dir in ["segments", "audio", "live-subtitles", "subs"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join("fragment.bin"), b"temporary media").unwrap();
+        }
+        for name in ["merged.mp4", "muxed.mp4", "init.mp4", "seg-0000.m4s", "local.m3u8", "vod_segments.json", "dash_vod_segments.json"] {
+            fs::write(root.join(name), b"temporary media").unwrap();
+        }
+        fs::write(root.join("subs/zh.srt"), b"1\n00:00:00,000 --> 00:00:01,000\nsubtitle\n").unwrap();
+        fs::write(&paths.progress, br#"{"completed_segments":2,"total_segments":2}"#).unwrap();
+        fs::write(root.join("user-notes.txt"), b"keep unknown files").unwrap();
+
+        complete_payload(&core, &task_id, &paths, &root.join("merged.mp4"), &spec).unwrap();
+
+        assert_eq!(core.lock().unwrap().tasks()[0].status, "completed");
+        assert_eq!(fs::read(&original).unwrap(), b"a complete payload");
+        assert_eq!(fs::read(&published).unwrap(), b"temporary media");
+        assert_eq!(resolve_published(&paths), published);
+        assert!(root.join("movie_1.zh.srt").is_file());
+        assert!(!paths.progress.exists());
+        assert!(root.join("user-notes.txt").is_file());
+        for name in ["segments", "audio", "live-subtitles", "subs", "merged.mp4", "muxed.mp4", "init.mp4", "seg-0000.m4s", "local.m3u8", "vod_segments.json", "dash_vod_segments.json"] {
+            assert!(!root.join(name).exists(), "leftover media work file: {name}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn completed_media_retains_opted_in_temps_and_failed_subtitle_copies() {
+    for keep_temp in [false, true] {
+        let (core, paths, published, root) = published_task_fixture("media-preserve");
+        let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+        let mut spec = task_spec_for(&core, &task_id);
+        spec.resource_kind = crate::ResourceKind::Hls;
+        core.lock().unwrap().store_mut().set_setting("keep_temp_files", keep_temp).unwrap();
+        fs::create_dir_all(root.join("segments")).unwrap();
+        fs::write(root.join("segments/000000.jpeg"), b"media segment").unwrap();
+        fs::create_dir_all(root.join("subs")).unwrap();
+        fs::write(root.join("subs/zh.srt"), b"subtitle to preserve").unwrap();
+        // 目标是目录，模拟字幕复制失败；成品仍应完成，字幕源不能被清理。
+        fs::create_dir_all(root.join("movie.zh.srt")).unwrap();
+
+        finish_published_task(&core, &task_id, &paths, &published, None, &spec, true).unwrap();
+
+        assert_eq!(core.lock().unwrap().tasks()[0].status, "completed");
+        assert_eq!(fs::read(root.join("subs/zh.srt")).unwrap(), b"subtitle to preserve");
+        assert_eq!(root.join("segments/000000.jpeg").exists(), keep_temp);
+        assert_eq!(fs::read(&published).unwrap(), b"a complete payload");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn incomplete_media_keeps_resumable_segments() {
+    for control in ["pause", "cancel", "run"] {
+        let (core, paths, published, root) = published_task_fixture("media-incomplete");
+        let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+        let mut spec = task_spec_for(&core, &task_id);
+        spec.resource_kind = crate::ResourceKind::Hls;
+        spec.expected_size = Some(999);
+        fs::write(&paths.control, control).unwrap();
+        let merged = root.join("merged.mp4");
+        fs::write(&merged, b"incomplete merge").unwrap();
+        fs::create_dir_all(root.join("segments")).unwrap();
+        fs::write(root.join("segments/000000.jpeg"), b"resumable segment").unwrap();
+
+        let error = complete_payload(&core, &task_id, &paths, &merged, &spec).unwrap_err();
+        match control {
+            "pause" => assert_eq!(error, "paused"),
+            "cancel" => assert_eq!(error, "canceled"),
+            _ => assert!(error.contains("size mismatch")),
+        }
+        assert_eq!(fs::read(root.join("segments/000000.jpeg")).unwrap(), b"resumable segment");
+        assert!(merged.is_file());
+        assert_eq!(fs::read(&published).unwrap(), b"a complete payload");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn media_cleanup_preserves_a_published_file_inside_the_work_directory() {
+    let (_core, paths, _published, root) = published_task_fixture("media-nested-output");
+    fs::create_dir_all(root.join("segments")).unwrap();
+    let published = root.join("segments/movie.mp4");
+    fs::write(&published, b"published media").unwrap();
+    fs::create_dir_all(root.join("audio")).unwrap();
+    fs::write(root.join("audio/fragment.bin"), b"temporary audio").unwrap();
+
+    assert!(cleanup_completed_media(&paths, &root.join("missing.mp4"), false).is_err());
+    assert!(root.join("audio/fragment.bin").is_file());
+    cleanup_completed_media(&paths, &published, false).unwrap();
+    assert_eq!(fs::read(&published).unwrap(), b"published media");
+    assert!(!root.join("audio").exists());
+    fs::remove_dir_all(root).unwrap();
 }
 
 // The regression this closes: `complete_payload` tail-called `maybe_schedule_power`,

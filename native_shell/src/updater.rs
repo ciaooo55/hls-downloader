@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 // MSI 保留三段产品版本；发布修订用于比较同一产品版本的修复包。
-pub const CURRENT_VERSION: &str = "7.0.3-r3";
+pub const CURRENT_VERSION: &str = "7.0.3-r4";
 const LATEST_API: &str = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest";
 
 #[derive(Debug, Clone, PartialEq)]
