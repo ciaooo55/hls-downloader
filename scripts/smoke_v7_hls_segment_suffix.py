@@ -29,9 +29,9 @@ def run(args):
     counts = Counter()
     ffmpeg = str(args.tools / 'ffmpeg.exe')
 
-    def ff(*argv):
+    def ff(*argv, cwd=None):
         return subprocess.run([ffmpeg, '-nostdin', '-y', '-v', 'error', *map(str, argv)],
-                              capture_output=True, timeout=90)
+                              capture_output=True, timeout=90, cwd=cwd)
 
     try:
         generated = ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=10',
@@ -52,14 +52,13 @@ def run(args):
         generated = ff('-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=10',
                        '-f', 'lavfi', '-i', 'sine=sample_rate=48000', '-t', '3',
                        '-c:v', 'libx264', '-g', '10', '-c:a', 'aac', '-f', 'dash',
-                       '-seg_duration', '1', dash / 'index.mpd')
+                       '-seg_duration', '1', 'index.mpd', cwd=dash)
         assert generated.returncode == 0, generated.stderr.decode(errors='replace')
         subtitles = fixture / 'subtitles'
         subtitles.mkdir()
         (subtitles / 'index.m3u8').write_text(
-            '#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",URI="subs.m3u8"\n'
+            '#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",URI="en.vtt"\n'
             '#EXT-X-STREAM-INF:BANDWIDTH=500000,SUBTITLES="subs"\n../base.m3u8\n')
-        (subtitles / 'subs.m3u8').write_text('#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:3,\nen.vtt\n#EXT-X-ENDLIST\n')
         (subtitles / 'en.vtt').write_text('WEBVTT\n\n00:00:00.000 --> 00:00:02.500\nCleanup subtitle fixture\n')
         bad = fixture / 'bad'
         bad.mkdir(exist_ok=True)
@@ -166,7 +165,7 @@ def run(args):
             subtitle_output = verify(settled(create('subtitles')))
             sidecars = list(subtitle_output.parent.glob(subtitle_output.stem + '.*.vtt'))
             assert sidecars and any('Cleanup subtitle fixture' in p.read_text() for p in sidecars)
-            report['checks'].append('HLS subtitles copied beside output before subtitle cache cleanup')
+            report['checks'].append('HLS direct WebVTT subtitles copied beside output before subtitle cache cleanup')
             send(ipc, {'type': 'store_settings', 'request_id': 3, 'values': {'keep_temp_files': True}})
             verify(settled(create('keep')), keep_temp=True)
             report['checks'].append('keep_temp_files=true preserves media segments')
@@ -183,6 +182,7 @@ def run(args):
         report['passed'] = True
     except Exception:
         report['error'] = traceback.format_exc()
+        report['requests'] = dict(counts)
     finally:
         gate.set()
         if process:
