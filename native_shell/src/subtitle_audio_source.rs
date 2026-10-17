@@ -221,8 +221,10 @@ mod tests {
             assert_eq!(bytes.len(), 32000, "{path}");
             assert!(
                 bytes
-                    .chunks_exact(2)
-                    .any(|sample| i16::from_le_bytes([sample[0], sample[1]]).unsigned_abs() > 1000),
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .any(|sample| i16::from_le_bytes(*sample).unsigned_abs() > 1000),
                 "{path}"
             );
         }

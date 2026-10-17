@@ -14,7 +14,17 @@
     "chromium_build_passed": true,
     "unit_tests_passed": 380,
     "encrypted_before_exit_code": 1,
-    "firefox_browser_interaction": "not run",
+    "firefox_browser_interaction": {
+      "passed": true,
+      "job_exit_code": 0,
+      "modes": [
+        "mse-encrypted",
+        "mse",
+        "dash-mse",
+        "direct"
+      ],
+      "environment": "Windows Sandbox; read-only Firefox installation; temporary browser profile"
+    },
     "typecheck_passed": true,
     "firefox_build_passed": true,
     "edge_media_modes": [
@@ -53,7 +63,7 @@
   "subtitle_audio": {
     "passed": true,
     "exit_code": 0,
-    "stdout": "\nrunning 1 test\ntest subtitle_audio_source::tests::decode_disguised_hls_audio ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 602 filtered out; finished in 0.53s\n\n",
+    "stdout": "\nrunning 1 test\ntest subtitle_audio_source::tests::decode_disguised_hls_audio ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 602 filtered out; finished in 1.54s\n\n",
     "stderr": ""
   },
   "subtitle_browser": {
@@ -288,9 +298,21 @@
     }
   },
   "player_button_retest": {
+    "passed": true,
+    "checks": [
+      "main-window overlay starts real playback and pause button pauses it",
+      "resume and video-surface click update real pause state",
+      "forward/back buttons and timeline drag seek the actual decoder",
+      "volume and mute controls change mpv volume/mute",
+      "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+      "hovering the preview preserves paused playback position",
+      "main fullscreen enters and Escape restores the overlay",
+      "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+      "close button and Escape release playback; reopening works"
+    ],
+    "thumbnail_pixel_mean_error": 4.044802118171684,
     "unchanged_ui_reused_from_r5": true,
-    "passed": false,
-    "blocked": "Windows firewall prompt for core-tests intercepted Robot click; security prompt not automated"
+    "initial_attempt": "blocked by firewall prompt; user canceled it before successful retest"
   },
   "public_pages": {
     "dash_js": "blocked: manifest requests timeout around 10 seconds, video src empty",
@@ -310,6 +332,12 @@
       "main"
     ],
     "worktrees": 1,
-    "previously_denied_generated_directories": "retained; deletion not retried through alternate paths"
+    "previously_denied_generated_directories": "retained; deletion not retried through alternate paths",
+    "current_extension_cache_cleanup": "automated deletion rejected: blocked by policy; not retried through alternate paths"
+  },
+  "clippy": {
+    "initial_ci_failure": "new ignored test chunks_exact constant chunk lint; changed only cfg(test) to as_chunks",
+    "local_ci_flags_passed": true,
+    "production_code_unchanged": true
   }
 }
