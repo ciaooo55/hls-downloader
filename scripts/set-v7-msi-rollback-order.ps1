@@ -225,7 +225,22 @@ try {
         throw 'MSI is missing the persisted install-directory registry search.'
     }
     Invoke-MsiNonQuery "DELETE FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
-    Invoke-MsiNonQuery "INSERT INTO ``AppSearch`` (``Property``,``Signature_``) VALUES ('INSTALLDIR','$installDirSearch')"
+    Invoke-MsiNonQuery "DELETE FROM ``AppSearch`` WHERE ``Property``='V7_EXISTING_INSTALLDIR'"
+    Invoke-MsiNonQuery "INSERT INTO ``AppSearch`` (``Property``,``Signature_``) VALUES ('V7_EXISTING_INSTALLDIR','$installDirSearch')"
+    # AppSearch 会覆盖命令行或向导传入的属性；只在未选择目录时恢复旧路径。
+    $restoreDirectoryAction = 'V7RestoreInstallDir'
+    $restoreDirectoryCondition = 'NOT INSTALLDIR AND V7_EXISTING_INSTALLDIR'
+    Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$restoreDirectoryAction'"
+    Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$restoreDirectoryAction',51,'INSTALLDIR','[V7_EXISTING_INSTALLDIR]')"
+    foreach ($table in @('InstallUISequence', 'InstallExecuteSequence')) {
+        $searchSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``$table`` WHERE ``Action``='AppSearch'"
+        $costSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``$table`` WHERE ``Action``='CostInitialize'"
+        if ($null -eq $searchSequence -or $null -eq $costSequence -or [int]$searchSequence + 1 -ge [int]$costSequence) {
+            throw "MSI has no directory-restore slot after AppSearch in $table."
+        }
+        Invoke-MsiNonQuery "DELETE FROM ``$table`` WHERE ``Action``='$restoreDirectoryAction'"
+        Invoke-MsiNonQuery "INSERT INTO ``$table`` (``Action``,``Condition``,``Sequence``) VALUES ('$restoreDirectoryAction','$restoreDirectoryCondition',$([int]$searchSequence + 1))"
+    }
 
     # 先移除旧产品再写入新文件；旧版 jpackage 卸载可能递归移除 INSTALLDIR。
     $target = [int]$initialize + 10
@@ -347,9 +362,13 @@ try {
     if ([int]$verifiedPrivilegeSequence -ne $privilegeSequence -or $verifiedPrivilegeCondition -ne $privilegeCondition -or [int]$verifiedPrivilegeType -ne 19) {
         throw 'MSI upgrade privilege guard verification failed.'
     }
-    $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'"
-    if ($verifiedInstallDirSearch -ne $installDirSearch) {
+    $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='V7_EXISTING_INSTALLDIR'"
+    if ($verifiedInstallDirSearch -ne $installDirSearch -or $null -ne (Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'")) {
         throw 'MSI maintenance install-directory search verification failed.'
+    }
+    foreach ($table in @('InstallUISequence', 'InstallExecuteSequence')) {
+        $condition = Invoke-MsiStringQuery "SELECT ``Condition`` FROM ``$table`` WHERE ``Action``='$restoreDirectoryAction'"
+        if ($condition -ne $restoreDirectoryCondition) { throw "MSI explicit directory selection is not protected in $table." }
     }
     if ([int]$verified -ne $target) {
         throw "MSI rollback sequence verification failed: expected $target, got $verified."
