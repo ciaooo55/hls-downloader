@@ -1,0 +1,308 @@
+{
+  "schema": 1,
+  "scope": "Final r10 unsigned MSI acceptance, package contents and scoped host audit",
+  "binary_source_commit": "a7be1de44439f970655422cbd49b11f1c8c2fda8",
+  "installer": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "MSI staged on VM local disk with matching SHA256",
+        "actual": true
+      },
+      {
+        "name": "MSI installs at requested path containing spaces",
+        "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+      },
+      {
+        "name": "final Core/UI and reused binaries match r10 provenance; omitted tools remain absent",
+        "actual": {
+          "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+          "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+          "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00",
+          "HLSDownloaderDesktop-7.0.3.jar": "a527070c6d9e21a07059383e5ecbb8b3760ef4cb14f18fd3e15acbee89d1cfb3",
+          "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+        }
+      },
+      {
+        "name": "installed extension ZIPs and unpacked files are identical",
+        "actual": {
+          "Chromium": {
+            "background_sha256": "dde85d2c265d9d291add1a94126792c95fa1e8f4c25f977bef283cc01cc59b1a",
+            "archives_sha256": {
+              "HLSDownloader-7.0.3-Chromium.zip": "fba3470295fc22d60f568f8e3f9c94d9be07255eccbd731283078780d9b65dd3",
+              "HLSDownloader-Extension-Chromium.zip": "fba3470295fc22d60f568f8e3f9c94d9be07255eccbd731283078780d9b65dd3"
+            }
+          },
+          "Firefox": {
+            "background_sha256": "3d9f74141f72ac6ce5ec612df89df89dbc0a529d39a4de2f6f37f84e270b2f63",
+            "archives_sha256": {
+              "HLSDownloader-7.0.3-Firefox.zip": "bb09fcd0d6322776d48c1554eda638840c7971938d50ddb894d0a1ccc9af7d58",
+              "HLSDownloader-Extension-Firefox.zip": "bb09fcd0d6322776d48c1554eda638840c7971938d50ddb894d0a1ccc9af7d58"
+            }
+          }
+        }
+      },
+      {
+        "name": "default download directory matches Windows Known Folder",
+        "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+      },
+      {
+        "name": "real public MDN video downloads into the default folder with identical bytes",
+        "actual": {
+          "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+          "bytes": 554058,
+          "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+        }
+      },
+      {
+        "name": "installed UI opens visibly and connects to the installed Core",
+        "actual": {
+          "x": 0,
+          "y": 0,
+          "width": 1214,
+          "height": 567,
+          "active": true,
+          "showing": true,
+          "iconCount": 1,
+          "iconWidth": 192,
+          "iconHeight": 192,
+          "scaleX": 1.25,
+          "scaleY": 1.25,
+          "deviceX": 0,
+          "deviceY": 0,
+          "deviceWidth": 1518,
+          "deviceHeight": 709
+        }
+      },
+      {
+        "name": "measured installed runtime idle CPU and memory",
+        "actual": {
+          "seconds": 5.015000000000001,
+          "logical_cpus": 8,
+          "cpu_one_core_percent": 1.246261216350947,
+          "cpu_machine_percent": 0.15578265204386837,
+          "processes": {
+            "1332": {
+              "name": "HLSDownloaderPresenter.exe",
+              "cpu": 0.140625,
+              "rss_bytes": 17883136,
+              "private_bytes": 4124672
+            },
+            "3684": {
+              "name": "HLSDownloader.exe",
+              "cpu": 0.0,
+              "rss_bytes": 6352896,
+              "private_bytes": 1392640
+            },
+            "5488": {
+              "name": "HLSDownloaderEngine.exe",
+              "cpu": 0.21875,
+              "rss_bytes": 17420288,
+              "private_bytes": 4898816
+            },
+            "5912": {
+              "name": "HLSDownloader.exe",
+              "cpu": 9.328125,
+              "rss_bytes": 192335872,
+              "private_bytes": 231264256
+            }
+          },
+          "rss_sum_bytes": 233992192,
+          "private_sum_bytes": 241680384
+        }
+      },
+      {
+        "name": "MSI uninstalls and removes its product registration",
+        "actual": true
+      }
+    ],
+    "msi_sha256": "62a885228617903b3e518a156c53a1b889cfbad32df63c637ebbdb29314fda61",
+    "installed_bytes": 472733722,
+    "installed_files": 263,
+    "largest_files": [
+      {
+        "path": "app/resources/ffmpeg.exe",
+        "bytes": 165155840
+      },
+      {
+        "path": "app/resources/libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "path": "runtime/lib/modules",
+        "bytes": 54030811
+      },
+      {
+        "path": "app/resources/HLSDownloaderPresenter.exe",
+        "bytes": 28685824
+      },
+      {
+        "path": "app/resources/HLSDownloaderEngine.exe",
+        "bytes": 14513664
+      },
+      {
+        "path": "app/skiko-windows-x64.dll",
+        "bytes": 14109696
+      },
+      {
+        "path": "runtime/bin/server/jvm.dll",
+        "bytes": 13919872
+      },
+      {
+        "path": "app/icudtl.dat",
+        "bytes": 10468208
+      },
+      {
+        "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+        "bytes": 4740663
+      },
+      {
+        "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+        "bytes": 4069888
+      },
+      {
+        "path": "app/resources/HLSDownloaderNativeHost.exe",
+        "bytes": 3773952
+      },
+      {
+        "path": "app/ui-desktop-1.12.0-c7e12ceabbe9ad2921953e527c30ea.jar",
+        "bytes": 3713949
+      }
+    ],
+    "installed_components_sha256": {
+      "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+      "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00"
+    },
+    "verified_payload_sha256": {
+      "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+      "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00",
+      "HLSDownloaderDesktop-7.0.3.jar": "a527070c6d9e21a07059383e5ecbb8b3760ef4cb14f18fd3e15acbee89d1cfb3",
+      "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+    },
+    "ui_exercised": true,
+    "ui_visible_connected_seconds": 7.5,
+    "idle": {
+      "seconds": 5.015000000000001,
+      "logical_cpus": 8,
+      "cpu_one_core_percent": 1.246261216350947,
+      "cpu_machine_percent": 0.15578265204386837,
+      "processes": {
+        "1332": {
+          "name": "HLSDownloaderPresenter.exe",
+          "cpu": 0.140625,
+          "rss_bytes": 17883136,
+          "private_bytes": 4124672
+        },
+        "3684": {
+          "name": "HLSDownloader.exe",
+          "cpu": 0.0,
+          "rss_bytes": 6352896,
+          "private_bytes": 1392640
+        },
+        "5488": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.21875,
+          "rss_bytes": 17420288,
+          "private_bytes": 4898816
+        },
+        "5912": {
+          "name": "HLSDownloader.exe",
+          "cpu": 9.328125,
+          "rss_bytes": 192335872,
+          "private_bytes": 231264256
+        }
+      },
+      "rss_sum_bytes": 233992192,
+      "private_sum_bytes": 241680384
+    }
+  },
+  "job": {
+    "exit_code": 0,
+    "finished": "2026-10-17T19:10:38.0796210Z"
+  },
+  "package": {
+    "product_code": "{E7BEA5B6-1295-4603-AAC0-1B5E2DB4E0E5}",
+    "source_commit": "a7be1de44439f970655422cbd49b11f1c8c2fda8",
+    "sha256": "62a885228617903b3e518a156c53a1b889cfbad32df63c637ebbdb29314fda61",
+    "bytes": 203096064,
+    "signed": false
+  },
+  "msi_static": {
+    "passed": true,
+    "install_dir_dialog": "InstallDirDlg",
+    "directory_property": "INSTALLDIR",
+    "path_edit_property": "WIXUI_INSTALLDIR",
+    "path_edit_indirect_binding": true,
+    "signature_status": "NotSigned",
+    "bytes": 203096064,
+    "sha256": "62a885228617903b3e518a156c53a1b889cfbad32df63c637ebbdb29314fda61"
+  },
+  "extension_zip_verification": {
+    "chrome": {
+      "files": 17,
+      "sha256": "fba3470295fc22d60f568f8e3f9c94d9be07255eccbd731283078780d9b65dd3"
+    },
+    "firefox": {
+      "files": 17,
+      "sha256": "bb09fcd0d6322776d48c1554eda638840c7971938d50ddb894d0a1ccc9af7d58"
+    },
+    "sources": {
+      "files": 71,
+      "sha256": "7695946b761d897e75e688818ddde9f6e1092e83f954403c7384ae3008e93320"
+    }
+  },
+  "host": {
+    "time": "2026-10-17T19:12:00.5673049Z",
+    "hls_uninstall_entries": [],
+    "hls_native_messaging_entries": [],
+    "known_hls_paths_present": [],
+    "host_hls_processes": 0,
+    "sandbox_clients": 0,
+    "scope": "Known HLS uninstall roots, NativeMessagingHosts keys and historical paths; no unrelated registry or folders modified",
+    "hls_startup_values": [],
+    "other_hls_native_or_protocol_keys": []
+  },
+  "cache_inventory": [
+    {
+      "path": ".tool-cache",
+      "files": 32720,
+      "bytes": 11977510196
+    },
+    {
+      "path": "desktop_ui/.gradle",
+      "files": 123,
+      "bytes": 2197639
+    },
+    {
+      "path": "desktop_ui/.kotlin",
+      "files": 0,
+      "bytes": 0
+    },
+    {
+      "path": "extension/.output",
+      "files": 37,
+      "bytes": 2454500
+    },
+    {
+      "path": "extension/.wxt",
+      "files": 8,
+      "bytes": 11215
+    },
+    {
+      "path": "extension/node_modules",
+      "files": 10630,
+      "bytes": 171874470
+    }
+  ],
+  "procedure_sha256": "133eb1cdbd1c7e335c703762bd4de284572b642a0f949af51ada7bed43a830d1",
+  "limits": [
+    "Custom install path was exercised through INSTALLDIR; chooser dialog and its indirect binding were statically inspected, not clicked in this run.",
+    "Resource figures are a single 5-second VM idle sample, not a cross-machine benchmark.",
+    "Windows OS DPI was unchanged. Product UI interaction validation uses the identical final JAR recorded in validation-ui-polish-20261018.json.",
+    "No host installation, audio upload, physical casting or TVBox validation."
+  ],
+  "fixture_note": "Initial static MSI check expected a directly-bound INSTALLDIR PathEdit; inspection found the standard WiX WIXUI_INSTALLDIR indirection with the Indirect attribute set. The check was corrected without modifying the MSI.",
+  "cache_cleanup": "Previously denied by automatic approval review (blocked by policy); no retry or alternate deletion method used."
+}

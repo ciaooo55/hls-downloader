@@ -33,7 +33,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
-最新修订版：[7.0.3-r9（未签名预发布版）](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r9)。提供未签名 MSI、Chromium/Firefox 插件、插件源码、Firefox 审核源码包和完整项目源码。本版修复断流恢复、任务按钮与筛选清理，并将安装包和安装目录分别精简约 32.9% 和 30.0%；保留内置播放器、边播边下和缓存清理。具体验收范围、限制和校验值见[发布说明](docs/release-v7-r9.md)及附件。
+最新修订版：[7.0.3-r10（未签名预发布版）](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r10)。提供未签名 MSI、Chromium/Firefox 插件、插件源码、Firefox 审核源码包和完整项目源码。本版改进桌面行快捷操作、提示层与高 DPI 点击，以及插件分栏、清晰度选择、复制和下载反馈；保留 r9 的安装包精简、内置播放器、边播边下和缓存清理。具体验收范围、限制和校验值见[发布说明](docs/release-v7-r10.md)及附件。
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 

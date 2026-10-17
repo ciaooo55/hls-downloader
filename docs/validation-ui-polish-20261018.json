@@ -324,19 +324,24 @@
   "not_executed": [
     "Chromium 实际浏览器 UI 验收",
     "scripts/smoke_v7_browser_basics.py 整套执行",
-    "本机安装、MSI 打包、签名、提交、推送、GitHub 发布",
     "音频上传及真实云端字幕识别翻译",
-    "真实投屏和 TVBox 设备验收"
+    "真实投屏和 TVBox 设备验收",
+    "本机安装及签名（按用户要求不执行）"
   ],
   "delivery": {
     "worktrees": 1,
     "host_app_installed_by_this_turn": false,
-    "desktop_installer_updated": false,
+    "desktop_installer_updated": true,
     "branch": "main",
-    "github_updated": false,
+    "github_updated": true,
     "cache_cleanup": "构建缓存尚保留；此前自动删除被审批拒绝，本轮未绕过限制",
     "host_hls_processes_remaining": 0,
-    "sandbox_client_remaining": 0
+    "sandbox_client_remaining": 0,
+    "source_commit": "a7be1de44439f970655422cbd49b11f1c8c2fda8",
+    "installer_packaged": true,
+    "installer_sandbox_passed": true,
+    "installer_record": "validation-r10-installer-20261018.json",
+    "release_target": "v7.0.3-r10"
   },
   "raw_evidence_root": ".tool-cache/ui-polish-20261018",
   "static_diff_check": "git diff --check executed, exit 0",
