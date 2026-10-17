@@ -84,6 +84,29 @@ pub(crate) fn decode(
         "-rw_timeout",
         "10000000",
     ]);
+    let url = source["url"].as_str().unwrap();
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if source["resource_kind"].as_str() == Some("hls")
+        || source["mime_type"]
+            .as_str()
+            .is_some_and(|mime| mime.to_ascii_lowercase().contains("mpegurl"))
+        || path.ends_with(".m3u8")
+        || path.ends_with(".m3u")
+    {
+        // 站点可能以 jpeg/bin 命名音视频分片；输入协议仍限定 HTTP(S)，不开放本地文件。
+        command.args([
+            "-f",
+            "hls",
+            "-allowed_extensions",
+            "ALL",
+            "-extension_picky",
+            "0",
+        ]);
+    }
     for (key, option) in [("referer", "-referer"), ("user_agent", "-user_agent")] {
         if let Some(value) = source[key].as_str().filter(|v| !v.is_empty()) {
             if value.contains(['\r', '\n']) {
@@ -180,6 +203,32 @@ pub(crate) fn decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires the sandbox HTTP audio fixture and bundled FFmpeg"]
+    fn decode_disguised_hls_audio() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        let origin = std::env::var("HLS_SUBTITLE_FIXTURE_ORIGIN").unwrap();
+        for (path, kind) in [
+            ("index.m3u8", "hls"),
+            ("opaque", "hls"),
+            ("sample.m4a", "media"),
+        ] {
+            let source = json!({"url": format!("{origin}/{path}"), "resource_kind": kind});
+            let audio = decode(&source, 1.25, 1.0, || false)
+                .unwrap_or_else(|error| panic!("{path}: {error}"));
+            let bytes = STANDARD.decode(audio["audio"].as_str().unwrap()).unwrap();
+            assert_eq!(bytes.len(), 32000, "{path}");
+            assert!(
+                bytes
+                    .chunks_exact(2)
+                    .any(|sample| i16::from_le_bytes([sample[0], sample[1]]).unsigned_abs() > 1000),
+                "{path}"
+            );
+        }
+        let blocked = json!({"url": format!("{origin}/local.m3u8"), "resource_kind": "hls"});
+        assert!(decode(&blocked, 0.0, 1.0, || false).is_err());
+    }
 
     #[test]
     fn prefetch_never_turns_browser_credentials_into_global_ffmpeg_headers() {

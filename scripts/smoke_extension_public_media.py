@@ -37,7 +37,7 @@ CASES = [
 def _hook_replay_diagnostics(driver, expected: str) -> dict:
     """Replay MAIN-world resource events and summarize matching network evidence."""
     replay = driver.execute_async_script(
-        """
+        r"""
         const [expected, done] = arguments;
         const events = [];
         const safeUrl = value => {
@@ -164,9 +164,17 @@ def run(args):
                 try:
                     try: driver.get(url)
                     except TimeoutException: record["page_load_timed_out"] = True
+                    clicked_play = False
                     deadline = time.monotonic() + 45
                     while time.monotonic() < deadline:
                         driver.switch_to.default_content()
+                        # DASH 手动加载样例由页面控制器启动；video.play() 不会替它加载清单。
+                        if name == 'dash-js' and not clicked_play:
+                            for button in driver.find_elements(By.CSS_SELECTOR, 'button[title="Play/Pause"]'):
+                                if button.is_displayed() and button.is_enabled():
+                                    button.click()
+                                    clicked_play = True
+                                    break
                         play_frames(driver)
                         # 小屏幕沙盒中 HLS demo 的播放器位于首屏下方；入口只随可见播放器显示。
                         driver.execute_script("document.querySelector('video')?.scrollIntoView({block:'center',inline:'nearest'})")
@@ -180,7 +188,7 @@ def run(args):
                     driver.save_screenshot(str(args.report.with_name(f"{args.report.stem}-{name}.png")))
                     if not record["passed"]:
                         record["page_text"] = driver.execute_script("return document.body.innerText.slice(0,6000)")
-                        if args.browser == "edge" and name == "hls-js":
+                        if args.browser == "edge":
                             record["hook_diagnostics"] = _hook_replay_diagnostics(driver, expected)
                             record["browser_console_errors"] = _browser_console_errors(driver)
                 except Exception as error:

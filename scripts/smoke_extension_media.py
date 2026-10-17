@@ -43,6 +43,29 @@ class QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, _format: str, *_args) -> None:
         pass
 
+    def do_POST(self):
+        if self.path != '/encrypted.mp4':
+            self.send_error(404)
+            return
+        size = int(self.headers.get('Content-Length', '0'))
+        if not 0 < size <= 8 * 1024 * 1024:
+            self.send_error(413)
+            return
+        self.server.encrypted_media = self.rfile.read(size)
+        self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path == '/encrypted.mp4':
+            payload = self.server.encrypted_media
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        else:
+            super().do_GET()
+
 
 PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><link rel="icon" href="data:,"><title>Extension media smoke</title>
@@ -80,6 +103,22 @@ function mseSlicedVideo() {
     await append(buffer,copied);
     if (source.readyState === 'open') source.endOfStream(); await value.play();
   }, {once:true});
+}
+function mseEncryptedVideo() {
+  const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
+  source.addEventListener('sourceopen', async () => {
+    const buffer=source.addSourceBuffer('video/mp4; codecs="avc1.64001e, mp4a.40.2"');
+    const key=await crypto.subtle.importKey('raw',new Uint8Array(16),'AES-CBC',false,['encrypt','decrypt']);
+    const algorithm={name:'AES-CBC',iv:new Uint8Array(16)};
+    const original=await (await fetch('/stream.mp4?channel=plain')).arrayBuffer();
+    const encrypted=await crypto.subtle.encrypt(algorithm,key,original);
+    await fetch('/encrypted.mp4',{method:'POST',body:encrypted});
+    const downloaded=await (await fetch('/encrypted.mp4')).arrayBuffer();
+    const decrypted=await crypto.subtle.decrypt(algorithm,key,downloaded);
+    URL.createObjectURL(new Blob([decrypted],{type:'video/mp4'}));
+    await append(buffer,new Uint8Array(decrypted));
+    if(source.readyState==='open') source.endOfStream(); await value.play();
+  },{once:true});
 }
 function mseWorkerVideo(channel='worker', dedicated=false) {
   const value=video(); mount.append(value); const source=new MediaSource(); value.src=URL.createObjectURL(source);
@@ -166,6 +205,8 @@ if (mode === 'dual-source') {
   mseVideo('single');
 } else if (mode === 'mse-sliced') {
   mseSlicedVideo();
+} else if (mode === 'mse-encrypted') {
+  mseEncryptedVideo();
 } else if (mode === 'mse-worker') {
   mseWorkerVideo();
 } else if (mode === 'mse-worker-dedicated') {
@@ -514,7 +555,7 @@ def run(
                 driver.install_addon(str(resolved_addon), temporary=True)
             for mode in modes or (
                 "direct", "dual-source", "srcdoc", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
-                "ad-direct", "spa", "mse", "mse-sliced", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+                "ad-direct", "spa", "mse", "mse-sliced", "mse-encrypted", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
                 "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
             ):
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")
@@ -566,6 +607,13 @@ def run(
                 if mode in {'dual-source','srcdoc'}:
                     if state.get('resourceIds') != [_resource_id(state['videos'][0]['src'])]:
                         raise AssertionError(f'{mode}: 按钮未绑定浏览器当前选定的资源: {state}')
+                if mode == 'mse-encrypted':
+                    encrypted_url = f'http://127.0.0.1:{server.server_port}/encrypted.mp4'
+                    if state.get('resourceIds') != [_resource_id(encrypted_url)]:
+                        raise AssertionError(f'{mode}: 解密输出未匹配其实际响应: {state}')
+                    ownership = state['frameStates'][0]['mediaOwnership']
+                    if any(item['purpose'] == 'download' for item in ownership):
+                        raise AssertionError(f'{mode}: 解密结果被误标记为可原样重放的下载: {ownership}')
                 if mode == "direct":
                     if not state.get("moreButtons"):
                         raise AssertionError(f"{mode}: 单资源播放器没有显示投屏/推送更多操作入口: {state}")
@@ -615,8 +663,9 @@ def main() -> None:
     parser.add_argument("--driver", type=Path, help="可选的匹配版 WebDriver；省略时由 Selenium Manager 查找")
     parser.add_argument("--browser-binary", type=Path, help="可选的浏览器可执行文件路径")
     parser.add_argument("--mode", action="append", help="只执行指定媒体场景；可重复指定")
+    parser.add_argument("--report", type=Path)
     arguments = parser.parse_args()
-    print(json.dumps(run(
+    results = run(
         arguments.extension.resolve(),
         browser_name=arguments.browser,
         modes=arguments.mode,
@@ -625,7 +674,11 @@ def main() -> None:
         ffmpeg=arguments.ffmpeg,
         driver_path=arguments.driver.resolve() if arguments.driver else None,
         binary_path=arguments.browser_binary.resolve() if arguments.browser_binary else None,
-    ), ensure_ascii=False, indent=2))
+    )
+    text = json.dumps(results, ensure_ascii=False, indent=2)
+    if arguments.report:
+        arguments.report.write_text(text, encoding="utf-8")
+    print(text)
 
 
 if __name__ == "__main__":

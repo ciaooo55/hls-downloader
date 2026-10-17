@@ -142,6 +142,19 @@ export default defineContentScript({
       if (ArrayBuffer.isView(value)) mseBufferSources.set(value.buffer, sourceUrl)
     }
     try {
+      const decrypt = SubtleCrypto.prototype.decrypt
+      SubtleCrypto.prototype.decrypt = async function (algorithm, key, data) {
+        const source = mseBufferSources.get(data) || bufferSources.get(data)
+          || (ArrayBuffer.isView(data) ? mseBufferSources.get(data.buffer) || bufferSources.get(data.buffer) : '')
+        const value = await decrypt.call(this, algorithm, key, data)
+        // 解密改变了响应正文，只传递播放器归属，不能用于重放 Blob 下载。
+        if (source) rememberMseBufferSource(value, source)
+        return value
+      }
+    } catch {
+      // 非安全上下文或冻结原型不影响页面原有解密和网络识别。
+    }
+    try {
       const OriginalBlob = window.Blob
       window.Blob = class extends OriginalBlob {
         constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
