@@ -82,11 +82,12 @@ export function prefetchSubtitleAudio(options: {
       }
       if (Date.now() < nextSendAt || position >= clock.position + 30) return
       const bytes = windowBytes.slice(offset, offset + 8000)
+      const sentAt = Date.now()
       await options.send(encode(bytes), windowStart + offset / 32000, epoch)
       if (stopped || current !== generation) return
       offset += bytes.length; position = windowStart + offset / 32000
-      // 不突发追赶后台节流，也不假定云端允许超实时发送。
-      nextSendAt = Date.now() + bytes.length / 32
+      // IPC 耗时属于本包发送间隔；每次从实际发送时间计时，不突发追赶后台节流。
+      nextSendAt = sentAt + bytes.length / 32
       if (offset === windowBytes.length) {
         await options.commit(windowStart, position, epoch)
         if (stopped || current !== generation) return

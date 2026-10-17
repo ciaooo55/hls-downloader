@@ -28,7 +28,7 @@ require(hlsRenderApi in setOf("SOFTWARE", "ANGLE", "DIRECT3D", "OPENGL")) {
 
 dependencies {
     implementation(compose.desktop.currentOs)
-    implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
+    implementation("org.jetbrains.compose.material:material-icons-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     testImplementation(kotlin("test"))
@@ -48,6 +48,7 @@ tasks.test {
 }
 tasks.processResources {
     from("../assets/app-icon.png")
+    from("../assets/licenses/material-icons-Apache-2.0.txt") { into("licenses") }
 }
 compose.desktop { application {
     mainClass = "com.hlsdownloader.desktop.MainKt"

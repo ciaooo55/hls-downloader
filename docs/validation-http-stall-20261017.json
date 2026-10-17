@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "date": "2026-10-17",
+  "scope": "Direct HTTP stalled response reads: pause/cancel, checkpoint resume, deletion and UI batch start; not full-product certification",
+  "base_commit": "af5435e18031424b5f056572f96a6fb2e71ed3c2",
+  "working_tree_modified": true,
+  "root_cause": "TcpStream response reads blocked up to 60 seconds without checking pause/cancel; resume waits for the previous worker to exit (30-second deadline).",
+  "fix": "Poll task control during TCP response headers/body/chunked reads with 200ms socket waits, retaining the 60-second idle-read budget; preserve Pause/Cancel errors and range checkpoints.",
+  "source_sha256": {
+    "native_shell/src/http_engine.rs": "30a29abdbde031215153ca25838558c77a3964e5e118cc9b3a0fb9632a488c91",
+    "scripts/smoke_v7_http_stall.py": "964accd4d8543386042c7d37317343cc65940e0e9d8182bc2ae5c400a799b1b5"
+  },
+  "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+  "jar_sha256": "45ba438059898aed5b6dafed8b15b32c3103662c65ecc7aa78695014556eb6f4",
+  "builds": [
+    {
+      "command": "cargo build --manifest-path native_shell/Cargo.toml --release --bin hls-downloader-engine --offline",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --manifest-path native_shell/Cargo.toml --lib --no-run --offline",
+      "exit_code": 0
+    }
+  ],
+  "sandbox_tests": {
+    "http_unit_tests": {
+      "filter": "http_engine::tests::",
+      "passed": 56,
+      "failed": 0,
+      "exit_code": 0,
+      "log": ".tool-cache\\http-stall-20261017\\http-unit.out"
+    },
+    "core": [
+      {
+        "name": "single: stalled pause/resume",
+        "pause_seconds": 0.03100000000000591,
+        "resume_seconds": 0.23399999999998045
+      },
+      {
+        "name": "single: complete, SHA-256 verified, cache removed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "parallel: stalled pause/resume",
+        "pause_seconds": 0.016000000000019554,
+        "resume_seconds": 0.25
+      },
+      {
+        "name": "parallel: complete, SHA-256 verified, cache removed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "delete while all connections are stalled removes task/cache",
+        "seconds": 0.21800000000001774
+      },
+      {
+        "name": "gap: complete, SHA-256 verified, cache removed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    ],
+    "ui": [
+      "Empty library has correct message and disabled global start/pause",
+      "Completed document does not offer playback or active start/pause",
+      "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+      "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection"
+    ],
+    "screenshot": ".tool-cache\\http-stall-20261017\\ui-stalled-mixed-selection.png",
+    "exit_code": 0
+  },
+  "fixture_corrections": [
+    "The isolated unit executable first failed to load VCRUNTIME140.dll (0xc0000135); copied the existing bundled runtime next to it, then all 56 tests passed.",
+    "The multi-connection acceptance initially required active_workers == 1; inspected core_runtime.rs and corrected the assertion to > 0 because the field counts connections. Final acceptance passed."
+  ],
+  "limits": [
+    "This change and stalled-network acceptance cover direct HTTP TCP response reads. HTTPS/proxy WinHTTP stalled-read cancellation, connection establishment and request-body transmission are not covered by this fix.",
+    "Java Access Bridge reported a dynamic-tree IndexOutOfBoundsException; the final UI scenario completed successfully.",
+    "The 200ms wait is a cancellation polling interval; it does not change the existing 60-second idle-read timeout. The smoke test covers an 800ms silent gap.",
+    "No host installation, signing, installer update, commit, push or release was performed. Existing published installers do not contain this change."
+  ],
+  "sandbox_closed": true
+}

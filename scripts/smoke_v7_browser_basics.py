@@ -1009,7 +1009,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                     return found[-1] if found and found[-1]['status'] == 'completed' else None
                 task = wait(current, f'{kind} public download did not finish', 600)
                 path = Path(task['output_path'])
-                probe = json.loads(subprocess.check_output([str(runtime/'app/resources/ffprobe.exe'), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)], timeout=30))
+                probe = json.loads(subprocess.check_output([str(args.ffprobe), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)], timeout=30))
                 video_stream = next(s for s in probe['streams'] if s['codec_type'] == 'video')
                 assert video_stream['height'] == expected_height, (chosen['text'], video_stream)
                 assert any(s['codec_type'] == 'audio' for s in probe['streams']), 'Output has no audio'
@@ -1066,6 +1066,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--browser', choices=['firefox', 'edge'], required=True)
     parser.add_argument('--runtime', type=Path, required=True)
+    parser.add_argument('--ffprobe', type=Path, required=True, help='External test tool; not part of the installed application')
     parser.add_argument('--extension', type=Path, required=True)
     parser.add_argument('--driver', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)

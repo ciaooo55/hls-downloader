@@ -50,6 +50,37 @@ describe('提前字幕的连续窗口和取消', () => {
     } finally { control?.stop(); vi.useRealTimers() }
   })
 
+  it('通信耗时计入音频间隔，慢请求不会重叠发送或突发追赶', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    let control: ReturnType<typeof prefetchSubtitleAudio> | undefined
+    try {
+      const starts: number[] = []
+      const positions: number[] = []
+      const delays = [100, 600, 0]
+      let inFlight = false
+      control = prefetchSubtitleAudio({ epoch: 0, position: 0, duration: 2,
+        clock: () => ({ position: 0, running: true }),
+        prepare: async (position, duration) => ({ position, duration, audio: btoa('\0'.repeat(duration * 32000)) }),
+        send: async (_audio, position) => {
+          expect(inFlight).toBe(false)
+          inFlight = true
+          starts.push(Date.now()); positions.push(position)
+          const delay = delays[starts.length - 1] ?? 0
+          if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+          inFlight = false
+        },
+        commit: async () => undefined, ready: () => false,
+        failed: reason => { throw new Error(reason) } })
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(starts[1] - starts[0]).toBe(250)
+      expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(600)
+      expect(starts[2] - starts[1]).toBeLessThanOrEqual(650)
+      expect(starts[3] - starts[2]).toBe(250)
+      expect(positions.slice(0, 4)).toEqual([0, .25, .5, .75])
+    } finally { control?.stop(); vi.useRealTimers() }
+  })
+
   it('拖动时丢弃旧解码响应，只发送新时间轴的音频', async () => {
     vi.useFakeTimers()
     let control: ReturnType<typeof prefetchSubtitleAudio> | undefined

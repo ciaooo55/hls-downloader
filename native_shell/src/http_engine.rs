@@ -1036,9 +1036,13 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     let mut last_progress = Instant::now();
     loop {
         check_control(&job.control)?;
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        let count = match reader.read(&mut buffer) {
+            Ok(count) => count,
+            Err(err) => {
+                check_control(&job.control)?;
+                return Err(EngineError::Failed(err.to_string()));
+            }
+        };
         if count == 0 {
             break;
         }
@@ -1837,11 +1841,46 @@ fn fetch_range(
     }
 }
 
+struct InterruptibleTcpStream {
+    stream: TcpStream,
+    control: PathBuf,
+    last_control: Instant,
+}
+
+impl Read for InterruptibleTcpStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let started = Instant::now();
+        loop {
+            if self.last_control.elapsed() >= Duration::from_millis(50) {
+                self.last_control = Instant::now();
+                match read_control(&self.control) {
+                    Control::Run => {}
+                    Control::Pause | Control::Cancel => {
+                        // Interrupted 会被 read_exact 自动重试，不能用它表达任务停止。
+                        return Err(std::io::Error::other("HTTP transfer stopped"));
+                    }
+                }
+            }
+            match self.stream.read(buf) {
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) && started.elapsed() < Duration::from_secs(60) => {}
+                result => return result,
+            }
+        }
+    }
+}
+
 enum Body {
     Tcp {
         prefix: Vec<u8>,
         at: usize,
-        stream: TcpStream,
+        stream: InterruptibleTcpStream,
         remaining: Option<u64>,
     },
     Chunked(ChunkedReader<Box<Body>>),
@@ -2790,9 +2829,6 @@ fn http_get(
         }
     };
     stream
-        .set_read_timeout(Some(Duration::from_secs(60)))
-        .map_err(|err| EngineError::Failed(err.to_string()))?;
-    stream
         .set_write_timeout(Some(Duration::from_secs(30)))
         .map_err(|err| EngineError::Failed(err.to_string()))?;
     let mut header = format!(
@@ -2828,12 +2864,26 @@ fn http_get(
             .write_all(&body)
             .map_err(|err| EngineError::Failed(err.to_string()))?;
     }
+    // 短超时只用于轮询暂停/取消；持续慢网仍沿用 60 秒无数据超时。
+    // 包住响应头和实体底层，使 chunked 的大小行和 trailer 等待也能停止。
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .map_err(|err| EngineError::Failed(err.to_string()))?;
+    let mut stream = InterruptibleTcpStream {
+        stream,
+        control: job.control.clone(),
+        last_control: Instant::now() - Duration::from_millis(50),
+    };
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     while buf.len() < 64 * 1024 {
-        let count = stream
-            .read(&mut byte)
-            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        let count = match stream.read(&mut byte) {
+            Ok(count) => count,
+            Err(err) => {
+                check_control(&job.control)?;
+                return Err(EngineError::Failed(err.to_string()));
+            }
+        };
         if count == 0 {
             break;
         }
@@ -3782,6 +3832,74 @@ mod tests {
         let err = run_job(&job).unwrap_err();
         assert!(matches!(&err, EngineError::Cancel));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stalled_http_headers_body_and_chunked_reads_can_stop() {
+        use std::sync::mpsc;
+        for phase in ["headers", "body", "chunked"] {
+            for action in ["pause", "cancel"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let addr = listener.local_addr().unwrap();
+                let (ready_tx, ready_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let server = thread::spawn(move || {
+                    let (stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let mut stream = reader.into_inner();
+                    let response: &[u8] = match phase {
+                        "headers" => b"HTTP/1.1 200 OK\r\n",
+                        "chunked" => {
+                            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n"
+                        }
+                        _ => b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc",
+                    };
+                    stream.write_all(response).unwrap();
+                    ready_tx.send(()).unwrap();
+                    // 主线程在断言前释放连接，即使回归也不会留下阻塞的服务线程。
+                    let _ = release_rx.recv();
+                });
+                let (job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+                let worker_job = job.clone();
+                let (done_tx, done_rx) = mpsc::channel();
+                let worker = thread::spawn(move || {
+                    let _ = done_tx.send(run_job(&worker_job));
+                });
+                ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                if phase != "headers" {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while fs::metadata(&job.output).map(|m| m.len()).unwrap_or(0) != 3 {
+                        assert!(Instant::now() < deadline, "prefix not written: {phase}");
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                fs::write(&job.control, action).unwrap();
+                let result = done_rx.recv_timeout(Duration::from_secs(3));
+                let _ = release_tx.send(());
+                server.join().unwrap();
+                worker.join().unwrap();
+                let error = result
+                    .expect("stalled read did not stop promptly")
+                    .unwrap_err();
+                assert!(
+                    matches!(
+                        (&error, action),
+                        (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")
+                    ),
+                    "{phase}/{action}: {error}"
+                );
+                if phase != "headers" {
+                    assert_eq!(fs::read(&job.output).unwrap(), b"abc");
+                }
+                let _ = fs::remove_dir_all(dir);
+            }
+        }
     }
 
     #[test]

@@ -39,8 +39,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.*
-import androidx.compose.material.icons.outlined.*
+import com.hlsdownloader.desktop.icons.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -316,6 +315,13 @@ internal fun batchTaskMenuActions(tasks: List<TaskDto>): List<String> {
 internal fun taskStartAction(task: TaskDto): String? =
     if (task.status.lowercase() in setOf("completed", "done")) null
     else task.availableActions.firstOrNull { it in setOf("start", "resume", "retry") }
+internal fun selectedTaskActionTargets(tasks: List<TaskDto>, action: String): List<Pair<String, String>> {
+    val targets = if (action in setOf("play", "cast", "push_tvbox")) listOfNotNull(tasks.singleOrNull()) else tasks
+    return targets.mapNotNull { task ->
+        val resolved = if (action == "start") taskStartAction(task) else action.takeIf { it in taskMenuActions(task) }
+        resolved?.let { task.id to it }
+    }
+}
 internal fun workbenchShortcut(ctrl: Boolean, shift: Boolean, keyCode: Int): String? = when {
     ctrl && shift && keyCode == AwtKeyEvent.VK_N -> "batch"
     ctrl && keyCode == AwtKeyEvent.VK_N -> "new"
@@ -719,6 +725,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var category by remember { mutableStateOf<TaskCategory?>(null) }
     var selectedQueueId by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
+    var searchFocused by remember { mutableStateOf(false) }
     var engineHasConnected by remember { mutableStateOf(visualFixture == "tasks_1000") }
     var engineText by remember { mutableStateOf(if (visualFixture == "tasks_1000") Product.engineConnected else Product.engineStarting) }
     var extensionText by remember { mutableStateOf(Product.extensionDisconnected) }
@@ -1062,6 +1069,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             settingsDialog -> { settingsDialog = false; true }
             extensionDialog -> { extensionDialog = false; true }
             detailTaskId != null -> { detailTaskId = null; detailTaskFallback = null; true }
+            searchFocused && query.isNotEmpty() -> { query = ""; true }
             selected.isNotEmpty() -> { selected = emptySet(); true }
             else -> false
         }
@@ -1385,6 +1393,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                             }
                         }
                         .onFailure { error ->
+                            UiDiagnostics.error("task.batch.$action", error, taskId)
                             notice = UiSignal.Notice("error", describeTaskActionFailure(error, "批量操作失败"))
                         }
                 }
@@ -1413,7 +1422,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("dark_mode", requestedDarkMode) } }
                     .onFailure { notice = UiSignal.Notice("error", "主题已切换，但未能保存；重启后可能恢复原主题。${describeFailure(it, "主题保存失败")}") }
             }
-        })
+        }, canStartAll = tasks.any { taskStartAction(it.source) != null }, canPauseAll = tasks.any { "pause" in it.source.availableActions }, onSearchFocus = { searchFocused = it })
         Row(Modifier.weight(1f).fillMaxWidth()) {
                 // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
                 // maxWidth 就是"窗口内容区宽度"，正是断点需要比较的量。
@@ -1427,8 +1436,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     )
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().background(canvas)) {
-                ContentHeader(filter, visible.size, selected.isNotEmpty(), tasks.any { it.status == "已完成" }, { refreshKey++ }, {
-                    val completedIds = tasks.filter { it.status == "已完成" }.map { it.id }.toSet()
+                ContentHeader(filter, visible.size, visible.filter { it.id in selected }, visible.count { it.status == "已完成" }, { selected = emptySet() }, { refreshKey++ }, {
+                    val completedIds = visible.filter { it.status == "已完成" }.map { it.id }.toSet()
                     if (completedIds.isNotEmpty()) {
                         destructiveRequest = DestructiveRequest("delete", completedIds)
                     }
@@ -1443,14 +1452,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         "exit" -> onExit()
                     }
                 }) { action ->
-                    if (action in setOf("delete", "delete_files")) destructiveRequest = DestructiveRequest(action, selected)
-                    else if (action == "move_queue") queueAssignTaskIds = selected
-                    else if (action in setOf("play", "cast", "push_tvbox")) selected.firstOrNull()?.let { performTaskAction(it, action) }
-                    else launchTaskActions(tasks.filter { it.id in selected }.mapNotNull { task ->
-                        val resolved = if (action == "start") taskStartAction(task.source)
-                            else action.takeIf { it in task.source.availableActions }
-                        resolved?.let { task.id to it }
-                    })
+                    val targets = selectedTaskActionTargets(visible.filter { it.id in selected }.map { it.source }, action)
+                    if (targets.isNotEmpty()) {
+                        val ids = targets.mapTo(mutableSetOf()) { it.first }
+                        when (action) {
+                            "delete", "delete_files" -> destructiveRequest = DestructiveRequest(action, ids)
+                            "move_queue" -> queueAssignTaskIds = ids
+                            "play", "cast", "push_tvbox" -> targets.singleOrNull()?.let { performTaskAction(it.first, it.second) }
+                            else -> launchTaskActions(targets)
+                        }
+                    }
                 }
                 TaskTable(
                     visible,
@@ -1466,6 +1477,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                     } },
                     modifier = Modifier.weight(1f),
                     onBatchAction = ::performTaskActions,
+                    hasTasks = tasks.isNotEmpty(),
+                    onClearFilters = { filter = TaskFilter.ALL; category = null; selectedQueueId = null; query = ""; selected = emptySet() },
                     onSort = { field ->
                         val next = nextTaskSort(settings.taskSort, field)
                         settingsEpoch++
@@ -2355,7 +2368,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
     }
 }
 
-@Composable private fun DesktopToolbar(query: String, onQuery: (String) -> Unit, onNew: () -> Unit, onPaste: () -> Unit, onBatch: () -> Unit, onHarvest: () -> Unit, onStartAll: () -> Unit, onPauseAll: () -> Unit, onCastMedia: () -> Unit, onPushMedia: () -> Unit, onExtension: () -> Unit, onSettings: () -> Unit, dark: Boolean, onTheme: () -> Unit) {
+@Composable private fun DesktopToolbar(query: String, onQuery: (String) -> Unit, onNew: () -> Unit, onPaste: () -> Unit, onBatch: () -> Unit, onHarvest: () -> Unit, onStartAll: () -> Unit, onPauseAll: () -> Unit, onCastMedia: () -> Unit, onPushMedia: () -> Unit, onExtension: () -> Unit, onSettings: () -> Unit, dark: Boolean, onTheme: () -> Unit, canStartAll: Boolean, canPauseAll: Boolean, onSearchFocus: (Boolean) -> Unit) {
     BoxWithConstraints(Modifier.height(52.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border))) {
         val compact = maxWidth < 1180.dp
         val narrow = maxWidth < 980.dp
@@ -2372,13 +2385,21 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
                 "extension" -> Triple(Icons.Outlined.Extension, "插件", onExtension)
                 else -> return
             }
+            val enabled = when (id) {
+                "start_all" -> canStartAll
+                "pause_all" -> canPauseAll
+                else -> true
+            }
+            val hint = when {
+                id == "start_all" && !enabled -> "没有可开始、继续或重试的任务"
+                id == "pause_all" && !enabled -> "没有可暂停的任务"
+                else -> label
+            }
             if (id == "new") ToolbarButton(icon, label, action, true)
-            else if (compact) ToolbarIcon(icon, label, action)
-            else ToolbarButton(icon, label, action)
+            else if (compact) ToolbarIcon(icon, label, enabled, hint, action)
+            else WorkbenchTooltip(hint) { ToolbarButton(icon, label, action, enabled = enabled) }
         }
         Row(Modifier.fillMaxSize().padding(horizontal = if (narrow) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            // 9 个入口按用途分组：新建 / 导入 / 批量 / 推送 / 插件。
-            // 只加视觉分隔，不合并也不移动任何入口——交互路径完全不变。
             listOf(
                 listOf("new"),
                 listOf("paste", "batch", "harvest"),
@@ -2390,30 +2411,37 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
                 group.forEach { Action(it) }
             }
             Spacer(Modifier.weight(1f))
-            ToolbarSearchField(query, onQuery, narrow)
+            ToolbarSearchField(query, onQuery, narrow, onSearchFocus)
             Spacer(Modifier.width(5.dp))
-            if (compact) ToolbarIcon(Icons.Outlined.Settings, "设置", onSettings) else ToolbarButton(Icons.Outlined.Settings, "设置", onSettings)
-            ToolbarIcon(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, if (dark) "浅色模式" else "深色模式", onTheme)
+            if (compact) ToolbarIcon(Icons.Outlined.Settings, "设置", action = onSettings) else ToolbarButton(Icons.Outlined.Settings, "设置", onSettings)
+            ToolbarIcon(if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode, if (dark) "浅色模式" else "深色模式", action = onTheme)
         }
     }
 }
-@Composable private fun ToolbarSearchField(value: String, onValue: (String) -> Unit, narrow: Boolean) {
+@Composable private fun ToolbarSearchField(value: String, onValue: (String) -> Unit, narrow: Boolean, onFocus: (Boolean) -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
     Row(
         Modifier.width(if (narrow) 145.dp else 190.dp).height(36.dp).clip(RoundedCornerShape(Radius.md))
-            .background(if (focused) rail else surface2).border(1.dp, if (focused) blue else border, RoundedCornerShape(Radius.md)).padding(horizontal = 10.dp),
+            .background(if (focused) rail else surface2).border(1.dp, if (focused) blue else border, RoundedCornerShape(Radius.md)).padding(start = 10.dp, end = if (value.isEmpty()) 10.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Outlined.Search, "搜索", modifier = Modifier.size(17.dp), tint = muted); Spacer(Modifier.width(8.dp))
         BasicTextField(
             value = value,
             onValueChange = onValue,
-            modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
+            modifier = Modifier.weight(1f).focusRequester(focusRequester).onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
+                .semantics { contentDescription = "搜索任务" },
             singleLine = true,
             textStyle = TextStyle(color = ink, fontSize = TypeScale.caption),
             cursorBrush = SolidColor(blue),
             decorationBox = { field -> if (value.isEmpty()) Text(if (narrow) "搜索" else "搜索任务", color = faint, fontSize = TypeScale.caption, maxLines = 1); field() },
         )
+        if (value.isNotEmpty()) WorkbenchTooltip("清除搜索（Esc）") {
+            IconButton(onClick = { onValue(""); focusRequester.requestFocus() }, modifier = Modifier.size(34.dp).reportControlBounds("toolbar.clear_search")) {
+                Icon(Icons.Outlined.Close, "清除搜索", modifier = Modifier.size(15.dp), tint = muted)
+            }
+        }
     }
 }
 // 分组分隔线。
@@ -2427,8 +2455,8 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
 // 这是纯装饰性分组线，不承担"识别控件"的信息，WCAG 1.4.11 不适用；目标是稳定可辨，而非卡 3:1。
 // 取 faint 的 80%：浅色约 3.00~3.24:1、深色约 3.99~4.33:1，顺带也过了 3:1。
 @Composable private fun ToolbarGroupDivider() = Box(Modifier.padding(horizontal = 5.dp).width(2.dp).height(18.dp).background(faint.copy(alpha = .8f)))
-@Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false) { Button(onClick = action, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) onBlue else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp).reportControlBounds("toolbar.$label"), hoverColor = if (primary) null else surface3, pressedColor = if (primary) null else pressedSurface) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = TypeScale.caption, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
-@Composable private fun ToolbarIcon(icon: ImageVector, text: String, action: () -> Unit) = WorkbenchTooltip(text) { IconButton(onClick = action, modifier = Modifier.size(36.dp).reportControlBounds("toolbar.$text")) { Icon(icon, text, tint = muted, modifier = Modifier.size(18.dp)) } }
+@Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false, enabled: Boolean = true) { Button(onClick = action, enabled = enabled, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) onBlue else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp).reportControlBounds("toolbar.$label"), hoverColor = if (primary) null else surface3, pressedColor = if (primary) null else pressedSurface) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = TypeScale.caption, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
+@Composable private fun ToolbarIcon(icon: ImageVector, text: String, enabled: Boolean = true, hint: String = text, action: () -> Unit) = WorkbenchTooltip(hint) { IconButton(onClick = action, enabled = enabled, modifier = Modifier.size(36.dp).reportControlBounds("toolbar.$text")) { Icon(icon, text, tint = muted, modifier = Modifier.size(18.dp)) } }
 
 /**
  * 侧栏导航行的外壳：悬停换底色、按压缩一点、选中给选中底。
@@ -2606,30 +2634,53 @@ private fun NavRow(
 private fun categoryIcon(filter: TaskFilter): ImageVector = when (filter) { TaskFilter.RUNNING -> Icons.Outlined.Downloading; TaskFilter.QUEUED -> Icons.Outlined.Schedule; TaskFilter.PAUSED -> Icons.Outlined.PauseCircle; TaskFilter.COMPLETED -> Icons.Outlined.CheckCircle; TaskFilter.FAILED -> Icons.Outlined.ErrorOutline; else -> Icons.Outlined.Folder }
 private fun categoryIcon(category: TaskCategory): ImageVector = when (category) { TaskCategory.MEDIA -> Icons.Outlined.Image; TaskCategory.PROGRAM -> Icons.Outlined.Apps; TaskCategory.ARCHIVE -> Icons.Outlined.FolderZip; TaskCategory.OTHER -> Icons.AutoMirrored.Outlined.InsertDriveFile }
 
-@Composable private fun ContentHeader(filter: TaskFilter, count: Int, hasSelection: Boolean, hasCompleted: Boolean, onRefresh: () -> Unit, onClearCompleted: () -> Unit, onMore: (String) -> Unit, onSelectedAction: (String) -> Unit) {
+@Composable private fun ContentHeader(filter: TaskFilter, count: Int, selection: List<DownloadTask>, completedCount: Int, onClearSelection: () -> Unit, onRefresh: () -> Unit, onClearCompleted: () -> Unit, onMore: (String) -> Unit, onSelectedAction: (String) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
-    BoxWithConstraints(Modifier.height(42.dp).fillMaxWidth().background(surface2).border(BorderStroke(1.dp, border))) {
+    val selectedSources = selection.map { it.source }
+    val clearHint = "清理当前列表中 $completedCount 个已完成任务；保留已下载文件"
+    BoxWithConstraints(Modifier.height(42.dp).fillMaxWidth().background(if (selection.isNotEmpty()) selectedSurface else surface2).border(BorderStroke(1.dp, border))) {
         val compact = maxWidth < 940.dp
+        @Composable fun SelectedAction(icon: ImageVector, label: String, action: String) {
+            val eligibleCount = selectedTaskActionTargets(selectedSources, action).size
+            val hint = when (eligibleCount) {
+                0 -> "所选任务当前不支持$label"
+                selection.size -> "$label（${selection.size} 项）"
+                else -> "$label（${selection.size} 项中有 $eligibleCount 项可执行）"
+            }
+            ToolbarIcon(icon, label, enabled = eligibleCount > 0, hint = hint) { onSelectedAction(action) }
+        }
         Row(Modifier.fillMaxSize().padding(horizontal = if (compact) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(filter.label, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.width(8.dp)); Text("$count 项", color = faint, fontSize = TypeScale.caption)
-            if (hasSelection) {
+            if (selection.isNotEmpty()) {
                 Spacer(Modifier.width(if (compact) 8.dp else 16.dp))
-                if (!compact) Text("已选择", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold)
-                ToolbarIcon(Icons.Outlined.FileDownload, "开始") { onSelectedAction("start") }; ToolbarIcon(Icons.Outlined.Pause, "暂停") { onSelectedAction("pause") }; ToolbarIcon(Icons.AutoMirrored.Outlined.DriveFileMove, "移动队列") { onSelectedAction("move_queue") }; ToolbarIcon(Icons.Outlined.PlayCircle, "播放") { onSelectedAction("play") }; ToolbarIcon(Icons.Outlined.Cast, "投屏") { onSelectedAction("cast") }; ToolbarIcon(Icons.Outlined.Tv, "TVBox 推送") { onSelectedAction("push_tvbox") }; ToolbarIcon(Icons.Outlined.DeleteOutline, "删除") { onSelectedAction("delete") }
+                Text("已选 ${selection.size} 项", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold)
+                ToolbarIcon(Icons.Outlined.Close, "取消选择", action = onClearSelection)
+                SelectedAction(Icons.Outlined.FileDownload, "开始", "start")
+                SelectedAction(Icons.Outlined.Pause, "暂停", "pause")
+                SelectedAction(Icons.AutoMirrored.Outlined.DriveFileMove, "移动队列", "move_queue")
+                selection.singleOrNull()?.takeIf { taskSupportsMediaActions(it.source) }?.let { task ->
+                    SelectedAction(Icons.Outlined.PlayCircle, taskPlayLabel(task.source), "play")
+                    SelectedAction(Icons.Outlined.Cast, "投屏", "cast")
+                    SelectedAction(Icons.Outlined.Tv, "TVBox 推送", "push_tvbox")
+                }
+                SelectedAction(Icons.Outlined.DeleteOutline, "删除", "delete")
             } else if (!compact) {
                 Spacer(Modifier.width(14.dp)); Text("选择任务后可进行批量操作", color = faint, fontSize = TypeScale.caption)
             }
             Spacer(Modifier.weight(1f))
             if (compact) {
-                WorkbenchTooltip("清理已完成") {
-                    IconButton(onClick = onClearCompleted, enabled = hasCompleted, modifier = Modifier.size(36.dp).reportControlBounds("content_header.clear_completed")) {
-                        Icon(Icons.Outlined.DeleteSweep, "清理已完成", tint = muted, modifier = Modifier.size(18.dp))
+                WorkbenchTooltip(clearHint) {
+                    IconButton(onClick = onClearCompleted, enabled = completedCount > 0, modifier = Modifier.size(36.dp).reportControlBounds("content_header.clear_completed")) {
+                        Icon(Icons.Outlined.DeleteSweep, clearHint, tint = muted, modifier = Modifier.size(18.dp))
                     }
                 }
-                ToolbarIcon(Icons.Outlined.Refresh, "刷新", onRefresh)
+                ToolbarIcon(Icons.Outlined.Refresh, "刷新", action = onRefresh)
             } else {
-                TextButton(onClick = onClearCompleted, enabled = hasCompleted, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.clear_completed")) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = TypeScale.caption) }; TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.refresh")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
+                WorkbenchTooltip(clearHint) {
+                    TextButton(onClick = onClearCompleted, enabled = completedCount > 0, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.clear_completed")) { Icon(Icons.Outlined.DeleteSweep, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清理已完成", fontSize = TypeScale.caption) }
+                }
+                TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.refresh")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
             }
             Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = TypeScale.body) }, onClick = { menuOpen = false; onMore(action) }) } } }
         }
@@ -2641,7 +2692,7 @@ private data class TaskContextMenuRequest(
     val position: IntOffset,
 )
 @OptIn(ExperimentalComposeUiApi::class)
-@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (String) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, onSort: (String) -> Unit, onAction: (String, String) -> Unit) {
+@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (String) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, hasTasks: Boolean, onClearFilters: () -> Unit, onSort: (String) -> Unit, onAction: (String, String) -> Unit) {
     var anchorId by remember { mutableStateOf<String?>(null) }
     var tableFocused by remember { mutableStateOf(false) }
     var contextMenu by remember { mutableStateOf<TaskContextMenuRequest?>(null) }
@@ -2731,9 +2782,13 @@ private data class TaskContextMenuRequest(
                             if (appIcon != null) Image(appIcon, "HLS Downloader", modifier = Modifier.size(62.dp))
                             else Icon(Icons.Outlined.Downloading, "下载任务", tint = blue, modifier = Modifier.size(34.dp))
                             Spacer(Modifier.height(14.dp))
-                            Text("这里还没有下载任务", color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold)
+                            Text(if (hasTasks) "当前筛选下没有任务" else "这里还没有下载任务", color = ink, fontSize = TypeScale.title, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(4.dp))
-                            Text("点击工具栏“新建”或粘贴链接开始下载", color = muted, fontSize = TypeScale.body)
+                            Text(if (hasTasks) "可调整搜索、状态、分类或队列筛选" else "点击工具栏“新建”或粘贴链接开始下载", color = muted, fontSize = TypeScale.body)
+                            if (hasTasks) {
+                                Spacer(Modifier.height(12.dp))
+                                TextButton(onClick = onClearFilters, modifier = Modifier.reportControlBounds("tasks.reset_filters")) { Text("重置筛选", color = blue) }
+                            }
                         }
                     }
                 } else {
@@ -3105,7 +3160,7 @@ internal fun taskAccessibilityLabel(task: DownloadTask): String = listOf(
     task.filename,
     listOf(taskProtocolLabel(task.source), taskExtensionLabel(task.source)).filter(String::isNotBlank).joinToString(" "),
     task.status,
-    "进度 ${(task.progress.coerceIn(0f, 1f) * 100).toInt()}%",
+    "进度 ${taskProgressLabel(task)}",
     if (isActiveTaskStatus(task.status)) "速度 ${task.speed}" else null,
     task.source.totalBytes?.let { "大小 ${formatBytes(it)}" },
 ).filterNotNull().filter(String::isNotBlank).joinToString("，")

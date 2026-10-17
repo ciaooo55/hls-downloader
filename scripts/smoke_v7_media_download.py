@@ -44,7 +44,7 @@ class Handler(SimpleHTTPRequestHandler):
 def run(args):
     runtime = args.runtime.resolve()
     ffmpeg = runtime / "app/resources/ffmpeg.exe"
-    ffprobe = runtime / "app/resources/ffprobe.exe"
+    ffprobe = args.ffprobe.resolve(strict=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     result = {"passed": False, "cases": [], "engine_sha256": hashlib.sha256(
         (runtime / 'app/resources/HLSDownloaderEngine.exe').read_bytes()).hexdigest()}
@@ -193,6 +193,7 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", type=Path, required=True)
+    parser.add_argument("--ffprobe", type=Path, required=True, help="External test tool; not part of the installed application")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument('--audio-failure', nargs='?', const='all', choices=['all', 'segment'])
     parser.add_argument('--live', action='store_true')

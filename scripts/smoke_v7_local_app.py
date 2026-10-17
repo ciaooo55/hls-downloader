@@ -81,7 +81,7 @@ def run(args):
         check("installation", code in (0, 3010), code)
         check("registered", product_state(package["product_code"]) == 5, product_state(package["product_code"]))
         resources = install / "app" / "resources"
-        files = [install / "HLSDownloader.exe", *(resources / name for name in ["HLSDownloaderEngine.exe", "HLSDownloaderNativeHost.exe", "HLSDownloaderPresenter.exe", "HLSDownloaderUpdater.exe", "ffmpeg.exe", "ffprobe.exe"])]
+        files = [install / "HLSDownloader.exe", *(resources / name for name in ["HLSDownloaderEngine.exe", "HLSDownloaderNativeHost.exe", "HLSDownloaderPresenter.exe", "HLSDownloaderUpdater.exe", "ffmpeg.exe"])]
         check("complete-runtime-installed", all(p.is_file() for p in files), [str(p) for p in files])
         result["installed_sha256"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
         provenance = json.loads((resources / "BUILD-PROVENANCE.json").read_text(encoding="utf-8"))

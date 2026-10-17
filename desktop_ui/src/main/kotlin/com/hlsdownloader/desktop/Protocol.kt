@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.EOFException
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.InetSocketAddress
@@ -790,7 +791,17 @@ object EnginePipeClient {
         if (windowsPipe && !IS_WINDOWS) {
             return TcpFrameChannel(InetSocketAddress(CORE_TCP_HOST, CORE_TCP_PORT))
         }
-        return FileFrameChannel(RandomAccessFile(pipePath, "rw"))
+        val deadline = System.nanoTime() + CORE_CONNECT_TIMEOUT_MS * 1_000_000L
+        while (true) {
+            try {
+                return FileFrameChannel(RandomAccessFile(pipePath, "rw"))
+            } catch (error: FileNotFoundException) {
+                // Windows 会把管道实例暂时占满报告成 FileNotFoundException。只在打开阶段
+                // 等待服务端补充实例；此时尚未发送命令，不能重试已发送的删除、开始等操作。
+                if (!windowsPipe || System.nanoTime() >= deadline) throw error
+                Thread.sleep(10)
+            }
+        }
     }
 
     private fun <T> session(block: (PipeConnection) -> T): T =

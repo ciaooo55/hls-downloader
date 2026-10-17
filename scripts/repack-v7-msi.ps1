@@ -10,7 +10,8 @@ param(
     [string]$DesktopJarReplacement = '',
     [string]$ProvenanceReplacement = '',
     [string]$ExtensionArchivesDirectory = '',
-    [string]$NativeDependenciesDirectory = ''
+    [string]$NativeDependenciesDirectory = '',
+    [switch]$OmitTestAndUnusedIcons
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,6 +115,34 @@ try {
         $destination = [IO.Path]::GetFullPath((Join-Path $work $files[0].GetAttribute('Source')))
         if (-not $destination.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Replacement target escaped the extracted installer.' }
         Copy-Item -LiteralPath (Resolve-Path -LiteralPath $replacement[1]).Path -Destination $destination -Force
+    }
+    if ($OmitTestAndUnusedIcons) {
+        if ([string]::IsNullOrWhiteSpace($DesktopJarReplacement)) { throw 'Slim repacking requires the rebuilt desktop JAR.' }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $jar = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $DesktopJarReplacement).Path)
+        try {
+            foreach ($name in @('OutlinedIconsKt', 'AutoMirroredIconsKt')) {
+                if (-not $jar.GetEntry("com/hlsdownloader/desktop/icons/$name.class")) { throw "Rebuilt desktop JAR lacks $name." }
+            }
+        } finally { $jar.Dispose() }
+        foreach ($file in @($model.SelectNodes("//*[local-name()='File' and (@Name='ffprobe.exe' or starts-with(@Name, 'material-icons-extended-desktop-'))]"))) {
+            $component = $file.ParentNode
+            $component.RemoveChild($file) | Out-Null
+            if ($component.SelectNodes("./*[local-name()='File']").Count -eq 0) {
+                $id = $component.GetAttribute('Id')
+                foreach ($reference in @($model.SelectNodes("//*[local-name()='ComponentRef' and @Id='$id']"))) {
+                    $reference.ParentNode.RemoveChild($reference) | Out-Null
+                }
+                $component.ParentNode.RemoveChild($component) | Out-Null
+            }
+        }
+        $configs = $model.SelectNodes("//*[local-name()='File' and @Name='HLSDownloader.cfg']")
+        if ($configs.Count -ne 1) { throw 'Desktop launcher configuration is not unique.' }
+        $config = [IO.Path]::GetFullPath((Join-Path $work $configs[0].GetAttribute('Source')))
+        if (-not $config.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Launcher configuration escaped extracted installer.' }
+        $lines = [IO.File]::ReadAllLines($config) | Where-Object { $_ -notmatch '^app\.classpath=.*material-icons-extended-desktop-' }
+        [IO.File]::WriteAllLines($config, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
+        $model.Save($wxs)
     }
     if (-not [string]::IsNullOrWhiteSpace($ExtensionArchivesDirectory)) {
         $archives = (Resolve-Path -LiteralPath $ExtensionArchivesDirectory).Path

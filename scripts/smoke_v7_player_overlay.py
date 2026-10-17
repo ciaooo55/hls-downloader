@@ -187,6 +187,7 @@ def run(args):
                 bounds('surface')
                 wait(lambda: player()['position_available'], 'UI did not start playback')
             open_player()
+            assert player()['duration_seconds'] >= 45, 'Overlay acceptance requires a >=45-second multitrack fixture; short media clamps the 10-second seek'
             click('暂停')
             wait(lambda: player()['paused'], 'Pause did not reach mpv')
             check_video_rect('main')
@@ -313,6 +314,16 @@ def run(args):
                 process.wait(timeout=15)
             except (psutil.NoSuchProcess, subprocess.TimeoutExpired):
                 pass
+        # jpackage 启动器可能先于独立 JVM 退出；仍需清理这个沙盒运行目录中的进程。
+        remaining = []
+        for proc in psutil.process_iter(['exe']):
+            if proc.info['exe'] and Path(proc.info['exe']).is_relative_to(args.runtime):
+                try:
+                    proc.terminate()
+                    remaining.append(proc)
+                except psutil.NoSuchProcess:
+                    pass
+        psutil.wait_procs(remaining, timeout=15)
         server.shutdown()
         server.server_close()
         log.close()

@@ -363,8 +363,8 @@ internal object ButtonDefaults {
     fun buttonColors(
         containerColor: Color = Color.Transparent,
         contentColor: Color = Color.Unspecified,
-        disabledContainerColor: Color = containerColor.copy(alpha = .45f),
-        disabledContentColor: Color = contentColor.copy(alpha = .45f),
+        disabledContainerColor: Color = containerColor.copy(alpha = containerColor.alpha * .45f),
+        disabledContentColor: Color = contentColor.copy(alpha = contentColor.alpha * .45f),
     ) = ButtonColors(containerColor, contentColor, disabledContainerColor, disabledContentColor)
 }
 

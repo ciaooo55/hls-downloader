@@ -59,7 +59,6 @@ foreach ($name in @(
     'app\resources\HLSDownloaderUpdater.exe',
     'app\resources\HLSDownloaderPresenter.exe',
     'app\resources\ffmpeg.exe',
-    'app\resources\ffprobe.exe',
     'app\resources\libmpv-2.dll',
     'app\resources\BUILD-PROVENANCE.json',
     'app\resources\FEATURE-PARITY.json'

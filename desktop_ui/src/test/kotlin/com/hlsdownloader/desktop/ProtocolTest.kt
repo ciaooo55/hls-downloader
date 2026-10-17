@@ -37,6 +37,33 @@ class ProtocolTest {
     }
 
     @Test
+    fun selectionStartResolvesMixedStatesWithoutRestartingCompletedTasks() {
+        val queued = TaskDto(id = "queued", filename = "queued.bin", status = "queued", availableActions = listOf("start", "delete"))
+        val paused = TaskDto(id = "paused", filename = "paused.bin", status = "paused", availableActions = listOf("resume", "delete"))
+        val failed = TaskDto(id = "failed", filename = "failed.bin", status = "failed", availableActions = listOf("retry", "delete"))
+        val completed = TaskDto(id = "completed", filename = "completed.bin", status = "completed", availableActions = listOf("start", "delete"))
+
+        assertEquals(
+            listOf("queued" to "start", "paused" to "resume", "failed" to "retry"),
+            selectedTaskActionTargets(listOf(queued, paused, failed, completed), "start"),
+        )
+        assertEquals(listOf("paused" to "move_queue"), selectedTaskActionTargets(listOf(paused, completed), "move_queue"))
+    }
+
+    @Test
+    fun mediaSelectionRequiresOnePlayableTask() {
+        val media = TaskDto(id = "media", filename = "clip.mp4", status = "completed", playbackReady = true, availableActions = listOf("open", "delete"))
+        val document = TaskDto(id = "document", filename = "notes.txt", status = "completed", availableActions = listOf("open", "delete"))
+
+        listOf("play", "cast", "push_tvbox").forEach { action ->
+            assertEquals(listOf("media" to action), selectedTaskActionTargets(listOf(media), action))
+            assertTrue(selectedTaskActionTargets(listOf(media, media.copy(id = "other")), action).isEmpty())
+            assertTrue(selectedTaskActionTargets(listOf(document), action).isEmpty())
+            assertTrue(selectedTaskActionTargets(listOf(media.copy(playbackReady = false)), action).isEmpty())
+        }
+    }
+
+    @Test
     fun taskSnapshotDecodesStructuredVerificationAndMirrorResults() {
         val task = protocolJson.decodeFromString<TaskDto>(
             """{"task_id":"t-verify","filename":"file.bin","status":"completed","peer_count":18,"seed_count":4,"uploaded_bytes":0,"upload_speed_bytes_per_sec":0,"expected_checksum":"sha256:abc","checksum_algorithm":"SHA-256","checksum_actual":"abc","checksum_verified":true,"av_scan":{"state":"clean","engine":"Windows Defender","detail":"completed"},"mirror_status":[{"url":"https://mirror.test/file.bin","final_url":"https://cdn.test/file.bin","state":"active","detail":"used","ranges":true}]}""",

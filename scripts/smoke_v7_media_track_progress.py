@@ -4,7 +4,7 @@ import argparse,hashlib,json,os,subprocess,threading,time,traceback,uuid
 from http.server import SimpleHTTPRequestHandler,ThreadingHTTPServer
 from smoke_v7_portable_app import Pipe,wait
 
-def run(runtime,report_path):
+def run(runtime,report_path,ffprobe):
     assert os.environ.get('HLS_VM_ACCEPTANCE')=='1','Run only in the acceptance VM'
     report_path.parent.mkdir(parents=True,exist_ok=True)
     fixture=report_path.parent/(report_path.stem+'-media');fixture.mkdir(exist_ok=True)
@@ -76,7 +76,7 @@ def run(runtime,report_path):
             assert current['completed_ranges']==current['total_ranges']>video_done['completed_ranges'],current
             output=Path(current['output_path'])
             assert output.suffix=='.mp4' and current['filename']==output.name,'Merged MP4 kept an incorrect requested suffix'
-            metadata=json.loads(subprocess.check_output([str(runtime/'app/resources/ffprobe.exe'),'-v','error','-show_streams','-show_format','-of','json',str(output)],timeout=30))
+            metadata=json.loads(subprocess.check_output([str(ffprobe),'-v','error','-show_streams','-show_format','-of','json',str(output)],timeout=30))
             assert {'audio','video'} <= {s['codec_type'] for s in metadata['streams']},metadata
             assert float(metadata['format']['duration'])>=7.8,metadata['format']
             subprocess.run([str(runtime/'app/resources/ffmpeg.exe'),'-v','error','-i',str(output),'-f','null','NUL'],check=True,timeout=45)
@@ -97,4 +97,5 @@ def run(runtime,report_path):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--runtime',type=Path,required=True);parser.add_argument('--report',type=Path,required=True)
-    args=parser.parse_args();raise SystemExit(run(args.runtime,args.report))
+    parser.add_argument('--ffprobe',type=Path,required=True,help='External test tool; not part of the installed application')
+    args=parser.parse_args();raise SystemExit(run(args.runtime,args.report,args.ffprobe))

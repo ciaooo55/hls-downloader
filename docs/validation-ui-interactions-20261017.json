@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "date": "2026-10-17",
+  "scope": "Contextual task actions, search, filtered cleanup and small-window UI; not a full-product certification",
+  "base_commit": "af5435e18031424b5f056572f96a6fb2e71ed3c2",
+  "working_tree_modified": true,
+  "source_sha256": {
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "059aa0b3e74b6f533d462d0f1bab9a379c1c60ccf40b763abf4cd7c116e1c45d",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt": "059a8c37c128d2deea197eb48cb6b10da2d51c2ca24a7c43928bde7f5da0d94a",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt": "dfe1f8cf7614ef71af8bd11cabaa292a3ae6fb2da830a49d0b45ecd149075da5",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/ProtocolTest.kt": "e86acbd71c8ffdf400af9791bc0c546a4dd9874ff74dbaebd25e83468138ce13"
+  },
+  "jar_sha256": "45ba438059898aed5b6dafed8b15b32c3103662c65ecc7aa78695014556eb6f4",
+  "unit_tests": [
+    {
+      "name": "com.hlsdownloader.desktop.ControlBoundsReportingTest",
+      "tests": "9",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.hlsdownloader.desktop.ProtocolTest",
+      "tests": "25",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.hlsdownloader.desktop.SelectionPruningTest",
+      "tests": "6",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.hlsdownloader.desktop.SelectionTest",
+      "tests": "13",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.hlsdownloader.desktop.TransparentButtonFeedbackTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.hlsdownloader.desktop.UiTestApiTest",
+      "tests": "6",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ],
+  "unit_total": 63,
+  "sandbox": [
+    {
+      "artifact": ".tool-cache/ui-design-20261017/selection-display-100.json",
+      "sha256": "2961c98205c747b24828b8ca0873bb301126f5078db8f155e8d35a27c2be6dd4",
+      "passed": true,
+      "process_exit_code": 0,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1024,
+        "height": 600,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1024,
+        "deviceHeight": 600
+      },
+      "screen_logical_size": [
+        1920,
+        1080
+      ],
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window"
+      ],
+      "disabled_button_background": {
+        "adjacent": [
+          245,
+          247,
+          250
+        ],
+        "median": [
+          245,
+          247,
+          250
+        ]
+      },
+      "jar_sha256": "45ba438059898aed5b6dafed8b15b32c3103662c65ecc7aa78695014556eb6f4",
+      "screenshot": ".tool-cache/ui-design-20261017/selection-display-100-final-layout.png"
+    },
+    {
+      "artifact": ".tool-cache/ui-design-20261017/selection-display-150.json",
+      "sha256": "4b02d5ce872b9d923e41657c9fb3432b0b60157fe1054cd812bf77a9ab970e9e",
+      "passed": true,
+      "process_exit_code": 0,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1024,
+        "height": 600,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.5,
+        "scaleY": 1.5,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1536,
+        "deviceHeight": 900
+      },
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window"
+      ],
+      "disabled_button_background": {
+        "adjacent": [
+          245,
+          247,
+          250
+        ],
+        "median": [
+          245,
+          247,
+          250
+        ]
+      },
+      "jar_sha256": "45ba438059898aed5b6dafed8b15b32c3103662c65ecc7aa78695014556eb6f4",
+      "screenshot": ".tool-cache/ui-design-20261017/selection-display-150-final-layout.png"
+    }
+  ],
+  "sandbox_job_exit_code": 0,
+  "test_driver_sha256": "e2fbdc33a0a6feeabc9529e463dbc1e2a7e8e3313894b663bcf87dad001f54f8",
+  "additional_fixes": [
+    "Disabled transparent buttons preserve original alpha instead of becoming opaque grey.",
+    "Windows named-pipe opening waits up to the existing 2-second connection timeout for a free instance. Commands already sent are not retried."
+  ],
+  "initial_failure_evidence": [
+    "selection-100.json: server stalled during probing; fixture subsequently gained HEAD/Range support.",
+    "selection-final-100.json: test confused the global TVBox entry with the selected-task entry; assertion corrected.",
+    "selection-diagnostic.json: batch resume failed with Windows pipe instances busy; diagnostic captured before transport correction.",
+    "selection-fixed-100.json: a fixture that deliberately stopped sending bytes did not resume within the test deadline of 15 seconds. The final normal-flow tests use a continuously throttled transfer. This stalled-network case is not claimed as passed.",
+    "selection-flowing-150-final-layout.png: initial guest desktop too small; top controls fit but bottom was clipped. Superseded by full-viewport display runs with whole-window bounds and bottom status text verified."
+  ],
+  "limits": [
+    "UI scaling was set using the Java UI scale; Windows OS display settings were not changed.",
+    "No physical casting/TVBox device or cloud subtitle acceptance was performed.",
+    "No host installation, signing, installer update, commit, push or GitHub release was performed.",
+    "Java Access Bridge emitted a dynamic-tree IndexOutOfBoundsException during reads; both final functional runs completed successfully."
+  ],
+  "build_log": ".tool-cache/ui-design-20261017/ui-pipe-fixed-build-test.log",
+  "sandbox_closed": true,
+  "stalled_network_followup": {
+    "fixed_and_validated": true,
+    "evidence": "docs/validation-http-stall-20261017.json",
+    "scope": "Direct HTTP response reads; original failure entry retained as history."
+  }
+}
