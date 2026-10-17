@@ -1,0 +1,1771 @@
+{
+  "revision": "v7.0.3-r7",
+  "date": "2026-10-17",
+  "production_source_commit": "a4f54a1d55d4060fa63b0d15ebd965906b4752b1",
+  "formal_release_ready": false,
+  "signed": false,
+  "environment": "Windows Sandbox; temporary browser profiles; no local application install",
+  "reports": {
+    "desktop_tasks": {
+      "passed": true,
+      "report_sha256": "d9f7ecac66aa35e0336967318332749b146531a06122c3e670a557e3c5f52fb5",
+      "checks": [
+        {
+          "name": "new-task invalid input, disabled submit, analyze, actual 32MiB download and SHA256",
+          "actual": true
+        },
+        {
+          "name": "real task row click selects downloaded task",
+          "actual": true
+        },
+        {
+          "name": "real task right-click exposes legal actions",
+          "actual": [
+            "open",
+            "open_folder",
+            "retry",
+            "delete",
+            "delete_files"
+          ]
+        },
+        {
+          "name": "task details tab: 概览",
+          "actual": true
+        },
+        {
+          "name": "task details tab: 连接",
+          "actual": true
+        },
+        {
+          "name": "task details tab: 速度",
+          "actual": true
+        },
+        {
+          "name": "task details tab: 日志",
+          "actual": true
+        },
+        {
+          "name": "all-start, all-pause, selected-task resume, checkpoint and SHA256",
+          "actual": true
+        },
+        {
+          "name": "batch blocks invalid input, then downloads both corrected links",
+          "actual": true
+        },
+        {
+          "name": "harvest size filter: ≥ 1 MB",
+          "actual": true
+        },
+        {
+          "name": "harvest size filter: ≥ 10 MB",
+          "actual": true
+        },
+        {
+          "name": "harvest size filter: 全部大小",
+          "actual": true
+        },
+        {
+          "name": "page harvest, size probing, category selection, select/deselect and selected download",
+          "actual": true
+        },
+        {
+          "name": "queue manager creates and saves real queue",
+          "actual": "新队列"
+        },
+        {
+          "name": "selected task moves into saved queue",
+          "actual": true
+        },
+        {
+          "name": "test task count",
+          "actual": 5
+        }
+      ],
+      "components_sha256": {
+        "app\\HLSDownloaderDesktop-7.0.3.jar": "266865a79c15539a4907a120193ec24ccd89aa9f6213dc3aa9bb17ee9794ccc1",
+        "app\\resources\\HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de"
+      },
+      "background_sha256": null
+    },
+    "desktop_delete_and_settings": {
+      "passed": true,
+      "report_sha256": "33b44160f382c739304802b884721f299b60354a4bf65c9075f9ea4630a14c46",
+      "checks": [
+        {
+          "name": "prepared three downloaded files for remaining interactions",
+          "actual": true
+        },
+        {
+          "name": "search matches filename and empty result then restores test-only view",
+          "actual": true
+        },
+        {
+          "name": "select-all respects search and destructive confirmation cancel preserves tasks",
+          "actual": true
+        },
+        {
+          "name": "local video opens in the workbench overlay and closes using its own close button",
+          "actual": true
+        },
+        {
+          "name": "settings save persists changed option; original restored in cleanup",
+          "actual": true
+        },
+        {
+          "name": "confirmed delete removes task and preserves completed file",
+          "actual": true
+        },
+        {
+          "name": "delete task and file: cancel preserves both; confirm removes both",
+          "actual": true
+        },
+        {
+          "name": "clear completed: cancel preserves records; confirm removes completed records, preserves queued task and file SHA256",
+          "actual": true
+        }
+      ],
+      "components_sha256": {
+        "app\\HLSDownloaderDesktop-7.0.3.jar": "266865a79c15539a4907a120193ec24ccd89aa9f6213dc3aa9bb17ee9794ccc1",
+        "app\\resources\\HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de"
+      },
+      "background_sha256": null
+    },
+    "desktop_files_and_windows": {
+      "passed": true,
+      "report_sha256": "a524148d6b94482957115625412066fa5f76bbda8bba5dd0fd46b5566fc83394",
+      "checks": [
+        {
+          "name": "real system chooser selects file: 导出任务列表",
+          "actual": true
+        },
+        {
+          "name": "real system chooser selects file: 导入任务 JSON、种子、Metalink 或 URL 列表",
+          "actual": true
+        },
+        {
+          "name": "actual export chooser saves selected task; delete preserves file; import chooser recreates task and downloads matching bytes",
+          "actual": true
+        },
+        {
+          "name": "imported output SHA256",
+          "actual": "e11360251d1173650cdcd20f111d8f1ca2e412f572e8b36a4dc067121c1799b8"
+        },
+        {
+          "name": "maximize, restore, minimize and restore visible workbench",
+          "actual": true
+        },
+        {
+          "name": "narrow window preserves essential buttons and Escape cancels modal",
+          "actual": true
+        }
+      ],
+      "components_sha256": {
+        "app\\HLSDownloaderDesktop-7.0.3.jar": "266865a79c15539a4907a120193ec24ccd89aa9f6213dc3aa9bb17ee9794ccc1",
+        "app\\resources\\HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de"
+      },
+      "background_sha256": null
+    },
+    "protocols": {
+      "passed": true,
+      "report_sha256": "d1dab0ef29520478b0670164f1197602c0b6b257eb29c8a5f2fbe0311da9b909",
+      "checks": [
+        {
+          "name": "real FTP password login, pause, REST resume and SHA256",
+          "passed": true,
+          "actual": {
+            "paused_bytes": 4194304,
+            "bytes": 8388608,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "real SFTP password login, pinned host key, pause, offset resume and SHA256",
+          "passed": true,
+          "actual": {
+            "paused_bytes": 3407703,
+            "bytes": 8388608,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "cURL import -> actual authenticated POST with Cookie and exact body",
+          "passed": true,
+          "actual": {
+            "bytes": 8388608,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+            "secrets_absent_from_snapshot": true
+          }
+        },
+        {
+          "name": "checksum match completes; mismatch fails without publishing corrupt file",
+          "passed": true,
+          "actual": {
+            "correct_verified": true,
+            "incorrect_failed": "checksum mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, got 7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "export JSON -> delete record -> import, preserving configuration and future schedule",
+          "passed": true,
+          "actual": {
+            "configuration_preserved": true,
+            "runtime_state_not_imported": true,
+            "future_schedule_prevents_transfer": true
+          }
+        },
+        {
+          "name": "scheduling and rate: near-term schedule waits then downloads with SHA256",
+          "passed": true,
+          "actual": {
+            "scheduled_start_at": "2026-10-17T10:17:33Z",
+            "pre_due_status": "queued",
+            "pre_due_downloaded_bytes": 0,
+            "pre_due_http_requests": 0,
+            "post_due_status": "completed",
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "scheduling and rate: measured per-task KiB limit then unlimited completion",
+          "passed": true,
+          "actual": {
+            "limit_kib": 64,
+            "observation_seconds": 4.1720000000000255,
+            "observed_downloaded_delta": 262144,
+            "allowed_delta_bytes": 797704,
+            "paused_bytes": 524288,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "expired signed URL -> visible failure -> refresh URL and resume same task",
+          "passed": true,
+          "actual": {
+            "same_task_id": "task-10",
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions HTTP 403 visible classified failure and same-task recovery",
+          "passed": true,
+          "actual": {
+            "error_code": "HTTP_403",
+            "hint": "访问凭据或短效签名可能已过期，请回到原网页刷新后重新发送资源",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions HTTP 404 visible classified failure and same-task recovery",
+          "passed": true,
+          "actual": {
+            "error_code": "HTTP_404",
+            "hint": "资源地址已失效或文件已被移动，请回到来源页面重新识别",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions HTTP 200 login HTML is rejected as media without false success",
+          "passed": true,
+          "actual": {
+            "error": "服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试",
+            "media_file_not_published": true
+          }
+        },
+        {
+          "name": "exceptions invalid save directory fails clearly and valid directory recovers",
+          "passed": true,
+          "actual": {
+            "failure": {
+              "type": "error",
+              "request_id": 2,
+              "code": "core_command_failed",
+              "message": "下载目录必须位于默认下载根目录内"
+            },
+            "blocking_file_preserved": true,
+            "valid_directory_recovers": true
+          }
+        },
+        {
+          "name": "exceptions interrupted response fails without corrupt output then retry completes same task",
+          "passed": true,
+          "actual": {
+            "failure": "range 32768-2097151 made no progress after 5 attempts: range response ended without data",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+            "same_task_id": "task-15"
+          }
+        },
+        {
+          "name": "exceptions offline endpoint refusal is visible and recovered after link refresh",
+          "passed": true,
+          "actual": {
+            "failure": "WinHttpSendRequest 12029",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions real default HTTP response timeout and same-task recovery",
+          "passed": true,
+          "actual": {
+            "failure": "WinHttpReceiveResponse 12002",
+            "hint": "查看任务日志确认失败位置，修正网络或站点设置后重试",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "LAN share actual published address serves correct Range; stop revokes address",
+          "passed": true,
+          "actual": {
+            "lan_url": "http://172.27.24.93:50424/media/mf40d401a49c8496e04484a37732b464b/file.bin",
+            "range_bytes_match": true,
+            "stop_revokes_url": true
+          }
+        },
+        {
+          "name": "local FTPS explicit/implicit TLS, REST resume and SHA256",
+          "passed": true,
+          "actual": {
+            "modes": [
+              "explicit",
+              "implicit"
+            ],
+            "bytes": 80000,
+            "sha256": "09164749480446bde1b0de9b9fc701e9c24edb417d7cf18ecef61802fb22929e",
+            "resume_checkpoints": [
+              {
+                "mode": "explicit",
+                "paused_bytes": 32768
+              },
+              {
+                "mode": "implicit",
+                "paused_bytes": 32768
+              }
+            ],
+            "server_certificate_subject": "localhost"
+          }
+        }
+      ],
+      "components_sha256": null,
+      "background_sha256": null
+    },
+    "torrent": {
+      "passed": true,
+      "report_sha256": "740da6825ff10e401efa8e7743a73b36ce9966beb597c99e0cde886b72ab86c8",
+      "checks": [
+        {
+          "name": "real new-task torrent probe, deselect-all disabled submit, select two files, peer transfer and selected-only publication",
+          "actual": {
+            "ui_action_and_accessibility_observation_ms": 698.9994000000479,
+            "first_peer_ms": 6156.299700000034,
+            "metadata_requests": [],
+            "tracker_requests": 1,
+            "requested_pieces": [
+              0,
+              2
+            ],
+            "selected_sha256": [
+              "1dfa33e4c49e3c0a9ef0b609c3fb26c5211f7cff763fa72194d884d15d86e68e",
+              "b007fe445ff5b583c095c4688c75d8afef66d4c93eb6aeebcea0942e670e1cd3"
+            ]
+          }
+        }
+      ],
+      "components_sha256": {
+        "app\\HLSDownloaderDesktop-7.0.3.jar": "266865a79c15539a4907a120193ec24ccd89aa9f6213dc3aa9bb17ee9794ccc1",
+        "app\\resources\\HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de"
+      },
+      "background_sha256": null
+    },
+    "workbench": {
+      "passed": true,
+      "report_sha256": "938c625270bb21b69f1e19f8ae3eaf0d49dd33149bc23c76b6a9fc42399e00d4",
+      "checks": [
+        {
+          "name": "all toolbar controls: light-theme bounds, hover, press",
+          "actual": true
+        },
+        {
+          "name": "sidebar click: 进行中",
+          "actual": {
+            "activeFilter": "进行中",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 排队中",
+          "actual": {
+            "activeFilter": "排队中",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 已暂停",
+          "actual": {
+            "activeFilter": "已暂停",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 已完成",
+          "actual": {
+            "activeFilter": "已完成",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 失败",
+          "actual": {
+            "activeFilter": "失败",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 全部",
+          "actual": {
+            "activeFilter": "全部",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 媒体",
+          "actual": {
+            "activeFilter": "全部",
+            "activeCategory": "媒体",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 程序",
+          "actual": {
+            "activeFilter": "全部",
+            "activeCategory": "程序",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 压缩包",
+          "actual": {
+            "activeFilter": "全部",
+            "activeCategory": "压缩包",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 其他",
+          "actual": {
+            "activeFilter": "全部",
+            "activeCategory": "其他",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "sidebar click: 全部",
+          "actual": {
+            "activeFilter": "全部",
+            "activeCategory": "",
+            "activeQueueId": ""
+          }
+        },
+        {
+          "name": "refresh keeps workbench connected",
+          "actual": "下载引擎 · 已连接"
+        },
+        {
+          "name": "all toolbar controls: dark-theme feedback, theme restored",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: newtask-基本",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: newtask-连接",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: newtask-请求",
+          "actual": true
+        },
+        {
+          "name": "request method click: POST",
+          "actual": true
+        },
+        {
+          "name": "request method click: HEAD",
+          "actual": true
+        },
+        {
+          "name": "request method click: GET",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: newtask-计划",
+          "actual": true
+        },
+        {
+          "name": "completion draft option: 睡眠",
+          "actual": true
+        },
+        {
+          "name": "completion draft option: 休眠",
+          "actual": true
+        },
+        {
+          "name": "completion draft option: 关机",
+          "actual": true
+        },
+        {
+          "name": "completion draft option: 无",
+          "actual": true
+        },
+        {
+          "name": "new-task cancel removes dialog",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: dialog-批量添加",
+          "actual": true
+        },
+        {
+          "name": "dialog open / cancel: 批量添加",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: dialog-页面抓取",
+          "actual": true
+        },
+        {
+          "name": "dialog open / cancel: 页面抓取",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: dialog-插件",
+          "actual": true
+        },
+        {
+          "name": "dialog open / cancel: 插件",
+          "actual": true
+        },
+        {
+          "name": "queue-manager draft action: 上移队列",
+          "actual": true
+        },
+        {
+          "name": "queue-manager draft action: 下移队列",
+          "actual": true
+        },
+        {
+          "name": "queue-manager draft action: 删除队列",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-通用",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/自动分类目录",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/监视剪贴板",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/恢复未完成任务",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/开机启动",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/完成提示音",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/下载进度窗口",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 通用/完成通知",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-下载",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 下载/默认允许重复",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 下载/保留过程文件",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-计划",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 计划/启用定时限速",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 计划/队列自动开始",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 计划/队列自动停止",
+          "actual": true
+        },
+        {
+          "name": "settings choice: 计划/无",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-网络",
+          "actual": true
+        },
+        {
+          "name": "empty site rule disables save",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-媒体",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 媒体/下载外挂字幕",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 媒体/跳过广告片段",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-BT",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: BT/监视新种子",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: BT/启用 DHT 节点发现",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-安全",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 安全/完成后病毒扫描",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 安全/发现威胁时标记失败",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-浏览器",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 浏览器/接管浏览器下载",
+          "actual": true
+        },
+        {
+          "name": "pointer feedback: settings-外观",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 外观/深色模式",
+          "actual": true
+        },
+        {
+          "name": "settings switch toggles and restores: 外观/减弱动画",
+          "actual": true
+        },
+        {
+          "name": "settings cancel preserves existing configuration",
+          "actual": true
+        }
+      ],
+      "components_sha256": {
+        "app\\HLSDownloaderDesktop-7.0.3.jar": "266865a79c15539a4907a120193ec24ccd89aa9f6213dc3aa9bb17ee9794ccc1",
+        "app\\resources\\HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de"
+      },
+      "background_sha256": null
+    },
+    "firefox_post": {
+      "passed": true,
+      "report_sha256": "2128c9e852ad1b6ef523932e9b0de99118a379964fca6f9064cbc60c72605e83",
+      "checks": [
+        {
+          "name": "one-resolved-handoff-post",
+          "actual": {
+            "id": "handoff-1a149721138-1",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "post-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-9",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "urlencoded-post-not-replayed",
+          "actual": {
+            "task_id": "task-9",
+            "post_requests": 1
+          }
+        },
+        {
+          "name": "multipart-accept-single-post-desktop-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a149722e6d-2",
+            "status": "accepted",
+            "size": 65536,
+            "task_id": "task-10",
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "post_requests": 1,
+            "browser_download_absent": true,
+            "desktop_tasks_unchanged": false
+          }
+        },
+        {
+          "name": "multipart-reject-single-post-browser-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a149724b81-3",
+            "status": "rejected",
+            "size": 65536,
+            "task_id": null,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "post_requests": 1,
+            "browser_download_absent": false,
+            "desktop_tasks_unchanged": true
+          }
+        }
+      ],
+      "components_sha256": {
+        "HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+        "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+        "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+      },
+      "background_sha256": "d3e2530f45b5d618a724acc18aed670a2ddc9b17b4ca6b80e0d8843a802e3f3e"
+    },
+    "firefox_takeover": {
+      "passed": true,
+      "report_sha256": "bf58062d56ab4437957eab31425420118ff6efdc103d69ca70777dbd1857183c",
+      "checks": [
+        {
+          "name": "one-resolved-handoff-small",
+          "actual": {
+            "id": "handoff-1a149734db5-2",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "small-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-11",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-stream",
+          "actual": {
+            "id": "handoff-1a1497357d2-4",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "stream-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-12",
+            "size": 2097152,
+            "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938",
+            "browser_download_absent": true,
+            "no_content_length": true
+          }
+        },
+        {
+          "name": "one-resolved-handoff-ordinary",
+          "actual": {
+            "id": "handoff-1a1497367b4-6",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "ordinary-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-13",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-quick",
+          "actual": {
+            "id": "handoff-1a1497383f1-8",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "quick-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-14",
+            "size": 1024,
+            "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-image",
+          "actual": {
+            "id": "handoff-1a149738e75-a",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "image-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-15",
+            "size": 68,
+            "sha256": "6af484b8a73288a07fec730818a6de8bebce88aa915b52f66a8769bfb865f434",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-json",
+          "actual": {
+            "id": "handoff-1a14973988c-c",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "json-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-16",
+            "size": 32,
+            "sha256": "8cc6d67e9c047e92fa51eadb250504c11471cec93c4864cb2e66a96ae0b2361f",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-generic",
+          "actual": {
+            "id": "handoff-1a14973a30c-e",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "generic-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-17",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-post",
+          "actual": {
+            "id": "handoff-1a14973ad2a-f",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "post-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-18",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "urlencoded-post-not-replayed",
+          "actual": {
+            "task_id": "task-18",
+            "post_requests": 1
+          }
+        },
+        {
+          "name": "multipart-accept-single-post-desktop-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a14973cb4a-10",
+            "status": "accepted",
+            "size": 65536,
+            "task_id": "task-19",
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "post_requests": 1,
+            "browser_download_absent": true,
+            "desktop_tasks_unchanged": false
+          }
+        },
+        {
+          "name": "multipart-reject-single-post-browser-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a14973e84b-11",
+            "status": "rejected",
+            "size": 65536,
+            "task_id": null,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "post_requests": 1,
+            "browser_download_absent": false,
+            "desktop_tasks_unchanged": true
+          }
+        },
+        {
+          "name": "one-resolved-handoff-generated_blob",
+          "actual": {
+            "id": "handoff-1a1497401cf-12",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "generated_blob-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-20",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-generated_data",
+          "actual": {
+            "id": "handoff-1a1497408fe-13",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "generated_data-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-21",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "generated-blob-rejection-keeps-browser-file-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a149741251-14",
+            "browser_filename": "generated-blob-rejected.bin",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "desktop_tasks_unchanged": true
+          }
+        },
+        {
+          "name": "generated-blob-alt-bypasses-takeover-browser-file-sha256",
+          "actual": {
+            "browser_filename": "generated-blob-alt.bin",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "desktop_tasks_unchanged": true,
+            "handoffs_unchanged": true
+          }
+        },
+        {
+          "name": "generated-data-excluded-bypasses-takeover-browser-file-sha256",
+          "actual": {
+            "browser_filename": "generated-data-excluded.bin",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "desktop_tasks_unchanged": true,
+            "handoffs_unchanged": true
+          }
+        },
+        {
+          "name": "takeover-disabled-browser-complete-sha256",
+          "actual": {
+            "bytesReceived": 7634944,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-q3elw5h7\\downloads\\disabled.bin",
+            "finalUrl": null,
+            "id": 16,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:50995/disabled.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "site-excluded-browser-complete-sha256",
+          "actual": {
+            "bytesReceived": 8355840,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-q3elw5h7\\downloads\\excluded.bin",
+            "finalUrl": null,
+            "id": 17,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:50995/excluded.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "real-takeover-blocks-before-desktop-confirmation",
+          "actual": {
+            "bytesReceived": 65536,
+            "canResume": true,
+            "danger": "safe",
+            "error": "USER_CANCELED",
+            "exists": false,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-q3elw5h7\\downloads\\accept.bin",
+            "finalUrl": null,
+            "id": 18,
+            "mime": "application/octet-stream",
+            "paused": true,
+            "state": "interrupted",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:50995/accept.bin"
+          }
+        },
+        {
+          "name": "real-takeover-accepted-single-complete-file-sha256",
+          "actual": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+        },
+        {
+          "name": "one-resolved-handoff-accept",
+          "actual": {
+            "id": "handoff-1a1497440d4-16",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "real-desktop-rejection-browser-resumes-sha256",
+          "actual": {
+            "bytesReceived": 7897088,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-q3elw5h7\\downloads\\reject.bin",
+            "finalUrl": null,
+            "id": 19,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:50995/reject.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "one-resolved-handoff-reject",
+          "actual": {
+            "id": "handoff-1a14974527a-18",
+            "status": "rejected"
+          }
+        },
+        {
+          "name": "real-accepted-desktop-failure-browser-fallback-sha256",
+          "actual": {
+            "bytesReceived": 7766016,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-q3elw5h7\\downloads\\fallback.bin",
+            "finalUrl": null,
+            "id": 20,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:50995/fallback.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "one-resolved-handoff-fallback",
+          "actual": {
+            "id": "handoff-1a149746de7-1a",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256",
+          "actual": {
+            "bytesReceived": 7864320,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-q3elw5h7\\downloads\\disconnect.bin",
+            "finalUrl": null,
+            "id": 21,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:50995/disconnect.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        }
+      ],
+      "components_sha256": {
+        "HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+        "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+        "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+      },
+      "background_sha256": "d3e2530f45b5d618a724acc18aed670a2ddc9b17b4ca6b80e0d8843a802e3f3e"
+    },
+    "edge_takeover": {
+      "passed": true,
+      "report_sha256": "d631fc15d52020fabdd58137fd839d6dd1513a4e0d6d8de75c7d3a9d762c2119",
+      "checks": [
+        {
+          "name": "one-resolved-handoff-small",
+          "actual": {
+            "id": "handoff-1a14976cb78-2",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "small-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-24",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-stream",
+          "actual": {
+            "id": "handoff-1a14976db04-4",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "stream-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-25",
+            "size": 2097152,
+            "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938",
+            "browser_download_absent": true,
+            "no_content_length": true
+          }
+        },
+        {
+          "name": "one-resolved-handoff-ordinary",
+          "actual": {
+            "id": "handoff-1a14976f1ce-6",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "ordinary-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-26",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-quick",
+          "actual": {
+            "id": "handoff-1a14976fd7a-8",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "quick-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-27",
+            "size": 1024,
+            "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-image",
+          "actual": {
+            "id": "handoff-1a149770908-a",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "image-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-28",
+            "size": 68,
+            "sha256": "6af484b8a73288a07fec730818a6de8bebce88aa915b52f66a8769bfb865f434",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-json",
+          "actual": {
+            "id": "handoff-1a14977157a-2",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "json-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-29",
+            "size": 32,
+            "sha256": "8cc6d67e9c047e92fa51eadb250504c11471cec93c4864cb2e66a96ae0b2361f",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-generic",
+          "actual": {
+            "id": "handoff-1a1497725ee-4",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "generic-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-30",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-post",
+          "actual": {
+            "id": "handoff-1a1497738fb-5",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "post-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-31",
+            "size": 65536,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "urlencoded-post-not-replayed",
+          "actual": {
+            "task_id": "task-31",
+            "post_requests": 1
+          }
+        },
+        {
+          "name": "multipart-accept-single-post-desktop-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a1497755ad-6",
+            "status": "accepted",
+            "size": 65536,
+            "task_id": "task-32",
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "post_requests": 1,
+            "browser_download_absent": true,
+            "desktop_tasks_unchanged": false
+          }
+        },
+        {
+          "name": "multipart-reject-single-post-browser-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a149776dbb-7",
+            "status": "rejected",
+            "size": 65536,
+            "task_id": null,
+            "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+            "post_requests": 1,
+            "browser_download_absent": false,
+            "desktop_tasks_unchanged": true
+          }
+        },
+        {
+          "name": "one-resolved-handoff-generated_blob",
+          "actual": {
+            "id": "handoff-1a149777e67-8",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "generated_blob-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-33",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "one-resolved-handoff-generated_data",
+          "actual": {
+            "id": "handoff-1a149779532-1",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "generated_data-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "actual": {
+            "task_id": "task-34",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "browser_download_absent": true,
+            "no_content_length": false
+          }
+        },
+        {
+          "name": "generated-blob-rejection-keeps-browser-file-sha256",
+          "actual": {
+            "handoff_id": "handoff-1a14977a5c1-2",
+            "browser_filename": "generated-blob-rejected.bin",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "desktop_tasks_unchanged": true
+          }
+        },
+        {
+          "name": "generated-blob-alt-bypasses-takeover-browser-file-sha256",
+          "actual": {
+            "browser_filename": "generated-blob-alt.bin",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "desktop_tasks_unchanged": true,
+            "handoffs_unchanged": true
+          }
+        },
+        {
+          "name": "generated-data-excluded-bypasses-takeover-browser-file-sha256",
+          "actual": {
+            "browser_filename": "generated-data-excluded.bin",
+            "size": 50,
+            "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+            "desktop_tasks_unchanged": true,
+            "handoffs_unchanged": true
+          }
+        },
+        {
+          "name": "takeover-disabled-browser-complete-sha256",
+          "actual": {
+            "bytesReceived": 8388608,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-jz093str\\downloads\\disabled.bin",
+            "finalUrl": "http://127.0.0.1:51101/disabled.bin",
+            "id": 16,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:51101/disabled.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "site-excluded-browser-complete-sha256",
+          "actual": {
+            "bytesReceived": 8388608,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-jz093str\\downloads\\excluded.bin",
+            "finalUrl": "http://127.0.0.1:51101/excluded.bin",
+            "id": 17,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:51101/excluded.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "real-takeover-pauses-before-desktop-confirmation",
+          "actual": {
+            "bytesReceived": 0,
+            "canResume": true,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-jz093str\\downloads\\accept.bin",
+            "finalUrl": "http://127.0.0.1:51101/accept.bin",
+            "id": 18,
+            "mime": "application/octet-stream",
+            "paused": true,
+            "state": "in_progress",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:51101/accept.bin"
+          }
+        },
+        {
+          "name": "real-takeover-accepted-single-complete-file-sha256",
+          "actual": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+        },
+        {
+          "name": "one-resolved-handoff-accept",
+          "actual": {
+            "id": "handoff-1a14977fc5a-4",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "real-desktop-rejection-browser-resumes-sha256",
+          "actual": {
+            "bytesReceived": 8388608,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-jz093str\\downloads\\reject.bin",
+            "finalUrl": "http://127.0.0.1:51101/reject.bin",
+            "id": 19,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:51101/reject.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "one-resolved-handoff-reject",
+          "actual": {
+            "id": "handoff-1a1497819dd-6",
+            "status": "rejected"
+          }
+        },
+        {
+          "name": "real-accepted-desktop-failure-browser-fallback-sha256",
+          "actual": {
+            "bytesReceived": 8388608,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-jz093str\\downloads\\fallback.bin",
+            "finalUrl": "http://127.0.0.1:51101/fallback.bin",
+            "id": 20,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:51101/fallback.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "one-resolved-handoff-fallback",
+          "actual": {
+            "id": "handoff-1a149783d75-8",
+            "status": "accepted"
+          }
+        },
+        {
+          "name": "actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256",
+          "actual": {
+            "bytesReceived": 8388608,
+            "canResume": false,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-jz093str\\downloads\\disconnect.bin",
+            "finalUrl": "http://127.0.0.1:51101/disconnect.bin",
+            "id": 21,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "state": "complete",
+            "totalBytes": 8388608,
+            "url": "http://127.0.0.1:51101/disconnect.bin",
+            "verified_bytes": 8388608,
+            "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        }
+      ],
+      "components_sha256": {
+        "HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+        "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+        "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+      },
+      "background_sha256": "941c3766e95b56737c3a44666e628af129d6474f83bca1b0bf845fcddffb7ffc"
+    },
+    "public_firefox_takeover": {
+      "passed": true,
+      "report_sha256": "003fdbe3b104359d0d6da2dd3917eb3bed019f94689673fd97f065548a214dfe",
+      "checks": [
+        {
+          "name": "independent-public-source",
+          "actual": {
+            "url": "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-src.tar.xz",
+            "bytes": 1560440,
+            "sha256": "9691944c0fe0d01bb49373a704fb983fd33bc98b1738695179dfbf99ac1734f6"
+          }
+        },
+        {
+          "name": "default-takeover-enabled-for-all-sizes",
+          "actual": true
+        },
+        {
+          "name": "original-website-link-reaches-confirmation-before-task",
+          "actual": true
+        },
+        {
+          "name": "one-Core-file-completed-with-source-SHA256",
+          "actual": {
+            "bytes": 1560440,
+            "sha256": "9691944c0fe0d01bb49373a704fb983fd33bc98b1738695179dfbf99ac1734f6"
+          }
+        },
+        {
+          "name": "browser-keeps-no-second-file",
+          "actual": {
+            "items": []
+          }
+        }
+      ],
+      "components_sha256": {
+        "HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+        "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+        "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+      },
+      "background_sha256": "d3e2530f45b5d618a724acc18aed670a2ddc9b17b4ca6b80e0d8843a802e3f3e"
+    }
+  },
+  "extension": {
+    "unit_tests_passed": 380,
+    "typecheck_passed": true,
+    "chromium_build_passed": true,
+    "firefox_build_passed": true,
+    "firefox_lint": {
+      "errors": 0,
+      "notices": 0,
+      "warnings": 0
+    }
+  },
+  "unchanged_runtime_prior_evidence": "docs/validation-r6-20261017.json",
+  "not_closed": {
+    "cloud_subtitles": "Historical short real-cloud validation exists; long-video translation quality and latency not rerun this round.",
+    "original_page": "Firefox: Cloudflare Just a moment; no video loaded. Prior Edge: SmartScreen. No bypass.",
+    "playback_performance": "640x360 vGPU six-second sample is not a hardware-wide performance guarantee.",
+    "original_media": "Prior surrit manifest returned HTTP 403; original video unverified.",
+    "excluded_by_user": [
+      "physical casting receiver",
+      "TVBox"
+    ]
+  },
+  "extension_build_source_commit": "8271a71149fdc78a50a5bbb17651ebc7936ff2d1",
+  "installation": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "MSI staged on VM local disk with matching SHA256",
+        "actual": true
+      },
+      {
+        "name": "MSI installs at requested path containing spaces",
+        "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+      },
+      {
+        "name": "installed extension ZIPs and unpacked files are identical",
+        "actual": {
+          "Chromium": {
+            "background_sha256": "941c3766e95b56737c3a44666e628af129d6474f83bca1b0bf845fcddffb7ffc",
+            "archives_sha256": {
+              "HLSDownloader-7.0.3-Chromium.zip": "a7b379d111cb1db4148f388b14ccbaab525e6775f639378471a8293bfd1e5e23",
+              "HLSDownloader-Extension-Chromium.zip": "a7b379d111cb1db4148f388b14ccbaab525e6775f639378471a8293bfd1e5e23"
+            }
+          },
+          "Firefox": {
+            "background_sha256": "d3e2530f45b5d618a724acc18aed670a2ddc9b17b4ca6b80e0d8843a802e3f3e",
+            "archives_sha256": {
+              "HLSDownloader-7.0.3-Firefox.zip": "463796ba2f9c8cd30a83e375339ff3c038266c00c58371031c00358d6fa8c214",
+              "HLSDownloader-Extension-Firefox.zip": "463796ba2f9c8cd30a83e375339ff3c038266c00c58371031c00358d6fa8c214"
+            }
+          }
+        }
+      },
+      {
+        "name": "default download directory matches Windows Known Folder",
+        "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+      },
+      {
+        "name": "real public MDN video downloads into the default folder with identical bytes",
+        "actual": {
+          "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+          "bytes": 554058,
+          "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+        }
+      },
+      {
+        "name": "measured installed runtime idle CPU and memory",
+        "actual": {
+          "seconds": 5.014999999999873,
+          "logical_cpus": 8,
+          "cpu_one_core_percent": 0.0,
+          "cpu_machine_percent": 0.0,
+          "processes": {
+            "1812": {
+              "name": "HLSDownloaderEngine.exe",
+              "cpu": 0.046875,
+              "rss_bytes": 17182720,
+              "private_bytes": 4304896
+            }
+          },
+          "rss_sum_bytes": 17182720,
+          "private_sum_bytes": 4304896
+        }
+      },
+      {
+        "name": "MSI uninstalls and removes its product registration",
+        "actual": true
+      }
+    ],
+    "msi_sha256": "98775e28a6ea079db1b7c3b670663f83f340cd2f54acea65468ab98cad23df12",
+    "installed_bytes": 675444314,
+    "installed_files": 265,
+    "largest_files": [
+      {
+        "path": "app/resources/ffmpeg.exe",
+        "bytes": 165155840
+      },
+      {
+        "path": "app/resources/ffprobe.exe",
+        "bytes": 164954624
+      },
+      {
+        "path": "app/resources/libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "path": "runtime/lib/modules",
+        "bytes": 54030811
+      },
+      {
+        "path": "app/material-icons-extended-desktop-1.7.3-848bc0f13628d5b3accc94dd3afdfa27.jar",
+        "bytes": 37768805
+      },
+      {
+        "path": "app/resources/HLSDownloaderPresenter.exe",
+        "bytes": 28685824
+      },
+      {
+        "path": "app/resources/HLSDownloaderEngine.exe",
+        "bytes": 14582784
+      },
+      {
+        "path": "app/skiko-windows-x64.dll",
+        "bytes": 14109696
+      },
+      {
+        "path": "runtime/bin/server/jvm.dll",
+        "bytes": 13919872
+      },
+      {
+        "path": "app/icudtl.dat",
+        "bytes": 10468208
+      },
+      {
+        "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+        "bytes": 4740663
+      },
+      {
+        "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+        "bytes": 4069888
+      }
+    ],
+    "installed_components_sha256": {
+      "HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+      "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+      "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00"
+    },
+    "ui_exercised": false,
+    "idle": {
+      "seconds": 5.014999999999873,
+      "logical_cpus": 8,
+      "cpu_one_core_percent": 0.0,
+      "cpu_machine_percent": 0.0,
+      "processes": {
+        "1812": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.046875,
+          "rss_bytes": 17182720,
+          "private_bytes": 4304896
+        }
+      },
+      "rss_sum_bytes": 17182720,
+      "private_sum_bytes": 4304896
+    }
+  },
+  "upgrade_paths": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "baseline installed at a custom path containing spaces",
+        "actual": true
+      },
+      {
+        "name": "upgrade with no selected directory preserves the original installation path and user file",
+        "actual": true
+      },
+      {
+        "name": "ARP-style uninstall finds the restored directory and preserves unrelated user file",
+        "actual": true
+      },
+      {
+        "name": "baseline reinstalled for explicit upgrade relocation verification",
+        "actual": true
+      }
+    ]
+  }
+}
