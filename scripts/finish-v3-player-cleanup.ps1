@@ -9,9 +9,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell/src/player.rs'))
 }
 
 $desktop = [Environment]::GetFolderPath('Desktop')
-$latest = Join-Path $desktop 'HLSDownloader-7.0.3-r5-未签名.msi'
-$latestHash = '0536637a1f65aad034907ba23bd68df3e6017ed8ccb123b7c570f3b125d90393'
+$latest = Join-Path $desktop 'HLSDownloader-7.0.3-r6-未签名.msi'
+$latestHash = '5f78da410fcf0c55dfc8a9cd7d470b50a3b27455cd68ee0f9f30093bfc97a96a'
 $oldPackages = @{
+    'HLSDownloader-7.0.3-r5-未签名.msi' = '0536637a1f65aad034907ba23bd68df3e6017ed8ccb123b7c570f3b125d90393'
     'HLSDownloader-7.0.3-cache-playback-未签名.msi' = 'dca68bc346f6b262c4b2887e21f10cec37f9b53e347e98b0d6fab092bdeb971a'
     'HLSDownloader-7.0.3-v3-player-未签名.msi' = '96158caea3914bb3857703efd34bf48798545a629735e67057abde1d79fe6b5c'
 }
@@ -29,7 +30,8 @@ foreach ($name in $oldPackages.Keys) {
 
 # 仅本轮生成目录；不遍历下载目录、用户备份、注册表或其他项目。
 $targets = @('.tool-cache/build-cache', '.tool-cache/player-v3-validation',
-             'desktop_ui/.gradle', 'desktop_ui/.kotlin')
+             'desktop_ui/.gradle', 'desktop_ui/.kotlin',
+             'extension/node_modules', 'extension/.output', 'extension/.wxt')
 foreach ($relative in $targets) {
     $path = [IO.Path]::GetFullPath((Join-Path $repo $relative))
     if (-not $path.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

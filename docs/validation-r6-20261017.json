@@ -1,0 +1,315 @@
+{
+  "revision": "v7.0.3-r6",
+  "date": "2026-10-17",
+  "production_source_commit": "16965cd83bd2c20950c6dbf86ebb67e37b5f933e",
+  "formal_release_ready": false,
+  "signed": false,
+  "core": {
+    "ignored": 3,
+    "passed": 600,
+    "failed": 0,
+    "fixture_test_separately_passed": true
+  },
+  "extension": {
+    "chromium_build_passed": true,
+    "unit_tests_passed": 380,
+    "encrypted_before_exit_code": 1,
+    "firefox_browser_interaction": "not run",
+    "typecheck_passed": true,
+    "firefox_build_passed": true,
+    "edge_media_modes": [
+      "direct",
+      "dual-source",
+      "srcdoc",
+      "shadow",
+      "dynamic-shadow",
+      "iframe",
+      "cross-iframe",
+      "ad-direct",
+      "spa",
+      "mse",
+      "mse-sliced",
+      "mse-encrypted",
+      "mse-worker",
+      "mse-worker-dedicated",
+      "multi-worker",
+      "multi-mse",
+      "hls-mse",
+      "ll-hls-mse",
+      "dash-mse",
+      "empty-video-src",
+      "dash-low-mse",
+      "multi-dash-mse",
+      "dash-unknown-mse"
+    ],
+    "encrypted_after_exit_code": 0,
+    "firefox_lint": {
+      "notices": 0,
+      "errors": 0,
+      "warnings": 0
+    },
+    "edge_media_job_exit_code": 0
+  },
+  "subtitle_audio": {
+    "passed": true,
+    "exit_code": 0,
+    "stdout": "\nrunning 1 test\ntest subtitle_audio_source::tests::decode_disguised_hls_audio ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 602 filtered out; finished in 0.53s\n\n",
+    "stderr": ""
+  },
+  "subtitle_browser": {
+    "tab": {
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "real browser audio + AudioWorklet",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI"
+      ],
+      "provider": "fixture Core, cloud accuracy not tested",
+      "passed": true,
+      "audio_frames": 29,
+      "nonzero_samples": 111224
+    },
+    "prefetch": {
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "fixture PCM prefetch in real browser",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI",
+        "manual commit waits for completed translation",
+        "originally paused player stays paused",
+        "PCM positions remain accurate during page thread stall",
+        "bounded pretranslation stops PCM",
+        "next cue seeks into prepared cache",
+        "missing subtitles pause actual playback",
+        "hold-pause prevents automatic resume",
+        "seek while playing resumes only after translation is ready"
+      ],
+      "provider": "fixture Core, cloud accuracy not tested",
+      "passed": true,
+      "audio_frames": 205,
+      "nonzero_samples": 815900
+    },
+    "element": {
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "real browser audio + AudioWorklet",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI"
+      ],
+      "provider": "fixture Core, cloud accuracy not tested",
+      "passed": true,
+      "audio_frames": 29,
+      "nonzero_samples": 110439
+    }
+  },
+  "download_playback": {
+    "passed": true,
+    "check_names": [
+      "ts: thumbnail leaves playback position, pause and speed unchanged",
+      "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+      "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+      "fmp4: thumbnail leaves playback position, pause and speed unchanged",
+      "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+      "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+      "aes: thumbnail leaves playback position, pause and speed unchanged",
+      "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+      "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+      "external: thumbnail leaves playback position, pause and speed unchanged",
+      "external: unfinished download decodes, exposes full duration and seeks to 80%",
+      "external: same-window final switch; complete decode; cache removed; delete preserves output",
+      "dash: thumbnail leaves playback position, pause and speed unchanged",
+      "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+      "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+      "http: thumbnail leaves playback position, pause and speed unchanged",
+      "http: unfinished download decodes, exposes full duration and seeks to 80%",
+      "http: same-window final switch; complete decode; cache removed; delete preserves output",
+      "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+      "closing playback during download stays closed after completion and allows cleanup",
+      "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output"
+    ],
+    "engine_sha256": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+    "final_binary_retest": "passed; identical to installed MSI engine SHA256",
+    "software_rendering_cpu_machine_percent": 54.622395833333336
+  },
+  "installation": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "MSI staged on VM local disk with matching SHA256",
+        "actual": true
+      },
+      {
+        "name": "MSI installs at requested path containing spaces",
+        "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+      },
+      {
+        "name": "default download directory matches Windows Known Folder",
+        "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+      },
+      {
+        "name": "real public MDN video downloads into the default folder with identical bytes",
+        "actual": {
+          "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+          "bytes": 554058,
+          "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+        }
+      },
+      {
+        "name": "measured installed runtime idle CPU and memory",
+        "actual": {
+          "seconds": 5.016000000000076,
+          "logical_cpus": 8,
+          "cpu_one_core_percent": 0.0,
+          "cpu_machine_percent": 0.0,
+          "processes": {
+            "6516": {
+              "name": "HLSDownloaderEngine.exe",
+              "cpu": 0.046875,
+              "rss_bytes": 17711104,
+              "private_bytes": 4681728
+            }
+          },
+          "rss_sum_bytes": 17711104,
+          "private_sum_bytes": 4681728
+        }
+      },
+      {
+        "name": "MSI uninstalls and removes its product registration",
+        "actual": true
+      }
+    ],
+    "msi_sha256": "5f78da410fcf0c55dfc8a9cd7d470b50a3b27455cd68ee0f9f30093bfc97a96a",
+    "installed_bytes": 675441988,
+    "installed_files": 265,
+    "largest_files": [
+      {
+        "path": "app/resources/ffmpeg.exe",
+        "bytes": 165155840
+      },
+      {
+        "path": "app/resources/ffprobe.exe",
+        "bytes": 164954624
+      },
+      {
+        "path": "app/resources/libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "path": "runtime/lib/modules",
+        "bytes": 54030811
+      },
+      {
+        "path": "app/material-icons-extended-desktop-1.7.3-848bc0f13628d5b3accc94dd3afdfa27.jar",
+        "bytes": 37768805
+      },
+      {
+        "path": "app/resources/HLSDownloaderPresenter.exe",
+        "bytes": 28685824
+      },
+      {
+        "path": "app/resources/HLSDownloaderEngine.exe",
+        "bytes": 14582784
+      },
+      {
+        "path": "app/skiko-windows-x64.dll",
+        "bytes": 14109696
+      },
+      {
+        "path": "runtime/bin/server/jvm.dll",
+        "bytes": 13919872
+      },
+      {
+        "path": "app/icudtl.dat",
+        "bytes": 10468208
+      },
+      {
+        "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+        "bytes": 4740663
+      },
+      {
+        "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+        "bytes": 4069888
+      }
+    ],
+    "installed_components_sha256": {
+      "HLSDownloaderEngine.exe": "c940920d000b2ecc70bbeb2248cf3bdd5cc9edc93dee9c4218a9aec37cb916de",
+      "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+      "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00"
+    },
+    "ui_exercised": false,
+    "idle": {
+      "seconds": 5.016000000000076,
+      "logical_cpus": 8,
+      "cpu_one_core_percent": 0.0,
+      "cpu_machine_percent": 0.0,
+      "processes": {
+        "6516": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.046875,
+          "rss_bytes": 17711104,
+          "private_bytes": 4681728
+        }
+      },
+      "rss_sum_bytes": 17711104,
+      "private_sum_bytes": 4681728
+    }
+  },
+  "player_button_retest": {
+    "unchanged_ui_reused_from_r5": true,
+    "passed": false,
+    "blocked": "Windows firewall prompt for core-tests intercepted Robot click; security prompt not automated"
+  },
+  "public_pages": {
+    "dash_js": "blocked: manifest requests timeout around 10 seconds, video src empty",
+    "original_page": "blocked by Edge SmartScreen; not bypassed",
+    "hls_js": "passed",
+    "mdn": "passed",
+    "original_media": "HTTP 403"
+  },
+  "real_cloud": "not rerun; fixture translation is not cloud accuracy validation",
+  "excluded": [
+    "casting",
+    "TVBox"
+  ],
+  "cleanup": {
+    "host_install_performed": false,
+    "branches": [
+      "main"
+    ],
+    "worktrees": 1,
+    "previously_denied_generated_directories": "retained; deletion not retried through alternate paths"
+  }
+}
