@@ -63,23 +63,23 @@ def _extension_state(driver) -> dict[str, Any]:
     return _require_ok(_message(driver, {"type": "subtitle-state-get"}), "subtitle state")
 
 
-def _core_poll_popup(driver, popup_handle: str, page_handle: str, session_id: str) -> dict[str, Any]:
+def _core_poll_popup(driver, popup_handle: str, page_handle: str, session_id: str, after_sequence: int = 0) -> dict[str, Any]:
     current = driver.current_window_handle
     try:
         driver.switch_to.window(popup_handle)
         response = driver.execute_async_script("""
-          const done=arguments[arguments.length-1], sessionId=arguments[0];
+          const done=arguments[arguments.length-1], sessionId=arguments[0], afterSequence=arguments[1];
           chrome.storage.local.get('desktopClientId').then(values=>{
             const clientId=String(values.desktopClientId||'').trim();
             if(!clientId) throw Error('extension browser client id is unavailable');
             chrome.runtime.sendNativeMessage('com.ciaooo55.hls_downloader',
-              {op:'subtitle',client_id:clientId,request:{action:'poll',session_id:sessionId,after_sequence:0}},
+              {op:'subtitle',client_id:clientId,request:{action:'poll',session_id:sessionId,after_sequence:afterSequence}},
               result=>{
                 const error=chrome.runtime.lastError;
                 done(error?{ok:false,error:error.message}:(result?.result||result));
               });
           }).catch(error=>done({ok:false,error:String(error)}));
-        """, session_id)
+        """, session_id, after_sequence)
         return _require_ok(response, "Core subtitle poll")
     finally:
         if current in driver.window_handles:

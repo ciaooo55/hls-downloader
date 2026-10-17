@@ -480,7 +480,6 @@ impl Decoder {
         }
         self.uncommitted = None;
         self.pending_window = Some((start, end));
-        self.response_id.clear();
         Ok(())
     }
     fn audio(&mut self, bytes: usize, position: f64, rate: f64) {
@@ -792,7 +791,11 @@ fn accept_event(
     if kind == "error" || kind.ends_with(".failed") {
         return Err("字幕服务处理失败，请检查额度、模型权限和输入音频".into());
     }
-    if decoder.manual && kind == "response.created" && decoder.pending_window.is_some() {
+    // 服务端在收到流式音频后即可创建响应，不会等客户端提交整个窗口。
+    if decoder.manual
+        && kind == "response.created"
+        && (decoder.pending_window.is_some() || decoder.uncommitted.is_some())
+    {
         decoder.response_id = event
             .pointer("/response/id")
             .and_then(Value::as_str)
@@ -841,6 +844,7 @@ fn accept_event(
                 state.push(json!({"type": "ready", "start": start, "end": end}));
             }
             decoder.pending_window = None;
+            decoder.response_id.clear();
         }
     }
     Ok(())
@@ -977,6 +981,13 @@ mod tests {
         decoder.manual_audio(8000, 10.0, 1.0).unwrap();
         assert!(decoder.manual_audio(8000, 10.5, 1.0).is_err());
         assert!(decoder.manual_audio(8000, 10.25, 2.0).is_err());
+        accept_event(
+            &json!({"type":"response.created", "response":{"id":"response-1"}}),
+            &mut decoder,
+            &state,
+            2,
+        )
+        .unwrap();
         decoder.manual_audio(8000, 10.25, 1.0).unwrap();
         assert!(decoder.commit_window(10.0, 11.0).is_err());
         decoder.commit_window(10.0, 10.5).unwrap();
@@ -984,7 +995,6 @@ mod tests {
         for event in [
             json!({"type":"conversation.item.input_audio_transcription.text", "item_id":"input", "text":"partial"}),
             json!({"type":"conversation.item.created", "item":{"id":"output", "role":"assistant"}, "previous_item_id":"input"}),
-            json!({"type":"response.created", "response":{"id":"response-1"}}),
             json!({"type":"input_audio_buffer.committed", "item_id":"input"}),
             json!({"type":"conversation.item.input_audio_transcription.completed", "item_id":"input", "transcript":"source"}),
             json!({"type":"response.text.done", "item_id":"output", "text":"译文"}),
@@ -1014,6 +1024,25 @@ mod tests {
             .iter()
             .filter(|e| e["type"] == "cue")
             .all(|e| e["start"] == 10.0 && e["end"] == 10.5));
+        drop(locked);
+        assert!(decoder.response_id.is_empty());
+        decoder.manual_audio(8000, 10.5, 1.0).unwrap();
+        decoder.commit_window(10.5, 10.75).unwrap();
+        accept_event(
+            &json!({"type":"response.created", "response":{"id":"response-2"}}),
+            &mut decoder,
+            &state,
+            2,
+        )
+        .unwrap();
+        accept_event(
+            &json!({"type":"response.done", "response":{"id":"response-2", "status":"completed"}}),
+            &mut decoder,
+            &state,
+            2,
+        )
+        .unwrap();
+        assert_eq!(state.lock().unwrap().events.back().unwrap()["end"], 10.75);
     }
 
     #[test]
