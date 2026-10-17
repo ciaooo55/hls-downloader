@@ -915,7 +915,8 @@ def run_real(args) -> dict[str, Any]:
         result['checks'].append({'name':name,'actual':actual})
         args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         print(json.dumps({'check':name}),flush=True)
-    temp_root = Path(__file__).resolve().parents[1]/'.tool-cache/test-tmp'
+    # 真实浏览器配置放本地临时目录，隔离沙盒映射盘对 Native Messaging 启动的影响。
+    temp_root = Path(tempfile.gettempdir())
     with tempfile.TemporaryDirectory(prefix='real-takeover-',dir=temp_root) as temporary:
         stage = Path(temporary)
         try:

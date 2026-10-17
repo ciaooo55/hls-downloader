@@ -173,8 +173,8 @@ def main() -> int:
         process_environment["HLS_V7_SMOKE_ENGINE"] = str(engine)
         count = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command",
-             "@(Get-CimInstance Win32_Process -Filter \"Name='HLSDownloaderEngine.exe'\" | "
-             "Where-Object { $_.ExecutablePath -eq $env:HLS_V7_SMOKE_ENGINE }).Count"],
+             "@(Get-Process -Name HLSDownloaderEngine -ErrorAction SilentlyContinue | "
+             "Where-Object { $_.Path -eq $env:HLS_V7_SMOKE_ENGINE }).Count"],
             capture_output=True, text=True, timeout=10, check=True, env=process_environment,
         )
         engine_count = int(count.stdout.strip())

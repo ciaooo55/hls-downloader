@@ -22,7 +22,7 @@ def run(args):
     if not expected or len(expected) > 8 * 1024 * 1024:
         raise ValueError("Unexpected public media fixture size")
     expected_hash = hashlib.sha256(expected).hexdigest()
-    temp_root = Path(__file__).resolve().parents[1] / ".tool-cache" / "test-tmp"
+    temp_root = Path(tempfile.gettempdir()) if args.system_temp else Path(__file__).resolve().parents[1] / ".tool-cache" / "test-tmp"
     temp_root.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     result = {"passed": False, "url": url, "expected_bytes": len(expected), "expected_sha256": expected_hash,
@@ -74,4 +74,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--system-temp", action="store_true", help="Stage the executable on the VM local disk instead of a mapped source folder")
     raise SystemExit(0 if run(parser.parse_args())["passed"] else 1)

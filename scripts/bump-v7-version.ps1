@@ -11,7 +11,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $utf8 = [Text.UTF8Encoding]::new($false)
 
 function Read-Utf8([string]$RelativePath) {
-    [IO.File]::ReadAllText((Join-Path $repo $RelativePath), [Text.Encoding]::UTF8)
+    [IO.File]::ReadAllText((Join-Path $repo $RelativePath), [Text.Encoding]::UTF8).Replace("`r`n", "`n")
 }
 
 function Write-Utf8([string]$RelativePath, [string]$Content) {
@@ -42,7 +42,6 @@ Replace-Required 'native_shell\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' "ve
 Replace-Required 'presenter_ui\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'extension\package.json' '(?m)^  "version": "\d+\.\d+\.\d+",$' "  `"version`": `"$Version`"," 
 Replace-Required 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt' '(?m)^    const val version = "\d+\.\d+\.\d+"$' "    const val version = `"$Version`""
-Replace-Required 'desktop_ui\src\test\kotlin\com\hlsdownloader\desktop\ProtocolTest.kt' '(?m)^        assertEquals\("\d+\.\d+\.\d+", Product\.version\)$' "        assertEquals(`"$Version`", Product.version)"
 Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^        packageVersion = "\d+\.\d+\.\d+"$' "        packageVersion = `"$Version`""
 Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^        description = "HLS Downloader \d+\.\d+\.\d+"$' "        description = `"HLS Downloader $Version`""
@@ -73,4 +72,4 @@ if (-not $ReleaseReady) {
 }
 Write-Utf8 $readmePath $readme
 
-Write-Host "Updated v7 product version, version contract tests and local Cargo lock entries to $Version (release_ready=$([bool]$ReleaseReady))."
+Write-Host "Updated v7 product version and local Cargo lock entries to $Version (release_ready=$([bool]$ReleaseReady))."

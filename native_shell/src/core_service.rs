@@ -131,6 +131,10 @@ impl PersistentCore {
         self.runtime.list_tasks()
     }
 
+    pub(crate) fn snapshot(&self, task_id: &str) -> Option<&TaskSnapshot> {
+        self.runtime.snapshot(task_id)
+    }
+
     pub fn mark_output_missing(
         &mut self,
         task_id: &str,

@@ -1,0 +1,1077 @@
+{
+  "date": "2026-10-17",
+  "source_commit": "4464fa1324d3493a44a5dfc23baa4972b37e1aa2",
+  "worktree_dirty": true,
+  "signed": false,
+  "github_published": false,
+  "host_new_install": false,
+  "core_tests_before_final_dpi_and_exact_seek_fixes": [
+    {
+      "group": "player::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 600 filtered out; finished in 0.02s"
+    },
+    {
+      "group": "playback::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.50s"
+    },
+    {
+      "group": "download_worker::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 532 filtered out; finished in 1.99s"
+    },
+    {
+      "group": "media::hls::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 577 filtered out; finished in 0.33s"
+    },
+    {
+      "group": "media::dash::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 586 filtered out; finished in 0.07s"
+    },
+    {
+      "group": "http_engine::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 547 filtered out; finished in 16.29s"
+    },
+    {
+      "group": "core_runtime::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 589 filtered out; finished in 0.30s"
+    },
+    {
+      "group": "core_service::tests::",
+      "exit_code": 0,
+      "summary": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 590 filtered out; finished in 0.24s"
+    }
+  ],
+  "core_player_tests_after_final_fixes": {
+    "passed": 2,
+    "failures": 0
+  },
+  "ui_tests_final": {
+    "errors": 0,
+    "skipped": 0,
+    "tests": 124,
+    "failures": 0
+  },
+  "ui_overlay_validation": {
+    "125_percent_windows_default": {
+      "passed": true,
+      "checks": [
+        "main-window overlay starts real playback and pause button pauses it",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "requested_java_ui_scale": null,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1214,
+        "height": 567,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.25,
+        "scaleY": 1.25,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1518,
+        "deviceHeight": 709
+      },
+      "video_rectangles": {
+        "main": {
+          "expected": [
+            72,
+            118,
+            1447,
+            496
+          ],
+          "actual": [
+            [
+              72,
+              118,
+              1447,
+              496
+            ],
+            [
+              72,
+              118,
+              1447,
+              496
+            ]
+          ]
+        },
+        "fullscreen": {
+          "expected": [
+            0,
+            60,
+            1518,
+            614
+          ],
+          "actual": [
+            [
+              0,
+              60,
+              1518,
+              614
+            ],
+            [
+              0,
+              60,
+              1518,
+              614
+            ]
+          ]
+        },
+        "pip": {
+          "expected": [
+            868,
+            319,
+            1518,
+            554
+          ],
+          "actual": [
+            [
+              867,
+              319,
+              1517,
+              554
+            ],
+            [
+              867,
+              319,
+              1517,
+              554
+            ]
+          ]
+        },
+        "returned-main": {
+          "expected": [
+            72,
+            118,
+            1447,
+            496
+          ],
+          "actual": [
+            [
+              72,
+              118,
+              1447,
+              496
+            ],
+            [
+              72,
+              118,
+              1447,
+              496
+            ]
+          ]
+        }
+      },
+      "thumbnail_pixel_mean_error": 4.044802118171684
+    },
+    "100_percent_jvm_override": {
+      "passed": true,
+      "checks": [
+        "main-window overlay starts real playback and pause button pauses it",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "requested_java_ui_scale": 1.0,
+      "window": {
+        "x": 59,
+        "y": 0,
+        "width": 1400,
+        "height": 709,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "deviceX": 59,
+        "deviceY": 0,
+        "deviceWidth": 1400,
+        "deviceHeight": 709
+      },
+      "video_rectangles": {
+        "main": {
+          "expected": [
+            209,
+            102,
+            1309,
+            531
+          ],
+          "actual": [
+            [
+              209,
+              102,
+              1309,
+              531
+            ],
+            [
+              209,
+              102,
+              1309,
+              531
+            ]
+          ]
+        },
+        "fullscreen": {
+          "expected": [
+            0,
+            48,
+            1518,
+            644
+          ],
+          "actual": [
+            [
+              0,
+              48,
+              1518,
+              644
+            ],
+            [
+              0,
+              48,
+              1518,
+              644
+            ]
+          ]
+        },
+        "pip": {
+          "expected": [
+            998,
+            397,
+            1518,
+            584
+          ],
+          "actual": [
+            [
+              998,
+              397,
+              1518,
+              584
+            ],
+            [
+              998,
+              397,
+              1518,
+              584
+            ]
+          ]
+        },
+        "returned-main": {
+          "expected": [
+            209,
+            102,
+            1309,
+            531
+          ],
+          "actual": [
+            [
+              209,
+              102,
+              1309,
+              531
+            ],
+            [
+              209,
+              102,
+              1309,
+              531
+            ]
+          ]
+        }
+      },
+      "thumbnail_pixel_mean_error": 2.535413182831661
+    },
+    "150_percent_jvm_override": {
+      "passed": true,
+      "checks": [
+        "main-window overlay starts real playback and pause button pauses it",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "requested_java_ui_scale": 1.5,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1012,
+        "height": 473,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.5,
+        "scaleY": 1.5,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1518,
+        "deviceHeight": 710
+      },
+      "video_rectangles": {
+        "main": {
+          "expected": [
+            30,
+            135,
+            1488,
+            460
+          ],
+          "actual": [
+            [
+              30,
+              135,
+              1488,
+              460
+            ],
+            [
+              30,
+              135,
+              1488,
+              460
+            ]
+          ]
+        },
+        "fullscreen": {
+          "expected": [
+            0,
+            72,
+            1518,
+            582
+          ],
+          "actual": [
+            [
+              0,
+              72,
+              1518,
+              582
+            ],
+            [
+              0,
+              72,
+              1518,
+              582
+            ]
+          ]
+        },
+        "pip": {
+          "expected": [
+            738,
+            242,
+            1518,
+            522
+          ],
+          "actual": [
+            [
+              738,
+              241,
+              1518,
+              521
+            ],
+            [
+              738,
+              241,
+              1518,
+              521
+            ]
+          ]
+        },
+        "returned-main": {
+          "expected": [
+            30,
+            135,
+            1488,
+            460
+          ],
+          "actual": [
+            [
+              30,
+              135,
+              1488,
+              460
+            ],
+            [
+              30,
+              135,
+              1488,
+              460
+            ]
+          ]
+        }
+      },
+      "thumbnail_pixel_mean_error": 4.231953734671126
+    }
+  },
+  "player_native": {
+    "passed": true,
+    "engine_sha256": "beff65226c34cff1001c9fffbce528e555b046842be8962201a61cfeca48142b",
+    "initial": {
+      "audio_tracks": 2,
+      "buffered_end_seconds": 1.44,
+      "buffering": false,
+      "duration_seconds": 60.021,
+      "muted": false,
+      "paused": false,
+      "position_available": true,
+      "position_seconds": 0.0,
+      "session_active": true,
+      "speed": 1.0,
+      "subtitle_tracks": 2,
+      "tracks": [
+        {
+          "id": "1",
+          "kind": "audio",
+          "language": "",
+          "selected": true,
+          "title": "Audio-A"
+        },
+        {
+          "id": "2",
+          "kind": "audio",
+          "language": "",
+          "selected": false,
+          "title": "Audio-B"
+        },
+        {
+          "id": "1",
+          "kind": "sub",
+          "language": "",
+          "selected": true,
+          "title": ""
+        },
+        {
+          "id": "2",
+          "kind": "sub",
+          "language": "",
+          "selected": false,
+          "title": ""
+        }
+      ],
+      "volume": 100.0
+    },
+    "keyboard_pause_resume": true,
+    "pause_stable": true,
+    "seek": {
+      "audio_tracks": 2,
+      "buffered_end_seconds": 31.4,
+      "buffering": false,
+      "duration_seconds": 60.021,
+      "muted": false,
+      "paused": true,
+      "position_available": true,
+      "position_seconds": 30.04,
+      "session_active": true,
+      "speed": 1.0,
+      "subtitle_tracks": 2,
+      "tracks": [
+        {
+          "id": "1",
+          "kind": "audio",
+          "language": "",
+          "selected": true,
+          "title": "Audio-A"
+        },
+        {
+          "id": "2",
+          "kind": "audio",
+          "language": "",
+          "selected": false,
+          "title": "Audio-B"
+        },
+        {
+          "id": "1",
+          "kind": "sub",
+          "language": "",
+          "selected": true,
+          "title": ""
+        },
+        {
+          "id": "2",
+          "kind": "sub",
+          "language": "",
+          "selected": false,
+          "title": ""
+        }
+      ],
+      "volume": 100.0
+    },
+    "resume_advances": true,
+    "playing_usage": {
+      "sample_seconds": 3.0,
+      "position_before": 31.48,
+      "position_after": 36.0,
+      "cpu_one_core_percent": 603.125,
+      "cpu_machine_percent": 75.390625,
+      "rss_bytes": 130375680,
+      "private_bytes": 107831296
+    },
+    "closes_without_status_polling": true,
+    "reopened": {
+      "audio_tracks": 2,
+      "buffered_end_seconds": 1.44,
+      "buffering": false,
+      "duration_seconds": 60.021,
+      "muted": false,
+      "paused": false,
+      "position_available": true,
+      "position_seconds": 0.0,
+      "session_active": true,
+      "speed": 1.0,
+      "subtitle_tracks": 2,
+      "tracks": [
+        {
+          "id": "1",
+          "kind": "audio",
+          "language": "",
+          "selected": true,
+          "title": "Audio-A"
+        },
+        {
+          "id": "2",
+          "kind": "audio",
+          "language": "",
+          "selected": false,
+          "title": "Audio-B"
+        },
+        {
+          "id": "1",
+          "kind": "sub",
+          "language": "",
+          "selected": true,
+          "title": ""
+        },
+        {
+          "id": "2",
+          "kind": "sub",
+          "language": "",
+          "selected": false,
+          "title": ""
+        }
+      ],
+      "volume": 100.0
+    },
+    "osc_pause_resume": true,
+    "osc_close_without_status_polling": true,
+    "embedded_main_pip_resize_preserves_session": true,
+    "embedded_close_releases_child": true
+  },
+  "playback": {
+    "passed": true,
+    "engine_sha256": "beff65226c34cff1001c9fffbce528e555b046842be8962201a61cfeca48142b",
+    "checks": [
+      "ts: thumbnail leaves playback position, pause and speed unchanged",
+      "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+      "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+      "fmp4: thumbnail leaves playback position, pause and speed unchanged",
+      "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+      "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+      "aes: thumbnail leaves playback position, pause and speed unchanged",
+      "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+      "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+      "external: thumbnail leaves playback position, pause and speed unchanged",
+      "external: unfinished download decodes, exposes full duration and seeks to 80%",
+      "external: same-window final switch; complete decode; cache removed; delete preserves output",
+      "dash: thumbnail leaves playback position, pause and speed unchanged",
+      "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+      "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+      "http: thumbnail leaves playback position, pause and speed unchanged",
+      "http: unfinished download decodes, exposes full duration and seeks to 80%",
+      "http: same-window final switch; complete decode; cache removed; delete preserves output",
+      "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+      "closing playback during download stays closed after completion and allows cleanup",
+      "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output"
+    ],
+    "completed_output_sha256": [
+      "e29840e37919d3a34b1b74a930230c1523910df6aef748b738ed3fbe9693093b",
+      "b01643e0cd2eed1a656fd00e18846cc0d9ceceb2ed24b1f3944a4b2eb235e06b",
+      "e29840e37919d3a34b1b74a930230c1523910df6aef748b738ed3fbe9693093b",
+      "b890af47b664f4881dfe57e4b858aa9ec1d65a9f8a2fb56cc0233732838bc3bb",
+      "476f573f97e957ebd415bee84da3426305877ba6c2f7a026fba8be4db81e2f2a",
+      "c01ca46e79100a52f60fbafc26660bcd6c86899c3b7da9db88016aa73efc90bc"
+    ],
+    "performance": {
+      "core_idle": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "rss_sum_bytes": 12771328,
+        "processes": {
+          "3524": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.0,
+            "rss": 12771328,
+            "private": 2924544
+          }
+        }
+      },
+      "downloading": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "rss_sum_bytes": 15593472,
+        "processes": {
+          "3524": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.015625,
+            "rss": 15593472,
+            "private": 5451776
+          }
+        }
+      },
+      "downloading_and_playing": {
+        "elapsed_seconds": 3.030999999999949,
+        "cpu_one_core_percent": 408.28109534807686,
+        "cpu_machine_percent": 51.03513691850961,
+        "rss_sum_bytes": 155054080,
+        "processes": {
+          "3524": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.296875,
+            "rss": 16564224,
+            "private": 6107136
+          },
+          "6020": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 15.0,
+            "rss": 138489856,
+            "private": 130924544
+          }
+        }
+      }
+    },
+    "window_switch": {
+      "before": [
+        {
+          "hwnd": 786522,
+          "pid": 6416,
+          "rect": [
+            254,
+            85,
+            959,
+            482
+          ]
+        }
+      ],
+      "after": [
+        {
+          "hwnd": 786522,
+          "pid": 6416,
+          "rect": [
+            254,
+            85,
+            959,
+            482
+          ]
+        }
+      ]
+    }
+  },
+  "installation": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "MSI staged on VM local disk with matching SHA256",
+        "actual": true
+      },
+      {
+        "name": "MSI installs at requested path containing spaces",
+        "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+      },
+      {
+        "name": "default download directory matches Windows Known Folder",
+        "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+      },
+      {
+        "name": "real public MDN video downloads into the default folder with identical bytes",
+        "actual": {
+          "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+          "bytes": 554058,
+          "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+        }
+      },
+      {
+        "name": "installed UI opens visibly and connects to the installed Core",
+        "actual": {
+          "x": 0,
+          "y": 0,
+          "width": 1214,
+          "height": 567,
+          "active": true,
+          "showing": true,
+          "iconCount": 1,
+          "iconWidth": 192,
+          "iconHeight": 192,
+          "scaleX": 1.25,
+          "scaleY": 1.25,
+          "deviceX": 0,
+          "deviceY": 0,
+          "deviceWidth": 1518,
+          "deviceHeight": 709
+        }
+      },
+      {
+        "name": "measured installed runtime idle CPU and memory",
+        "actual": {
+          "seconds": 5.0,
+          "logical_cpus": 8,
+          "cpu_one_core_percent": 0.625,
+          "cpu_machine_percent": 0.078125,
+          "processes": {
+            "856": {
+              "name": "HLSDownloader.exe",
+              "cpu": 0.0,
+              "rss_bytes": 6696960,
+              "private_bytes": 1404928
+            },
+            "3944": {
+              "name": "HLSDownloaderEngine.exe",
+              "cpu": 0.046875,
+              "rss_bytes": 17895424,
+              "private_bytes": 4919296
+            },
+            "4896": {
+              "name": "HLSDownloader.exe",
+              "cpu": 4.328125,
+              "rss_bytes": 188973056,
+              "private_bytes": 213811200
+            },
+            "5292": {
+              "name": "HLSDownloaderPresenter.exe",
+              "cpu": 0.015625,
+              "rss_bytes": 17981440,
+              "private_bytes": 3850240
+            }
+          },
+          "rss_sum_bytes": 231546880,
+          "private_sum_bytes": 223985664
+        }
+      },
+      {
+        "name": "MSI uninstalls and removes its product registration",
+        "actual": true
+      }
+    ],
+    "msi_sha256": "96158caea3914bb3857703efd34bf48798545a629735e67057abde1d79fe6b5c",
+    "installed_bytes": 675423713,
+    "installed_files": 265,
+    "largest_files": [
+      {
+        "path": "app/resources/ffmpeg.exe",
+        "bytes": 165155840
+      },
+      {
+        "path": "app/resources/ffprobe.exe",
+        "bytes": 164954624
+      },
+      {
+        "path": "app/resources/libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "path": "runtime/lib/modules",
+        "bytes": 54030811
+      },
+      {
+        "path": "app/material-icons-extended-desktop-1.7.3-848bc0f13628d5b3accc94dd3afdfa27.jar",
+        "bytes": 37768805
+      },
+      {
+        "path": "app/resources/HLSDownloaderPresenter.exe",
+        "bytes": 28685824
+      },
+      {
+        "path": "app/resources/HLSDownloaderEngine.exe",
+        "bytes": 14556160
+      },
+      {
+        "path": "app/skiko-windows-x64.dll",
+        "bytes": 14109696
+      },
+      {
+        "path": "runtime/bin/server/jvm.dll",
+        "bytes": 13919872
+      },
+      {
+        "path": "app/icudtl.dat",
+        "bytes": 10468208
+      },
+      {
+        "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+        "bytes": 4740663
+      },
+      {
+        "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+        "bytes": 4069888
+      }
+    ],
+    "installed_components_sha256": {
+      "HLSDownloaderEngine.exe": "beff65226c34cff1001c9fffbce528e555b046842be8962201a61cfeca48142b",
+      "HLSDownloaderNativeHost.exe": "5ff6ccc03257512c72de4d8415f0402984d797deae9028e73872755658408ff9",
+      "HLSDownloaderUpdater.exe": "f7c1c0792d1436707a129bf308e466e836008a8a52b5cdb5c8a88308fe2e1b37"
+    },
+    "ui_exercised": true,
+    "ui_visible_connected_seconds": 4.1720000000000255,
+    "idle": {
+      "seconds": 5.0,
+      "logical_cpus": 8,
+      "cpu_one_core_percent": 0.625,
+      "cpu_machine_percent": 0.078125,
+      "processes": {
+        "856": {
+          "name": "HLSDownloader.exe",
+          "cpu": 0.0,
+          "rss_bytes": 6696960,
+          "private_bytes": 1404928
+        },
+        "3944": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.046875,
+          "rss_bytes": 17895424,
+          "private_bytes": 4919296
+        },
+        "4896": {
+          "name": "HLSDownloader.exe",
+          "cpu": 4.328125,
+          "rss_bytes": 188973056,
+          "private_bytes": 213811200
+        },
+        "5292": {
+          "name": "HLSDownloaderPresenter.exe",
+          "cpu": 0.015625,
+          "rss_bytes": 17981440,
+          "private_bytes": 3850240
+        }
+      },
+      "rss_sum_bytes": 231546880,
+      "private_sum_bytes": 223985664
+    }
+  },
+  "size": {
+    "baseline_msi_bytes": 302559232,
+    "msi_bytes": 302792704,
+    "msi_delta_bytes": 233472,
+    "baseline_extracted_files_bytes": 675107220,
+    "installed_bytes": 675423713,
+    "installed_delta_bytes": 316493,
+    "installed_files": 265
+  },
+  "package": {
+    "product_code": "{FB22AE14-FD69-4E84-A497-1CFC87E1CB17}",
+    "sha256": "96158caea3914bb3857703efd34bf48798545a629735e67057abde1d79fe6b5c",
+    "bytes": 302792704,
+    "baseline_sha256": "dca68bc346f6b262c4b2887e21f10cec37f9b53e347e98b0d6fab092bdeb971a",
+    "signed": false
+  },
+  "build_provenance": {
+    "schema": 1,
+    "version": "7.0.3",
+    "revision": "local-v3-player-validation",
+    "source_commit": "4464fa1324d3493a44a5dfc23baa4972b37e1aa2",
+    "git_worktree_clean": false,
+    "package_tier": "local-validation",
+    "release_ready": false,
+    "signed": false,
+    "created_at": "2026-10-17T04:29:29.6353102Z",
+    "user_data_included": false,
+    "rebuilt_components_sha256": {
+      "HLSDownloaderEngine.exe": "beff65226c34cff1001c9fffbce528e555b046842be8962201a61cfeca48142b",
+      "HLSDownloaderNativeHost.exe": "5ff6ccc03257512c72de4d8415f0402984d797deae9028e73872755658408ff9",
+      "HLSDownloaderUpdater.exe": "f7c1c0792d1436707a129bf308e466e836008a8a52b5cdb5c8a88308fe2e1b37",
+      "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e",
+      "HLSDownloaderDesktop-7.0.3.jar": "266865a79c15539a4907a120193ec24ccd89aa9f6213dc3aa9bb17ee9794ccc1"
+    },
+    "modified_sources_sha256": {
+      "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "7df748c0c85ab629c918660b28310dd0587c5f72533ac12ef6944282aa0be50b",
+      "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt": "a4648f0874a77ae2283181f0f743737e187e0dff2eaf399a072166d49637c641",
+      "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/UiTestApi.kt": "559d72f8f189e37550f8f798cafe444c7bffb43dd985f0e882e5b9f2b3c2e0d7",
+      "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt": "cc7b8b248b1074bace31591a8e92a94efca5ab9e7a7e3f5f3ac86b96e20d8b9c",
+      "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt": "38fcd166639cb6d58065704aa5cf104a5f0d1442a30df038f8ae2ac9e451fe5c",
+      "extension/entrypoints/background.ts": "15d66f623e219fee7202ba69b43efe6dec09864cc457163e44a80a750e031352",
+      "extension/entrypoints/content.ts": "c1c021fd328aea94ce7cbff28916607f584c5d5bc58fa62473fcdf5a66c475fd",
+      "extension/entrypoints/subtitle-pcm.ts": "39cee575e24e01e21ff8bdfb637e2c4fc825a719d9f18622aadee352ee5b8658",
+      "extension/lib/subtitle.test.ts": "5637e1781f543961c1b8ef533c9112c9458f2381bc06ae66d9baf6ad617f6a71",
+      "extension/lib/subtitleBackground.ts": "1e8e060e559f21bc4d53e5f232fffe94d24afa7d68021e243477903324ed25ed",
+      "extension/lib/subtitleContent.ts": "f166a4aaea24243fc3ae51af03702b6afd322b7fc099cb8db4a91e48b4f4bc4f",
+      "extension/lib/subtitlePopup.ts": "971779c739daf61dc0d0d9dd13b873614717ec9c982ce8ad93fa2ae478fe79d7",
+      "extension/lib/subtitlePrefetch.ts": "f2ffbbb4090f0ec6f7e0fd95e82261c34ba139e146802ff7b73119cfdac6acfd",
+      "extension/lib/subtitleSettings.ts": "9bc34a0e5890ac4a5440519d5ab1096690c6955d0d1da75154dca40310a635e7",
+      "native_shell/Cargo.toml": "046fdc379fdb82805c87ac62ed313a90f57cf35f6ec7472fc224648580683147",
+      "native_shell/src/contract.rs": "c0515d7ee74b373d5986be21fa068a89af5971b43b49445096af71282e2ac536",
+      "native_shell/src/core_ipc.rs": "5e219a06220fbfd12a23147239c907ae458581cb499405f08f875cb4ac7ab14f",
+      "native_shell/src/core_runtime.rs": "128d5dd9a0d17a82d02e239a2959941076053a5101953370e9a21f45b10a0d94",
+      "native_shell/src/core_server.rs": "c2088d279dec1804462a1d8740de8ad1bdd05c40b11442b17d5060434f91f2ec",
+      "native_shell/src/core_service.rs": "729ccf73abe94bd18371698f85ec0292b66230bcdbee7bfcf725ce808f3b7eca",
+      "native_shell/src/download_worker.rs": "8e7c5cf75e0310a9402566bd6d9896a5159bd84c20800e4cfefbbbca8d431baf",
+      "native_shell/src/http_engine.rs": "80192e02696c4d2835acb5f3194adac34303469f1d903f6525dbb38d670fbd41",
+      "native_shell/src/lib.rs": "81ae2f8c5f932c0f0e2cc6cfdb88ebc4360fcd153810a41adb6794df334d5bb2",
+      "native_shell/src/media/dash.rs": "8abbb8a0f90a70d5fff1e4f91c8f826e7951021171f21f8f1795a621ac797d8c",
+      "native_shell/src/media/hls.rs": "37e74d5a32828777185d59bc25b103d23a09ceea0841e1677139a446f1dd91fb",
+      "native_shell/src/media/mod.rs": "c89f1ced373ce3bfdc84d502d12c510c5503918209ebdbbd0672ad48b68ca14f",
+      "native_shell/src/media/preview.rs": "ad6cd9a906ac9a1490247b0313c654f6d5c0373c8a5282150cdae2b62b0ac567",
+      "native_shell/src/playback.rs": "bc63a36320486e6f1418ffacea3a47d90b987e74df16f15fc0e0ad03fa603283",
+      "native_shell/src/player_thumbnail.rs": "02eb39116b35763f473a12a25f3f4f49dd4427fe264f55be917ac28b6bf21c3e",
+      "native_shell/src/player.rs": "8f7b336921cdb92b09d086e091a51426539d1141ab9ee8d509b78805c8280e6c",
+      "native_shell/src/subtitle_audio_source.rs": "82141a9c69d8b28c4f7e91fb5017cb31292766f375fcc742b65c23f6bf22c012",
+      "native_shell/src/subtitle_translate.rs": "eebe3e2fb49d19766729aca7506a03ccb65eef6eaa06d3bd46fba3d72cc14d2e",
+      "native_shell/src/updater.rs": "dd892d076818063e148d10d9a00cf6b822c3f52ce018bb46787589b980a50c8f"
+    },
+    "reused_extension_sources_match": true,
+    "validation_report": "docs/validation-v3-player-20261017.md",
+    "source_hash_scope": "Modified production sources under native_shell, desktop_ui and extension; excludes validation scripts and reports.",
+    "validation": {
+      "existing_ui_tests": 124,
+      "core_tests": 203,
+      "compose_overlay_buttons": "passed-real-robot-and-decoder-state-100-125-150-percent",
+      "native_embed_passed": true,
+      "sandbox_download_playback_checks": 21,
+      "msi_validation_stage": "final-package-install-results-recorded-in-external-validation-report"
+    }
+  },
+  "historical_performance_reference": {
+    "limitation": "Different execution times; short VM samples, not a controlled benchmark or guarantee.",
+    "source": "docs/validation-cache-playback-20261016.json",
+    "samples": {
+      "core_idle": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "rss_sum_bytes": 12886016,
+        "processes": {
+          "5840": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.015625,
+            "rss": 12886016,
+            "private": 2916352
+          }
+        }
+      },
+      "downloading": {
+        "elapsed_seconds": 3.0160000000000053,
+        "cpu_one_core_percent": 1.0361405835543747,
+        "cpu_machine_percent": 0.12951757294429683,
+        "rss_sum_bytes": 15585280,
+        "processes": {
+          "5840": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.0625,
+            "rss": 15585280,
+            "private": 5517312
+          }
+        }
+      },
+      "downloading_and_playing": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 142.70833333333331,
+        "cpu_machine_percent": 17.838541666666664,
+        "rss_sum_bytes": 154120192,
+        "processes": {
+          "5840": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.28125,
+            "rss": 16445440,
+            "private": 5550080
+          },
+          "760": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 8.046875,
+            "rss": 137674752,
+            "private": 129585152
+          }
+        }
+      }
+    }
+  },
+  "limits": [
+    "Core 203 initial tests ran before final DPI/exact-seek fixes; final Core reran the 2 player tests and native/download regressions.",
+    "100/150 percent are JVM UI scaling overrides; default Windows scale is 125 percent. Multiple physical monitors and other Windows versions were not tested.",
+    "Installer custom path with spaces was tested using INSTALLDIR; graphical directory-picker clicks were not tested.",
+    "GPU is disabled in the VM. Short CPU/RSS samples are not a controlled benchmark or a guarantee for other machines.",
+    "Extension packages were reused after source-hash comparison; this player-only round did not rerun browser/subtitle/casting tests."
+  ],
+  "cleanup": {
+    "state": "blocked-by-automatic-approval",
+    "reason": "blocked by policy; no specific reason supplied",
+    "sandbox_closed": true,
+    "host_install_performed": false,
+    "generated_directories_remaining": [
+      {
+        "path": ".tool-cache/build-cache",
+        "files": 16544,
+        "bytes": 4327332022.0
+      },
+      {
+        "path": ".tool-cache/player-v3-validation",
+        "files": 1181,
+        "bytes": 1881707244.0
+      },
+      {
+        "path": "desktop_ui/.gradle",
+        "files": 54,
+        "bytes": 1534803.0
+      },
+      {
+        "path": "desktop_ui/.kotlin",
+        "files": 0,
+        "bytes": null
+      }
+    ],
+    "generated_bytes_remaining": 6210574069.0,
+    "old_desktop_package_remaining": "C:\\Users\\lee\\Desktop\\HLSDownloader-7.0.3-cache-playback-未签名.msi",
+    "new_desktop_package": "C:\\Users\\lee\\Desktop\\HLSDownloader-7.0.3-v3-player-未签名.msi",
+    "previously_denied_extracted_directory": ".tool-cache/player-v3-validation/.repack-a6a1817f16484c5db78be226351f351b",
+    "manual_cleanup_script": "scripts/finish-v3-player-cleanup.ps1",
+    "manual_cleanup_script_static_parse_passed": true,
+    "manual_cleanup_script_executed": false,
+    "branch": "main",
+    "worktree_count": 1
+  },
+  "msi_lifecycle": {
+    "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\player-v3-validation\\HLSDownloader-7.0.3-v3-player-unsigned.msi",
+    "original_product_code": "{0A866C85-E803-4299-AF66-CBAD3AE44E59}",
+    "verified_product_code": "{FB22AE14-FD69-4E84-A497-1CFC87E1CB17}",
+    "original_package_code": "{D6DD8AC0-CC89-413D-9B55-C5D843808BEE}",
+    "verified_package_code": "{613F914F-4AB6-4FEA-907B-164E7B298CC2}",
+    "verified_word_count": 2,
+    "original_sequence": 1510,
+    "verified_sequence": 1510,
+    "install_initialize_sequence": 1500,
+    "upgrade_privilege_sequence": 1490,
+    "install_files_sequence": 4000,
+    "install_finalize_sequence": 6600,
+    "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+    "native_host_prepare_type": 1042,
+    "native_host_prepare_sequence": 4010,
+    "native_host_registry_count": 7,
+    "same_version_upgrade_attributes": 769,
+    "downgrade_detection_attributes": 1,
+    "related_product_detection": "Windows Installer FindRelatedProducts",
+    "sha256_before": "9F7ABEB929F6EB4DA8DB449713865198E27A43168571D2026442D4514E91469D",
+    "sha256_after": "96158CAEA3914BB3857703EFD34BF48798545A629735E67057ABDE1D79FE6B5C"
+  }
+}

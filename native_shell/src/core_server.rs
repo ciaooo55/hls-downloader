@@ -226,6 +226,14 @@ fn dispatch(
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
+        CorePipeRequest::PlayerThumbnail { request_id, task_id, seconds } => {
+            match coordinator.player_thumbnail(&task_id, seconds) {
+                Ok(jpeg_base64) => CorePipeResponse::PlayerThumbnail { request_id, jpeg_base64 },
+                Err(message) => CorePipeResponse::Error {
+                    request_id: Some(request_id), code: "player_thumbnail_unavailable".into(), message,
+                },
+            }
+        }
         CorePipeRequest::Subtitle { request_id, .. } => CorePipeResponse::Error {
             request_id: Some(request_id),
             code: "subtitle_unavailable".into(),

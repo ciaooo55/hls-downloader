@@ -1582,7 +1582,28 @@ export default defineBackground(() => {
     message => native(message),
   )
   const subtitleBridge = new NativeBridge(() => browser.runtime.connectNative(HOST) as unknown as NativePortLike, 20_000)
-  installSubtitleBackground(async request => subtitleBridge.request({ op: 'subtitle', request, client_id: await browserClientId() }))
+  const subtitleAudioBridge = new NativeBridge(() => browser.runtime.connectNative(HOST) as unknown as NativePortLike, 20_000)
+  installSubtitleBackground(async request => (request.action === 'prepare_audio' ? subtitleAudioBridge : subtitleBridge)
+    .request({ op: 'subtitle', request, client_id: await browserClientId() }),
+    async (tabId, frameId, selection) => {
+      const pageUrl = await topLevelPageUrl(tabId)
+      const key = storageKey(tabId, pageUrl)
+      const values = await resourceSessionStore.update(key, raw => compactResources(pruneExpiredResources(raw), 40, true))
+      let resource = values.find(value => value.id === selection.resourceId && resourceBelongsToFrame(value, frameId))
+      if (!resource || !['hls', 'dash', 'media'].includes(resource.kind) || resource.isLive === true) {
+        throw new Error('尚未确认当前播放器的点播音源，请继续播放以完成识别，或关闭提前翻译')
+      }
+      const tracks = resource.audioTracks || []
+      const matches = tracks.filter(track => selection.audioLanguage && track.language === selection.audioLanguage
+        || selection.audioLabel && track.label === selection.audioLabel)
+      const track = matches.length === 1 ? matches[0] : tracks.length === 1 ? tracks[0] : undefined
+      if (tracks.length > 1 && !track || selection.audioIndex > 0 && !track?.url) {
+        throw new Error('无法确认当前备用音轨，请关闭提前翻译以采集播放器实际音轨')
+      }
+      if (track?.url) resource = { ...resource, url: track.url }
+      // 已由实际加载的播放器唯一匹配；独立解码还会验证音频，不需要下载任务的请求完成门禁。
+      return resourcePayload(resource, undefined, { allowUnverified: true })
+    })
   void hydrateHandoffTracker().then(() => pollTrackedHandoffs()).catch(() => undefined)
   // A suspended worker may have left paused downloads waiting on a handoff;
   // storage.local survives suspension and browser restart, so finish that work right away.

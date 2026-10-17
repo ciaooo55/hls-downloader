@@ -50,6 +50,7 @@ class FixtureCore(socketserver.ThreadingTCPServer):
         self.fail_poll = False
         self.fail_reset = False
         self.prefetch_positions = []
+        self.hold_ready = False
         self.idle_timeout = 30
 
     def respond(self, request):
@@ -72,7 +73,8 @@ class FixtureCore(socketserver.ThreadingTCPServer):
                 assert request["source"] == "auto" and request["target"] == "zh"
                 self.fail_poll = False
                 self.fail_reset = False
-                self.sessions[sid] = {"status":"running", "epoch":request["epoch"], "events":[], "chunks":0}
+                self.sessions[sid] = {"status":"running", "epoch":request["epoch"], "events":[], "chunks":0,
+                                      "manual":bool(request.get('audio_source')), "pending":[]}
                 result["status"] = "running"
             elif action == "stop":
                 if sid in self.sessions: self.sessions[sid]["status"] = "stopped"
@@ -82,8 +84,21 @@ class FixtureCore(socketserver.ThreadingTCPServer):
                     result = {"ok":False, "error":"测试快进重置失败"}
                 else:
                     session = self.sessions[sid]
-                    session.update(epoch=request["epoch"], chunks=0)
+                    session.update(epoch=request["epoch"], chunks=0, pending=[])
                     self.resets += 1
+            elif action == "prepare_audio":
+                position = request['position']; duration = request['duration']
+                pcm = b''.join(struct.pack('<h', int(math.sin(i*math.tau*440/16000)*5000)) for i in range(round(duration*16000)))
+                result.update(position=position, duration=duration, audio=base64.b64encode(pcm).decode())
+            elif action == "commit":
+                session = self.sessions[sid]
+                if request['epoch'] == session['epoch']:
+                    start, end = request['start'], request['end']
+                    session['pending'] = [
+                        {"type":"cue", "id":f'window-{start}', "role":role, "text":text,
+                         "final":True, "start":start, "end":end, "epoch":session['epoch']}
+                        for role, text in (("translation","浏览器字幕链路验证"),("source","Browser audio pipeline"))]
+                    session['pending'].append({"type":"ready", "start":start, "end":end, "epoch":session['epoch']})
             elif action == "audio":
                 session = self.sessions[sid]
                 pcm = base64.b64decode(request["audio"], validate=True)
@@ -96,7 +111,7 @@ class FixtureCore(socketserver.ThreadingTCPServer):
                 self.prefetch_positions.append(request['position'])
                 self.nonzero_samples += sum(sample != 0 for sample in samples)
                 session["chunks"] += 1
-                if session["chunks"] % 4 == 0:
+                if not session['manual'] and session["chunks"] % 4 == 0:
                     start = request["position"]
                     for role, text in (("translation","浏览器字幕链路验证"),("source","Browser audio pipeline")):
                         session["events"].append({"type":"cue", "id":f"speech-{session['epoch']}-{session['chunks']}", "role":role,
@@ -104,6 +119,11 @@ class FixtureCore(socketserver.ThreadingTCPServer):
                             "epoch":session["epoch"], "sequence":len(session["events"])+1})
             elif action == "poll":
                 session = self.sessions[sid]
+                if not self.hold_ready:
+                    for event in session['pending']:
+                        event['sequence'] = len(session['events'])+1
+                        session['events'].append(event)
+                    session['pending'] = []
                 if self.fail_poll: session.update(status="failed", error="测试服务断开")
                 result.update(status=session["status"], epoch=session["epoch"], latest_sequence=len(session["events"]),
                     error=session.get("error",""), events=[e for e in session["events"] if e["sequence"] > request.get("after_sequence",0)])
@@ -189,7 +209,6 @@ def run(args):
     browser = Path(args.browser_binary).resolve() if firefox else _find_chromium_binary(args.browser_binary)
     family = "firefox" if firefox else "edge" if "msedge" in browser.name.lower() else "chrome"
     if firefox and args.capture == 'tab': raise ValueError('Firefox cannot use tab capture')
-    if args.prefetch_fallback and args.capture != 'tab': raise ValueError('fallback fixture requires cross-origin tab capture')
     temp_root = Path(tempfile.gettempdir()) if args.system_temp else Path(__file__).resolve().parents[1]/'.tool-cache'/'test-tmp'
     temp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="hls-subtitle-smoke-", dir=temp_root) as temporary:
@@ -305,7 +324,7 @@ def run(args):
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === false"),"page override not applied")
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"player not selected")
                 prefetch_checks = []
-                if args.capture == 'prefetch' or args.prefetch_fallback:
+                if args.capture == 'prefetch':
                     evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-prefetch]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
                     wait(lambda:evaluate(popup,"chrome.storage.local.get('subtitle-settings').then(v=>v['subtitle-settings']?.prefetch === true)"),"prefetch setting not saved")
                     if args.capture == 'prefetch':
@@ -319,9 +338,6 @@ def run(args):
                 capture = evaluate(popup, "chrome.storage.session.get('subtitle-sessions').then(v=>Object.values(v['subtitle-sessions']||{})[0]?.capture)")
                 assert capture == args.capture, f"expected {args.capture} capture, got {capture}"
                 wait(lambda:core.nonzero_samples > 1000, "captured audio remained silent")
-                if args.prefetch_fallback:
-                    wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.status')?.textContent.includes('实时采集：')"),"unreadable audio did not disclose fallback")
-                    prefetch_checks.append('CORS failure falls back to real tab capture with visible reason')
                 if args.capture == 'prefetch':
                     wait(lambda:max(core.prefetch_positions,default=0)>3,"paused player did not prepare future audio")
                     frames_before_stall = core.audio_frames
@@ -331,20 +347,51 @@ def run(args):
                     assert all(abs(second-first-.25)<.02 for first,second in zip(positions,positions[1:])), f'PCM timeline jumped or repeated during page thread stall: {positions}'
                     state = evaluate(page,"(()=>{const v=window.testMedia;return {time:v.currentTime,paused:v.paused,rate:v.playbackRate,caption:document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.translation')?.textContent}})()")
                     assert state == {'time':0,'paused':True,'rate':1,'caption':''}, f'prefetch modified player or displayed future cue: {state}'
-                    wait(lambda:max(core.prefetch_positions,default=0)>=29.5,"prefetch did not reach its 30-second window",timeout=55)
+                    core.hold_ready = True
+                    wait(lambda:any(s['pending'] for s in core.sessions.values()), 'manual window not committed')
+                    assert evaluate(page, 'window.testMedia.paused'), 'untranslated audio was treated as ready'
+                    core.hold_ready = False
+                    wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('.translation').textContent.includes('字幕链路验证')"), 'completed window did not render')
+                    assert evaluate(page, 'window.testMedia.paused'), 'originally paused player resumed unexpectedly'
+                    evaluate(page, 'window.testMedia.play().then(()=>true)')
+                    wait(lambda:evaluate(page, 'window.testMedia.currentTime > .5'), 'prepared player did not play')
+                    evaluate(page, 'window.testMedia.pause()')
+                    paused_position = float(evaluate(page, 'window.testMedia.currentTime'))
+                    wait(lambda:max(core.prefetch_positions,default=0)>=paused_position+29.5,"prefetch did not reach its bounded window",timeout=55)
                     frames = core.audio_frames
                     time.sleep(1)
-                    assert core.audio_frames <= frames+1 and max(core.prefetch_positions)<=30.5, 'prefetch continued past the bounded window'
+                    assert core.audio_frames <= frames+1 and max(core.prefetch_positions)<=paused_position+30.01, 'prefetch continued past the bounded window'
                     evaluate(page,"document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('.tools button:nth-child(3)').click()")
                     wait(lambda:evaluate(page,"window.testMedia.currentTime > 0.5"),"next cue did not seek into prepared subtitles")
-                    prefetch_checks.extend(['future PCM uploaded while original player stays paused at time zero', 'PCM positions stay accurate while page thread is blocked', 'future captions hidden until their time', '30-second pretranslation window stops PCM', 'next cue seeks into prepared cache'])
+                    prefetch_checks.extend(['manual commit waits for completed translation', 'originally paused player stays paused', 'PCM positions remain accurate during page thread stall', 'bounded pretranslation stops PCM', 'next cue seeks into prepared cache'])
+                    core.hold_ready = True
+                    evaluate(page, 'window.testMedia.currentTime=40; window.testMedia.play().then(()=>true)')
+                    wait(lambda:evaluate(page, 'window.testMedia.paused'), 'playback did not pause for missing subtitles')
+                    wait(lambda:any(s['pending'] for s in core.sessions.values()), 'new seek window not committed', timeout=20)
+                    assert evaluate(page, 'window.testMedia.currentTime < 40.5'), 'player ran ahead of untranslated seek window'
+                    evaluate(page, "document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('button[title*=保持暂停]').click()")
+                    core.hold_ready = False
+                    wait(lambda:evaluate(page, "document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('.status').textContent.includes('已备好 8.0 秒')"), 'held window not prepared')
+                    assert evaluate(page, 'window.testMedia.paused'), 'hold-pause resumed the player'
+                    evaluate(page, 'window.testMedia.play().then(()=>true)')
+                    wait(lambda:evaluate(page, 'window.testMedia.currentTime > 40.5'), 'manual play after hold failed')
+                    evaluate(page, 'window.testMedia.currentTime=60')
+                    wait(lambda:evaluate(page, 'window.testMedia.paused'), 'seek while playing did not pause')
+                    wait(lambda:evaluate(page, 'window.testMedia.currentTime > 60.5 && !window.testMedia.paused'), 'prepared seek did not automatically resume', timeout=25)
+                    prefetch_checks.extend(['missing subtitles pause actual playback', 'hold-pause prevents automatic resume', 'seek while playing resumes only after translation is ready'])
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.translation')?.textContent.includes('字幕链路验证')"),"translation not rendered")
                 evaluate(page,"window.testMedia.currentTime=5")
                 wait(lambda:core.resets>0,"seek did not reset the provider session")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.translation')?.textContent.includes('字幕链路验证')"),"post-seek translation missing")
                 reset_count = core.resets
                 evaluate(page,"window.testMedia.playbackRate=2")
-                wait(lambda:core.resets > reset_count,"rate change did not reset provider")
+                if args.capture == 'prefetch':
+                    time.sleep(.5)
+                    assert core.resets == reset_count, 'playback rate reset original-speed prefetch'
+                else:
+                    # 实时路径的变速只更新播放器时钟，不重建采集连接。
+                    time.sleep(.5)
+                    assert core.resets == reset_count, 'rate change unexpectedly reset provider'
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"字幕时间偏移秒\"]');c.value='1.2';c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.status')?.textContent.includes('+1.2s')"),"subtitle offset not applied")
                 core.fail_poll = True
@@ -384,7 +431,7 @@ def run(args):
                 evaluate(page,"window.testMedia.remove()")
                 wait(lambda:evaluate(page,"document.querySelectorAll('[data-hls-subtitle]').length === 0"),"removed player retained subtitle UI")
                 result = {"passed":True,"browser":family,"headed":args.headed,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "idle_reconnect_verified":args.idle_reconnect,"audio_frames":core.audio_frames,
-                    "nonzero_samples":core.nonzero_samples,"seek_resets":core.resets,"checks":["production popup","global switch broadcast","site disable and page override","real browser audio + AudioWorklet","real Native Host PCM forwarding","subtitle render","seek reset","rate reset","time offset","provider failure and retry","reset rejection and retry","disable hides cached navigation and reenable restores audio","language change clears old cues","stop capture","removed player clears subtitle UI",*prefetch_checks]}
+                    "nonzero_samples":core.nonzero_samples,"seek_resets":core.resets,"checks":["production popup","global switch broadcast","site disable and page override","fixture PCM prefetch in real browser" if args.capture == 'prefetch' else "real browser audio + AudioWorklet","real Native Host PCM forwarding","subtitle render","seek reset","rate change preserves original-speed audio timeline","time offset","provider failure and retry","reset rejection and retry","disable hides cached navigation and reenable restores audio","language change clears old cues","stop capture","removed player clears subtitle UI",*prefetch_checks]}
                 args.report.parent.mkdir(parents=True,exist_ok=True); args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
                 return result
         except Exception:
@@ -415,7 +462,6 @@ if __name__ == "__main__":
     parser.add_argument('--browser', choices=('chromium','firefox'), default='chromium')
     parser.add_argument('--firefox-driver')
     parser.add_argument('--capture', choices=('element','tab','prefetch'), default='element')
-    parser.add_argument('--prefetch-fallback', action='store_true')
     parser.add_argument('--player-dom', choices=('document','shadow','dynamic-shadow','nested-shadow'), default='document')
     parser.add_argument('--system-temp', action='store_true')
     parser.add_argument('--headed', action='store_true')

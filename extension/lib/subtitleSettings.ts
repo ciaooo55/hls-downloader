@@ -52,3 +52,12 @@ export function visibleSubtitle(cues: Iterable<SubtitleCue>, time: number, offse
   }
   return result
 }
+
+export function subtitleReadyEnd(ranges: readonly (readonly [number, number])[], position: number): number {
+  let end = position
+  for (const [start, stop] of [...ranges].sort((a, b) => a[0] - b[0])) {
+    if (start > end + .001) break
+    if (stop > end) end = stop
+  }
+  return end
+}

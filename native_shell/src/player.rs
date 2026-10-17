@@ -1,7 +1,7 @@
 //! In-process libmpv via LoadLibrary/GetProcAddress.
 //!
 //! When the UI supplies a child HWND, mpv renders into that window (`wid`).
-//! Timeline drag preview seeks while paused. The process never spawns `mpv.exe`.
+//! Timeline thumbnails are decoded separately; seeking preserves playback state.
 
 use serde::{Deserialize, Serialize};
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -15,7 +15,7 @@ pub const PLAYER_WINDOW_TITLE: &str = "HLS Downloader 播放器";
 // 播放器和 Core 控制测试共享此环境变量，修改和使用必须在同一个锁内。
 pub(crate) static TEST_PLAYER_ENV: Mutex<()> = Mutex::new(());
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerMetadata {
     pub position_seconds: f64,
     pub duration_seconds: f64,
@@ -25,6 +25,16 @@ pub struct PlayerMetadata {
     pub speed: Option<f64>,
     pub audio_tracks: u32,
     pub subtitle_tracks: u32,
+    #[serde(default)]
+    pub volume: f64,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub buffered_end_seconds: f64,
+    #[serde(default)]
+    pub buffering: bool,
+    #[serde(default)]
+    pub tracks: Vec<crate::contract::PlayerTrack>,
 }
 
 fn null_backend_enabled() -> bool {
@@ -36,8 +46,6 @@ pub struct Player {
     inner: Mutex<Backend>,
     last_url: Mutex<String>,
     embed_wid: Mutex<Option<i64>>,
-    last_preview: Mutex<f64>,
-    last_embed: Mutex<String>,
 }
 
 #[derive(Default)]
@@ -102,8 +110,8 @@ impl Drop for MpvSession {
 
 impl Player {
     pub fn play(&self, url: &str, title: &str) -> Result<(), String> {
-        *self.last_url.lock().map_err(|_| "player lock")? = url.to_string();
         if null_backend_enabled() {
+            *self.last_url.lock().map_err(|_| "player lock")? = url.to_string();
             return Ok(());
         }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
@@ -112,7 +120,61 @@ impl Player {
         let title = if title.trim().is_empty() { "视频" } else { title.trim() };
         self.command_locked(&mut inner, &format!("set force-media-title {}", quote_mpv(title)?))?;
         self.command_locked(&mut inner, "set pause no")?;
-        self.command_locked(&mut inner, &format!("loadfile {} replace", quote_mpv(url)?))
+        self.command_locked(&mut inner, &format!("loadfile {} replace", quote_mpv(url)?))?;
+        *self.last_url.lock().map_err(|_| "player lock")? = url.to_string();
+        Ok(())
+    }
+
+    pub fn finish_download(&self, path: &str, title: &str) -> Result<(), String> {
+        if null_backend_enabled() {
+            *self.last_url.lock().map_err(|_| "player lock")? = path.into();
+            return Ok(());
+        }
+        {
+            let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+            if let Backend::Child(child) = &mut *inner {
+                child.request("finish_download", Some(serde_json::json!({ "path": path, "title": title })))?;
+                *self.last_url.lock().map_err(|_| "player lock")? = path.into();
+                return Ok(());
+            }
+        }
+        let metadata = self.metadata();
+        if metadata.session_active == Some(false) {
+            return Ok(());
+        }
+        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+        let Backend::Mpv(session) = &*inner else { return Ok(()); };
+        if mpv_has_shutdown(session) { *inner = Backend::Idle; return Ok(()); }
+        let audio = property_string(session, "aid");
+        let subtitle = property_string(session, "sid");
+        let has_input = property_string(session, "idle-active").as_deref() != Some("yes");
+        self.command_locked(&mut inner, "stop")?;
+        // END_FILE 表示旧文件已经卸载；保留窗口和播放器选项，再释放分片缓存。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let Backend::Mpv(session) = &*inner else { return Ok(()); };
+        while has_input {
+            let event = unsafe { (session.wait_event)(session.handle, 0.05).as_ref() };
+            match event.map(|event| event.event_id) {
+                Some(7) => break,
+                Some(1) => { *inner = Backend::Idle; return Ok(()); }
+                _ if std::time::Instant::now() >= deadline => return Err("播放器仍占用下载缓存，已保留缓存供稍后清理".into()),
+                _ => {}
+            }
+        }
+        *self.last_url.lock().map_err(|_| "player lock")? = path.to_string();
+        self.command_locked(&mut inner, &format!("set force-media-title {}", quote_mpv(title)?))?;
+        let mut options = format!("start={:.3},pause={},speed={:.3}",
+            metadata.position_seconds,
+            if metadata.paused == Some(true) { "yes" } else { "no" },
+            metadata.speed.unwrap_or(1.0));
+        for (name, track) in [("aid", audio), ("sid", subtitle)] {
+            if let Some(track) = track.filter(|track| matches!(track.as_str(), "no" | "auto")
+                || (!track.is_empty() && track.bytes().all(|ch| ch.is_ascii_digit()))) {
+                options.push_str(&format!(",{name}={track}"));
+            }
+        }
+        self.command_locked(&mut inner, &format!("loadfile {} replace -1 {}",
+            quote_mpv(path)?, quote_mpv(&options)?))
     }
 
     pub fn pause(&self, paused: bool) -> Result<(), String> {
@@ -156,6 +218,21 @@ impl Player {
         self.command_locked(&mut inner, &format!("add volume {:.0}", delta))
     }
 
+    pub fn set_volume(&self, volume: f64) -> Result<(), String> {
+        if !volume.is_finite() { return Err("音量无效".into()); }
+        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+        self.command_locked(&mut inner, &format!("set volume {:.0}", volume.clamp(0.0, 100.0)))
+    }
+
+    pub fn toggle_mute(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+        self.command_locked(&mut inner, "cycle mute")
+    }
+
+    pub(crate) fn source_url(&self) -> Result<String, String> {
+        self.last_url.lock().map(|url| url.clone()).map_err(|_| "player source lock".into())
+    }
+
     pub fn set_audio_track(&self, track: &str) -> Result<(), String> {
         let track = track.trim();
         if track.is_empty() || track.chars().any(|ch| !ch.is_ascii_digit()) {
@@ -167,7 +244,7 @@ impl Player {
 
     pub fn set_subtitle_track(&self, track: &str) -> Result<(), String> {
         let track = track.trim();
-        if track.is_empty() || track.chars().any(|ch| !ch.is_ascii_digit()) {
+        if track != "no" && (track.is_empty() || track.chars().any(|ch| !ch.is_ascii_digit())) {
             return Err("字幕编号无效".into());
         }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
@@ -176,7 +253,13 @@ impl Player {
 
     pub fn seek_relative(&self, seconds: f64) -> Result<(), String> {
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
-        self.command_locked(&mut inner, &format!("seek {:.3} relative", seconds))
+        self.command_locked(&mut inner, &format!("seek {:.3} relative+exact", seconds))
+    }
+
+    pub fn seek_absolute(&self, seconds: f64) -> Result<(), String> {
+        if !seconds.is_finite() || seconds < 0.0 { return Err("播放时间无效".into()); }
+        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+        self.command_locked(&mut inner, &format!("seek {seconds:.3} absolute+exact"))
     }
 
     pub fn metadata(&self) -> PlayerMetadata {
@@ -210,11 +293,22 @@ impl Player {
         let track_count = number("track-list/count") as u32;
         let mut audio_tracks = 0u32;
         let mut subtitle_tracks = 0u32;
+        let mut tracks = Vec::new();
         for index in 0..track_count {
-            match property_string(session, &format!("track-list/{index}/type")).as_deref() {
-                Some("audio") => audio_tracks = audio_tracks.saturating_add(1),
-                Some("sub") => subtitle_tracks = subtitle_tracks.saturating_add(1),
+            let kind = property_string(session, &format!("track-list/{index}/type")).unwrap_or_default();
+            match kind.as_str() {
+                "audio" => audio_tracks = audio_tracks.saturating_add(1),
+                "sub" => subtitle_tracks = subtitle_tracks.saturating_add(1),
                 _ => {}
+            }
+            if matches!(kind.as_str(), "audio" | "sub") {
+                tracks.push(crate::contract::PlayerTrack {
+                    id: property_string(session, &format!("track-list/{index}/id")).unwrap_or_default(),
+                    kind,
+                    title: property_string(session, &format!("track-list/{index}/title")).unwrap_or_default(),
+                    language: property_string(session, &format!("track-list/{index}/lang")).unwrap_or_default(),
+                    selected: property_string(session, &format!("track-list/{index}/selected")).as_deref() == Some("yes"),
+                });
             }
         }
         PlayerMetadata {
@@ -230,19 +324,12 @@ impl Player {
             speed: Some(number("speed")).filter(|value| *value > 0.0),
             audio_tracks,
             subtitle_tracks,
+            volume: number("volume"),
+            muted: property_string(session, "mute").as_deref() == Some("yes"),
+            buffered_end_seconds: number("demuxer-cache-time").max(position_seconds),
+            buffering: property_string(session, "paused-for-cache").as_deref() == Some("yes"),
+            tracks,
         }
-    }
-
-    pub fn preview_percent(&self, percent: f64) -> Result<(), String> {
-        let percent = percent.clamp(0.0, 100.0);
-        *self.last_preview.lock().map_err(|_| "player lock")? = percent;
-        if null_backend_enabled() {
-            return Ok(());
-        }
-        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
-        self.ensure_backend(&mut inner)?;
-        self.command_locked(&mut inner, "set pause yes")?;
-        self.command_locked(&mut inner, &format!("seek {percent:.3} absolute-percent"))
     }
 
     pub fn attach_embed_host(
@@ -253,12 +340,11 @@ impl Player {
         w: i32,
         h: i32,
     ) -> Result<(), String> {
-        *self.last_embed.lock().map_err(|_| "player lock")? = format!("{title}:{x},{y},{w},{h}");
         if null_backend_enabled() {
             *self.embed_wid.lock().map_err(|_| "player lock")? = Some(1);
             return Ok(());
         }
-        let parent = crate::window_handle_by_title(title).unwrap_or(0);
+        let parent = crate::window_handle_by_title(title).ok_or("播放器宿主窗口尚未就绪")?;
         self.attach_embed_hwnd(parent, x, y, w, h)
     }
 
@@ -270,27 +356,51 @@ impl Player {
         w: i32,
         h: i32,
     ) -> Result<(), String> {
-        *self.last_embed.lock().map_err(|_| "player lock")? =
-            format!("embed_hwnd:{parent}:{x},{y},{w},{h}");
         if null_backend_enabled() {
             *self.embed_wid.lock().map_err(|_| "player lock")? = Some(1);
             return Ok(());
         }
+        if parent <= 1 || w <= 0 || h <= 0 || w > 16384 || h > 16384 {
+            return Err("播放器宿主区域无效".into());
+        }
+        // 嵌入参数必须在真正持有 libmpv 的子进程设置，不能只写 Core 的字段。
+        if std::env::var_os("HLS_V7_PLAYER_CHILD").is_none() {
+            let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+            self.ensure_backend(&mut inner)?;
+            if let Backend::Child(child) = &mut *inner {
+                child.request("embed", Some(serde_json::json!({"parent":parent,"x":x,"y":y,"w":w,"h":h})))?;
+                return Ok(());
+            }
+        }
         #[cfg(windows)]
         {
-            if let Ok(mut slot) = self.embed_wid.lock() {
-                if let Some(old) = slot.take() {
-                    destroy_previous_host(old, parent);
-                }
+            use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+            use windows_sys::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{GetParent, IsWindow, SetParent, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_SHOWWINDOW};
+            let mut slot = self.embed_wid.lock().map_err(|_| "player embed lock")?;
+            if unsafe { IsWindow(parent as _) } == 0 { return Err("播放器宿主已关闭".into()); }
+            // 使用宿主的 DPI 模式创建和移动子 HWND，坐标与 Compose 的像素矩形一致。
+            if unsafe { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent as _)) }.is_null() {
+                return Err(std::io::Error::last_os_error().to_string());
             }
-            if parent > 1 {
-                if let Ok(wid) = create_child_host_parent(parent, x, y, w, h) {
-                    *self.embed_wid.lock().map_err(|_| "player lock")? = Some(wid);
-                    if let Ok(mut inner) = self.inner.lock() {
-                        *inner = Backend::Idle;
+            if let Some(wid) = *slot {
+                if unsafe { IsWindow(wid as _) } != 0 {
+                    // 调整尺寸、主界面和画中画之间切换，只移动同一个视频子窗口。
+                    unsafe {
+                        if GetParent(wid as _) != parent as _ {
+                            SetLastError(0);
+                            if SetParent(wid as _, parent as _).is_null() && GetLastError() != 0 {
+                                return Err(std::io::Error::last_os_error().to_string());
+                            }
+                        }
+                        if SetWindowPos(wid as _, HWND_TOP, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW) == 0 {
+                            return Err(std::io::Error::last_os_error().to_string());
+                        }
                     }
+                    return Ok(());
                 }
             }
+            *slot = Some(create_child_host_parent(parent, x, y, w, h)?);
         }
         #[cfg(not(windows))]
         {
@@ -303,6 +413,25 @@ impl Player {
         if let Ok(mut inner) = self.inner.lock() {
             *inner = Backend::Idle;
         }
+        #[cfg(windows)]
+        if let Ok(mut slot) = self.embed_wid.lock() {
+            if let Some(wid) = slot.take().filter(|wid| *wid > 1) {
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(wid as _); }
+            }
+        }
+    }
+
+    pub fn hide_embed(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+        if let Backend::Child(child) = &mut *inner {
+            child.request("hide_embed", None)?;
+            return Ok(());
+        }
+        #[cfg(windows)]
+        if let Some(wid) = *self.embed_wid.lock().map_err(|_| "player embed lock")? {
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(wid as _, 0); }
+        }
+        Ok(())
     }
 
     fn poll_shutdown(&self) {
@@ -441,9 +570,18 @@ impl PlayerChild {
 /// the protocol stream so a crashed player cannot corrupt Core IPC.
 pub fn run_player_process() -> i32 {
     std::env::set_var("HLS_V7_PLAYER_CHILD", "1");
+    #[cfg(windows)]
+    unsafe {
+        // mpv 的窗口线程由其内部创建，仅设置当前线程不会改变它的 DPI 默认值。
+        // 必须在创建任何窗口前设置进程默认值，否则嵌入画面会被再次缩小。
+        use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 {
+            eprintln!("player DPI initialization failed: {}", std::io::Error::last_os_error());
+            return 1;
+        }
+    }
     let player = Player::default();
-    // 生产界面不轮询本地播放状态。stdin 不能阻塞 mpv 事件处理，否则点击关闭后
-    // SHUTDOWN 无人消费，窗口一直等客户端释放；此前主动查询 metadata 的测试掩盖了它。
+    // stdin 不阻塞事件处理。视频子 HWND 归此线程，必须持续泵送窗口消息。
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
@@ -452,7 +590,16 @@ pub fn run_player_process() -> i32 {
     });
     let mut stdout = std::io::BufWriter::new(std::io::stdout());
     loop {
-        let line = match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE};
+            let mut message: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        let line = match receiver.recv_timeout(std::time::Duration::from_millis(16)) {
             Ok(line) => line,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 player.poll_shutdown();
@@ -484,6 +631,18 @@ pub fn run_player_process() -> i32 {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or(""),
                 ),
+                "finish_download" => {
+                    let path = request.get("path").and_then(serde_json::Value::as_str).ok_or("缺少成品路径")?;
+                    let title = request.get("title").and_then(serde_json::Value::as_str).unwrap_or("视频");
+                    player.finish_download(path, title)?;
+                    Ok(serde_json::Value::Null)
+                }
+                "embed" => {
+                    let integer = |key| request.get(key).and_then(serde_json::Value::as_i64).ok_or("缺少播放器区域参数");
+                    player.attach_embed_hwnd(integer("parent")?, integer("x")? as i32, integer("y")? as i32, integer("w")? as i32, integer("h")? as i32)?;
+                    Ok(serde_json::Value::Null)
+                }
+                "hide_embed" => { player.hide_embed()?; Ok(serde_json::Value::Null) }
                 "stop" => {
                     player.stop();
                     Ok(serde_json::Value::Null)
@@ -600,7 +759,12 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                         *const c_char,
                         *const c_char,
                     ) -> i32 = std::mem::transmute(set_option);
-                    let mut options = vec![("keep-open", "yes".to_string())];
+                    // 输入只来自本地播放服务或成品；站点分片可能使用 jpeg/bin 后缀。
+                    let mut options = vec![
+                        ("keep-open", "yes".to_string()),
+                        ("idle", "yes".into()),
+                        ("demuxer-lavf-o", "allowed_extensions=ALL,extension_picky=0".into()),
+                    ];
                     if let Some(wid) = wid {
                         options.extend([("wid", wid.to_string()), ("force-window", "no".into())]);
                     } else {
@@ -613,6 +777,9 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                             ("input-vo-keyboard", "yes".into()),
                             ("input-cursor", "yes".into()),
                             ("border", "no".into()),
+                            // 分片与成品的显示参数可能略有差别，不能在收尾切换时重排窗口。
+                            ("auto-window-resize", "no".into()),
+                            ("keepaspect-window", "no".into()),
                             ("ontop", "yes".into()),
                             ("autofit", "70%x70%".into()),
                             ("geometry", "50%:50%".into()),
@@ -670,25 +837,13 @@ fn property_string(session: &MpvSession, name: &str) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn destroy_previous_host(wid: i64, parent: i64) {
-    if wid <= 1 || wid == parent {
-        return;
-    }
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(
-            wid as windows_sys::Win32::Foundation::HWND,
-        );
-    }
-}
-
-#[cfg(windows)]
 fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Result<i64, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, SetWindowPos, HWND_TOP, SWP_NOZORDER, SWP_SHOWWINDOW, WS_CHILD,
-        WS_CLIPSIBLINGS, WS_VISIBLE,
+        CreateWindowExW, DestroyWindow, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_CHILD,
+        WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DISABLED, WS_VISIBLE,
     };
     if parent <= 1 {
         return Err("player hwnd missing".into());
@@ -703,7 +858,7 @@ fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Resu
             0,
             class.as_ptr(),
             std::ptr::null(),
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_DISABLED,
             x,
             y,
             w.max(32),
@@ -718,15 +873,19 @@ fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Resu
         return Err("failed to create mpv host window".into());
     }
     unsafe {
-        SetWindowPos(
+        if SetWindowPos(
             child,
             HWND_TOP,
             x,
             y,
             w.max(32),
             h.max(32),
-            SWP_NOZORDER | SWP_SHOWWINDOW,
-        );
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        ) == 0 {
+            let error = std::io::Error::last_os_error().to_string();
+            DestroyWindow(child);
+            return Err(error);
+        }
     }
     Ok(child as i64)
 }
@@ -736,7 +895,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_backend_records_url_embed_and_preview() {
+    fn null_backend_accepts_embed_and_rejects_invalid_controls() {
         let _guard = TEST_PLAYER_ENV.lock().unwrap();
         let previous = std::env::var_os("HLS_V7_PLAYER_NULL");
         std::env::set_var("HLS_V7_PLAYER_NULL", "1");
@@ -754,7 +913,10 @@ mod tests {
         player
             .attach_embed_host(PLAYER_WINDOW_TITLE, 0, 48, 720, 220)
             .unwrap();
-        player.preview_percent(37.5).unwrap();
+        player.seek_absolute(37.5).unwrap();
+        assert!(player.seek_absolute(f64::NAN).is_err());
+        assert!(player.seek_absolute(-1.0).is_err());
+        player.set_subtitle_track("no").unwrap();
         assert!(quote_mpv("http://127.0.0.1/a.mp4; run calc")
             .unwrap()
             .starts_with('"'));

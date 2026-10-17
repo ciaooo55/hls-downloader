@@ -1103,7 +1103,9 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         mark_file_sparse(&file);
     }
     if pending.is_empty() {
-        let _ = fs::remove_file(completed_ranges_path(job));
+        if !job.control.with_file_name("playback-byte-priority").exists() {
+            let _ = fs::remove_file(completed_ranges_path(job));
+        }
         write_progress(&job.progress, total, total, 0.0, "done");
         return Ok(());
     }
@@ -1163,6 +1165,12 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
                 "downloading",
             );
             write_active_ranges(&progress_path, &progress_scheduler.active_ranges());
+            if let Some(root) = progress_control.parent() {
+                if let Some(position) = fs::read_to_string(root.join("playback-byte-priority"))
+                    .ok().and_then(|text| text.trim().parse::<u64>().ok()) {
+                    progress_scheduler.playback_priority.store(position, Ordering::Relaxed);
+                }
+            }
             thread::sleep(Duration::from_millis(200));
         }
     });
@@ -1200,7 +1208,10 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
             "file length mismatch, expected {total}, got {final_len}"
         )));
     }
-    let _ = fs::remove_file(completed_ranges_path(job));
+    // 边播边下必须继续依据已落盘范围读取，直至 Core 切换成品后统一清理。
+    if !job.control.with_file_name("playback-byte-priority").exists() {
+        let _ = fs::remove_file(completed_ranges_path(job));
+    }
     write_progress(&job.progress, total, total, 0.0, "done");
     Ok(())
 }
@@ -1313,6 +1324,7 @@ struct RangeScheduler {
     pending: Mutex<Vec<WorkRange>>,
     active: Mutex<Vec<ActiveRange>>,
     next_id: AtomicU64,
+    playback_priority: AtomicU64,
     connections: AdaptiveConnectionController,
     wake_lock: Mutex<()>,
     wake: Condvar,
@@ -1324,6 +1336,7 @@ impl RangeScheduler {
             pending: Mutex::new(pending),
             active: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
+            playback_priority: AtomicU64::new(u64::MAX),
             connections: AdaptiveConnectionController::new(maximum_connections),
             wake_lock: Mutex::new(()),
             wake: Condvar::new(),
@@ -1338,7 +1351,9 @@ impl RangeScheduler {
         if !self.connections.permits(worker_index) {
             return None;
         }
-        let index = pending
+        let priority = self.playback_priority.load(Ordering::Relaxed);
+        let priority_index = pending.iter().position(|item| item.start <= priority && priority <= item.end);
+        let index = priority_index.or_else(|| pending
             .iter()
             .enumerate()
             .max_by_key(|(_, item)| {
@@ -1347,8 +1362,12 @@ impl RangeScheduler {
                     std::cmp::Reverse(item.start),
                 )
             })
-            .map(|(index, _)| index)?;
-        let range = pending.swap_remove(index);
+            .map(|(index, _)| index))?;
+        let mut range = pending.swap_remove(index);
+        if priority_index.is_some() && priority > range.start {
+            pending.push(WorkRange { start: range.start, end: priority - 1 });
+            range.start = priority;
+        }
         drop(pending);
         let active = ActiveRange {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
@@ -3345,6 +3364,20 @@ mod tests {
         assert_ne!(third_range, first_range);
         assert_ne!(third_range, second_range);
         scheduler.complete(third.id);
+    }
+
+    #[test]
+    fn playback_seek_splits_pending_range_without_losing_or_overlapping_bytes() {
+        let scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 99 }], 2);
+        scheduler.playback_priority.store(25, Ordering::Relaxed);
+        let target = scheduler.claim(0).unwrap();
+        let target_range = { let state = target.progress.lock().unwrap(); (state.cursor, state.stop) };
+        assert_eq!(target_range, (25, 99));
+        let head = scheduler.claim(1).unwrap();
+        let head_range = { let state = head.progress.lock().unwrap(); (state.cursor, state.stop) };
+        assert_eq!(head_range, (0, 24));
+        scheduler.complete(target.id); scheduler.complete(head.id);
+        assert!(scheduler.claim(0).is_none());
     }
 
     #[test]

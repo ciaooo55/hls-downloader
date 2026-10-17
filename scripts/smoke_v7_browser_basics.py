@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -506,6 +507,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                     record('actual-edge-toolbar-reopen-restores-pending-confirmation')
                     click_download_confirmation(
                         accept=False,
+                        runtime=runtime,
                         evidence_path=args.report.with_name('edge-toolbar-reject-confirmation.json'))
                     if edge_popup_targets():
                         click_edge_popup(title='关闭')
@@ -705,7 +707,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                     wait(lambda:presenter_window(runtime=runtime), 'Context entry has no desktop confirmation', 15)
                     from smoke_v7_presenter_visual import capture
                     capture(presenter_window(runtime=runtime), args.report.with_name(f'{args.report.stem}-confirmation-{len(report["checks"])}.png'))
-                    click_download_confirmation()
+                    click_download_confirmation(runtime=runtime)
                     def completed():
                         found=[t for t in tasks() if t['url'] in expected and t['task_id'] not in before]
                         created.update(t['task_id'] for t in found)
@@ -960,7 +962,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                 ActionChains(driver).click(widget).perform()
                 state = wait(lambda: (s if '等待确认' in (s:=toolbar_state()).get('text','') else None), 'Reopened popup lost pending confirmation', 10)
                 record('actual-toolbar-reopen-restores-pending-confirmation', '等待确认' in state['text'])
-                click_download_confirmation(accept=False)
+                click_download_confirmation(accept=False, runtime=runtime)
                 widget = driver.execute_script('return document.getElementById(arguments[0])',widget_id)
                 ActionChains(driver).click(widget).perform()
                 def retryable_toolbar():
@@ -999,7 +1001,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                 ActionChains(driver).click(button).perform()
                 wait(lambda: presenter_window(runtime=runtime), 'Desktop confirmation missing', 12)
                 assert before == {t['task_id'] for t in tasks()}, 'Task started before desktop confirmation'
-                click_download_confirmation()
+                click_download_confirmation(runtime=runtime)
                 def current():
                     found = [t for t in tasks() if t['task_id'] not in before and t['resource_kind'] == kind]
                     created.update(t['task_id'] for t in found)
@@ -1044,10 +1046,14 @@ ConvertTo-Json -InputObject @($matches) -Compress
             if args.stage=='entries' and 'token' in locals():
                 markers=['hls-entry='+token,'hls-selection='+token+'-']
                 created.update(t['task_id'] for t in tasks() if any(m in t['url'] for m in markers))
-                for encoded in core({'type':'load_handoffs','request_id':3})['items']:
-                    handoff=json.loads(encoded)
-                    if handoff.get('status')=='pending' and any(m in handoff.get('offer',{}).get('url','') for m in markers):
-                        core({'type':'command','request_id':4,'command':{'kind':'reject_handoff','handoff_id':handoff['id'],'suppress_site_kind':False}})
+            # 失败的工具栏验收也会留下待确认请求，必须收回本轮服务器的交接，避免遮挡下一项。
+            fixture_prefixes = [fixture_url + '/'] if 'fixture_url' in locals() else []
+            if selection_server:
+                fixture_prefixes.append(f'http://127.0.0.1:{selection_server.server_port}/')
+            for encoded in core({'type':'load_handoffs','request_id':3})['items']:
+                handoff=json.loads(encoded)
+                if handoff.get('status')=='pending' and any(handoff.get('offer',{}).get('url','').startswith(prefix) for prefix in fixture_prefixes):
+                    core({'type':'command','request_id':4,'command':{'kind':'reject_handoff','handoff_id':handoff['id'],'suppress_site_kind':False}})
             for task_id in created:
                 core({'type': 'command', 'request_id': 2, 'command': {'kind': 'task_action', 'task_id': task_id, 'action': 'delete_files'}})
             report['user_tasks_preserved'] = initial <= {t['task_id'] for t in tasks()}
@@ -1056,6 +1062,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
 
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser()
     parser.add_argument('--browser', choices=['firefox', 'edge'], required=True)
     parser.add_argument('--runtime', type=Path, required=True)

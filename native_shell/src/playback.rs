@@ -38,6 +38,8 @@ struct MediaState {
 enum Mount {
     File(PathBuf),
     Dir(PathBuf),
+    Downloading(PathBuf),
+    Growing { root: PathBuf, file: PathBuf, total: u64 },
     Remote(String),
 }
 
@@ -95,6 +97,14 @@ impl MediaServer {
         self.store(token, Mount::Dir(path));
     }
 
+    pub fn mount_downloading(&self, token: &str, path: PathBuf) {
+        self.store(token, Mount::Downloading(path));
+    }
+
+    pub fn mount_growing(&self, token: &str, root: PathBuf, file: PathBuf, total: u64) {
+        self.store(token, Mount::Growing { root, file, total });
+    }
+
     pub fn mount_remote(&self, token: &str, url: String) {
         self.store(token, Mount::Remote(url));
     }
@@ -129,6 +139,8 @@ impl MediaServer {
                     .and_then(|(_, mount)| match mount {
                         Mount::File(path) => file_cast_name(path).map(|name| format!("/{name}")),
                         Mount::Dir(_) => Some("/local.m3u8".into()),
+                        Mount::Downloading(_) => Some("/preview.m3u8".into()),
+                        Mount::Growing { .. } => None,
                         Mount::Remote(_) => None,
                     })
             })
@@ -305,6 +317,10 @@ fn handle_client(
         Mount::Remote(url) => {
             return write_redirect(&mut stream, url);
         }
+        Mount::Growing { root, file, total } => {
+            if !sub.is_empty() { return write_status(&mut stream, 404, b"not found"); }
+            return serve_growing_file(&mut stream, &request, root, file, *total);
+        }
         Mount::File(path) => {
             if !sub.is_empty() && file_cast_name(path).as_deref() != Some(sub) {
                 write_status(&mut stream, 404, b"not found")?;
@@ -321,6 +337,37 @@ fn handle_client(
                     return Ok(());
                 }
             }
+        }
+        Mount::Downloading(dir) => {
+            let name = if sub.is_empty() { "preview.m3u8" } else { sub };
+            let Some(file) = safe_join(dir, name) else {
+                return write_status(&mut stream, 404, b"not found");
+            };
+            let playlist = matches!(name, "preview.m3u8" | "preview-video.m3u8" | "audio/local.m3u8" | "audio/preview-audio.m3u8");
+            let fragment = name.starts_with("segments/") || name.starts_with("audio/segments/")
+                || ((name.starts_with("seg-") || name.starts_with("audio/seg-")) && name.ends_with(".m4s"))
+                || matches!(name, "init.mp4" | "audio/init.mp4");
+            if !playlist && !fragment { return write_status(&mut stream, 404, b"not found"); }
+            if fragment && !crate::media::preview::is_ready(dir, name) {
+                if thumbnail_request(&request) {
+                    return write_status(&mut stream, 503, b"thumbnail segment not downloaded");
+                }
+                crate::media::preview::request_priority(dir, name)?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+                while !crate::media::preview::is_ready(dir, name) {
+                    let control = std::fs::read_to_string(dir.join("control")).unwrap_or_default();
+                    if !dir.is_dir() || control.trim() != "run" || std::time::Instant::now() >= deadline {
+                        return write_status(&mut stream, 503, b"segment not ready; resume download and retry");
+                    }
+                    thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+            // 白名单以外的任务配置、请求凭据和进度文件不能经播放地址读取。
+            if !file.is_file() || !file.canonicalize().ok().zip(dir.canonicalize().ok())
+                .is_some_and(|(file, root)| file.starts_with(root)) {
+                return write_status(&mut stream, 404, b"not found");
+            }
+            file
         }
     };
     serve_file(&mut stream, &request, &file_path)
@@ -378,6 +425,7 @@ fn resolve_mount<'a>(mounts: &'a [(String, Mount)], token: &str) -> Option<&'a M
 
 fn safe_join(dir: &Path, sub: &str) -> Option<PathBuf> {
     if sub.is_empty()
+        || sub.contains(':')
         || sub
             .split(['/', '\\'])
             .any(|part| part.is_empty() || part == "." || part == "..")
@@ -399,6 +447,11 @@ fn range_header(request: &str) -> Option<&str> {
             .eq_ignore_ascii_case("bytes")
             .then_some(range.trim())
     })
+}
+
+fn thumbnail_request(request: &str) -> bool {
+    request.lines().skip(1).any(|line| line.split_once(':').is_some_and(|(name, value)|
+        name.eq_ignore_ascii_case("x-hls-thumbnail") && value.trim() == "1"))
 }
 
 fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result<(), String> {
@@ -426,6 +479,62 @@ fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result
             .write_all(header.as_bytes())
             .map_err(|error| error.to_string())?;
         stream_bytes(stream, &mut file, 0, total)
+    }
+}
+
+fn downloaded_range_end(root: &Path, start: u64, total: u64) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("native-engine.ranges.json")).ok()?).ok()?;
+    if value["total"].as_u64() != Some(total) { return None; }
+    value["ranges"].as_array()?.iter().find_map(|range| {
+        let first = range[0].as_u64()?;
+        let last = range[1].as_u64()?;
+        (first <= start && start <= last && last < total).then_some(last)
+    })
+}
+
+fn serve_growing_file(stream: &mut TcpStream, request: &str, root: &Path, path: &Path, total: u64) -> Result<(), String> {
+    let range = range_header(request);
+    let Some((start, end)) = range.map(|range| parse_range(range, total)).unwrap_or_else(||
+        total.checked_sub(1).map(|end| (0, end))) else {
+        return write_status(stream, 416, b"range not satisfiable");
+    };
+    let head = request.lines().next().is_some_and(|line| line.starts_with("HEAD "));
+    let status = if range.is_some() { 206 } else { 200 };
+    let length = end - start + 1;
+    let mut cursor = start;
+    let mut headers_sent = false;
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    loop {
+        let available = downloaded_range_end(root, cursor, total);
+        if head || available.is_some() {
+            if !headers_sent {
+                let content_range = if range.is_some() { format!("Content-Range: bytes {start}-{end}/{total}\r\n") } else { String::new() };
+                write!(stream, "HTTP/1.1 {status} {}\r\n{content_range}Content-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    if status == 206 { "Partial Content" } else { "OK" }).map_err(|error| error.to_string())?;
+                headers_sent = true;
+            }
+            if head { return Ok(()); }
+            let count = (available.unwrap().min(end) - cursor + 1).min(1024 * 1024);
+            stream_bytes(stream, &mut file, cursor, count)?;
+            cursor += count;
+            if cursor > end { return Ok(()); }
+        } else {
+            if thumbnail_request(request) {
+                if !headers_sent { return write_status(stream, 503, b"thumbnail range not downloaded"); }
+                return Err("thumbnail reached undownloaded bytes".into());
+            }
+            crate::media::preview::request_byte_priority(root, cursor)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            while downloaded_range_end(root, cursor, total).is_none() {
+                let control = std::fs::read_to_string(root.join("control")).unwrap_or_default();
+                if control.trim() != "run" || std::time::Instant::now() >= deadline {
+                    if !headers_sent { return write_status(stream, 503, b"range not ready; resume download and retry"); }
+                    return Err("requested download range is not ready".into());
+                }
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
     }
 }
 
@@ -528,14 +637,95 @@ fn write_response(
     stream.write_all(body).map_err(|error| error.to_string())
 }
 
-pub fn playlist_url(task_dir: &Path) -> Option<PathBuf> {
-    let playlist = task_dir.join("local.m3u8");
-    playlist.exists().then_some(playlist)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumbnails_do_not_download_missing_segments_or_sparse_ranges() {
+        let root = std::env::temp_dir().join(format!("hls-thumbnail-readonly-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("segments")).unwrap();
+        std::fs::write(root.join("control"), "run").unwrap();
+        let payload = root.join("payload.downloading");
+        std::fs::write(&payload, b"AB\0\0\0\0\0\0").unwrap();
+        std::fs::write(root.join("native-engine.ranges.json"), r#"{"total":8,"ranges":[[0,1]]}"#).unwrap();
+        let server = MediaServer::start_local().unwrap();
+        server.mount_downloading("segments", root.clone());
+        server.mount_growing("bytes", root.clone(), payload, 8);
+        for (path, range) in [("segments/segments/000042.jpeg", "0-7"), ("bytes", "4-7")] {
+            let mut client = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+            client.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            write!(client, "GET /media/{path} HTTP/1.1\r\nX-HLS-Thumbnail: 1\r\nRange: bytes={range}\r\n\r\n").unwrap();
+            let mut response = Vec::new(); client.read_to_end(&mut response).unwrap();
+            assert!(response.starts_with(b"HTTP/1.1 503"));
+        }
+        assert!(!root.join("playback-priority").exists());
+        assert!(!root.join("playback-byte-priority").exists());
+        server.unmount("segments"); server.unmount("bytes");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn downloading_segment_waits_for_verified_completion_and_requests_priority() {
+        let root = std::env::temp_dir().join(format!("hls-pending-fragment-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("segments")).unwrap();
+        std::fs::write(root.join("control"), "run").unwrap();
+        let file = root.join("segments/000042.jpeg");
+        std::fs::write(&file, b"partial").unwrap();
+        let server = MediaServer::start_local().unwrap();
+        server.mount_downloading("pending", root.clone());
+        let mut client = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        client.write_all(b"GET /media/pending/segments/000042.jpeg HTTP/1.1\r\nRange: bytes=0-7\r\n\r\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::media::preview::priority_file(&root).as_ref() != Some(&file) {
+            assert!(std::time::Instant::now() < deadline, "player did not request the missing fragment");
+            thread::yield_now();
+        }
+        client.set_nonblocking(true).unwrap();
+        assert_eq!(client.peek(&mut [0u8; 1]).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        client.set_nonblocking(false).unwrap();
+        client.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        std::fs::write(&file, b"complete fragment").unwrap();
+        crate::media::preview::mark_ready(&root, &file).unwrap();
+        let mut response = Vec::new(); client.read_to_end(&mut response).unwrap();
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 206"));
+        assert!(response.ends_with(b"complete"));
+        server.unmount("pending");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sparse_file_playback_never_returns_undownloaded_holes() {
+        let root = std::env::temp_dir().join(format!("hls-sparse-playback-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("payload.downloading");
+        std::fs::write(&path, b"AB\0\0\0\0\0\0").unwrap();
+        std::fs::write(root.join("control"), "run").unwrap();
+        std::fs::write(root.join("native-engine.ranges.json"), r#"{"total":8,"ranges":[[0,1]]}"#).unwrap();
+        let server = MediaServer::start_local().unwrap();
+        server.mount_growing("growing", root.clone(), path.clone(), 8);
+        let mut client = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        client.write_all(b"GET /media/growing HTTP/1.1\r\nRange: bytes=4-7\r\n\r\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::fs::read_to_string(root.join("playback-byte-priority")).ok().as_deref() != Some("4") {
+            assert!(std::time::Instant::now() < deadline, "player did not request the missing byte range");
+            thread::yield_now();
+        }
+        client.set_nonblocking(true).unwrap();
+        assert_eq!(client.peek(&mut [0u8; 1]).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        client.set_nonblocking(false).unwrap();
+        client.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(4)).unwrap(); file.write_all(b"WXYZ").unwrap(); file.sync_all().unwrap(); drop(file);
+        std::fs::write(root.join("native-engine.ranges.json"), r#"{"total":8,"ranges":[[0,1],[4,7]]}"#).unwrap();
+        let mut response = Vec::new(); client.read_to_end(&mut response).unwrap();
+        assert!(String::from_utf8_lossy(&response).contains("Content-Range: bytes 4-7/8"));
+        assert!(response.ends_with(b"WXYZ"));
+        server.unmount("growing"); std::fs::remove_dir_all(root).unwrap();
+    }
     use std::io::{Read, Write};
 
     #[test]

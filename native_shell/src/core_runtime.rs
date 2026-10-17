@@ -720,11 +720,12 @@ impl CoreRuntime {
             }
             snapshot.stage = effective_stage.clone();
             snapshot.status = effective_status.clone();
-            snapshot.playback_ready = snapshot.downloaded_bytes > 0
-                || matches!(
-                    effective_status.as_str(),
-                    "completed" | "downloading" | "merging"
-                );
+            snapshot.playback_ready = (matches!(effective_status.as_str(), "completed" | "done")
+                && !snapshot.output_missing)
+                || spec.as_ref()
+                    .is_some_and(|spec| crate::download_worker::TaskPaths::for_task(task_id, spec).ok()
+                        .is_some_and(|paths| crate::download_worker::playable_task_playlist(&paths).is_some()
+                            || crate::download_worker::playable_http_total(&paths, spec).is_some()));
             snapshot.completed_ranges =
                 if snapshot.total_ranges > 0 && snapshot.total_bytes.unwrap_or(0) > 0 {
                     snapshot

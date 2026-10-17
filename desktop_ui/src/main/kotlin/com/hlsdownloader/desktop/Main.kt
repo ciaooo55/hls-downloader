@@ -369,19 +369,6 @@ private sealed interface UiSignal {
         val durationSeconds: Long = 0,
         val positionAvailable: Boolean = false,
     ) : UiSignal
-    data class Player(
-        val active: Boolean,
-        val title: String,
-        val taskId: String = "",
-        val status: String,
-        val paused: Boolean = false,
-        val speed: Double = 1.0,
-        val positionSeconds: Double = 0.0,
-        val durationSeconds: Double = 0.0,
-        val positionAvailable: Boolean = false,
-        val audioTracks: Int = 0,
-        val subtitleTracks: Int = 0,
-    ) : UiSignal
 }
 private data class DestructiveRequest(val action: String, val taskIds: Set<String>)
 private data class MediaSourceSelection(val path: String = "", val url: String = "", val title: String = "")
@@ -556,6 +543,7 @@ fun main() {
         height = initialHeight.dp,
     )
     val appIcon = remember { loadDesktopIcon() }
+    var placementBeforePlayback by remember { mutableStateOf(WindowPlacement.Floating) }
     // Native Core owns the sole resident tray; hiding here avoids creating a second AWT tray icon.
     val requestClose = { WorkbenchWindow.hideToTray() }
     var droppedPaths by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -698,6 +686,14 @@ fun main() {
                 }
             },
             onExit = ::exitApplication,
+            onPlayerFullscreen = { fullscreen ->
+                if (fullscreen && state.placement != WindowPlacement.Fullscreen) {
+                    placementBeforePlayback = state.placement
+                    state.placement = WindowPlacement.Fullscreen
+                } else if (!fullscreen && state.placement == WindowPlacement.Fullscreen) {
+                    state.placement = placementBeforePlayback
+                }
+            },
             titleBar = { WindowTitleBar(appIcon, state.placement == WindowPlacement.Maximized, { window.isMinimized = true }, { state.placement = if (state.placement == WindowPlacement.Maximized) WindowPlacement.Floating else WindowPlacement.Maximized }, requestClose) },
         )
         }
@@ -716,7 +712,7 @@ internal fun auditSettingsTab(surface: String): String? = when (surface) {
 }
 
 @Composable @Preview
-fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenterAvailable: Boolean = false, presenterProbeComplete: Boolean = false, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
+fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenterAvailable: Boolean = false, presenterProbeComplete: Boolean = false, externalDropPaths: List<String> = emptyList(), externalDropActive: Boolean = false, onExternalDropConsumed: () -> Unit = {}, onAttention: () -> Unit = {}, onExit: () -> Unit = {}, onPlayerFullscreen: (Boolean) -> Unit = {}, titleBar: @Composable () -> Unit = {}) {
     val visualFixture = remember { System.getenv("HLS_UI_AUDIT_SURFACE").orEmpty().lowercase() }
     val visualTheme = remember { System.getenv("HLS_UI_AUDIT_THEME").orEmpty().lowercase() }
     var filter by remember { mutableStateOf(TaskFilter.ALL) }
@@ -752,6 +748,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var eventSequence by remember { mutableLongStateOf(0) }
     var notice by remember { mutableStateOf<UiSignal.Notice?>(null) }
     val shellFocus = remember { FocusRequester() }
+    var playerTaskId by remember { mutableStateOf<String?>(null) }
+    var playerOverlayVisible by remember { mutableStateOf(false) }
+    var playerOpenRequest by remember { mutableIntStateOf(0) }
     var probeResult by remember { mutableStateOf<UiSignal.Probe?>(null) }
     var probeDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var newTaskProbeBusy by remember { mutableStateOf(false) }
@@ -978,6 +977,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     }
     UiTestStateMirror(selected, visible.size, filter.label, category?.label ?: "", selectedQueueId)
     fun performTaskAction(taskId: String, action: String) {
+        if (action == "play") {
+            playerOverlayVisible = true
+            playerOpenRequest++
+            playerTaskId = taskId
+            return
+        }
         if (action in setOf("delete", "delete_files")) {
             destructiveRequest = DestructiveRequest(action, setOf(taskId))
             return
@@ -999,7 +1004,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 when (action) {
-                    "play" -> EnginePipeClient.playTask(taskId)
                     "open" -> EnginePipeClient.openCompleted(taskId, false)
                     "open_folder" -> EnginePipeClient.openCompleted(taskId, true)
                     "log" -> EnginePipeClient.getTaskLog(taskId)
@@ -1314,7 +1318,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                     mediaUrl = signal.mediaUrl.ifBlank { castSession?.mediaUrl.orEmpty() },
                                 )
                             }
-                            is UiSignal.Player -> Unit
                         }
                     })
                     if (attentionRequired) onAttention()
@@ -1364,7 +1367,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
         }
     }
-    LaunchedEffect(Unit) { shellFocus.requestFocus() }
+    LaunchedEffect(playerTaskId) { if (playerTaskId == null) shellFocus.requestFocus() }
     val taskActionLimiter = remember { Semaphore(8) }
     fun launchTaskActions(entries: List<Pair<String, String>>) {
         if (entries.isEmpty()) {
@@ -1392,9 +1395,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         queueAssignTaskIds.isNotEmpty() || detailTaskId != null || extensionDialog || activeHandoff != null ||
         probeResult != null || torrentDraft != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
         (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
-        preparedUpdate != null || powerPending != null || destructiveRequest != null || aboutDialog || noticesDialog
+        preparedUpdate != null || powerPending != null || destructiveRequest != null || aboutDialog || noticesDialog || playerOverlayVisible
     CompositionLocalProvider(LocalWorkbenchPalette provides if (darkMode) darkPalette else lightPalette) {
-    Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().clip(RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().onPreviewKeyEvent { playerOverlayVisible }.clip(RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
         titleBar()
         DesktopToolbar(query, { query = it }, { newTaskUrl = ""; newTaskDialog = true }, {
             scope.launch {
@@ -1475,6 +1479,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 }
         }
         ConnectionStatus(tasks, engineText, extensionText)
+    }
+    playerTaskId?.let { taskId -> key(taskId) {
+        LocalVideoPlayer(taskId, tasks.firstOrNull { it.id == taskId }?.source,
+            onClose = { playerTaskId = null; playerOverlayVisible = false }, onFullscreen = onPlayerFullscreen,
+            onModalChanged = { playerOverlayVisible = it }, openRequest = playerOpenRequest)
+    } }
     }
     if (externalDropActive || visualFixture == "drop") {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -2218,19 +2228,6 @@ private fun applyEngineEvent(
             positionSeconds = event["position_seconds"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
             durationSeconds = event["duration_seconds"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
             positionAvailable = event["position_available"]?.jsonPrimitive?.content == "true",
-        )
-        "player_session" -> UiSignal.Player(
-            active = event["active"]?.jsonPrimitive?.content == "true",
-            title = event["title"]?.jsonPrimitive?.content.orEmpty(),
-            taskId = event["task_id"]?.jsonPrimitive?.content.orEmpty(),
-            status = event["status"]?.jsonPrimitive?.content.orEmpty(),
-            paused = event["paused"]?.jsonPrimitive?.content == "true",
-            speed = event["speed"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 1.0,
-            positionSeconds = event["position_seconds"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
-            durationSeconds = event["duration_seconds"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0,
-            positionAvailable = event["position_available"]?.jsonPrimitive?.content == "true",
-            audioTracks = event["audio_tracks"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
-            subtitleTracks = event["subtitle_tracks"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
         )
         else -> null
     }
@@ -3084,7 +3081,7 @@ private class ContextMenuPositionProvider(private val pointer: IntOffset) : Popu
 @Composable private fun TaskMenuEntries(task: DownloadTask, dismiss: () -> Unit, onDetails: () -> Unit, onAction: (String) -> Unit, actions: List<String> = taskMenuActions(task.source), includeDetails: Boolean = true) {
     if (includeDetails) DropdownMenuItem(text = { Text("详情与日志", fontSize = TypeScale.body, color = ink) }, onClick = { dismiss(); onDetails() })
     actions.forEach { action ->
-        DropdownMenuItem(text = { Text(actionLabel(action), fontSize = TypeScale.body, color = ink) }, onClick = { dismiss(); onAction(action) })
+        DropdownMenuItem(text = { Text(if (action == "play") taskPlayLabel(task.source) else actionLabel(action), fontSize = TypeScale.body, color = ink) }, onClick = { dismiss(); onAction(action) })
     }
     if (includeDetails && task.status == "排队中") {
         HorizontalDivider(color = border)
@@ -3093,6 +3090,7 @@ private class ContextMenuPositionProvider(private val pointer: IntOffset) : Popu
         }
     }
 }
+private fun taskPlayLabel(task: TaskDto) = if (task.status.lowercase() in setOf("completed", "done")) "播放" else "边播边下"
 private fun taskProtocolLabel(task: TaskDto) = when {
     task.resourceKind.equals("hls", true) -> "HLS"
     task.resourceKind.equals("dash", true) -> "DASH"
@@ -3949,7 +3947,7 @@ private fun HarvestDialog(
         }
     }, actions = {
         val mediaCapable = taskSupportsMediaActions(task.source)
-        if (mediaCapable && (task.source.playbackReady || task.source.resourceKind in setOf("hls", "dash", "live"))) DialogSecondary("播放") { onAction("play") }
+        if (mediaCapable && task.source.playbackReady) DialogSecondary(taskPlayLabel(task.source)) { onAction("play") }
         if (mediaCapable && task.source.playbackReady) DialogSecondary("投屏") { onAction("cast") }
         if (mediaCapable && task.source.playbackReady) DialogSecondary("TVBox") { onAction("push_tvbox") }
         DialogSecondary("站点规则") { onAction("save_site_profile") }

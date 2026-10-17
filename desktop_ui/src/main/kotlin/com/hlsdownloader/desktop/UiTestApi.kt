@@ -32,6 +32,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -260,9 +261,11 @@ internal object UiTestState {
      * 「对话框已打开」的错误结论（把关掉之前残留的 `dialog.secondary.取消` 当成了证据）。
      */
     @Volatile private var controlBounds: Map<String, List<Int>> = emptyMap()
+    private val controlRegistrations = linkedMapOf<Any, Pair<String, List<Int>>>()
 
-    fun reportControlBounds(name: String, left: Int, top: Int, right: Int, bottom: Int) {
+    fun reportControlBounds(name: String, left: Int, top: Int, right: Int, bottom: Int, owner: Any) {
         if (name.isBlank()) return
+        controlRegistrations[owner] = name to listOf(left, top, right, bottom)
         val next = controlBounds.toMutableMap()
         next[name] = listOf(left, top, right, bottom)
         controlBounds = next
@@ -274,10 +277,12 @@ internal object UiTestState {
      * 只注册不注销时，条目会带着最后一帧的非零边框一直留着，于是"这个控件此刻
      * 在不在屏上"根本没法从 `controlBounds` 判断。
      */
-    fun clearControlBounds(name: String) {
-        if (name.isBlank() || !controlBounds.containsKey(name)) return
+    fun clearControlBounds(name: String, owner: Any) {
+        if (controlRegistrations.remove(owner) == null) return
+        // 主界面与 PiP 交接时，旧控件退出不能删除新宿主已经注册的同名控件。
         val next = controlBounds.toMutableMap()
-        next.remove(name)
+        val remaining = controlRegistrations.values.lastOrNull { it.first == name }?.second
+        if (remaining == null) next.remove(name) else next[name] = remaining
         controlBounds = next
     }
 
@@ -387,12 +392,14 @@ internal object UiTestState {
  */
 @Composable
 internal fun Modifier.reportControlBounds(name: String): Modifier {
+    val owner = remember(name) { object { var active = true } }
     // 离开组合就注销，`controlBounds` 才等于"此刻屏上真实存在的控件"。
     DisposableEffect(name) {
-        onDispose { runCatching { UiTestState.clearControlBounds(name) } }
+        onDispose { owner.active = false; runCatching { UiTestState.clearControlBounds(name, owner) } }
     }
     return this.then(
         Modifier.onGloballyPositioned { coordinates ->
+            if (!owner.active) return@onGloballyPositioned
             val origin = coordinates.positionInWindow()
             val size = coordinates.size
             runCatching {
@@ -402,6 +409,7 @@ internal fun Modifier.reportControlBounds(name: String): Modifier {
                     origin.y.toInt(),
                     (origin.x + size.width).toInt(),
                     (origin.y + size.height).toInt(),
+                    owner,
                 )
             }
         }
@@ -835,11 +843,12 @@ internal class UiTestApi private constructor(
     }
 
     companion object {
-        fun startIfEnabled(window: Window): UiTestApi? {
+        fun startIfEnabled(window: Window, portVariable: String = "HLS_UI_TEST_PORT"): UiTestApi? {
             if (System.getenv("HLS_UI_TEST_API") != "1") return null
+            if (portVariable != "HLS_UI_TEST_PORT" && System.getenv(portVariable) == null) return null
             val token = System.getenv("HLS_UI_TEST_TOKEN").orEmpty()
             require(token.length >= 16) { "HLS_UI_TEST_TOKEN must contain at least 16 characters" }
-            val requestedPort = System.getenv("HLS_UI_TEST_PORT")?.toIntOrNull() ?: 19739
+            val requestedPort = System.getenv(portVariable)?.toIntOrNull() ?: 19739
             require(requestedPort == 0 || requestedPort in 1024..65535) { "HLS_UI_TEST_PORT is invalid" }
             val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), requestedPort), 8)
             val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -855,7 +864,7 @@ internal class UiTestApi private constructor(
             server.executor = executor
             api.installRoutes()
             server.start()
-            System.getenv("HLS_UI_TEST_PORT_FILE")?.takeIf(String::isNotBlank)?.let { file ->
+            System.getenv("HLS_UI_TEST_PORT_FILE")?.takeIf { it.isNotBlank() && portVariable == "HLS_UI_TEST_PORT" }?.let { file ->
                 val path = Path.of(file).toAbsolutePath().normalize()
                 path.parent?.let(Files::createDirectories)
                 Files.writeString(path, api.port.toString(), StandardCharsets.UTF_8)

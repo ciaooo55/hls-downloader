@@ -1,10 +1,11 @@
 import { browser } from 'wxt/browser'
 import { captureSubtitleAudio } from './subtitleAudio'
-import { prefetchSubtitleAudio, type PrefetchAudio } from './subtitlePrefetch'
+import type { MediaResource } from './resources'
 import { subtitlePage, subtitleSettings, visibleSubtitle, type SubtitleCue, type SubtitleSettings } from './subtitleSettings'
 
-export function installSubtitleContent(ctx: { onInvalidated(callback: () => void): void }): (node: ParentNode) => void {
-  const players = new Map<HTMLMediaElement, { id: string; host: HTMLElement; button: HTMLButtonElement; caption: HTMLElement; source: HTMLElement; status: HTMLElement; back: HTMLButtonElement; next: HTMLButtonElement; earlier: HTMLButtonElement; later: HTMLButtonElement }>()
+export function installSubtitleContent(ctx: { onInvalidated(callback: () => void): void },
+  resolveSource: (media: HTMLMediaElement) => MediaResource | undefined): (node: ParentNode) => void {
+  const players = new Map<HTMLMediaElement, { id: string; host: HTMLElement; button: HTMLButtonElement; caption: HTMLElement; source: HTMLElement; status: HTMLElement; back: HTMLButtonElement; next: HTMLButtonElement; earlier: HTMLButtonElement; later: HTMLButtonElement; hold: HTMLButtonElement }>()
   let nextId = 0
   const documentId = [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-')
   let settings: SubtitleSettings = subtitleSettings(null)
@@ -15,7 +16,14 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   let error = ''
   let epoch = 0
   let stopCapture: (() => void | Promise<void>) | undefined
-  let prefetch: PrefetchAudio | undefined
+  let readyEnd = 0
+  let preparing = false
+  let resumeAfterPrepare = false
+  let resumePending = false
+  let sourceId = ''
+  let audioTrackId = ''
+  const trackIdentity = (media: HTMLMediaElement) => JSON.stringify(Array.from(((media as any).audioTracks || []) as ArrayLike<{ enabled: boolean; language: string; label: string }>)
+    .filter(track => track.enabled).map(track => [track.language, track.label]))
   let capture = ''
   let note = ''
   const cues = new Map<string, SubtitleCue>()
@@ -37,15 +45,28 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       playing: !selected.paused && !selected.ended && !selected.seeking && selected.readyState >= 2, epoch,
     }).catch(() => undefined)
   }
-  const reset = () => { if (selected && sessionId) { epoch++; live = undefined; prefetch?.reset(epoch); clock() } }
+  const reset = () => { if (selected && sessionId) {
+    epoch++; live = undefined; readyEnd = selected.currentTime
+    if (capture === 'prefetch') {
+      preparing = true; resumeAfterPrepare = resumeAfterPrepare || !selected.paused; selected.pause()
+    }
+    clock()
+  } }
+  const rateChanged = () => { clock(); render() }
+  const pauseForBuffer = () => {
+    if (!selected || selected.paused) return
+    preparing = true; resumeAfterPrepare = true; selected.pause()
+  }
   const pick = (media: HTMLMediaElement, id: string) => {
-    if (selected) { selected.removeEventListener('seeking', reset); selected.removeEventListener('ratechange', reset) }
-    stopCapture?.(); stopCapture = undefined; prefetch = undefined; capture = ''; note = ''
+    if (selected) { selected.removeEventListener('seeking', reset); selected.removeEventListener('ratechange', rateChanged) }
+    stopCapture?.(); stopCapture = undefined; capture = ''; note = ''; preparing = false; resumeAfterPrepare = false
     const languages = `${settings.source}:${settings.target}`
     if (selected !== media || sourceUrl !== media.currentSrc || cueLanguages !== languages) cues.clear()
     cueLanguages = languages
     selected = media; sourceUrl = media.currentSrc; sessionId = id; epoch = 0; status = 'connecting'; error = ''; live = undefined
-    selected.addEventListener('seeking', reset); selected.addEventListener('ratechange', reset)
+    readyEnd = media.currentTime; sourceId = resolveSource(media)?.id || ''
+    audioTrackId = trackIdentity(media)
+    selected.addEventListener('seeking', reset); selected.addEventListener('ratechange', rateChanged)
     if (!clockTimer) clockTimer = setInterval(() => { clock(); render() }, 250)
     clock(); render()
   }
@@ -97,14 +118,16 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     }
     const earlier = button('提前 0.2s', () => offset(-0.2))
     const later = button('延后 0.2s', () => offset(0.2))
+    const hold = button('保持暂停', () => { resumeAfterPrepare = false; render() })
+    hold.title = '字幕准备完成后保持暂停，由你手动播放'
     const state = document.createElement('span'); state.className = 'status'; state.setAttribute('role', 'status')
-    tools.append(start, back, next, earlier, later, state)
+    tools.append(start, back, next, earlier, later, hold, state)
     const captions = document.createElement('div'); captions.className = 'captions'; captions.setAttribute('aria-live', 'polite')
     const source = document.createElement('div'); source.className = 'line source'
     const caption = document.createElement('div'); caption.className = 'line translation'
     captions.append(source, caption); shadow.append(style, tools, captions)
     document.documentElement.append(host)
-    players.set(media, { id, host, button: start, caption, source, status: state, back, next, earlier, later })
+    players.set(media, { id, host, button: start, caption, source, status: state, back, next, earlier, later, hold })
   }
   const inventory = async () => {
     if (invalidated || reporting) return
@@ -132,7 +155,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
           void send({ type: 'subtitle-capture-error', sessionId, error: '音频尾部未能提交给字幕服务' })
         }
         clearInterval(clockTimer); clockTimer = undefined
-        selected.removeEventListener('seeking', reset); selected.removeEventListener('ratechange', reset)
+        selected.removeEventListener('seeking', reset); selected.removeEventListener('ratechange', rateChanged)
         void send({ type: 'subtitle-stop' }); selected = undefined; sessionId = ''; cues.clear(); live = undefined
       }
       render()
@@ -140,6 +163,24 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   }
   function render() {
     if (invalidated) return
+    if (selected && capture === 'prefetch' && status === 'running') {
+      const currentSource = resolveSource(selected)
+      if (currentSource && currentSource.id !== sourceId || trackIdentity(selected) !== audioTrackId || selected.mediaKeys) {
+        void send({ type: 'subtitle-capture-error', sessionId, error: '播放器音源已切换，请重新开始翻译' })
+        status = 'failed'; preparing = false; resumeAfterPrepare = false
+      } else {
+        const ahead = Math.max(0, readyEnd - selected.currentTime)
+        const remaining = Math.max(0, selected.duration - selected.currentTime)
+        if (!selected.paused && ahead < Math.min(1, remaining) && remaining > .05) pauseForBuffer()
+        if (preparing && ahead >= Math.min(16, 8 * selected.playbackRate, remaining) - .01 && ahead > 0) {
+          preparing = false
+          if (resumeAfterPrepare && !resumePending && !selected.seeking) {
+            resumeAfterPrepare = false; resumePending = true
+            void selected.play().catch(() => { note = '字幕已准备，请点击播放器播放' }).finally(() => { resumePending = false })
+          }
+        }
+      }
+    }
     for (const [media, ui] of players) {
       const rect = media.getBoundingClientRect()
       // Firefox 的原生音频文档以 40px VIDEO 呈现，紧凑控件也需要字幕显示空间。
@@ -155,12 +196,13 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       const active = selected === media && !['stopped', 'failed'].includes(status)
       ui.back.hidden = ui.next.hidden = !allowed || !active && !(selected === media && cues.size)
       ui.earlier.hidden = ui.later.hidden = !active
+      ui.hold.hidden = !active || selected !== media || !preparing || !resumeAfterPrepare
       ui.status.hidden = selected !== media || (!active && !error)
       ui.button.disabled = !allowed
       ui.button.textContent = !allowed ? '字幕翻译已关闭' : active ? '停止翻译' : '翻译字幕'
       ui.button.title = !allowed ? '在 HLS 插件弹窗中开启字幕翻译，检查全局、本站和本页开关' : '在线翻译当前播放器音频'
       ui.status.textContent = selected !== media ? '' : error || (active ? status === 'running'
-        ? `${capture === 'prefetch' ? '音轨预翻译中' : media.paused || media.ended ? '等待播放器播放' : '翻译中'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
+        ? `${capture === 'prefetch' ? `${preparing ? '正在准备字幕' : '提前翻译'} · 已备好 ${Math.max(0, readyEnd - media.currentTime).toFixed(1)} 秒` : media.paused || media.ended ? '等待播放器播放' : '翻译中'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
       const cue = allowed && selected === media ? visibleSubtitle(cues.values(), media.currentTime, settings.offset) : undefined
       // 同传有服务端延迟，最新译文在抵达后短暂显示；回看仍严格使用音频时间轴。
       const recent = capture !== 'prefetch' && allowed && active && live && Date.now() >= live.at + Math.max(0, settings.offset * 1000)
@@ -182,26 +224,21 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     if (message?.type === 'subtitle-select') {
       const media = [...players].find(([, ui]) => ui.id === message.mediaId)?.[0]
       if (!media?.isConnected) { respond({ ok: false, error: '播放器已移除，请重新选择' }); return }
-      pick(media, String(message.sessionId)); respond({ ok: true }); return
+      pick(media, String(message.sessionId))
+      if (message.prefetch) {
+        preparing = true; resumeAfterPrepare = !media.paused; media.pause()
+      }
+      const tracks = Array.from(((media as any).audioTracks || []) as ArrayLike<{ enabled: boolean; label: string; language: string }>)
+      const audioIndex = tracks.findIndex(track => track.enabled)
+      respond({ ok: true, resourceId: sourceId, position: media.currentTime, duration: media.duration,
+        drm: Boolean(media.mediaKeys), audioIndex, audioLabel: tracks[audioIndex]?.label || '', audioLanguage: tracks[audioIndex]?.language || '' })
+      return
     }
     if (message?.type === 'subtitle-prefetch-start' && message.sessionId === sessionId && selected) {
-      const controller = new AbortController()
-      const id = sessionId
-      stopCapture = () => controller.abort()
-      void prefetchSubtitleAudio(selected, controller.signal, epoch, () => id === sessionId && status === 'running',
-        (audio, position, rate, audioEpoch) => {
-          if (id === sessionId) void send({ type: 'subtitle-prefetch-audio', sessionId: id, audio, position, rate,
-            epoch: audioEpoch, mainPosition: selected!.currentTime, capturedAt: Date.now() }).catch(() => undefined)
-        }, reason => { if (id === sessionId) void send({ type: 'subtitle-capture-error', sessionId: id, error: reason }) },
-      ).then(value => {
-        if (id !== sessionId || controller.signal.aborted) { value.stop(); respond({ ok: false }); return }
-        prefetch = value; stopCapture = () => { controller.abort(); value.stop(); prefetch = undefined }
-        respond({ ok: true })
-      }).catch(reason => {
-        if (id === sessionId && !controller.signal.aborted) stopCapture = undefined
-        respond({ ok: false, error: reason instanceof Error ? reason.message : '无法提前读取音轨' })
-      })
-      return true
+      capture = 'prefetch'; preparing = true; readyEnd = selected.currentTime
+      selected.pause()
+      stopCapture = () => { preparing = false; resumeAfterPrepare = false }
+      clock(); render(); respond({ ok: true }); return
     }
     if (message?.type === 'subtitle-capture-start' && message.sessionId === sessionId && selected) {
       const media = selected as HTMLMediaElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream }
@@ -229,7 +266,9 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       return true
     }
     if (message?.type !== 'subtitle-state' || message.sessionId !== sessionId) return
+    if (message.epoch !== epoch) return
     status = message.status; error = message.error || ''; capture = message.capture || ''; note = message.note || ''
+    if (Number.isFinite(message.readyEnd)) readyEnd = Math.max(readyEnd, message.readyEnd)
     if (['failed', 'stopped'].includes(status)) {
       stopCapture?.(); stopCapture = undefined; live = undefined
       clearInterval(clockTimer); clockTimer = undefined
@@ -258,7 +297,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   ctx.onInvalidated(() => {
     invalidated = true; clearInterval(inventoryTimer); clearInterval(clockTimer)
     stopCapture?.(); browser.runtime.onMessage.removeListener(listener)
-    selected?.removeEventListener('seeking', reset); selected?.removeEventListener('ratechange', reset)
+    selected?.removeEventListener('seeking', reset); selected?.removeEventListener('ratechange', rateChanged)
     document.removeEventListener('play', onPlay, true); document.removeEventListener('playing', onPlay, true)
     document.removeEventListener('fullscreenchange', render); window.removeEventListener('scroll', render); window.removeEventListener('resize', render)
     for (const ui of players.values()) ui.host.remove()

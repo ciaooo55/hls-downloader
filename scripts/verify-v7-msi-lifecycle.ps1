@@ -70,7 +70,14 @@ function Get-MsiProperty([string]$Path, [string]$Property) {
 
 function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
     $allArguments = @($Arguments) + @('/norestart', 'REBOOT=ReallySuppress', '/l*v', $LogPath)
-    $quotedArguments = @($allArguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } })
+    $quotedArguments = @($allArguments | ForEach-Object {
+        # MSI 属性有自己的解析规则：只给值加引号，不能把整个 KEY=value 包起来。
+        if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            $Matches[1] + '="' + $Matches[2].Replace('"', '""') + '"'
+        } elseif ($_ -match '[\s"]') {
+            '"' + $_.Replace('"', '""') + '"'
+        } else { $_ }
+    })
     $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $quotedArguments -Wait -PassThru
     return [int]$process.ExitCode
 }

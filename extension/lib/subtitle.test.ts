@@ -1,8 +1,74 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SubtitlePcm } from './subtitlePcm'
 import { waitForSubtitleAudio } from './subtitleAudio'
-import { subtitleAllowed, subtitleSettings, visibleSubtitle } from './subtitleSettings'
+import { subtitleAllowed, subtitleReadyEnd, subtitleSettings, visibleSubtitle } from './subtitleSettings'
 import { parseHlsManifest } from './hlsManifest'
+import { prefetchSubtitleAudio, subtitleWindowEnd } from './subtitlePrefetch'
+
+describe('提前字幕的连续窗口和取消', () => {
+  it('较晚完成的字幕不能跨越未翻译的空洞，回看能复用连续就绪范围', () => {
+    expect(subtitleReadyEnd([[20, 30], [0, 8]], 2)).toBe(8)
+    expect(subtitleReadyEnd([[20, 30], [0, 8], [8, 20]], 2)).toBe(30)
+    expect(subtitleReadyEnd([[0, 8]], 50)).toBe(50)
+  })
+  it('断句跨下载分片连续计时，优先在静音处提交并限制连续讲话窗口', () => {
+    const pcm = new Uint8Array(12 * 32000)
+    const view = new DataView(pcm.buffer)
+    for (let i = 0; i < 3 * 32000; i += 2) view.setInt16(i, 4000, true)
+    expect(subtitleWindowEnd(pcm)).toBe(3.5 * 32000)
+    for (let i = 0; i < pcm.length; i += 2) view.setInt16(i, 4000, true)
+    expect(subtitleWindowEnd(pcm)).toBe(8 * 32000)
+  })
+
+  it('发送保持正常语速，云端未完成时不推进下一个窗口，停止后不再采集', async () => {
+    vi.useFakeTimers()
+    let control: ReturnType<typeof prefetchSubtitleAudio> | undefined
+    try {
+      const prepare = vi.fn(async (position: number, duration: number) => ({ position, duration, audio: btoa('\0'.repeat(duration * 32000)) }))
+      const send = vi.fn(async (_audio: string, _position: number, _epoch: number) => undefined)
+      const commit = vi.fn(async () => undefined)
+      let completed = false
+      control = prefetchSubtitleAudio({ epoch: 0, position: 0, duration: 4,
+        clock: () => ({ position: 0, running: true }), prepare, send, commit,
+        ready: () => completed, failed: reason => { throw new Error(reason) } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(send).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(249)
+      expect(send).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(commit).toHaveBeenCalledWith(0, 2, 0)
+      const sent = send.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(send.mock.calls.length).toBe(sent)
+      completed = true
+      await vi.advanceTimersByTimeAsync(300)
+      expect(send.mock.calls.length).toBeGreaterThan(sent)
+      control.stop()
+      const stopped = send.mock.calls.length
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(send.mock.calls.length).toBe(stopped)
+    } finally { control?.stop(); vi.useRealTimers() }
+  })
+
+  it('拖动时丢弃旧解码响应，只发送新时间轴的音频', async () => {
+    vi.useFakeTimers()
+    let control: ReturnType<typeof prefetchSubtitleAudio> | undefined
+    try {
+      let release!: (value: { position: number; duration: number; audio: string }) => void
+      const prepare = vi.fn().mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+        .mockImplementation(async (position: number, duration: number) => ({ position, duration, audio: btoa('\0'.repeat(duration * 32000)) }))
+      const send = vi.fn(async (_audio: string, _position: number, _epoch: number) => undefined)
+      control = prefetchSubtitleAudio({ epoch: 0, position: 0, duration: 100,
+        clock: () => ({ position: 50, running: true }), prepare, send,
+        commit: async () => undefined, ready: () => false, failed: reason => { throw new Error(reason) } })
+      control.reset(1, 50)
+      release({ position: 0, duration: 1, audio: btoa('\0'.repeat(32000)) })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(send).toHaveBeenCalledWith(expect.any(String), 50, 1)
+      expect(send.mock.calls.every(call => call[2] === 1)).toBe(true)
+    } finally { control?.stop(); vi.useRealTimers() }
+  })
+})
 
 describe('字幕的实际行为边界', () => {
   it('自动播放权限或媒体请求不结束时启动会失败，成功和失败都不遗留定时器', async () => {

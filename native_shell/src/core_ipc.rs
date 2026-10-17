@@ -136,6 +136,11 @@ pub enum CorePipeRequest {
         request_id: u64,
         request: Value,
     },
+    PlayerThumbnail {
+        request_id: u64,
+        task_id: String,
+        seconds: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -308,6 +313,10 @@ pub enum CorePipeResponse {
     Subtitle {
         request_id: u64,
         result: Value,
+    },
+    PlayerThumbnail {
+        request_id: u64,
+        jpeg_base64: String,
     },
     Error {
         request_id: Option<u64>,

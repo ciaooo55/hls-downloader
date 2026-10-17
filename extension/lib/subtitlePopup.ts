@@ -30,7 +30,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   const originalLabel = node('label'); originalLabel.append(originals, node('span', '显示原文'))
   const prefetch = node('input'); prefetch.type = 'checkbox'; prefetch.dataset.subtitlePrefetch = 'true'
   const prefetchLabel = node('label'); prefetchLabel.append(prefetch, node('span', '提前翻译音轨（最多 30 秒）'))
-  const prefetchHelp = node('small', '可独立读取的点播音轨可在暂停时预翻译，再用“下一句”快进。无法预取时使用实时采集。')
+  const prefetchHelp = node('small', '点播会先暂停准备字幕，再按播放位置滚动预取音频；显示的是已完成翻译的时长。准备期间可停止翻译。直播及无法确认音源的网页请关闭此项，使用实时采集。')
   const player = node('select'); player.setAttribute('aria-label', '字幕播放器'); player.className = 'subtitle-player'
   const start = node('button', '开始翻译'); start.className = 'hlsd-button primary'; start.dataset.subtitleStart = 'true'
   const actionRow = node('div'); actionRow.className = 'subtitle-row'; actionRow.append(player, start)
@@ -87,7 +87,9 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       live = Boolean(state.session && !['stopped', 'failed'].includes(state.session.status))
       const playing = (state.players || []).some((p: any) => p.mediaId === state.session?.mediaId && p.frameId === state.session?.frameId && p.playing)
       status.textContent = !settings.enabled ? '全局已关闭' : !state.allowed ? '当前页已关闭' : live
-        ? state.session.status === 'running' ? state.session.capture === 'prefetch' ? '音轨预翻译中' : playing ? '翻译中' : '等待播放器播放' : '连接中' : '已开启 · 待启动'
+        ? state.session.status === 'running' ? state.session.capture === 'prefetch'
+          ? `提前翻译 · 已备好 ${Math.max(0, (state.session.readyEnd || 0) - (state.session.clock?.position || 0)).toFixed(1)} 秒`
+          : playing ? '翻译中' : '等待播放器播放' : '连接中' : '已开启 · 待启动'
       start.textContent = live ? '停止翻译' : '开始翻译'
       const options = (state.players || []).map((p: any, index: number) => ({ value: `${p.frameId}:${p.mediaId}`, label: `播放器 ${index + 1}${p.playing ? ' · 播放中' : ''} · ${String(p.label).slice(0, 36)}` }))
       const old = player.value

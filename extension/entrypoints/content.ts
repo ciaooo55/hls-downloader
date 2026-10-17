@@ -48,7 +48,6 @@ export default defineContentScript({
   // producing one denied chrome-extension request on every page.
   cssInjectionMode: 'manual',
   async main(ctx) {
-    const discoverSubtitlePlayers = installSubtitleContent(ctx)
     const pendingResourceWrites = new Set<Promise<unknown>>()
     const eventVideo = (event: Event): HTMLVideoElement | null => {
       const path = typeof event.composedPath === 'function' ? event.composedPath() : []
@@ -80,6 +79,14 @@ export default defineContentScript({
     document.addEventListener('play', rememberPendingPlayback, true)
     document.addEventListener('playing', rememberPendingPlayback, true)
     const resources = new Map<string, MediaResource>()
+    let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
+    const discoverSubtitlePlayers = installSubtitleContent(ctx, media => {
+      const candidates = playerPlaybackResources([...resources.values()], media instanceof HTMLVideoElement
+        ? playbackByVideo.get(media) || null : { sourceUrls: [media.currentSrc], startedAt: 0 }, 8)
+      const exact = candidates.filter(resource => resourceMatchesPlaybackSource(resource, media.currentSrc))
+      const choices = exact.length ? exact : candidates
+      return choices.length === 1 ? choices[0] : undefined
+    })
     // The UI mount below is asynchronous. Capture bridge/webRequest messages
     // during that window instead of losing the first manifest from a fast MSE
     // player (which otherwise leaves the overlay in “正在识别” forever).
@@ -224,7 +231,6 @@ export default defineContentScript({
     // A page can contain several players.  Keep playback evidence per element
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
-    let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
     const discoveryStarted = new WeakMap<HTMLVideoElement, number>()
     const discoveryWaitMs = 12_000
     const knownVideos = new Set<HTMLVideoElement>()

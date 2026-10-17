@@ -25,6 +25,8 @@ from smoke_v7_transfer_performance import free_port
 
 
 def run(args):
+    if args.extras_stage == "destructive":
+        assert os.environ.get("HLS_VM_ACCEPTANCE") == "1", "Destructive acceptance is Sandbox-only"
     runtime, evidence = args.runtime.resolve(), args.report.resolve().parent
     evidence.mkdir(parents=True, exist_ok=True)
     report = {"passed": False, "runtime": str(runtime), "checks": [], "controls": {}, "feedback": [],
@@ -502,7 +504,7 @@ def run(args):
             wait(lambda: not any(n["name"] == "保存队列" and "showing" in n["states"] for n in tree()),
                  "Queue manager did not close after cancel", 5)
 
-        if args.start_at not in ("functional", "extras", "dialogs", "files", "drop", "torrent", "feedback", "hover"):
+        if args.start_at in ("main", "settings"):
             click("设置")
             node("保存设置")
             started_settings = args.settings_start_tab == "通用"
@@ -723,11 +725,15 @@ def run(args):
                 node("链接列表")
                 focus_text_field()
                 enter(url+"?batch=1\ninvalid input\n"+url+"?batch=2")
-                node("有效 2 / 输入 3 条链接")
+                node("第 2 行链接无效，请修正后创建")
+                assert "enabled" not in node("创建 3 个任务", True)["states"]
+                assert not any("batch=" in t["url"] for t in tasks())
+                enter(url+"?batch=1\n"+url+"?batch=2", replace=True)
+                node("共 2 条链接")
                 click("创建 2 个任务")
                 wait(lambda: len([t for t in tasks() if "batch=" in t["url"] and t["status"] == "completed"]) == 2,
                      "Batch button did not complete both valid downloads", 90)
-                record("batch form rejects invalid line and downloads two valid links")
+                record("batch blocks invalid input, then downloads both corrected links")
 
                 click("页面抓取")
                 node("网页地址")
@@ -895,9 +901,11 @@ def run(args):
                 response = core({"type": "command", "request_id": 36, "command": {"kind": "player_control", "action": "status"}})
                 return next((e["event"] for e in response.get("events", []) if e["event"].get("kind") == "player_session"), {})
             wait(lambda: player_status().get("position_available"), "Local video did not open", 60)
+            wait(lambda: "video.surface" in ui("state")["controlBounds"], "Local video did not open in the workbench overlay", 15)
             assert not any(key.startswith("player.") for key in ui("state")["controlBounds"]), "Local playback opened a detached control HUD"
-            core({"type": "command", "request_id": 37, "command": {"kind": "player_control", "action": "stop"}})
-            record("local video opens without a detached control HUD; in-video controls require the Sandbox player acceptance")
+            pointer("video.关闭播放器，下载继续")
+            wait(lambda: not player_status().get("active") and "video.surface" not in ui("state")["controlBounds"], "Local video close did not release the overlay", 15)
+            record("local video opens in the workbench overlay and closes using its own close button")
             settings_to_restore["completion_sound_enabled"] = original_settings["completion_sound_enabled"]
             pointer("toolbar.设置")
             click("完成提示音")
@@ -913,6 +921,51 @@ def run(args):
             Path(ours[0]["output_path"]).unlink()
             created_tasks.discard(ours[0]["task_id"])
             record("confirmed delete removes task and preserves completed file")
+            if args.extras_stage == "destructive":
+                victim = ours[1]
+                victim_file = Path(victim["output_path"])
+                pointer("taskrow." + victim["task_id"])
+                wait(lambda: ui("state")["selectedTaskIds"] == [victim["task_id"]], "Delete-file target not selected", 10)
+
+                def open_file_delete():
+                    left, top, right, bottom = ui("state")["controlBounds"]["taskrow." + victim["task_id"]]
+                    action("right_click", x=(left + right)//2, y=(top + bottom)//2)
+                    click("删除任务和文件")
+                    node("任务记录、已下载文件和过程文件都会删除。")
+
+                open_file_delete()
+                click("取消", -1)
+                assert victim_file.is_file() and any(t["task_id"] == victim["task_id"] for t in snapshot())
+                open_file_delete()
+                click("确认删除")
+                wait(lambda: all(t["task_id"] != victim["task_id"] for t in snapshot()), "Delete-files left its task", 15)
+                wait(lambda: not victim_file.exists(), "Delete-files left the completed file", 15)
+                created_tasks.discard(victim["task_id"])
+                record("delete task and file: cancel preserves both; confirm removes both")
+
+                pending_response = core({"type":"command", "request_id":40, "command":{"kind":"create_task", "spec":{
+                    "url":f"http://127.0.0.1:{fixture.server_port}/queued-{token_url}.bin", "resource_kind":"file", "filename":"pending-"+token_url+".bin",
+                    "scheduled_start_at":"2999-01-01T00:00:00Z"}}})
+                pending = next(e["event"]["snapshot"] for e in pending_response["events"] if e["event"]["kind"] == "task_created")
+                created_tasks.add(pending["task_id"])
+                assert any(t["task_id"] == pending["task_id"] and t["status"] == "queued" for t in snapshot())
+                completed = [t for t in snapshot() if t["status"] == "completed"]
+                completed_ids = {t["task_id"] for t in completed}
+                preserved = {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for t in completed
+                             if (p := Path(t["output_path"])).is_file()}
+                assert completed_ids and preserved
+                pointer("content_header.clear_completed")
+                node("只删除任务记录，已完成文件将保留。")
+                click("取消", -1)
+                assert completed_ids.issubset({t["task_id"] for t in snapshot()})
+                pointer("content_header.clear_completed")
+                click("确认删除")
+                wait(lambda: not completed_ids.intersection(t["task_id"] for t in snapshot()), "Clear-completed left completed tasks", 20)
+                assert any(t["task_id"] == pending["task_id"] and t["status"] == "queued" for t in snapshot())
+                assert all(Path(p).is_file() and hashlib.sha256(Path(p).read_bytes()).hexdigest() == digest
+                           for p, digest in preserved.items())
+                created_tasks.difference_update(completed_ids)
+                record("clear completed: cancel preserves records; confirm removes completed records, preserves queued task and file SHA256")
             focus_text_field()
             enter("")
         if args.start_at == "torrent":
@@ -1465,7 +1518,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--extras-stage", choices=("all", "selection"), default="all")
+    parser.add_argument("--extras-stage", choices=("all", "selection", "destructive"), default="all")
     parser.add_argument("--functional-stage", choices=("all", "resume", "batch", "queue"), default="all")
     parser.add_argument("--settings-start-tab", default="通用")
     parser.add_argument("--torrent-source", choices=("torrent", "magnet"), default="torrent")

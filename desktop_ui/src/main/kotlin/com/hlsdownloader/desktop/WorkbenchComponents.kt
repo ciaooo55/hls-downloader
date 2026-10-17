@@ -56,6 +56,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
@@ -743,6 +744,7 @@ internal fun Slider(
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     colors: SliderColors = SliderDefaults.colors(),
     accessibilityLabel: String? = null,
+    enabled: Boolean = true,
 ) {
     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
     val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
@@ -773,13 +775,17 @@ internal fun Slider(
             .semantics {
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
                 progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(valueRange), valueRange)
+                if (!enabled) disabled()
                 setProgress { target ->
-                    onValueChange(target.coerceIn(valueRange))
-                    onValueChangeFinished()
-                    true
+                    if (enabled) {
+                        onValueChange(target.coerceIn(valueRange))
+                        onValueChangeFinished()
+                    }
+                    enabled
                 }
             }
-            .pointerInput(valueRange) {
+            .pointerInput(valueRange, enabled) {
+                if (!enabled) return@pointerInput
                 detectTapGestures(
                     onPress = {
                         pressing = true
@@ -791,7 +797,8 @@ internal fun Slider(
                     onValueChangeFinished()
                 }
             }
-            .pointerInput(valueRange) {
+            .pointerInput(valueRange, enabled) {
+                if (!enabled) return@pointerInput
                 detectDragGestures(
                     onDragStart = { pressing = true },
                     onDragEnd = { pressing = false; onValueChangeFinished() },

@@ -8,6 +8,7 @@ import hashlib
 import http.server
 import json
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -41,7 +42,6 @@ def command(value):
 
 
 def run(args):
-    root = Path(__file__).resolve().parents[1]
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {'passed': False, 'browser': args.browser, 'media': args.media, 'authenticated': args.authenticated,
               'cross_iframe': args.cross_iframe, 'redirect_init': args.redirect_init,
@@ -73,7 +73,7 @@ def run(args):
         print(name, flush=True)
 
     try:
-        temporary = tempfile.TemporaryDirectory(prefix="browser-progress-", dir=root / ".tool-cache/test-tmp")
+        temporary = tempfile.TemporaryDirectory(prefix="browser-progress-")
         stage = Path(temporary.name)
         site = stage / 'site'
         site.mkdir()
@@ -257,7 +257,11 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
                 driver.set_context('content')
                 popup_url = f'moz-extension://{uuids[addon_id]}/popup.html'
             driver.get(popup_url)
-            driver.execute_async_script("const done=arguments[0];chrome.storage.local.set({authorizedCookieHosts:['127.0.0.1']}).then(()=>done(true))")
+            configured = driver.execute_async_script("""const done=arguments[0];
+                const api=globalThis.browser||chrome;
+                api.storage.local.set({authorizedCookieHosts:['127.0.0.1']})
+                  .then(()=>done({ok:true}),error=>done({ok:false,error:String(error)}));""")
+            assert configured['ok'], configured
         _fit_browser_window(driver)
         media_url = ('https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd' if args.public_dash
                      else origin + ('/chunks/download?token=browser-smoke' if args.media == 'file'
@@ -337,14 +341,14 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
             record('native-browser-context-menu-download-in-media-frame', media_url)
         else:
             ActionChains(driver).move_to_element(target).click().perform()
-        hwnd = wait(presenter_window, 'Independent confirmation missing', 10)
+        hwnd = wait(lambda: presenter_window(runtime=args.runtime), 'Independent confirmation missing', 10)
         assert not user32.IsWindowVisible(workbench), 'Browser offer showed workbench'
         capture(hwnd, args.report.with_name(args.report.stem + '-confirm.png'))
         bounds = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(bounds))
         record('confirmation-window-bounds', [bounds.left, bounds.top, bounds.right, bounds.bottom])
         record('browser-click-only-independent-confirmation', True)
-        click_download_confirmation(input_mode=args.confirmation_input, evidence_path=args.report.with_name('confirmation.json'))
+        click_download_confirmation(input_mode=args.confirmation_input, evidence_path=args.report.with_name('confirmation.json'), runtime=args.runtime)
         report['confirmation_input']=args.confirmation_input
         from PIL import ImageGrab
         time.sleep(.4)
@@ -367,7 +371,7 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
                 report['last_task'] = task
                 assert task['status'] != 'failed', task.get('error_message')
                 if args.media != 'file' and task['status'] == 'downloading' and task['downloaded_bytes'] > 0 and not hud_closed:
-                    hud = presenter_window('下载进度')
+                    hud = presenter_window('下载进度', args.runtime)
                     assert hud, 'Transferring task has no visible HUD'
                     assert user32.GetWindowLongW(hud, -20) & 8, 'HUD is behind browser (not topmost)'
                     samples.append({'bytes': task['downloaded_bytes'], 'speed': task['speed_bytes_per_sec']})
@@ -395,9 +399,9 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
                         user32.SetCursorPos(rect.right-round(26*scale), rect.top+round(27*scale))
                         user32.mouse_event(2, 0, 0, 0, 0)
                         user32.mouse_event(4, 0, 0, 0, 0)
-                        wait(lambda: not presenter_window('下载进度'), 'Close did not hide HUD', 5)
+                        wait(lambda: not presenter_window('下载进度', args.runtime), 'Close did not hide HUD', 5)
                         time.sleep(.6)
-                        assert not presenter_window('下载进度'), 'Progress event reopened dismissed HUD'
+                        assert not presenter_window('下载进度', args.runtime), 'Progress event reopened dismissed HUD'
                         hud_closed = True
                         record('hud-close-keeps-download-running-and-does-not-reopen', True)
                 if task['status'] == 'completed':
@@ -519,11 +523,13 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
 
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser()
     parser.add_argument('--browser', choices=['firefox', 'edge'], required=True)
     parser.add_argument('--extension', type=Path, required=True)
     parser.add_argument('--driver', type=Path, required=True)
     parser.add_argument('--ffmpeg', type=Path, required=True)
+    parser.add_argument('--runtime', type=Path, default=Path(__file__).resolve().parents[1] / '.tool-cache/runtime/HLSDownloader')
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--confirmation-input', choices=['system', 'window'], default='system')
     parser.add_argument('--media', choices=['hls', 'dash', 'file'], default='hls')

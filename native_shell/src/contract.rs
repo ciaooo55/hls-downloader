@@ -672,6 +672,15 @@ pub enum CoreCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerTrack {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub language: String,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CoreEvent {
     Ready {
@@ -858,6 +867,16 @@ pub enum CoreEvent {
         audio_tracks: u32,
         #[serde(default)]
         subtitle_tracks: u32,
+        #[serde(default)]
+        volume: f64,
+        #[serde(default)]
+        muted: bool,
+        #[serde(default)]
+        buffered_end_seconds: f64,
+        #[serde(default)]
+        buffering: bool,
+        #[serde(default)]
+        tracks: Vec<PlayerTrack>,
     },
 }
 

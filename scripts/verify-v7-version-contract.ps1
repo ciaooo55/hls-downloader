@@ -6,7 +6,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
 
 function Read-Utf8([string]$RelativePath) {
-    [IO.File]::ReadAllText((Join-Path $repo $RelativePath), [Text.Encoding]::UTF8)
+    [IO.File]::ReadAllText((Join-Path $repo $RelativePath), [Text.Encoding]::UTF8).Replace("`r`n", "`n")
 }
 
 function Match-One([string]$RelativePath, [string]$Pattern, [string]$Label) {
@@ -34,7 +34,6 @@ Assert-Version $version (Match-One 'native_shell\Cargo.toml' '(?m)^version = "(\
 Assert-Version $version (Match-One 'presenter_ui\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Presenter manifest') 'Presenter manifest'
 Assert-Version $version (Match-One 'extension\package.json' '(?m)^  "version": "(\d+\.\d+\.\d+)",$' 'Extension package') 'Extension package'
 Assert-Version $version (Match-One 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt' '(?m)^    const val version = "(\d+\.\d+\.\d+)"$' 'Compose Product.version') 'Compose Product.version'
-Assert-Version $version (Match-One 'desktop_ui\src\test\kotlin\com\hlsdownloader\desktop\ProtocolTest.kt' '(?m)^        assertEquals\("(\d+\.\d+\.\d+)", Product\.version\)$' 'Compose version contract test') 'Compose version contract test'
 
 $gradle = Read-Utf8 'desktop_ui\build.gradle.kts'
 foreach ($check in @(

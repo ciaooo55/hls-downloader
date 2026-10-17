@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 import traceback
 import uuid
 
@@ -22,7 +23,8 @@ def run(args):
     root.mkdir(parents=True, exist_ok=True)
     fixture = root / 'fixture'
     fixture.mkdir(exist_ok=True)
-    report = {'passed': False, 'checks': []}
+    report = {'passed': False, 'checks': [], 'script_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+              'engine_sha256': hashlib.sha256(args.engine.read_bytes()).hexdigest()}
     process = server = None
     gate = threading.Event()
     requested = threading.Event()
@@ -60,6 +62,15 @@ def run(args):
             '#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",URI="en.vtt"\n'
             '#EXT-X-STREAM-INF:BANDWIDTH=500000,SUBTITLES="subs"\n../base.m3u8\n')
         (subtitles / 'en.vtt').write_text('WEBVTT\n\n00:00:00.000 --> 00:00:02.500\nCleanup subtitle fixture\n')
+        segmented = fixture / 'segmented-subtitles'
+        segmented.mkdir()
+        (segmented / 'index.m3u8').write_text(
+            '#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",URI="captions"\n'
+            '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English CC",LANGUAGE="en",URI="../subtitles/en.vtt"\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=500000,SUBTITLES="subs"\n../base.m3u8\n')
+        (segmented / 'captions').write_text('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:1.5,\nfirst.vtt\n#EXTINF:1.5,\nsecond.vtt\n#EXT-X-ENDLIST\n')
+        (segmented / 'first.vtt').write_text('WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\n00:00:00.000 --> 00:00:01.000\nSegment one\n')
+        (segmented / 'second.vtt').write_text('WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:135000\n\n00:00:00.000 --> 00:00:01.000\nSegment two\n')
         bad = fixture / 'bad'
         bad.mkdir(exist_ok=True)
         (bad / 'index.m3u8').write_text('#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nx.jpeg\n#EXT-X-ENDLIST\n')
@@ -123,15 +134,13 @@ def run(args):
                 decoded = ff('-xerror', '-i', output, '-f', 'null', 'NUL')
                 assert decoded.returncode == 0, decoded.stderr.decode(errors='replace')
                 work = work_root / '.hls-tasks' / task['task_id']
-                assert (work / 'published.path').is_file(), 'Published output marker was lost'
-                temporary = [work / name for name in (
-                    'segments', 'audio', 'subs', 'live-subtitles', 'merged.mp4', 'muxed.mp4',
-                    'local.m3u8', 'init.mp4', 'vod_segments.json', 'dash_vod_segments.json')]
-                temporary += list(work.glob('seg-*.m4s'))
                 if keep_temp:
                     assert (work / 'segments').is_dir(), 'Opted-in segments were deleted'
                 else:
-                    assert not any(path.exists() for path in temporary), f'Media cache remains: {work}'
+                    deadline = time.monotonic() + 10
+                    while work.exists() and time.monotonic() < deadline:
+                        time.sleep(.05)
+                    assert not work.exists(), f'Task cache or metadata remains: {work}'
                 return output
 
             tid = create('jpeg')
@@ -166,6 +175,16 @@ def run(args):
             sidecars = list(subtitle_output.parent.glob(subtitle_output.stem + '.*.vtt'))
             assert sidecars and any('Cleanup subtitle fixture' in p.read_text() for p in sidecars)
             report['checks'].append('HLS direct WebVTT subtitles copied beside output before subtitle cache cleanup')
+            subtitle_output = verify(settled(create('segmented-subtitles')))
+            sidecars = list(subtitle_output.parent.glob(subtitle_output.stem + '.*.vtt'))
+            assert len(sidecars) == 2, sidecars
+            segmented_sidecar = next(p for p in sidecars if 'Segment one' in p.read_text())
+            assert any('Cleanup subtitle fixture' in p.read_text() for p in sidecars), sidecars
+            text = segmented_sidecar.read_text()
+            assert 'Segment one' in text and 'Segment two' in text and '00:00:01.500 --> 00:00:02.500' in text, text
+            srt = segmented_sidecar.with_suffix('.srt')
+            assert srt.is_file() and '00:00:01,500 --> 00:00:02,500' in srt.read_text()
+            report['checks'].append('HLS extensionless segmented WebVTT merged with timestamp maps; same-language tracks preserved as separate VTT/SRT sidecars and cache cleaned')
             send(ipc, {'type': 'store_settings', 'request_id': 3, 'values': {'keep_temp_files': True}})
             verify(settled(create('keep')), keep_temp=True)
             report['checks'].append('keep_temp_files=true preserves media segments')

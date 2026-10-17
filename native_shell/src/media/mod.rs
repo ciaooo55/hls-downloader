@@ -5,6 +5,8 @@ mod dash;
 mod harness;
 mod hls;
 mod merge;
+pub(crate) mod preview;
+pub(crate) use merge::locate_ffmpeg;
 mod subtitles;
 
 /// Resolve a playlist/manifest URI against `base`. Absolute schemes other than

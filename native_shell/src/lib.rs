@@ -71,6 +71,8 @@ mod playback;
 #[cfg(feature = "full-core")]
 mod player;
 #[cfg(feature = "full-core")]
+mod player_thumbnail;
+#[cfg(feature = "full-core")]
 mod power_action;
 mod profile_paths;
 #[cfg(feature = "full-core")]
@@ -87,6 +89,8 @@ mod sleep_inhibit;
 mod startup;
 #[cfg(feature = "full-core")]
 mod store;
+#[cfg(feature = "full-core")]
+mod subtitle_audio_source;
 #[cfg(feature = "full-core")]
 mod subtitle_translate;
 #[cfg(feature = "full-core")]
@@ -116,7 +120,7 @@ pub use connection_parts::{
 };
 pub use contract::{
     AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate,
-    MediaPushRequest, MirrorStatus, QueueProfile, ResourceKind, ResourceOffer, StreamVariant,
+    MediaPushRequest, MirrorStatus, PlayerTrack, QueueProfile, ResourceKind, ResourceOffer, StreamVariant,
     TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry, TorrentFileSelection, DEFAULT_QUEUE_ID,
     LEGAL_TERMS_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };

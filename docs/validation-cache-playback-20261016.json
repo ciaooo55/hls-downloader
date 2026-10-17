@@ -1,0 +1,485 @@
+{
+  "date": "2026-10-16",
+  "source_commit": "4464fa1324d3493a44a5dfc23baa4972b37e1aa2",
+  "worktree_dirty": true,
+  "signed": false,
+  "github_published": false,
+  "host_new_install": false,
+  "core_tests": {
+    "playback": 9,
+    "core_service": 12,
+    "http": 55,
+    "hls": 25,
+    "total": 219,
+    "download_worker": 87,
+    "core_runtime": 13,
+    "dash": 16,
+    "player": 2
+  },
+  "ui_tests": {
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "tests": 124
+  },
+  "extension_tests": {
+    "files": 50,
+    "tests": 380
+  },
+  "test_total": 723,
+  "firefox_lint": {
+    "errors": 0,
+    "notices": 0,
+    "warnings": 0
+  },
+  "build_results": {
+    "firefox_sources": true,
+    "chromium": true,
+    "firefox": true,
+    "ui_jar": true,
+    "typecheck": true,
+    "core_release": true
+  },
+  "playback": {
+    "checks": [
+      "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+      "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+      "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+      "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+      "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+      "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+      "external: unfinished download decodes, exposes full duration and seeks to 80%",
+      "external: same-window final switch; complete decode; cache removed; delete preserves output",
+      "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+      "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+      "http: unfinished download decodes, exposes full duration and seeks to 80%",
+      "http: same-window final switch; complete decode; cache removed; delete preserves output",
+      "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+      "closing playback during download stays closed after completion and allows cleanup",
+      "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output"
+    ],
+    "engine_sha256": "151aa2c8b47b0b9b03f493b6a050eced4836a1349661fc05cc16a167d24f38c0",
+    "performance": {
+      "core_idle": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "rss_sum_bytes": 12886016,
+        "processes": {
+          "5840": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.015625,
+            "rss": 12886016,
+            "private": 2916352
+          }
+        }
+      },
+      "downloading": {
+        "elapsed_seconds": 3.0160000000000053,
+        "cpu_one_core_percent": 1.0361405835543747,
+        "cpu_machine_percent": 0.12951757294429683,
+        "rss_sum_bytes": 15585280,
+        "processes": {
+          "5840": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.0625,
+            "rss": 15585280,
+            "private": 5517312
+          }
+        }
+      },
+      "downloading_and_playing": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 142.70833333333331,
+        "cpu_machine_percent": 17.838541666666664,
+        "rss_sum_bytes": 154120192,
+        "processes": {
+          "5840": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.28125,
+            "rss": 16445440,
+            "private": 5550080
+          },
+          "760": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 8.046875,
+            "rss": 137674752,
+            "private": 129585152
+          }
+        }
+      }
+    },
+    "passed": true,
+    "window_switch": {
+      "before": [
+        {
+          "hwnd": 524448,
+          "pid": 4284,
+          "rect": [
+            175,
+            59,
+            761,
+            389
+          ]
+        }
+      ],
+      "after": [
+        {
+          "hwnd": 524448,
+          "pid": 4284,
+          "rect": [
+            175,
+            59,
+            761,
+            389
+          ]
+        }
+      ]
+    }
+  },
+  "cleanup": {
+    "passed": true,
+    "checks": [
+      "jpeg: MP4 full decode; failed merge preserves segments; retry reuses and then cleans segments",
+      "png: full decode; renamed output still resolves; existing output preserved; cache cleaned",
+      "bin: MP4 format, audio/video, full decode and cache cleanup",
+      "ended live HLS: full decode and cache cleanup",
+      "HLS direct WebVTT subtitles copied beside output before subtitle cache cleanup",
+      "HLS extensionless segmented WebVTT merged with timestamp maps; same-language tracks preserved as separate VTT/SRT sidecars and cache cleaned",
+      "keep_temp_files=true preserves media segments",
+      "DASH: custom work directory; full decode; video/audio fragments and merged intermediates cleaned",
+      "invalid media fails at merging, exposes stderr and retains segments"
+    ],
+    "script_sha256": "1d4da090e6de6a9cec604a6bbeab74c74a003f4a3b2f1c266de720aeed09cf34",
+    "engine_sha256": "151aa2c8b47b0b9b03f493b6a050eced4836a1349661fc05cc16a167d24f38c0"
+  },
+  "player": {
+    "passed": true,
+    "engine_sha256": "151aa2c8b47b0b9b03f493b6a050eced4836a1349661fc05cc16a167d24f38c0",
+    "initial": {
+      "audio_tracks": 2,
+      "duration_seconds": 30.037,
+      "paused": false,
+      "position_available": true,
+      "position_seconds": 0.0,
+      "session_active": true,
+      "speed": 1.0,
+      "subtitle_tracks": 2
+    },
+    "keyboard_pause_resume": true,
+    "pause_stable": true,
+    "seek": {
+      "audio_tracks": 2,
+      "duration_seconds": 30.037,
+      "paused": true,
+      "position_available": true,
+      "position_seconds": 15.04,
+      "session_active": true,
+      "speed": 1.0,
+      "subtitle_tracks": 2
+    },
+    "resume_advances": true,
+    "playing_usage": {
+      "sample_seconds": 3.0,
+      "position_before": 16.56,
+      "position_after": 21.12,
+      "cpu_one_core_percent": 68.75,
+      "cpu_machine_percent": 8.59375,
+      "rss_bytes": 124866560,
+      "private_bytes": 103329792
+    },
+    "closes_without_status_polling": true,
+    "reopened": {
+      "audio_tracks": 2,
+      "duration_seconds": 30.037,
+      "paused": false,
+      "position_available": true,
+      "position_seconds": 0.0,
+      "session_active": true,
+      "speed": 1.0,
+      "subtitle_tracks": 2
+    },
+    "osc_pause_resume": true,
+    "osc_close_without_status_polling": true
+  },
+  "installation": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "MSI staged on VM local disk with matching SHA256",
+        "actual": true
+      },
+      {
+        "name": "MSI installs at requested path containing spaces",
+        "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+      },
+      {
+        "name": "default download directory matches Windows Known Folder",
+        "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+      },
+      {
+        "name": "real public MDN video downloads into the default folder with identical bytes",
+        "actual": {
+          "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+          "bytes": 554058,
+          "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+        }
+      },
+      {
+        "name": "installed UI opens visibly and connects to the installed Core",
+        "actual": {
+          "x": 0,
+          "y": 0,
+          "width": 1214,
+          "height": 567,
+          "active": true,
+          "showing": true,
+          "iconCount": 1,
+          "iconWidth": 192,
+          "iconHeight": 192,
+          "scaleX": 1.25,
+          "scaleY": 1.25,
+          "deviceX": 0,
+          "deviceY": 0,
+          "deviceWidth": 1518,
+          "deviceHeight": 709
+        }
+      },
+      {
+        "name": "measured installed UI/Core idle CPU and memory",
+        "actual": {
+          "seconds": 5.0,
+          "logical_cpus": 8,
+          "cpu_one_core_percent": 0.3125,
+          "cpu_machine_percent": 0.0390625,
+          "processes": {
+            "912": {
+              "name": "HLSDownloaderEngine.exe",
+              "cpu": 0.46875,
+              "rss_bytes": 17633280,
+              "private_bytes": 4878336
+            },
+            "4788": {
+              "name": "HLSDownloaderPresenter.exe",
+              "cpu": 0.109375,
+              "rss_bytes": 18190336,
+              "private_bytes": 4075520
+            },
+            "5124": {
+              "name": "HLSDownloader.exe",
+              "cpu": 8.75,
+              "rss_bytes": 190541824,
+              "private_bytes": 252813312
+            },
+            "5212": {
+              "name": "HLSDownloader.exe",
+              "cpu": 0.0,
+              "rss_bytes": 6692864,
+              "private_bytes": 1384448
+            }
+          },
+          "rss_sum_bytes": 233058304,
+          "private_sum_bytes": 263151616
+        }
+      },
+      {
+        "name": "MSI uninstalls and removes its product registration",
+        "actual": true
+      }
+    ],
+    "msi_sha256": "dca68bc346f6b262c4b2887e21f10cec37f9b53e347e98b0d6fab092bdeb971a",
+    "installed_bytes": 675107170,
+    "installed_files": 265,
+    "largest_files": [
+      {
+        "path": "app/resources/ffmpeg.exe",
+        "bytes": 165155840
+      },
+      {
+        "path": "app/resources/ffprobe.exe",
+        "bytes": 164954624
+      },
+      {
+        "path": "app/resources/libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "path": "runtime/lib/modules",
+        "bytes": 54030811
+      },
+      {
+        "path": "app/material-icons-extended-desktop-1.7.3-848bc0f13628d5b3accc94dd3afdfa27.jar",
+        "bytes": 37768805
+      },
+      {
+        "path": "app/resources/HLSDownloaderPresenter.exe",
+        "bytes": 28685824
+      },
+      {
+        "path": "app/resources/HLSDownloaderEngine.exe",
+        "bytes": 14425600
+      },
+      {
+        "path": "app/skiko-windows-x64.dll",
+        "bytes": 14109696
+      },
+      {
+        "path": "runtime/bin/server/jvm.dll",
+        "bytes": 13919872
+      },
+      {
+        "path": "app/icudtl.dat",
+        "bytes": 10468208
+      },
+      {
+        "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+        "bytes": 4740663
+      },
+      {
+        "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+        "bytes": 4069888
+      }
+    ],
+    "installed_components_sha256": {
+      "HLSDownloaderEngine.exe": "151aa2c8b47b0b9b03f493b6a050eced4836a1349661fc05cc16a167d24f38c0",
+      "HLSDownloaderNativeHost.exe": "6bcb41ee19a9a3e586e36546e1c82349c799c00c80052ec40998170aaf94a62e",
+      "HLSDownloaderUpdater.exe": "333435e0a93a9bd9c8b1d34adb930bd4e5e9d5e0419a1847c6e856fe9697d820"
+    },
+    "ui_visible_connected_seconds": 11.312999999999988,
+    "idle": {
+      "seconds": 5.0,
+      "logical_cpus": 8,
+      "cpu_one_core_percent": 0.3125,
+      "cpu_machine_percent": 0.0390625,
+      "processes": {
+        "912": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.46875,
+          "rss_bytes": 17633280,
+          "private_bytes": 4878336
+        },
+        "4788": {
+          "name": "HLSDownloaderPresenter.exe",
+          "cpu": 0.109375,
+          "rss_bytes": 18190336,
+          "private_bytes": 4075520
+        },
+        "5124": {
+          "name": "HLSDownloader.exe",
+          "cpu": 8.75,
+          "rss_bytes": 190541824,
+          "private_bytes": 252813312
+        },
+        "5212": {
+          "name": "HLSDownloader.exe",
+          "cpu": 0.0,
+          "rss_bytes": 6692864,
+          "private_bytes": 1384448
+        }
+      },
+      "rss_sum_bytes": 233058304,
+      "private_sum_bytes": 263151616
+    }
+  },
+  "raw_report_sha256": {
+    "player-controls-perf.json": "3beae0bf9b28cb3fb76f94325585b913701a451c42f231cc93f092a134c23140",
+    "installed-footprint-final.json": "14d6e2924d6ab27ccef8e5ed2fbd5d917b4d0866a6cb94187e55f5b64272933f",
+    "media-cleanup-final.json": "29f6e7991e005d4c377cbdc123b601cf9223cecee69ed166726a4dd333cea731",
+    "download-playback-verified.json": "a325dcee869e1509a65f6f946fee40df198219c2be0acaf37c8c913dea9bc3d4"
+  },
+  "test_log_excerpts": {
+    "ui-build.log": [
+      "BUILD SUCCESSFUL in 9m 31s"
+    ],
+    "core-regression-other.log": [
+      "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 576 filtered out; finished in 8.73s",
+      "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 585 filtered out; finished in 2.12s",
+      "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 592 filtered out; finished in 4.23s",
+      "test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 546 filtered out; finished in 40.72s",
+      "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 599 filtered out; finished in 0.05s",
+      "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 588 filtered out; finished in 1.37s",
+      "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 589 filtered out; finished in 6.56s"
+    ],
+    "extension-test.log": [
+      " Test Files  50 passed (50)",
+      "      Tests  380 passed (380)"
+    ],
+    "core-cleanup-final.log": [
+      "test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 514 filtered out; finished in 5.37s"
+    ]
+  },
+  "limits": [
+    "8 logical CPUs; GPU disabled in Windows Sandbox; short performance samples",
+    "No claim of all websites/hardware or original full user video passing",
+    "No new full Core suite or prior browser suite rerun",
+    "Real casting/TVBox excluded",
+    "Host residual deletion blocked by automatic policy"
+  ],
+  "final_cleanup": {
+    "completed_at": "2026-10-16T23:44:02.6903267+08:00",
+    "source_files_compared": 425,
+    "source_fingerprints_unchanged_before_final_document_update": true,
+    "delivery_fingerprints_unchanged": true,
+    "backup_data_matches_frozen_hashes": true,
+    "old_residual_data_matches_frozen_hashes": true,
+    "production_sources_match_package_snapshot": 25,
+    "generated_directories": [
+      {
+        "exists_after": false,
+        "relative_path": ".tool-cache",
+        "bytes": 6322262141
+      },
+      {
+        "exists_after": false,
+        "relative_path": "desktop_ui/.gradle",
+        "bytes": 612763
+      },
+      {
+        "exists_after": false,
+        "relative_path": "desktop_ui/.kotlin",
+        "bytes": 0
+      },
+      {
+        "exists_after": false,
+        "relative_path": "extension/node_modules",
+        "bytes": 171726775
+      },
+      {
+        "exists_after": false,
+        "relative_path": "extension/.output",
+        "bytes": 2444661
+      },
+      {
+        "exists_after": false,
+        "relative_path": "extension/.wxt",
+        "bytes": 11215
+      },
+      {
+        "exists_after": false,
+        "relative_path": "downloads",
+        "bytes": 5
+      },
+      {
+        "exists_after": false,
+        "relative_path": "site-cache",
+        "bytes": 3
+      },
+      {
+        "exists_after": false,
+        "relative_path": "native_shell/downloads",
+        "bytes": 5
+      },
+      {
+        "exists_after": false,
+        "relative_path": "native_shell/site-cache",
+        "bytes": 3
+      }
+    ],
+    "bytes_removed": 6497057571,
+    "cleanup_helper": "Persistent user helper was intentionally updated to include four observed stale NativeHost leaves; parser checked, helper not executed",
+    "host_remaining_bytes": 4276208,
+    "host_residual_deletion": "Automatic approval rejected old install residue and Chromium deletion; reason: blocked by policy",
+    "branch": "main",
+    "worktrees": 1
+  }
+}

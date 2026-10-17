@@ -36,7 +36,7 @@ private const val CORE_CONNECT_TIMEOUT_MS = 2000
 private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
-    const val version = "7.0.3-r3"
+    const val version = "7.0.3"
     const val engineStarting = "下载引擎 · 启动中"
     const val engineConnected = "下载引擎 · 已连接"
     const val engineReconnecting = "下载引擎 · 重连中"
@@ -130,6 +130,30 @@ data class CommandResult(val requestId: Long, val events: List<EventEnvelopeDto>
             .takeLast(MAX_TASK_LOG_LINES)
     }
 }
+
+@Serializable
+internal data class PlayerTrackDto(val id: String, val kind: String, val title: String = "", val language: String = "", val selected: Boolean = false)
+
+@Serializable
+internal data class PlayerSnapshot(
+    val active: Boolean = false,
+    val title: String = "",
+    @SerialName("task_id") val taskId: String = "",
+    val paused: Boolean = false,
+    val speed: Double = 1.0,
+    @SerialName("position_seconds") val position: Double = 0.0,
+    @SerialName("duration_seconds") val duration: Double = 0.0,
+    @SerialName("position_available") val positionAvailable: Boolean = false,
+    @SerialName("buffered_end_seconds") val bufferedEnd: Double = 0.0,
+    val volume: Double = 100.0,
+    val muted: Boolean = false,
+    val buffering: Boolean = false,
+    val tracks: List<PlayerTrackDto> = emptyList(),
+)
+
+internal fun CommandResult.playerSnapshot(): PlayerSnapshot? = events.lastOrNull {
+    it.event["kind"]?.jsonPrimitive?.content == "player_session"
+}?.let { protocolJson.decodeFromJsonElement(PlayerSnapshot.serializer(), it.event) }
 data class TaskExportResult(val format: String, val data: String, val taskCount: Int)
 
 @Serializable
@@ -421,9 +445,17 @@ object EnginePipeClient {
         put("task_ids", buildJsonArray { taskIds.map(String::trim).filter(String::isNotBlank).distinct().forEach { add(JsonPrimitive(it)) } })
         put("queue_id", queueId.trim())
     })
-    fun playTask(taskId: String) = command(commandOf("play_task", "task_id" to taskId))
+    fun playTask(taskId: String) = requireNoCoreError(command(commandOf("play_task", "task_id" to taskId)), "无法开始播放")
     fun castTask(taskId: String) = command(commandOf("cast_task", "task_id" to taskId))
-    fun playerControl(action: String) = command(commandOf("player_control", "action" to action))
+    fun playerControl(action: String) = requireNoCoreError(command(commandOf("player_control", "action" to action)), "播放器操作失败")
+    fun playerThumbnail(taskId: String, seconds: Double?): String = session { connection ->
+        val response = connection.request(buildJsonObject {
+            put("type", "player_thumbnail"); put("request_id", nextRequestId())
+            put("task_id", taskId); put("seconds", seconds?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+        })
+        response.requireType("player_thumbnail", "缩略图暂不可用")
+        response["jpeg_base64"]?.jsonPrimitive?.content.orEmpty()
+    }
     fun discoverCastDevices(mode: String = "") = command(commandOf("discover_cast_devices", "mode" to mode.trim().lowercase()))
     fun castToDevice(taskId: String, deviceId: String) = command(commandOf("cast_to_device", "task_id" to taskId, "device_id" to deviceId))
     fun shareMedia(path: String, url: String, title: String, deviceId: String) = command(commandOf(
