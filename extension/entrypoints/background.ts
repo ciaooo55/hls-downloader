@@ -1011,16 +1011,13 @@ async function readyResourceChain(resource: MediaResource, explicitChain?: Reque
   throw new Error('浏览器尚未获得可用的短效签名媒体链接；请让视频继续播放或刷新页面后重试')
 }
 
-async function resourcePayload(
+async function resourceRequest(
   resource: MediaResource,
   explicitChain?: RequestChain,
   options: { allowUnverified?: boolean } = {},
 ) {
   resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
-  const pageChain = resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.pageContext(resource.tabId, pageUrl)
-    : undefined
   const requireSuccessfulRequest = resource.kind !== 'magnet'
   let chain = usesShortLivedMediaSignature(resource)
     ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
@@ -1045,6 +1042,19 @@ async function resourcePayload(
       throw new Error('浏览器尚未确认该媒体请求；请继续播放或重新点击下载')
     }
   }
+  return { chain, pageUrl }
+}
+
+async function resourcePayload(
+  resource: MediaResource,
+  explicitChain?: RequestChain,
+  options: { allowUnverified?: boolean } = {},
+) {
+  resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
+  const { chain, pageUrl } = await resourceRequest(resource, explicitChain, options)
+  const pageChain = resource.tabId !== undefined && resource.tabId >= 0
+    ? requestChains.pageContext(resource.tabId, pageUrl)
+    : undefined
   if (chain) {
     const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
     if (resourceFingerprint({ url: freshUrl, kind: resource.kind }) === resourceFingerprint(resource)) {
@@ -1726,10 +1736,6 @@ export default defineBackground(() => {
       const config = await settings()
       if (!config.enabled) return
       let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId)
-      // POST 的浏览器恢复可能改发 GET；让原请求完成后导入，避免重复提交或破坏已收到的文件。
-      const pauseResult = provisionalChain?.method.toUpperCase() === 'POST' ? false : await pauseBrowserDownload(item)
-      if (pauseResult === null) return
-      paused = pauseResult
       // Prefer the request chain first so click matching can use tabId even when
       // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
       // the chain to that tab so we never replay another page's auth headers.
@@ -1751,6 +1757,9 @@ export default defineBackground(() => {
           // is persisted before waiting so a suspended worker continues this
           // flow from the shared alarm.
           if (!desktopAcceptedHandoff(earlyResult.response)) return
+          const pauseResult = await pauseBrowserDownload(item)
+          if (pauseResult === null) return
+          paused = pauseResult
           const handoffId = String(earlyResult.response.handoff.id)
           followUpHandoffId = handoffId
           followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
@@ -1850,7 +1859,11 @@ export default defineBackground(() => {
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         return
       }
-      if (String(chain?.method || '').toUpperCase() === 'POST') {
+      // DownloadItem 可能先于请求链到达。使用与 offer 相同的解析流程确认方法后
+      // 才暂停，且把同一条链传入 offer，避免晚到的 POST 被当成 GET 路径重放。
+      chain = (await resourceRequest(resource, chain)).chain
+      if (!chain) return
+      if (chain.method.toUpperCase() === 'POST') {
         // 复用本地导入，复制成功前保留浏览器源文件。
         await hydrateLocalDownloads()
         localDownloadHandoffs.set(item.id, {
@@ -1862,6 +1875,9 @@ export default defineBackground(() => {
         void continueLocalDownloadHandoffs()
         return
       }
+      const pauseResult = await pauseBrowserDownload(actualBrowser)
+      if (pauseResult === null) return
+      paused = pauseResult
       console.debug('HLS Downloader offering a verified browser download')
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')

@@ -523,7 +523,6 @@ def _create_driver(
         "download.default_directory": str(downloads),
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
-        "safebrowsing.enabled": False,
     }
     if browser_family == "chrome":
         options = ChromeOptions()
@@ -857,7 +856,7 @@ def main() -> int:
     parser.add_argument("--report", type=Path)
     parser.add_argument("--real-runtime", type=Path, help="Use the installed Host/Core and real desktop confirmation")
     parser.add_argument('--headed', action='store_true')
-    parser.add_argument('--real-scenario', choices=('all', 'rejection', 'fallback'), default='all')
+    parser.add_argument('--real-scenario', choices=('all', 'post', 'rejection', 'fallback'), default='all')
     args = parser.parse_args()
     if args.browser == 'firefox' and not args.real_runtime:
         parser.error('Firefox takeover validation requires --real-runtime')
@@ -984,7 +983,7 @@ def run_real(args) -> dict[str, Any]:
                     super().do_GET()
             server=ThreadingHTTPServer(('127.0.0.1',0),RealDownloadHandler)
             threading.Thread(target=server.serve_forever,daemon=True).start()
-            driver=_create_driver(args.browser,args.browser_binary.resolve(),args.extension.resolve(),stage/'profile',downloads,args.driver.resolve(),headed=args.headed)
+            driver=_create_driver(args.browser,args.browser_binary.resolve(),args.extension.resolve(),stage/'profile',downloads,args.driver.resolve() if args.driver else None,headed=args.headed)
             driver.set_script_timeout(25)
             driver.set_page_load_timeout(40)
             page_url=f'http://127.0.0.1:{server.server_port}/page'
@@ -1122,6 +1121,14 @@ def run_real(args) -> dict[str, Any]:
                     'browser_download_absent':accepted,
                     'desktop_tasks_unchanged':not accepted,
                 })
+            if args.real_scenario == 'post':
+                post_task=accepted_case('post',size=SMALL_SIZE,filename='post.bin')
+                assert RealDownloadHandler.urlencoded_post_requests == 1, 'URL-encoded POST was replayed'
+                record('urlencoded-post-not-replayed', {'task_id':post_task['task_id'],'post_requests':1})
+                multipart_case(accepted=True)
+                multipart_case(accepted=False)
+                result['passed'] = True
+                return result
             if args.real_scenario == 'all':
                 accepted_case('small',size=SMALL_SIZE)
                 accepted_case('stream',size=STREAM_SIZE,no_content_length=True)
