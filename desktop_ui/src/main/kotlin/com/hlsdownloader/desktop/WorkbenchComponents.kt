@@ -1,19 +1,17 @@
 package com.hlsdownloader.desktop
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -68,14 +66,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 
@@ -466,9 +461,10 @@ internal fun IconButton(
     val reduceMotion by MotionPreferences.reduceMotion
     val feedback = rememberPressFeedback(
         hoverColor = surface3,
+        pressedColor = pressedSurface,
         enabled = enabled,
         interactionSource = interaction,
-        pressScale = .9f,
+        pressScale = .96f,
         hoverMillis = 180,
     )
     val focusAlpha by animateFloatAsState(
@@ -489,6 +485,7 @@ internal fun IconButton(
             .background(feedback.background)
             .border(2.dp, blue.copy(alpha = focusAlpha), RoundedCornerShape(Radius.sm))
             .hoverable(interaction)
+            .pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .alpha(enabledAlpha),
         contentAlignment = Alignment.Center,
@@ -979,59 +976,19 @@ internal fun OutlinedTextField(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun WorkbenchTooltip(text: String, content: @Composable () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val reduceMotion by MotionPreferences.reduceMotion
-    // 450ms 是"确实想停在这里"的判定延迟；出现/消失本身再叠一段淡入淡出。
-    // 用 MutableTransitionState 而不是 `if (visible)`：后者会让 Popup 随 visible 一起卸载，
-    // 退出动画永远播不到，而且没有"退出播完了没有"这个信号可以拿来做卸载条件。
-    val visibility = remember { MutableTransitionState(false) }
-    LaunchedEffect(hovered) {
-        if (hovered) {
-            delay(450)
-            visibility.targetState = true
-        } else {
-            visibility.targetState = false
-        }
-    }
-    Box(Modifier.hoverable(interaction)) {
-        content()
-        if (visibility.currentState || visibility.targetState) {
-            Popup(popupPositionProvider = WorkbenchTooltipPositionProvider, properties = PopupProperties(focusable = false)) {
-                AnimatedVisibility(
-                    visibleState = visibility,
-                    enter = fadeIn(tween(motionDurationMillis(reduceMotion, 110))),
-                    exit = fadeOut(tween(motionDurationMillis(reduceMotion, 90))),
-                ) {
-                    Surface(shape = RoundedCornerShape(Radius.sm), color = tooltipSurface, shadowElevation = Elevation.e2) {
-                        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = TypeScale.micro)
-                    }
-                }
+    // 自绘 Popup 会把指针留在旧提示层，遮住相邻行的按钮；交给框架处理离开与关闭。
+    TooltipArea(
+        delayMillis = 450,
+        tooltip = {
+            Surface(shape = RoundedCornerShape(Radius.sm), color = tooltipSurface, shadowElevation = Elevation.e2) {
+                Text(text, Modifier.padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = TypeScale.micro)
             }
-        }
-    }
-}
-
-private object WorkbenchTooltipPositionProvider : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: IntRect,
-        windowSize: IntSize,
-        layoutDirection: LayoutDirection,
-        popupContentSize: IntSize,
-    ): IntOffset {
-        val margin = 6
-        val x = (anchorBounds.left + (anchorBounds.width - popupContentSize.width) / 2)
-            .coerceIn(margin, (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin))
-        val below = anchorBounds.bottom + margin
-        val y = if (below + popupContentSize.height <= windowSize.height - margin) {
-            below
-        } else {
-            (anchorBounds.top - popupContentSize.height - margin).coerceAtLeast(margin)
-        }
-        return IntOffset(x, y)
-    }
+        },
+        content = content,
+    )
 }
 
 /**

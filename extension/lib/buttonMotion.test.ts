@@ -7,13 +7,13 @@ import { fileURLToPath } from 'node:url'
  * --------------------
  * The overlay and popup used to ship buttons that either had no transition at
  * all (`.video-more`, `.hover-action`, `.scan-button`, `.empty-retry`,
- * `.copy-link`, `.quality-menu button`, `.update-notice button`) or declared a
+ * `.copy-link`, `.update-notice button`) or declared a
  * `transform` transition that no state ever changed — `.video-download` listed
  * `transform .16s` while `:hover` only touched the background and `:active`
  * only swapped the cursor. Every click therefore read as a hard colour cut.
  *
  * These tests pin the fix: every interactive button must declare a transition,
- * must change `transform` on press, and both motion surfaces must honour
+ * must visibly respond on press, and both motion surfaces must honour
  * `prefers-reduced-motion` by disabling transitions *and* animations.
  */
 
@@ -112,9 +112,8 @@ describe('popup button motion', () => {
     '.scan-button',
     '.empty-retry',
     '.copy-link',
-    '.quality-trigger',
-    '.quality-menu button',
     '.restore-site-prompts',
+    '.view-tab',
   ]
 
   for (const selector of bespoke) {
@@ -123,13 +122,11 @@ describe('popup button motion', () => {
     })
   }
 
-  it('scales every pressable bespoke button on press', () => {
-    // A transition with no changed property is the bug that started this;
-    // each of these must actually move when pressed.
+  it('gives every pressable bespoke button colour or scale feedback on press', () => {
+    // 固定排版的文字按钮可以改变底色，无需所有控件都缩放。
     for (const selector of bespoke) {
-      if (selector === '.restore-site-prompts') continue // text link, colour only
       const active = /\s/.test(selector) ? `${selector}:active` : selector.replace(/^([.\w-]+)/, '$1:active')
-      expect(declares(popupCss, active, /transform:\s*scale\(/), `${selector} has no :active transform`).toBe(true)
+      expect(declares(popupCss, active, /transform:\s*scale\(|background(?:-color)?:/), `${selector} has no press feedback`).toBe(true)
     }
   })
 

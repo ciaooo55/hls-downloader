@@ -67,11 +67,10 @@ describe('popup button cascade', () => {
   })
 
   it('gives every popup button a keyboard focus ring', () => {
-    // 5 个手写按钮（update-notice / scan / empty-retry / quality-trigger / quality-menu）
-    // 此前没有 :focus-visible，键盘用户完全看不到焦点在哪。共享 `.hlsd-button` 自带焦点环，
-    // 其余按钮由这条通用规则兜住；实底按钮额外多留 2px 间隙，否则圆环贴着同色填充分不开。
+    // 原生选择框与手写按钮都需可见焦点；实底按钮额外留出间隙。
     expect(popupCss).toContain('button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }')
     expect(rules(popupCss).get('.update-notice button:focus-visible')).toContain('outline-offset: 2px')
+    expect(rules(popupCss).get('select:focus-visible')).toContain('outline: 2px solid var(--primary)')
   })
 
   it('lifts the shared button on hover like the in-page overlay and Compose workbench do', () => {

@@ -32,7 +32,8 @@ function updatePopupMaxHeight(main: HTMLElement) {
   const viewportTop = firefoxWindow.mozInnerScreenY ?? window.screenY
   const workAreaTop = screen.availTop ?? 0
   const remainingHeight = workAreaTop + screen.availHeight - viewportTop
-  const maxHeight = Math.max(1, Math.min(640, Math.floor(remainingHeight)))
+  // 原生扩展弹窗最高 600 CSS px；超过时浏览器裁切底部，而不会扩大窗口。
+  const maxHeight = Math.max(1, Math.min(600, Math.floor(remainingHeight)))
   main.style.setProperty('--popup-max-height', `${maxHeight}px`)
 }
 
@@ -60,7 +61,6 @@ const ICONS: Record<string, Array<['path' | 'circle' | 'rect', Record<string, st
   download: [['path', { d: 'M12 4v10m0 0 4-4m-4 4-4-4M5 19h14' }]],
   cast: [['path', { d: 'M5 18a2 2 0 0 1 2 2M5 13a7 7 0 0 1 7 7M5 8a12 12 0 0 1 12 12M19 5H5v3' }]],
   tv: [['rect', { x: '3', y: '5', width: '18', height: '12', rx: '2' }], ['path', { d: 'M8 21h8M12 17v4' }]],
-  chevron: [['path', { d: 'm7 10 5 5 5-5' }]],
   check: [['path', { d: 'm5 12 4 4L19 6' }]],
   scan: [['path', { d: 'M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7' }]],
   media: [['rect', { x: '3', y: '5', width: '18', height: '14', rx: '2' }], ['path', { d: 'm10 9 5 3-5 3Z' }]],
@@ -136,6 +136,7 @@ async function main() {
   const themeBtn = el('button', 'hlsd-button subtle')
   themeBtn.append(icon(themePreference, THEME_LABELS[themePreference]))
   themeBtn.title = THEME_LABELS[themePreference]
+  themeBtn.setAttribute('aria-label', themeBtn.title)
   themeBtn.addEventListener('click', async () => {
     themeChangeGeneration += 1
     themePreference = THEME_ORDER[(THEME_ORDER.indexOf(themePreference) + 1) % THEME_ORDER.length]
@@ -143,22 +144,34 @@ async function main() {
     removeThemeListener = applyTheme(document.documentElement, themePreference)
     themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
     themeBtn.title = THEME_LABELS[themePreference]
-    await browser.storage.local.set({ [THEME_STORAGE_KEY]: themePreference })
+    themeBtn.setAttribute('aria-label', themeBtn.title)
+    try {
+      await browser.storage.local.set({ [THEME_STORAGE_KEY]: themePreference })
+    } catch {
+      setError('主题已切换，但未能保存；下次打开时可能恢复原设置。')
+    }
   })
-  const openBtn = el('button', 'hlsd-button primary')
-  openBtn.append(icon('open'), el('span', '', '\u6253\u5f00'))
+  const openBtn = el('button', 'hlsd-button desktop-open')
+  openBtn.append(icon('open'), el('span', '', '主程序'))
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
   openBtn.addEventListener('click', async () => {
+    openBtn.disabled = true
+    openBtn.setAttribute('aria-busy', 'true')
+    setError('')
     try {
       const response = await withDeadline(browser.runtime.sendMessage({ type: 'activate' }), 10_000, '打开主程序超时，请重试')
       if (!response?.ok) setError(response?.error || '无法打开主程序')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '无法打开主程序')
+    } finally {
+      openBtn.disabled = false
+      openBtn.removeAttribute('aria-busy')
     }
   })
   const closeBtn = el('button', 'hlsd-button subtle')
   closeBtn.append(icon('close', '\u5173\u95ed'))
   closeBtn.title = '\u5173\u95ed'
+  closeBtn.setAttribute('aria-label', '关闭插件弹窗')
   closeBtn.addEventListener('click', () => window.close())
   actions.append(themeBtn, openBtn, closeBtn)
   header.append(brand, actions)
@@ -173,7 +186,22 @@ async function main() {
   enableBtn.disabled = true
   cookieBtn.disabled = true
   excludeBtn.disabled = true
-  controls.append(enableBtn, cookieBtn, excludeBtn)
+  const settingsPanel = el('section', 'settings-panel')
+  const settingsSite = el('p', 'panel-hint', '正在读取当前站点…')
+  settingsPanel.append(el('h2', '', '下载与站点设置'), settingsSite)
+  const settings = [
+    [enableBtn, '自动接管', '全局设置，控制浏览器下载是否交给主程序。'],
+    [cookieBtn, '本站 Cookie', '仅在授权后，为本站下载读取资源请求所需的 Cookie。'],
+    [excludeBtn, '本站媒体提示', '控制网页上的媒体悬浮入口，不影响插件内识别。'],
+  ] as const
+  for (const [button, label, description] of settings) {
+    const row = el('div', 'setting-item')
+    const text = el('div')
+    text.append(el('strong', '', label), el('small', '', description))
+    row.append(text, button)
+    controls.append(row)
+  }
+  settingsPanel.append(controls)
 
   const updateNotice = el('div', 'update-notice')
   updateNotice.hidden = true
@@ -184,11 +212,11 @@ async function main() {
 
   const errorBox = el('div', 'send-error')
   errorBox.hidden = true
-  const section = el('section')
+  errorBox.setAttribute('role', 'alert')
+  const section = el('section', 'resources-panel')
   const sectionHeader = el('div', 'section-header')
-  const title = el('div', 'section-title', '\u5df2\u8bc6\u522b\u8d44\u6e90 ')
+  const title = el('div', 'section-title', '当前页面')
   const count = el('b', '', '0')
-  title.append(count)
   const scanBtn = el('button', 'scan-button') as HTMLButtonElement
   scanBtn.type = 'button'
   scanBtn.disabled = true
@@ -204,9 +232,58 @@ async function main() {
   footer.append(
     el('span', '', EXTENSION_PRODUCT_LABEL),
     el('span', '', extensionVersionLabel(browser.runtime.getManifest().version)),
-    restorePromptsBtn,
   )
-  mainEl.append(header, controls, updateNotice, errorBox, section, footer)
+  settingsPanel.append(restorePromptsBtn)
+  const subtitlePanel = el('section')
+  subtitlePanel.append(el('p', 'panel-hint', '正在读取当前页面…'))
+  const views = el('div', 'views')
+  const navigation = el('nav', 'view-tabs')
+  navigation.setAttribute('role', 'tablist')
+  navigation.setAttribute('aria-label', '插件功能')
+  const panels = [section, subtitlePanel, settingsPanel]
+  const labels = ['资源', '字幕', '设置']
+  let subtitleMounted = false
+  let pageTabId: number | undefined
+  const tabs = labels.map((label, index) => {
+    const button = el('button', 'view-tab', label)
+    button.type = 'button'
+    button.id = `tab-${index}`
+    button.setAttribute('role', 'tab')
+    button.setAttribute('aria-controls', `panel-${index}`)
+    panels[index].id = `panel-${index}`
+    panels[index].setAttribute('role', 'tabpanel')
+    panels[index].setAttribute('aria-labelledby', button.id)
+    return button
+  })
+  const selectPanel = (index: number, focus = false) => {
+    if (index === 1 && !subtitleMounted && pageTabId !== undefined) {
+      subtitlePanel.replaceChildren()
+      mountSubtitlePopup(subtitlePanel, pageTabId)
+      subtitleMounted = true
+    }
+    panels.forEach((panel, at) => { panel.hidden = at !== index })
+    tabs.forEach((tab, at) => {
+      tab.setAttribute('aria-selected', String(at === index))
+      tab.tabIndex = at === index ? 0 : -1
+    })
+    if (focus) tabs[index].focus()
+  }
+  tabs[0].append(count)
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectPanel(index))
+    tab.addEventListener('keydown', event => {
+      const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+      if (next < 0) return
+      event.preventDefault()
+      selectPanel(next, true)
+    })
+  })
+  navigation.append(...tabs)
+  views.append(...panels)
+  selectPanel(0)
+  mainEl.append(header, navigation, updateNotice, errorBox, views, footer)
   updatePopupMaxHeight(mainEl)
   root.append(mainEl)
   window.addEventListener('resize', () => updatePopupMaxHeight(mainEl))
@@ -225,6 +302,7 @@ async function main() {
       removeThemeListener = applyTheme(document.documentElement, themePreference)
       themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
       themeBtn.title = THEME_LABELS[themePreference]
+      themeBtn.setAttribute('aria-label', themeBtn.title)
     })
     .catch(() => undefined)
 
@@ -233,6 +311,7 @@ async function main() {
   let authorizedCookieHosts: string[] = []
   let excluded: string[] = []
   let suppressions: HandoffSuppression[] = []
+  let settingsBusy: HTMLButtonElement | undefined
   const sending: Record<string, SendState> = {}
   const pushing: Record<string, PushState> = {}
   // Chosen rendition per resource id: the list re-renders on every send or
@@ -240,6 +319,7 @@ async function main() {
   const chosenVariant: Record<string, string> = {}
   let resources: MediaResource[] = []
   let resourceState: 'loading' | 'ready' | 'scanning' | 'error' = 'loading'
+  let canScanPage = false
   let rescanPage = async () => {}
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
@@ -248,6 +328,10 @@ async function main() {
     errorBox.textContent = message
   }
   const renderList = () => {
+    const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement)
+      ? { id: document.activeElement.closest<HTMLElement>('article')?.dataset.resourceId, action: document.activeElement.dataset.action }
+      : undefined
+    const scrollTop = section.scrollTop
     const visible = visibleMediaResources(resources)
     count.textContent = String(visible.length)
     list.replaceChildren()
@@ -261,12 +345,12 @@ async function main() {
           ? '\u6b63\u5728\u91cd\u65b0\u8bc6\u522b'
           : resourceState === 'error'
             ? '\u672a\u80fd\u5b8c\u6210\u8bc6\u522b'
-            : '\u5f53\u524d\u9875\u9762\u8fd8\u6ca1\u6709\u53ef\u4e0b\u8f7d\u8d44\u6e90'
+            : !canScanPage ? '此页面不支持媒体识别' : '\u5f53\u524d\u9875\u9762\u8fd8\u6ca1\u6709\u53ef\u4e0b\u8f7d\u8d44\u6e90'
       const description = resourceState === 'loading' || resourceState === 'scanning'
         ? '\u6b63\u5728\u68c0\u67e5\u89c6\u9891\u3001\u97f3\u9891\u548c\u5a92\u4f53\u6e05\u5355\u3002'
-        : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9\u91cd\u65b0\u8bc6\u522b\u3002'
+        : !canScanPage ? '请切换到普通网页，播放媒体后再打开插件。' : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9\u91cd\u65b0\u8bc6\u522b\u3002'
       empty.append(emptyIcon, el('strong', '', heading), el('span', '', description))
-      if (resourceState !== 'loading' && resourceState !== 'scanning') {
+      if (canScanPage && resourceState !== 'loading' && resourceState !== 'scanning') {
         const retry = el('button', 'empty-retry') as HTMLButtonElement
         retry.type = 'button'
         retry.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
@@ -277,83 +361,56 @@ async function main() {
       return
     }
     for (const item of visible) {
-      let itemHost = item.url
-      try { itemHost = new URL(item.url).host } catch {}
-      const likelySize = item.size || item.estimatedSize || 0
-      const size = item.size && item.size > 0 ? formatBytes(item.size) : likelySize > 0 ? `约 ${formatBytes(likelySize)}` : '大小未知'
-      const quality = item.quality || resourceQuality(item.url, item.height)
-      const resolution = item.width && item.height ? (item.width + '\u00d7' + item.height) : ''
-      const bandwidth = item.bandwidth ? ((item.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
-      const duration = item.duration ? formatDuration(item.duration) : ''
-      const streamMode = item.isLive === true ? '直播' : ''
-      const meta = [resourceKindLabel(item), resourceSuffix(item), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
-      const article = el('article')
-      const body = el('div', 'resource-body')
-      const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
-      const cardUrl = item.url
-      name.title = item.filename || item.title || cardUrl
-      const line = el('span', '', meta)
-      line.title = meta
-      const mime = el('small', '', [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 '))
-      mime.title = [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 ')
-      const copyBtn = el('button', 'copy-link') as HTMLButtonElement
-      copyBtn.type = 'button'
-      copyBtn.append(icon('copy'), el('span', '', '\u590d\u5236\u94fe\u63a5'))
-      copyBtn.title = itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5'
-      copyBtn.addEventListener('click', () => void copyLink(cardUrl, copyBtn))
       let selected = item
       const remembered = chosenVariant[item.id]
       if (remembered) {
         const variant = item.variants?.find(value => value.url === remembered)
         if (variant) selected = { ...item, ...variant, url: variant.url, variants: undefined }
       }
+      let itemHost = selected.url
+      try { itemHost = new URL(selected.url).host } catch {}
+      const likelySize = selected.size || selected.estimatedSize || 0
+      const size = selected.size && selected.size > 0 ? formatBytes(selected.size) : likelySize > 0 ? `约 ${formatBytes(likelySize)}` : '大小未知'
+      const quality = selected.quality || resourceQuality(selected.url, selected.height)
+      const resolution = selected.width && selected.height ? (selected.width + '\u00d7' + selected.height) : ''
+      const bandwidth = selected.bandwidth ? ((selected.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
+      const duration = selected.duration ? formatDuration(selected.duration) : ''
+      const streamMode = item.isLive === true ? '直播' : ''
+      const meta = [resourceKindLabel(item), resourceSuffix(item), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
+      const article = el('article')
+      article.dataset.resourceId = item.id
+      article.tabIndex = -1
+      const body = el('div', 'resource-body')
+      const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
+      const cardUrl = item.url
+      name.title = item.filename || item.title || cardUrl
+      const line = el('span', '', meta)
+      line.title = meta
+      const mime = el('small', '', itemHost)
+      mime.title = [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 ')
+      const copyBtn = el('button', 'copy-link') as HTMLButtonElement
+      copyBtn.type = 'button'
+      copyBtn.dataset.action = 'copy'
+      copyBtn.append(icon('copy'), el('span', 'copy-label', '\u590d\u5236\u94fe\u63a5'))
+      copyBtn.title = itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5'
+      copyBtn.addEventListener('click', () => void copyLink(selected.url, copyBtn))
       body.append(name, line)
       if (item.variants?.length) {
         const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
           variant
             ? [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' \u00b7 ')
             : '\u81ea\u52a8\uff08\u6700\u9ad8\uff09'
-        const trigger = el('button', 'quality-trigger') as HTMLButtonElement
-        trigger.type = 'button'
-        trigger.setAttribute('aria-label', '\u9009\u62e9\u89c6\u9891\u6e05\u6670\u5ea6')
-        const currentLabel = el('em', '', variantLabel(
-          item.variants?.find(value => value.url === chosenVariant[item.id]),
-        ))
-        trigger.append(currentLabel, icon('chevron'))
-        trigger.addEventListener('click', event => {
-          event.stopPropagation()
-          const host = trigger.closest('article') as HTMLElement | null
-          if (!host) return
-          // 先判断"这张卡片是否已打开菜单"，再清理：反序会让 `open` 恒为 null，
-          // 于是"再点一次 trigger 收起"变成死代码，用户只能点遮罩关闭。
-          const open = host.querySelector('.quality-menu')
-          document.querySelectorAll('.quality-menu, .quality-menu-backdrop').forEach(node => node.remove())
-          if (open) return
-          const backdrop = el('div', 'quality-menu-backdrop')
-          const menu = el('div', 'quality-menu')
-          backdrop.addEventListener('mousedown', () => { backdrop.remove(); menu.remove() })
-          const choices: Array<{ url: string; label: string; variant?: NonNullable<MediaResource['variants']>[number] }> = [
-            { url: item.url, label: variantLabel() },
-            ...item.variants!.map(variant => ({ url: variant.url, label: variantLabel(variant), variant })),
-          ]
-          for (const choice of choices) {
-            const option = el('button') as HTMLButtonElement
-            option.type = 'button'
-            const marker = el('i', 'quality-check')
-            if (selected.url === choice.url) marker.append(icon('check'))
-            option.append(marker, el('span', '', choice.label))
-            option.addEventListener('click', () => {
-              selected = choice.variant ? { ...item, ...choice.variant, url: choice.variant.url, variants: undefined } : item
-              if (choice.variant) chosenVariant[item.id] = choice.variant.url
-              else delete chosenVariant[item.id]
-              currentLabel.textContent = choice.label
-              backdrop.remove(); menu.remove()
-            })
-            menu.append(option)
-          }
-          host.append(backdrop, menu)
-          menu.style.top = `${trigger.offsetTop + trigger.offsetHeight + 4}px`
-          menu.style.left = `${trigger.offsetLeft}px`
+        // 原生选择框提供方向键、Escape 和越过滚动容器的菜单，不再维护自绘遮罩。
+        const trigger = el('select', 'quality-trigger')
+        trigger.dataset.action = 'quality'
+        trigger.setAttribute('aria-label', '选择视频清晰度')
+        trigger.append(new Option(variantLabel(), item.url))
+        for (const variant of item.variants) trigger.append(new Option(variantLabel(variant), variant.url))
+        trigger.value = selected.url
+        trigger.addEventListener('change', () => {
+          if (trigger.value === item.url) delete chosenVariant[item.id]
+          else chosenVariant[item.id] = trigger.value
+          renderList()
         })
         body.append(trigger)
       }
@@ -363,28 +420,40 @@ async function main() {
       const sendState = sending[item.id]
       const label = sendState ? SEND_LABELS[sendState] : '下载'
       const button = el('button', 'hlsd-button primary')
-      button.append(icon('download'), el('span', '', label))
+      button.dataset.state = sendState || ''
+      const sendPending = sendState === 'sending' || sendState === 'confirming'
+      button.dataset.action = 'download'
+      button.append(icon(sendPending ? 'scan' : sendState === 'queued' ? 'check' : 'download'), el('span', '', label))
       const locked = sendState ? SEND_BUSY.has(sendState) : false
       button.disabled = locked
-      if (sendState) button.classList.add('busy')
-      button.title = '发送到下载器'
+      button.classList.toggle('busy', sendPending)
+      button.setAttribute('aria-busy', String(sendPending))
+      button.title = sendState === 'confirming' ? '请在主程序中确认本次下载' : '发送到主程序，确认后加入下载队列'
       button.addEventListener('click', () => void send(selected))
       const pushKey = `${item.id}:tvbox`
       const pushState = pushing[pushKey]
       const pushLabel = pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox'
       const pushButton = el('button', 'hlsd-button push-button')
-      pushButton.append(icon('tv'), el('span', '', pushLabel))
+      pushButton.dataset.state = pushState || ''
+      const pushPending = pushState === 'working' || pushState === 'awaiting'
+      pushButton.dataset.action = 'tvbox'
+      pushButton.append(icon(pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv'), el('span', '', pushLabel))
       pushButton.disabled = pushState ? PUSH_BUSY.has(pushState) : false
-      if (pushState) pushButton.classList.add('busy')
+      pushButton.classList.toggle('busy', pushPending)
+      pushButton.setAttribute('aria-busy', String(pushPending))
       pushButton.title = '直接推送当前媒体链接到 TVBox'
       pushButton.addEventListener('click', () => void pushToTv(selected))
       const castKey = `${item.id}:cast`
       const castState = pushing[castKey]
       const castLabel = castState ? CAST_PUSH_LABELS[castState] : '投屏'
       const castButton = el('button', 'hlsd-button cast-button')
-      castButton.append(icon('cast'), el('span', '', castLabel))
+      castButton.dataset.state = castState || ''
+      const castPending = castState === 'working' || castState === 'awaiting'
+      castButton.dataset.action = 'cast'
+      castButton.append(icon(castPending ? 'scan' : castState === 'sent' ? 'check' : 'cast'), el('span', '', castLabel))
       castButton.disabled = castState ? PUSH_BUSY.has(castState) : false
-      if (castState) castButton.classList.add('busy')
+      castButton.classList.toggle('busy', castPending)
+      castButton.setAttribute('aria-busy', String(castPending))
       castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
       castButton.addEventListener('click', () => void castToDevice(selected))
       const actionCol = el('div', 'article-actions')
@@ -392,34 +461,47 @@ async function main() {
       article.append(body, actionCol)
       list.append(article)
     }
+    section.scrollTop = scrollTop
+    if (focused?.id) {
+      const card = [...list.querySelectorAll('article')].find(node => node.dataset.resourceId === focused.id)
+      const control = [...(card?.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('[data-action]') || [])]
+        .find(node => node.dataset.action === focused.action && !node.disabled)
+      const target = control || card
+      target?.focus({ preventScroll: true })
+    }
   }
 
   const refreshButtons = () => {
     // 这些按钮显示“当前状态”，不是动作。加前缀 + aria-pressed，避免被读成
     // “点击后会发生什么”的开关。
-    enableBtn.textContent = enabled ? '\u81ea\u52a8\u63a5\u7ba1\uff1a\u5df2\u5f00\u542f' : '\u81ea\u52a8\u63a5\u7ba1\uff1a\u5df2\u5173\u95ed'
-    enableBtn.title = enabled ? '\u5f53\u524d\u5df2\u63a5\u7ba1\u672c\u7ad9\u4e0b\u8f7d\uff1b\u70b9\u51fb\u5173\u95ed' : '\u5f53\u524d\u672a\u63a5\u7ba1\u672c\u7ad9\u4e0b\u8f7d\uff1b\u70b9\u51fb\u5f00\u542f'
+    enableBtn.textContent = enabled ? '已开启' : '已关闭'
+    enableBtn.setAttribute('aria-label', `自动接管：${enableBtn.textContent}`)
+    enableBtn.title = enabled ? '全局下载接管已开启；点击关闭' : '全局下载接管已关闭；点击开启'
     enableBtn.setAttribute('aria-pressed', String(enabled))
     enableBtn.classList.toggle('active', enabled)
     const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
-    cookieBtn.textContent = cookieAuthorized ? '\u672c\u7ad9 Cookie\uff1a\u5df2\u6388\u6743' : '\u672c\u7ad9 Cookie\uff1a\u672a\u6388\u6743'
+    cookieBtn.textContent = cookieAuthorized ? '已授权' : '未授权'
+    cookieBtn.setAttribute('aria-label', `本站 Cookie：${cookieBtn.textContent}`)
     cookieBtn.title = cookieAuthorized
       ? '\u5df2\u6388\u6743\uff1a\u53d1\u9001\u672c\u7ad9\u5a92\u4f53\u65f6\u4f1a\u53ea\u8bfb\u53d6\u6d4f\u89c8\u5668\u5bf9\u8be5\u8d44\u6e90\u5730\u5740\u53d1\u9001\u7684 Cookie\uff1b\u70b9\u51fb\u64a4\u9500\u6388\u6743'
       : '\u672a\u6388\u6743\uff1a\u9ed8\u8ba4\u4e0d\u8bfb\u53d6 Cookie\uff1b\u70b9\u51fb\u6388\u6743\u5f53\u524d\u7ad9\u70b9'
     cookieBtn.setAttribute('aria-pressed', String(cookieAuthorized))
     cookieBtn.classList.toggle('active', cookieAuthorized)
-    cookieBtn.disabled = !host
     const siteExcluded = excluded.includes(host)
-    excludeBtn.textContent = siteExcluded ? '\u672c\u7ad9\u63d0\u793a\uff1a\u5df2\u9690\u85cf' : '\u672c\u7ad9\u63d0\u793a\uff1a\u5df2\u663e\u793a'
+    excludeBtn.textContent = siteExcluded ? '已隐藏' : '已显示'
+    excludeBtn.setAttribute('aria-label', `本站提示：${excludeBtn.textContent}`)
     excludeBtn.title = siteExcluded ? '\u5f53\u524d\u5df2\u5728\u672c\u7ad9\u9690\u85cf\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u6062\u590d' : '\u5f53\u524d\u4f1a\u5728\u672c\u7ad9\u663e\u793a\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u9690\u85cf'
     excludeBtn.setAttribute('aria-pressed', String(siteExcluded))
     excludeBtn.classList.toggle('active', siteExcluded)
-    excludeBtn.disabled = !host
     const suppressedKinds = suppressions.filter(rule => rule.host === host).map(rule => rule.kind)
     restorePromptsBtn.hidden = suppressedKinds.length === 0
     restorePromptsBtn.title = suppressedKinds.length
       ? `\u6062\u590d\u672c\u7ad9 ${suppressedKinds.join('\u3001')} \u8d44\u6e90\u7684\u81ea\u52a8\u63d0\u793a`
       : ''
+    for (const button of [enableBtn, cookieBtn, excludeBtn, restorePromptsBtn]) {
+      button.disabled = Boolean(settingsBusy) || (button !== enableBtn && !host)
+      button.setAttribute('aria-busy', String(settingsBusy === button))
+    }
   }
 
   const waitForPushResult = async (requestId: string) => {
@@ -483,13 +565,18 @@ async function main() {
     }
   }
 
+  const copyResetTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
   const copyLink = async (url: string, node: HTMLButtonElement) => {
-    const label = node.querySelector('span') as HTMLSpanElement | null
-    const restore = label ? label.textContent : ''
+    const label = node.querySelector<HTMLSpanElement>('.copy-label')
     const done = (text: string) => {
+      clearTimeout(copyResetTimers.get(node))
       if (label) label.textContent = text
       node.classList.add('copied')
-      setTimeout(() => { if (label) label.textContent = restore; node.classList.remove('copied') }, 1_800)
+      copyResetTimers.set(node, setTimeout(() => {
+        if (label) label.textContent = '复制链接'
+        node.classList.remove('copied')
+        copyResetTimers.delete(node)
+      }, 1_800))
     }
     try {
       // navigator.clipboard needs a focused document; the popup already is one,
@@ -504,8 +591,11 @@ async function main() {
         scratch.style.opacity = '0'
         document.body.append(scratch)
         scratch.select()
-        document.execCommand('copy')
-        scratch.remove()
+        try {
+          if (!document.execCommand('copy')) throw new Error('Copy was denied')
+        } finally {
+          scratch.remove()
+        }
       }
       done('\u5df2\u590d\u5236')
     } catch {
@@ -527,6 +617,7 @@ async function main() {
   }
 
   const send = async (item: MediaResource) => {
+    if (sending[item.id] && SEND_BUSY.has(sending[item.id])) return
     setError('')
     sending[item.id] = 'sending'
     renderList()
@@ -546,10 +637,13 @@ async function main() {
   }
 
   enableBtn.addEventListener('click', async () => {
+    if (settingsBusy) return
     const requested = !enabled
-    enableBtn.disabled = true
+    settingsBusy = enableBtn
+    refreshButtons()
+    setError('')
     try {
-      const response = await browser.runtime.sendMessage({ type: 'set-takeover-settings', enabled: requested })
+      const response = await withDeadline(browser.runtime.sendMessage({ type: 'set-takeover-settings', enabled: requested }), 10_000, '保存接管设置超时，请重试')
       if (!response?.ok) {
         setError(response?.error || '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
         return
@@ -564,42 +658,61 @@ async function main() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '\u4fdd\u5b58\u63a5\u7ba1\u8bbe\u7f6e\u5931\u8d25')
     } finally {
-      enableBtn.disabled = false
+      settingsBusy = undefined
+      refreshButtons()
     }
   })
   cookieBtn.addEventListener('click', async () => {
-    if (!host) return
+    if (!host || settingsBusy) return
     const next = authorizedCookieHosts.includes(host)
       ? authorizedCookieHosts.filter(value => value !== host)
       : normalizeCookiePermissionHosts([...authorizedCookieHosts, host])
+    settingsBusy = cookieBtn
+    refreshButtons()
+    setError('')
     try {
       await browser.storage.local.set({ authorizedCookieHosts: next, useBrowserCookies: false })
       authorizedCookieHosts = next
       refreshButtons()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Cookie 设置保存失败')
+    } finally {
+      settingsBusy = undefined
+      refreshButtons()
     }
   })
   excludeBtn.addEventListener('click', async () => {
-    if (!host) return
+    if (!host || settingsBusy) return
     const next = excluded.includes(host) ? excluded.filter(value => value !== host) : [...excluded, host]
+    settingsBusy = excludeBtn
+    refreshButtons()
+    setError('')
     try {
       await browser.storage.local.set({ excludedHosts: next })
       excluded = next
       refreshButtons()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存排除站点失败')
+    } finally {
+      settingsBusy = undefined
+      refreshButtons()
     }
   })
   restorePromptsBtn.addEventListener('click', async () => {
-    if (!host) return
+    if (!host || settingsBusy) return
     const next = suppressions.filter(rule => rule.host !== host)
+    settingsBusy = restorePromptsBtn
+    refreshButtons()
+    setError('')
     try {
       await browser.storage.local.set({ [HANDOFF_SUPPRESSION_STORAGE_KEY]: next })
       suppressions = next
       refreshButtons()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '恢复本站提示失败')
+    } finally {
+      settingsBusy = undefined
+      refreshButtons()
     }
   })
 
@@ -612,10 +725,13 @@ async function main() {
     || [...windowTabs].reverse().find(candidate => /^https?:\/\//i.test(candidate.url || ''))
     || windowTabs.find(candidate => candidate.active)
   const pageUrl = tab?.url || ''
-  const subtitlePanel = el('section')
-  mainEl.insertBefore(subtitlePanel, section)
-  mountSubtitlePopup(subtitlePanel, tab?.id)
+  pageTabId = /^https?:\/\//i.test(pageUrl) ? tab?.id : undefined
+  if (tabs[1].getAttribute('aria-selected') === 'true') selectPanel(1)
+  if (pageTabId === undefined) subtitlePanel.replaceChildren(el('p', 'panel-hint', '请在包含播放器的网页中使用字幕翻译。'))
   host = normalizeHost(pageUrl)
+  settingsSite.textContent = host ? `当前站点 · ${host}` : '当前页面不是普通网页，站点设置不可用。'
+  title.textContent = host || '当前页面不支持媒体识别'
+  title.title = pageUrl
   const downloadErrorKey = `download-error:${tab?.id}`
   void browser.storage.session.get(downloadErrorKey).then(stored => {
     if (stored[downloadErrorKey]) setError(String(stored[downloadErrorKey]))
@@ -623,7 +739,7 @@ async function main() {
   browser.storage.onChanged.addListener((changes, area) => {
     if (area === 'session' && changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
   })
-  const canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
+  canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
   rescanPage = async () => {
     if (!canScanPage || tab?.id == null || resourceState === 'scanning') return
     resourceState = 'scanning'
@@ -653,6 +769,7 @@ async function main() {
   }
   scanBtn.disabled = !canScanPage
   scanBtn.addEventListener('click', () => void rescanPage())
+  renderList()
   // Load local settings before any network/native request. The popup is often
   // opened exactly while a page starts a download; controls must be usable even
   // if the desktop ping or resource query is temporarily slow.

@@ -142,7 +142,7 @@ def run(args):
 
     def popup_button(text):
         return wait(lambda: next((b for b in driver.find_elements(By.TAG_NAME, "button")
-                                 if b.is_displayed() and text in b.text), None), "Missing popup button: " + text, 12)
+                                 if b.is_displayed() and (text in b.text or text in (b.get_attribute('aria-label') or ''))), None), "Missing popup button: " + text, 12)
 
     def styles(element):
         return driver.execute_script("""
@@ -962,6 +962,7 @@ def run(args):
             for b in driver.find_elements(By.TAG_NAME,"button"):
                 if b.is_displayed() and not args.actions_only: measure(b,"popup dark")
 
+            popup_button("设置").click()
             for label in ("自动接管", "本站 Cookie", "本站提示"):
                 b = popup_button(label)
                 old = b.get_attribute("aria-pressed")
@@ -970,6 +971,7 @@ def run(args):
                 popup_button(label).click()
                 wait(lambda: popup_button(label).get_attribute("aria-pressed") == old, "Popup toggle did not restore: " + label, 10)
                 record("popup toggle and restore: " + label)
+            popup_button("资源").click()
             popup_button("重新识别").click()
             wait(lambda: driver.execute_script("return !document.querySelector('.scan-button').disabled"), "Rescan did not finish", 20)
             wait(lambda: driver.find_elements(By.CSS_SELECTOR,"article .copy-link"), "Rescan lost local video", 20)
@@ -977,9 +979,13 @@ def run(args):
             driver.execute_script("arguments[0].scrollIntoView({block:'center'})", copy)
             copy.click()
             wait(lambda: "已复制" in driver.find_element(By.CSS_SELECTOR,"article .copy-link").text, "Copy link did not confirm success", 5)
+            copy.click()
+            assert copy.find_elements(By.CSS_SELECTOR, '.hlsd-icon svg'), 'Repeated copy removed the icon'
+            wait(lambda: copy.find_element(By.CSS_SELECTOR, '.copy-label').text == '复制链接', 'Copy label did not reset', 5)
             record("popup rescan and copy-link buttons")
 
             if args.partitioned_cookies:
+                popup_button('设置').click()
                 if popup_button('本站 Cookie').get_attribute('aria-pressed') != 'true':
                     popup_button('本站 Cookie').click()
                     wait(lambda: popup_button('本站 Cookie').get_attribute('aria-pressed') == 'true', 'Cookie authorization did not apply', 10)
@@ -1000,11 +1006,12 @@ def run(args):
                 ''', PAGE)
                 assert not seeded.get('error'), seeded
                 record('real browser ordinary, current-site partitioned and foreign-partition cookies seeded', seeded)
+                popup_button('资源').click()
 
             before_popup_download = {t["task_id"] for t in core({"type":"snapshot","request_id":41})["tasks"]}
             before_handoffs = {json.loads(value)['id'] for value in core({'type':'load_handoffs','request_id':43})['items']} if args.partitioned_cookies else set()
             card = next(a for a in driver.find_elements(By.TAG_NAME,"article") if "stream.mp4" in a.text)
-            download_button = card.find_element(By.CSS_SELECTOR,'button[title="发送到下载器"]')
+            download_button = card.find_element(By.CSS_SELECTOR,'button[data-action="download"]')
             driver.execute_script("arguments[0].scrollIntoView({block:'center'})",download_button)
             ActionChains(driver).click(download_button).perform()
             if args.partitioned_cookies:
@@ -1030,8 +1037,14 @@ def run(args):
             task=wait(popup_downloaded,"Popup download did not complete",60)
             assert task["status"]=="completed" and hashlib.sha256(Path(task["output_path"]).read_bytes()).hexdigest()==expected_sha256,task
             record("popup download button -> actual local video -> completed and SHA256")
+            queued = wait(lambda: driver.find_elements(By.CSS_SELECTOR, '[data-action="download"][data-state="queued"]'),
+                          'Download button did not show confirmed state', 10)[0]
+            assert queued.get_attribute('aria-busy') == 'false' and not queued.is_enabled()
+            assert not driver.execute_script('return arguments[0].classList.contains("busy")', queued)
+            record('confirmed download has a stable check icon and no busy animation')
 
             # 此处只验证字幕设置交互；真实云端音频另行验收。
+            popup_button("字幕").click()
             for label, value in (("来源语言", "en"), ("目标语言", "ja"), ("本站字幕翻译", "off"), ("本页字幕翻译", "on")):
                 select = driver.find_element(By.CSS_SELECTOR,f'select[aria-label="{label}"]')
                 original = select.get_attribute("value")
@@ -1055,7 +1068,7 @@ def run(args):
             driver.execute_script('arguments[0].value=arguments[1]', workspace, original_workspace)
             Select(service).select_by_value(original_service)
             record("DashScope without workspace: browser validation prevents invalid save and original service is restored")
-            popup_button("打开").click()
+            popup_button("主程序").click()
             record("popup open desktop button")
             driver.save_screenshot(str(evidence/"popup-final.png"))
             close_button=driver.find_element(By.CSS_SELECTOR,'button[title="关闭"]')

@@ -1,0 +1,377 @@
+{
+  "date": "2026-10-18T03:00:42.608445+08:00",
+  "status": "scoped_validation_passed",
+  "base_commit": "4fff8054b403a1f13fed28399b92d02befc9e011",
+  "scope": "桌面与插件 UI 交互改进及用户已授权的定向验证",
+  "source_sha256": {
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "A0CBB5E6AB4674E51063EA676224AECB945A38F1435F13091AA3A6A84A7726B2",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt": "93751CDF6C09A350D69504DBB14F287C10A434A846B7BDD2AE08ABA652FEF9B0",
+    "extension/entrypoints/popup/style.css": "83ECDAF8BDD51EBF92F0B9FD5FAA082565FFB2A96452FC3FE398D787B59AD078",
+    "extension/entrypoints/popup/main.ts": "4B2D0D9D38D572FC37F4F426B71DF5F21BEA27BD45464F756EC399270010BF39"
+  },
+  "artifact_sha256": {
+    "extension/.output/firefox-mv3/popup.html": "C8685E8037124FAF16E5E38EDBF0A97371A5D08C0B2C7EC0936D024E9A8861D6",
+    ".tool-cache/build-cache/compose-build/libs/HLSDownloaderDesktop-7.0.3.jar": "A527070C6D9E21A07059383E5ECBB8B3760EF4CB14F18FD3E15ACBEE89D1CFB3",
+    "extension/.output/chrome-mv3/popup.html": "C8685E8037124FAF16E5E38EDBF0A97371A5D08C0B2C7EC0936D024E9A8861D6"
+  },
+  "fixes": [
+    "插件资源、字幕、设置分栏，原生清晰度选择、焦点与滚动保持、连续复制反馈及下载状态反馈",
+    "Firefox 原生 popup 高度限制为 600 CSS px，避免底部被裁切",
+    "桌面行快捷操作、按压与焦点反馈、排队拖动柄和更多按钮对齐、非活动状态留白",
+    "旧提示浮层滞留遮挡相邻按钮：用现有 Compose TooltipArea 替换自绘 Popup",
+    "失败通知改为窗口内 dp 布局，避免 150% 遮挡工具栏；模态界面期间隐藏通知，外层计时继续",
+    "前台窗口收到失败事件时不再强制聚焦外层 Frame，保留 Compose 画布和当前控件焦点"
+  ],
+  "automated": {
+    "extension": {
+      "test_files": 50,
+      "typecheck": "passed",
+      "chromium_build": "passed",
+      "tests": 380,
+      "firefox_build": "passed",
+      "logs": [
+        "extension-final-test.log",
+        "chrome-final-build.log",
+        "firefox-final-build.log"
+      ]
+    },
+    "desktop": {
+      "log": "dpi-diagnosis/desktop-final-build.log",
+      "failures": 0,
+      "classes": [
+        "ControlBoundsReportingTest",
+        "MotionPreferencesTest",
+        "ResponsiveLayoutTest",
+        "SelectionPruningTest",
+        "SelectionTest",
+        "TransparentButtonFeedbackTest"
+      ],
+      "tests": 54,
+      "build": "passed"
+    }
+  },
+  "sandbox": {
+    "firefox_popup_150": {
+      "passed": true,
+      "scale": "1.5",
+      "checks": [
+        {
+          "name": "real toolbar popup light fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1325,
+            "theme": "light",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "real toolbar popup dark fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1325,
+            "theme": "dark",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "native popup tabs: arrows, End and Home preserve keyboard focus and lazy Subtitle mounts",
+          "actual": true
+        },
+        {
+          "name": "native quality selection updates metadata and retains focus",
+          "actual": {
+            "meta": "HLS · .m3u8 · 720p · 1280×720 · 2.0 Mbps · 142 B",
+            "text": "720p · 2.0 Mbps",
+            "value": "http://localhost:51021/high.m3u8"
+          }
+        },
+        {
+          "name": "clipboard contains selected quality URL; repeated copy preserves SVG and resets label",
+          "actual": true
+        }
+      ]
+    },
+    "desktop_150": {
+      "passed": true,
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "After task failure, one mouse click switches each theme without waiting for the notice",
+        "Row resume, pause and retry produce real Core state changes",
+        "Row action has distinct rendered hover and pressed feedback",
+        "Tab reaches row retry with visible focus; Space retries the actual task",
+        "Row play opens inline player and close returns to task list",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window",
+        "Image details defer decoding until Preview and reuse the decoded image across tabs"
+      ],
+      "jar_sha256": "a527070c6d9e21a07059383e5ecbb8b3760ef4cb14f18fd3e15acbee89d1cfb3",
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1024,
+        "height": 600,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.5,
+        "scaleY": 1.5,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1536,
+        "deviceHeight": 900
+      },
+      "mode": "Java -Dsun.java2d.uiScale=1.5；Windows 系统 DPI 未修改；固定沙盒显示尺寸后启动应用",
+      "raw_report": "dpi-diagnosis/desktop-final-1.5.json",
+      "evidence": "ui-polish-20261018/desktop-150.png",
+      "fixture_connection": "Core 请求逐次建立连接，避免 Java 无障碍焦点遍历期间复用的空闲连接超时"
+    },
+    "firefox_full_interactions": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "popup actually connected to installed Native Host/Core",
+          "actual": true
+        },
+        {
+          "name": "popup theme button cycles through automatic/light/dark",
+          "actual": true
+        },
+        {
+          "name": "popup toggle and restore: 自动接管",
+          "actual": true
+        },
+        {
+          "name": "popup toggle and restore: 本站 Cookie",
+          "actual": true
+        },
+        {
+          "name": "popup toggle and restore: 本站提示",
+          "actual": true
+        },
+        {
+          "name": "popup rescan and copy-link buttons",
+          "actual": true
+        },
+        {
+          "name": "popup download button -> actual local video -> completed and SHA256",
+          "actual": true
+        },
+        {
+          "name": "confirmed download has a stable check icon and no busy animation",
+          "actual": true
+        },
+        {
+          "name": "subtitle popup select and restore: 来源语言",
+          "actual": true
+        },
+        {
+          "name": "subtitle popup select and restore: 目标语言",
+          "actual": true
+        },
+        {
+          "name": "subtitle popup select and restore: 本站字幕翻译",
+          "actual": true
+        },
+        {
+          "name": "subtitle popup select and restore: 本页字幕翻译",
+          "actual": true
+        },
+        {
+          "name": "DashScope without workspace: browser validation prevents invalid save and original service is restored",
+          "actual": true
+        },
+        {
+          "name": "popup open desktop button",
+          "actual": true
+        },
+        {
+          "name": "popup close button closes its window and keeps webpage open",
+          "actual": true
+        }
+      ],
+      "download_fixture": "本地 HTTP 视频，实际下载后核对 SHA256",
+      "note": "本轮完整交互在最终 600px 高度修复之前执行；最终高度修复后另行完成两档原生弹窗验收"
+    },
+    "firefox_popup_100": {
+      "passed": true,
+      "scale": "1.0",
+      "checks": [
+        {
+          "name": "real toolbar popup light fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1331,
+            "theme": "light",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "real toolbar popup dark fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1331,
+            "theme": "dark",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "native popup tabs: arrows, End and Home preserve keyboard focus and lazy Subtitle mounts",
+          "actual": true
+        },
+        {
+          "name": "native quality selection updates metadata and retains focus",
+          "actual": {
+            "meta": "HLS · .m3u8 · 720p · 1280×720 · 2.0 Mbps · 0:03 · 142 B",
+            "text": "720p · 2.0 Mbps",
+            "value": "http://localhost:50984/high.m3u8"
+          }
+        },
+        {
+          "name": "clipboard contains selected quality URL; repeated copy preserves SVG and resets label",
+          "actual": true
+        }
+      ]
+    },
+    "desktop_100": {
+      "passed": true,
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "After task failure, one mouse click switches each theme without waiting for the notice",
+        "Row resume, pause and retry produce real Core state changes",
+        "Row action has distinct rendered hover and pressed feedback",
+        "Tab reaches row retry with visible focus; Space retries the actual task",
+        "Row play opens inline player and close returns to task list",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window",
+        "Image details defer decoding until Preview and reuse the decoded image across tabs"
+      ],
+      "jar_sha256": "a527070c6d9e21a07059383e5ecbb8b3760ef4cb14f18fd3e15acbee89d1cfb3",
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1024,
+        "height": 600,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1024,
+        "deviceHeight": 600
+      },
+      "mode": "Java -Dsun.java2d.uiScale=1.0；Windows 系统 DPI 未修改；固定沙盒显示尺寸后启动应用",
+      "raw_report": "dpi-diagnosis/desktop-final-1.0.json",
+      "evidence": "ui-polish-20261018/desktop-100.png",
+      "fixture_connection": "Core 请求逐次建立连接，避免 Java 无障碍焦点遍历期间复用的空闲连接超时"
+    }
+  },
+  "fixture_corrections": [
+    "移除不存在的 update_check_enabled 设置项，并断言整批设置确实成功",
+    "每轮使用独立数据目录和命名管道；Java 显式传入 hls.engine.pipe",
+    "Tab 遍历上限依据可聚焦控件数量，未再假定 14 次即可到达重试",
+    "用原生窗口命中记录与整桌面截图区分界面遮挡和实际按钮行为",
+    "Core 请求使用独立短连接，避免焦点遍历后读取已超时的连接",
+    "固定沙盒显示尺寸后重新启动应用，避免中途改变远程显示分辨率污染布局与命中结果",
+    "100% 回归只读取重试控件的实际焦点状态，仍逐次按 Tab，再按 Space 验证真实 HTTP 请求",
+    "组合两档的作业达到总时限后，100% 在独立作业中完成；最终两档均使用同一最终 JAR"
+  ],
+  "not_executed": [
+    "Chromium 实际浏览器 UI 验收",
+    "scripts/smoke_v7_browser_basics.py 整套执行",
+    "本机安装、MSI 打包、签名、提交、推送、GitHub 发布",
+    "音频上传及真实云端字幕识别翻译",
+    "真实投屏和 TVBox 设备验收"
+  ],
+  "delivery": {
+    "worktrees": 1,
+    "host_app_installed_by_this_turn": false,
+    "desktop_installer_updated": false,
+    "branch": "main",
+    "github_updated": false,
+    "cache_cleanup": "构建缓存尚保留；此前自动删除被审批拒绝，本轮未绕过限制",
+    "host_hls_processes_remaining": 0,
+    "sandbox_client_remaining": 0
+  },
+  "raw_evidence_root": ".tool-cache/ui-polish-20261018",
+  "static_diff_check": "git diff --check executed, exit 0",
+  "resolved_desktop_150_issue": {
+    "previous_validation": {
+      "pointer_hit": {
+        "point": [
+          1488.0,
+          90.0
+        ],
+        "class": "SunAwtCanvas",
+        "title": "",
+        "root_title": "HLS Downloader",
+        "root": 2163374,
+        "expected_root": 2163374
+      },
+      "passed": false,
+      "failure": "Traceback (most recent call last):\n  File \"C:\\QAHost\\desktop-ui.py\", line 307, in run\n    wait(lambda: switch not in ui('state')['controlBounds'], 'Theme did not switch')\n  File \"C:\\Source\\scripts\\smoke_v7_player_overlay.py\", line 36, in wait\n    raise AssertionError(message)\nAssertionError: Theme did not switch\n",
+      "reason": "原因尚未确认，不将其当作已通过，也不推断为确定的产品缺陷",
+      "evidence": "ui-polish-20261018/desktop-150-failure.png",
+      "mode": "Java -Dsun.java2d.uiScale=1.5；未修改 Windows 系统 DPI",
+      "keyboard_continuation_error": "Traceback (most recent call last):\n  File \"C:\\QAHost\\desktop-ui.py\", line 314, in run\n    raise AssertionError('Theme is not keyboard reachable')\nAssertionError: Theme is not keyboard reachable\n",
+      "completed_checks": [
+        "Empty library has correct message and disabled global start/pause"
+      ],
+      "remaining": "主题按钮鼠标切换和键盘到达验收未通过，后续桌面 150% 完整流程未完成；需要继续定位，不能声称这一档正常。"
+    },
+    "root_cause": "通知 Popup 使用固定像素偏移 (-18,72)，在 150% 缩放下与主题按钮重叠；同一窗口中通知显示时点击失败，通知消失后点击立即成功。",
+    "fix": "通知改为主窗口内的 dp 布局，位于工具栏下方；前台窗口收到失败事件时保留 Compose 画布焦点。",
+    "proof": "最终 JAR 在任务失败通知仍显示时，一次点击切换浅色/深色；100% 和 Java 模拟 150% 的完整 13 项流程通过。",
+    "diagnostic_reports": [
+      "dpi-diagnosis/diagnosis2.json",
+      "dpi-diagnosis/notice-diagnosis.json"
+    ],
+    "failed_intermediate_run": "dpi-diagnosis/desktop-150-focus-fixed.json：只修复抢焦点仍失败，未当作最终成功证据。"
+  },
+  "evidence_note": "desktop-150-failure.png 保留作修复前证据；desktop-150.png 和 desktop-notification-150.png 是修复后的完整来宾截图。"
+}

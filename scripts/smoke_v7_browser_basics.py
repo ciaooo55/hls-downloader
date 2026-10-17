@@ -318,6 +318,8 @@ ConvertTo-Json -InputObject @($matches) -Compress
             text:content.document.body.textContent,
             scale:content.devicePixelRatio,
             viewport:{width:content.innerWidth,height:content.innerHeight},
+            footerBottom:content.document.querySelector('footer')?.getBoundingClientRect().bottom,
+            mainHeight:content.document.querySelector('main')?.getBoundingClientRect().height,
             buttons:[...content.document.querySelectorAll('button')].map(b=>{const r=b.getBoundingClientRect();return {text:b.textContent.trim(),title:b.title,pressed:b.getAttribute('aria-pressed'),disabled:b.disabled,visible:r.left>=0&&r.top>=0&&r.right<=content.innerWidth&&r.bottom<=content.innerHeight,rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom},x:content.mozInnerScreenX+r.x+r.width/2,y:content.mozInnerScreenY+r.y+r.height/2}})
         });"""
         source = source.replace('SCROLL_TARGET', json.dumps(scroll_target))
@@ -863,6 +865,8 @@ ConvertTo-Json -InputObject @($matches) -Compress
                 driver.execute_script("window.__hlsQaPopupHidden=false;arguments[0].closest('panel').addEventListener('popuphidden',()=>window.__hlsQaPopupHidden=true,{once:true})",panel_browser)
                 state = wait(lambda: (s if (s:=toolbar_state()).get('ready')=='ready' else None), 'Toolbar popup not ready', 15)
                 assert 'HLS Downloader' in state['text']
+                assert state['mainHeight'] <= state['viewport']['height'] + 1, state
+                assert state['footerBottom'] <= state['viewport']['height'] + 1, state
                 record('actual-toolbar-popup-opened', state)
                 def click_toolbar_button(text=None, title=None):
                     def visible_target():

@@ -402,7 +402,7 @@ internal val SIDEBAR_COLLAPSE_WIDTH = TASK_TABLE_COMPACT_WIDTH + SIDEBAR_WIDTH
 internal data class TaskColumns(val name: Dp, val progress: Dp, val status: Dp, val speed: Dp, val size: Dp, val actions: Dp, val compact: Boolean) {
     val requiredWidth: Dp get() = name + progress + status + speed + size + actions + 30.dp
 }
-internal fun taskColumnsForWidth(width: Dp) = if (width < TASK_TABLE_COMPACT_WIDTH) TaskColumns(225.dp, 185.dp, 100.dp, 75.dp, 70.dp, 55.dp, true)
+internal fun taskColumnsForWidth(width: Dp) = if (width < TASK_TABLE_COMPACT_WIDTH) TaskColumns(225.dp, 185.dp, 100.dp, 75.dp, 70.dp, 70.dp, true)
     else TaskColumns(280.dp, 220.dp, 120.dp, 100.dp, 90.dp, 70.dp, false)
 
 internal data class ResolvedTaskColumn(val id: String, val label: String, val width: Dp)
@@ -676,6 +676,9 @@ fun main() {
             onExternalDropConsumed = { droppedPaths = emptyList() },
             onAttention = {
                 EventQueue.invokeLater {
+                    // 前台任务失败时不能把焦点从 Compose 画布移到外层 Frame，
+                    // 否则下一次点击只恢复画布焦点，按钮操作会丢失。
+                    if (window.isVisible && !window.isMinimized && window.isActive) return@invokeLater
                     // Tray restore must reverse hideToTray() before focus/raise.
                     // A hidden Compose window can keep receiving native focus calls
                     // while remaining absent from the screen and accessibility tree.
@@ -972,12 +975,16 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     } else {
         null
     }
-    val visible = sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
+    val visible by remember(tasks) {
+        derivedStateOf {
+            sortTasks(visibleTasks(tasks, filter, category, query, selectedQueueId), settings.taskSort)
+        }
+    }
     // 可见集一变，选择就要收敛到可见行上。否则筛选后台头仍显示"4 已选"，
     // 而屏幕上一行都没选中，紧接着的批量删除会连被筛掉的 3 个任务一起删——
     // 用户在屏幕上根本看不到它们。Linux 上实测复现（见迭代日志第三十四轮）：
     // 连点 全部→进行中→排队中→已暂停→已完成→失败，selectedCount 一直是 4。
-    val visibleIds = visible.mapTo(HashSet()) { it.id }
+    val visibleIds by remember { derivedStateOf { visible.mapTo(HashSet()) { it.id } } }
     LaunchedEffect(visibleIds, visible.size) {
         val pruned = selectionAfterVisibleSetChange(selected, visibleIds, visible.size)
         if (pruned != selected) selected = pruned
@@ -1498,6 +1505,10 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             onClose = { playerTaskId = null; playerOverlayVisible = false }, onFullscreen = onPlayerFullscreen,
             onModalChanged = { playerOverlayVisible = it }, openRequest = playerOpenRequest)
     } }
+    // 使用主窗口内的 dp 布局；独立 Popup 的像素偏移在高 DPI 下会盖住工具栏。
+    if (!modalVisible) notice?.let { signal ->
+        NoticeToast(signal, Modifier.align(Alignment.TopEnd).padding(top = 96.dp, end = 18.dp)) { notice = null }
+    }
     }
     if (externalDropActive || visualFixture == "drop") {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1733,7 +1744,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         },
         onDismiss = { aboutDialog = false },
     )
-    LaunchedEffect(notice) { notice?.let { recordNotice(it.level, it.message) } }
+    LaunchedEffect(notice) {
+        notice?.let {
+            recordNotice(it.level, it.message)
+            delay(3_600)
+            notice = null
+        }
+    }
     LaunchedEffect(fallbackCandidate?.handoffId, fallbackCandidate?.presentation) {
         val offer = fallbackCandidate ?: return@LaunchedEffect
         var failureReported = false
@@ -1837,7 +1854,6 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             },
         )
     }
-    notice?.let { signal -> NoticeToast(signal) { notice = null } }
     probeResult?.let { signal -> ProbeResultDialog(signal, { probeResult = null; probeDraft = null }) { variant ->
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
@@ -2456,7 +2472,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
 // 取 faint 的 80%：浅色约 3.00~3.24:1、深色约 3.99~4.33:1，顺带也过了 3:1。
 @Composable private fun ToolbarGroupDivider() = Box(Modifier.padding(horizontal = 5.dp).width(2.dp).height(18.dp).background(faint.copy(alpha = .8f)))
 @Composable private fun ToolbarButton(icon: ImageVector, label: String, action: () -> Unit, primary: Boolean = false, enabled: Boolean = true) { Button(onClick = action, enabled = enabled, colors = ButtonDefaults.buttonColors(containerColor = if (primary) blue else Color.Transparent, contentColor = if (primary) onBlue else ink), border = if (primary) null else BorderStroke(1.dp, Color.Transparent), shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.height(36.dp).padding(horizontal = 1.dp).reportControlBounds("toolbar.$label"), hoverColor = if (primary) null else surface3, pressedColor = if (primary) null else pressedSurface) { Icon(icon, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text(label, fontSize = TypeScale.caption, fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium) } }
-@Composable private fun ToolbarIcon(icon: ImageVector, text: String, enabled: Boolean = true, hint: String = text, action: () -> Unit) = WorkbenchTooltip(hint) { IconButton(onClick = action, enabled = enabled, modifier = Modifier.size(36.dp).reportControlBounds("toolbar.$text")) { Icon(icon, text, tint = muted, modifier = Modifier.size(18.dp)) } }
+@Composable private fun ToolbarIcon(icon: ImageVector, text: String, enabled: Boolean = true, hint: String = text, action: () -> Unit) = WorkbenchTooltip(hint) { IconButton(onClick = action, enabled = enabled, modifier = Modifier.size(36.dp).reportControlBounds("toolbar.$text")) { Icon(icon, text, tint = if (enabled) ink else muted, modifier = Modifier.size(18.dp)) } }
 
 /**
  * 侧栏导航行的外壳：悬停换底色、按压缩一点、选中给选中底。
@@ -3100,15 +3116,45 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
                             modifier = Modifier.padding(top = 3.dp),
                         )
                     }
-                    "status" -> Column(Modifier.width(column.width)) { StatusBadge(task.status); Text(if (isActiveTaskStatus(task.status)) task.remaining else "", color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 1.dp)) }
+                    "status" -> Column(Modifier.width(column.width)) {
+                        StatusBadge(task.status)
+                        if (isActiveTaskStatus(task.status) && task.remaining.isNotBlank()) {
+                            Text(task.remaining, color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 1.dp))
+                        }
+                    }
                     "speed" -> Text(if (isActiveTaskStatus(task.status)) task.speed else "—", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption)
                     "size" -> Text(task.source.totalBytes?.takeIf { it > 0 }?.let(::formatBytes) ?: "已下载 ${formatBytes(task.source.downloadedBytes)}", Modifier.width(column.width), color = ink, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     "actions" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
                         if (!columns.compact && queueOrder && task.status == "排队中") {
                             var dragY by remember { mutableFloatStateOf(0f) }
-                            Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(28.dp).padding(5.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } })
-                        } else if (!columns.compact) Spacer(Modifier.width(28.dp))
-                        Box(Modifier.width(42.dp)) { IconButton(onClick = { if (!isSelected) select(false, false); overflowOpen = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
+                            Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(34.dp).padding(8.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } })
+                        } else {
+                            val startAction = taskStartAction(task.source)
+                            val primaryAction = when {
+                                "pause" in task.source.availableActions -> "pause"
+                                startAction != null -> startAction
+                                taskSupportsMediaActions(task.source) && task.source.playbackReady -> "play"
+                                "open_folder" in task.source.availableActions -> "open_folder"
+                                else -> null
+                            }
+                            Box(Modifier.width(34.dp)) {
+                                if (primaryAction != null) {
+                                    val label = if (primaryAction == "play") taskPlayLabel(task.source) else actionLabel(primaryAction)
+                                    val icon = when (primaryAction) {
+                                        "pause" -> Icons.Outlined.Pause
+                                        "retry" -> Icons.Outlined.Refresh
+                                        "open_folder" -> Icons.Outlined.FolderOpen
+                                        else -> Icons.Outlined.PlayArrow
+                                    }
+                                    WorkbenchTooltip(label) {
+                                        IconButton(onClick = { onAction(primaryAction) }, modifier = Modifier.size(34.dp).reportControlBounds("task.action.${task.id}.$primaryAction")) {
+                                            Icon(icon, "$label：${task.filename}", tint = blue, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Box(Modifier.width(36.dp)) { IconButton(onClick = { if (!isSelected) select(false, false); overflowOpen = true }, modifier = Modifier.size(34.dp)) { Icon(Icons.Outlined.MoreVert, "更多操作", tint = muted) }; DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { TaskMenuEntries(task, { overflowOpen = false }, onDetails, onAction) } }
                     }
                 }
             }
@@ -3854,8 +3900,12 @@ private fun HarvestDialog(
     val canRefresh = task.source.availableActions.any { it in setOf("start", "resume", "retry") }
     val canPreview = task.status == "已完成" && !task.source.outputMissing && isPreviewableImage(task.source.outputPath)
     var preview by remember(task.id, task.source.outputPath) { mutableStateOf<Result<ImageBitmap>?>(null) }
-    LaunchedEffect(canPreview, task.source.outputPath) {
-        preview = if (canPreview) withContext(Dispatchers.IO) { loadLocalImagePreview(task.source.outputPath) } else null
+    LaunchedEffect(task.id, canPreview, task.source.outputPath, tab) {
+        if (!canPreview) {
+            preview = null
+        } else if (tab == "预览" && preview == null) {
+            preview = withContext(Dispatchers.IO) { loadLocalImagePreview(task.source.outputPath) }
+        }
     }
     LaunchedEffect(task.id, torrentTask) {
         if (!torrentTask) return@LaunchedEffect
@@ -4316,15 +4366,14 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     }
 }, actions = { if (entries.isNotEmpty()) DialogSecondary("清空记录", onClear); DialogPrimary("关闭", onClick = onDismiss) })
 
-@Composable private fun NoticeToast(signal: UiSignal.Notice, onDismiss: () -> Unit) {
-    LaunchedEffect(signal) { delay(3_600); onDismiss() }
-    Popup(alignment = Alignment.TopEnd, offset = androidx.compose.ui.unit.IntOffset(-18, 72), properties = PopupProperties(focusable = false)) {
+@Composable private fun NoticeToast(signal: UiSignal.Notice, modifier: Modifier = Modifier, onDismiss: () -> Unit) {
         val tone = if (signal.level == "error") errorStrong else if (signal.level == "success") successColor else blue
         val reduceMotion by MotionPreferences.reduceMotion
         // 从上方 8dp 滑入 + 淡入：通知条贴在右上角，向下滑的动势和它的落点方向一致。
         val enterState = remember { MutableTransitionState(false).apply { targetState = true } }
         AnimatedVisibility(
             visibleState = enterState,
+            modifier = modifier,
             enter = fadeIn(tween(motionDurationMillis(reduceMotion, 150))) + slideInVertically(tween(motionDurationMillis(reduceMotion, 150))) { -8 },
         ) {
         Surface(color = dialogSurface, shape = RoundedCornerShape(Radius.md), shadowElevation = Elevation.e2, border = BorderStroke(1.dp, border), modifier = Modifier.widthIn(min = 300.dp, max = 440.dp)) {
@@ -4335,7 +4384,6 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
             }
         }
         }
-    }
 }
 
 @Composable private fun TorrentSelectionDialog(data: TorrentProbeDto, onDismiss: () -> Unit, onCreate: (List<TorrentFileDto>) -> Unit) {

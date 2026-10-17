@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "date": "2026-10-18",
+  "scope": "Task-list recomposition caching and on-demand image preview; targeted regression validation only",
+  "base_commit": "4fff8054b403a1f13fed28399b92d02befc9e011",
+  "working_tree_modified": true,
+  "source_sha256": {
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "e99364518c6937133eefbe3e440d931aff9711b3b84b9cb210f7671131f07475"
+  },
+  "changes": [
+    "Cache filtered/sorted visible tasks and visible task IDs with Compose derived state.",
+    "Decode completed-image preview only on the Preview tab; reuse decoded preview across tabs."
+  ],
+  "unit_tests": [
+    {
+      "name": "com.hlsdownloader.desktop.ControlBoundsReportingTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.PerformanceModelTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.ResponsiveLayoutTest",
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.SelectionPruningTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.SelectionTest",
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "unit_total": 50.0,
+  "thousand_task_model_p95_ms": 11.469,
+  "performance_note": "Existing mapping/filtering test measurement only; no before/after performance comparison was executed.",
+  "build_log": ".tool-cache/optimization-20261018/ui-build-test.log",
+  "build_tasks": [
+    "jar",
+    "test --tests SelectionTest --tests SelectionPruningTest --tests ResponsiveLayoutTest --tests PerformanceModelTest --tests ControlBoundsReportingTest --no-daemon --offline"
+  ],
+  "test_driver_sha256": "2c3af22d675336018e572cc925dfd54f17f007276b27b8fced2fda89ad374e0a",
+  "sandbox": [
+    {
+      "artifact": ".tool-cache/optimization-20261018/ui-final-100.json",
+      "sha256": "0c0fd38e2b1defb2b3c4399a1b9aaa1eff860889e391600770584039a4e5ad44",
+      "passed": true,
+      "exit_code": 0,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1024,
+        "height": 600,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1024,
+        "deviceHeight": 600
+      },
+      "screen_logical_size": [
+        1920,
+        1080
+      ],
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window",
+        "Image details defer decoding until Preview and reuse the decoded image across tabs"
+      ],
+      "jar_sha256": "cbceb9dd1dcae635cf65b965ad4baab72c20ab74cc03769b72a4ed36e7870ce7"
+    },
+    {
+      "artifact": ".tool-cache/optimization-20261018/ui-final-150.json",
+      "sha256": "1529211fc15dfd4c3ec97b9eea4aa8a4fb1156af673c4fc121623fcb8b28a9c5",
+      "passed": true,
+      "exit_code": 0,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1024,
+        "height": 600,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.5,
+        "scaleY": 1.5,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1536,
+        "deviceHeight": 900
+      },
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window",
+        "Image details defer decoding until Preview and reuse the decoded image across tabs"
+      ],
+      "jar_sha256": "cbceb9dd1dcae635cf65b965ad4baab72c20ab74cc03769b72a4ed36e7870ce7"
+    }
+  ],
+  "initial_failure": "The first additional image-preview scenario sent taskId instead of the UiTestAction JSON field task_id, causing HTTP 400. Corrected the fixture and reran both scales; production code was unchanged after the build. Initial evidence retained under .tool-cache/optimization-20261018/initial-attempt/.",
+  "limits": [
+    "Java UI scale was set to 1.0 and 1.5; Windows OS display settings were not changed.",
+    "No new dependency, signing, installer packaging, host installation, commit, push, or release was performed. The published r9 assets do not contain these working-tree optimizations.",
+    "No cloud audio upload, cloud subtitle acceptance, physical casting, or TVBox device acceptance in this round.",
+    "Installer size and CPU/memory were not remeasured; no size reduction or measured before/after speedup is claimed.",
+    "Throttled test transfers logged expected ConnectionAbortedError when a test task was paused; both final UI processes exited successfully."
+  ],
+  "host_install_entries": 0,
+  "host_hls_processes": 0,
+  "sandbox_closed": true,
+  "cache_cleanup": "Automatic build-cache removal had previously been rejected by approval review (blocked by policy). The desktop manual cleanup script allowlist was updated for this run, syntax-parsed successfully, and was not executed."
+}
