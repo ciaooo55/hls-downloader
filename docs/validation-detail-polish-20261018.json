@@ -1,0 +1,161 @@
+{
+  "date": "2026-10-18T03:40:32.555953+08:00",
+  "status": "scoped_validation_100_passed",
+  "base_commit": "215e7768d3d90353e6fea93a44d5e2c7927b37c2",
+  "source_sha256": {
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "70054a71143c3e77ec529fdbd96df5a186cc6a2d16ffaeb7dee3a6c2dae4b2b9",
+    "extension/entrypoints/popup/main.ts": "6e2d77e6c16f0b784225a362dfecd5eb60bf9e6663f0bcd605435a1eb98d5fcc",
+    "extension/entrypoints/popup/style.css": "2cc2f436216f7355240d17cd1118875edc5af96019de60f7faef2bd71a876312",
+    "extension/lib/subtitlePopup.ts": "1f54929c86be1f95956a14f7f55b517a0ecb6754cbdb9430d8ac426f2bdafa3b"
+  },
+  "artifact_sha256": {
+    ".tool-cache/build-cache/compose-build/libs/HLSDownloaderDesktop-7.0.3.jar": "98b67259ebb7f531c86f8bf9e8615d81db0b4d17d2cae23348ef51f5d79ef13a",
+    "extension/.output/hls-downloader-extension-7.0.3-chrome.zip": "825c946a5a4332b63cd03646738209e3b522af550b6f334b7afa8e27443479fe",
+    "extension/.output/hls-downloader-extension-7.0.3-firefox.zip": "de7f37a5def14d3f6ce4c3adc5b3454d297c5963305019037eb58873a550ab86"
+  },
+  "changes": [
+    "任务表格仅在自身持焦时处理快捷键，行内按钮 Enter 执行实际动作",
+    "插件下载、投屏和 TVBox 状态按资源 ID、实际 URL、操作隔离",
+    "异步复制被拒后尝试同步复制；恢复焦点；双重失败提供选中的只读完整链接；成功后移除手动入口",
+    "字幕页隐藏后停止前台轮询；设置保存并发守卫及禁用状态；失败保留新输入并恢复清除按钮；轮询不覆盖正操作的选择框"
+  ],
+  "automated": {
+    "desktop_tests": 52,
+    "desktop_jar_build": "passed",
+    "extension_typecheck": "passed",
+    "extension_tests": 380,
+    "extension_test_files": 50,
+    "chromium_build_zip": "passed",
+    "firefox_build_zip_sources": "passed"
+  },
+  "sandbox": {
+    "desktop-100": {
+      "passed": true,
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "After task failure, one mouse click switches each theme without waiting for the notice",
+        "Row resume, pause and retry produce real Core state changes",
+        "Row action has distinct rendered hover and pressed feedback",
+        "Tab reaches row retry with visible focus; Space retries the actual task",
+        "Focused row retry: Enter retries actual HTTP request without opening details",
+        "Row play opens inline player and close returns to task list",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window",
+        "Image details defer decoding until Preview and reuse the decoded image across tabs"
+      ]
+    },
+    "popup-final-100": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "real toolbar popup light fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1331,
+            "theme": "light",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "real toolbar popup dark fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1331,
+            "theme": "dark",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "native popup tabs: arrows, End and Home preserve keyboard focus and lazy Subtitle mounts",
+          "actual": true
+        },
+        {
+          "name": "native quality selection updates metadata and retains focus",
+          "actual": {
+            "meta": "HLS · .m3u8 · 720p · 1280×720 · 2.0 Mbps · 0:03 · 142 B",
+            "text": "720p · 2.0 Mbps",
+            "value": "http://localhost:50066/high.m3u8"
+          }
+        },
+        {
+          "name": "clipboard contains selected quality URL; repeated copy preserves SVG and resets label",
+          "actual": true
+        },
+        {
+          "name": "Async clipboard rejection falls back to real synchronous copy and restores button focus",
+          "actual": true
+        },
+        {
+          "name": "Both clipboard methods denied: full URL is visible, selected and Ctrl+C copies exact selected rendition",
+          "actual": {
+            "end": 32,
+            "focused": true,
+            "readonly": true,
+            "start": 0,
+            "value": "http://localhost:50066/high.m3u8"
+          }
+        },
+        {
+          "name": "Clipboard recovery removes obsolete error field and keeps normal card compact",
+          "actual": true
+        },
+        {
+          "name": "Pending high rendition does not disable low rendition; switching back restores matching status; two exact URLs sent",
+          "actual": [
+            "http://localhost:50066/high.m3u8",
+            "http://localhost:50066/low.m3u8"
+          ]
+        },
+        {
+          "name": "Hidden Subtitle tab stops polling; visible tab resumes without remount",
+          "actual": true
+        },
+        {
+          "name": "Save failure preserves entered key, restores Clear and prevents overlapping form submissions",
+          "actual": {
+            "clearEnabled": true,
+            "configure": 1,
+            "error": "QA simulated configuration failure",
+            "key": "qa-not-a-real-key"
+          }
+        },
+        {
+          "name": "Failed Clear can retry; successful Clear removes typed key and correctly disables Clear",
+          "actual": true
+        }
+      ]
+    }
+  },
+  "not_run": [
+    "Chromium 原生浏览器 UI",
+    "本轮真实云端字幕音频请求",
+    "投屏/TVBox实体接收设备",
+    "本轮全套 Core 回归；Core 源码未改"
+  ],
+  "delivery": "r10 发布包尚未包含本轮改动；r11 安装包验收后才可发布",
+  "limits": [
+    "字幕保存失败与清晰度等待状态使用真实 Firefox 原生弹窗中的本地响应注入，不是云端或设备端验收",
+    "无新增依赖；未在本机安装；未签名；未操作用户下载或其他项目",
+    "此前缓存和桌面旧包删除被自动审批拒绝，本轮未重试"
+  ]
+}

@@ -314,6 +314,9 @@ async function main() {
   let settingsBusy: HTMLButtonElement | undefined
   const sending: Record<string, SendState> = {}
   const pushing: Record<string, PushState> = {}
+  // 同一资源的不同清晰度分别发送，状态必须对应实际链接。
+  const actionKey = (item: MediaResource, action = 'download') => JSON.stringify([item.id, item.url, action])
+  const manualCopy = new Set<string>()
   // Chosen rendition per resource id: the list re-renders on every send or
   // status poll, and the pick must survive those rebuilds.
   const chosenVariant: Record<string, string> = {}
@@ -375,8 +378,8 @@ async function main() {
       const resolution = selected.width && selected.height ? (selected.width + '\u00d7' + selected.height) : ''
       const bandwidth = selected.bandwidth ? ((selected.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
       const duration = selected.duration ? formatDuration(selected.duration) : ''
-      const streamMode = item.isLive === true ? '直播' : ''
-      const meta = [resourceKindLabel(item), resourceSuffix(item), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
+      const streamMode = selected.isLive === true ? '直播' : ''
+      const meta = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
       const article = el('article')
       article.dataset.resourceId = item.id
       article.tabIndex = -1
@@ -417,7 +420,19 @@ async function main() {
       const metaRow = el('div', 'resource-meta')
       metaRow.append(mime, copyBtn)
       body.append(metaRow)
-      const sendState = sending[item.id]
+      if (manualCopy.has(selected.url)) {
+        const url = el('input', 'manual-copy')
+        url.type = 'text'
+        url.readOnly = true
+        url.value = selected.url
+        url.dataset.action = 'manual-copy'
+        url.setAttribute('aria-label', '完整媒体链接，按 Ctrl+C 复制')
+        url.addEventListener('focus', () => url.select())
+        const help = el('small', 'manual-copy-help', '自动复制失败，请按 Ctrl+C 复制下方完整链接')
+        help.setAttribute('role', 'status')
+        body.append(help, url)
+      }
+      const sendState = sending[actionKey(selected)]
       const label = sendState ? SEND_LABELS[sendState] : '下载'
       const button = el('button', 'hlsd-button primary')
       button.dataset.state = sendState || ''
@@ -430,7 +445,7 @@ async function main() {
       button.setAttribute('aria-busy', String(sendPending))
       button.title = sendState === 'confirming' ? '请在主程序中确认本次下载' : '发送到主程序，确认后加入下载队列'
       button.addEventListener('click', () => void send(selected))
-      const pushKey = `${item.id}:tvbox`
+      const pushKey = actionKey(selected, 'tvbox')
       const pushState = pushing[pushKey]
       const pushLabel = pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox'
       const pushButton = el('button', 'hlsd-button push-button')
@@ -443,7 +458,7 @@ async function main() {
       pushButton.setAttribute('aria-busy', String(pushPending))
       pushButton.title = '直接推送当前媒体链接到 TVBox'
       pushButton.addEventListener('click', () => void pushToTv(selected))
-      const castKey = `${item.id}:cast`
+      const castKey = actionKey(selected, 'cast')
       const castState = pushing[castKey]
       const castLabel = castState ? CAST_PUSH_LABELS[castState] : '投屏'
       const castButton = el('button', 'hlsd-button cast-button')
@@ -464,7 +479,7 @@ async function main() {
     section.scrollTop = scrollTop
     if (focused?.id) {
       const card = [...list.querySelectorAll('article')].find(node => node.dataset.resourceId === focused.id)
-      const control = [...(card?.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('[data-action]') || [])]
+      const control = [...(card?.querySelectorAll<HTMLButtonElement | HTMLSelectElement | HTMLInputElement>('[data-action]') || [])]
         .find(node => node.dataset.action === focused.action && !node.disabled)
       const target = control || card
       target?.focus({ preventScroll: true })
@@ -516,7 +531,7 @@ async function main() {
   }
 
   const pushToTv = async (item: MediaResource) => {
-    const key = `${item.id}:tvbox`
+    const key = actionKey(item, 'tvbox')
     const current = pushing[key]
     if (current && PUSH_BUSY.has(current)) return
     setError('')
@@ -541,7 +556,7 @@ async function main() {
   }
 
   const castToDevice = async (item: MediaResource) => {
-    const key = `${item.id}:cast`
+    const key = actionKey(item, 'cast')
     const current = pushing[key]
     if (current && PUSH_BUSY.has(current)) return
     setError('')
@@ -579,11 +594,13 @@ async function main() {
       }, 1_800))
     }
     try {
-      // navigator.clipboard needs a focused document; the popup already is one,
-      // but keep the textarea fallback for browsers that deny the async API.
-      if (navigator.clipboard?.writeText) {
+      let copied = false
+      try {
         await navigator.clipboard.writeText(url)
-      } else {
+        copied = true
+      } catch { /* 权限被拒绝时继续尝试同步复制。 */ }
+      if (!copied) {
+        const focused = document.activeElement
         const scratch = document.createElement('textarea')
         scratch.value = url
         scratch.setAttribute('readonly', '')
@@ -595,31 +612,40 @@ async function main() {
           if (!document.execCommand('copy')) throw new Error('Copy was denied')
         } finally {
           scratch.remove()
+          if (focused instanceof HTMLElement && focused.isConnected) focused.focus({ preventScroll: true })
         }
       }
+      manualCopy.delete(url)
+      node.closest('article')?.querySelector('.manual-copy')?.remove()
+      node.closest('article')?.querySelector('.manual-copy-help')?.remove()
       done('\u5df2\u590d\u5236')
     } catch {
-      setError('\u590d\u5236\u94fe\u63a5\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u62e9')
+      manualCopy.add(url)
+      renderList()
+      const card = [...list.querySelectorAll('article')].find(card => card.querySelector<HTMLInputElement>('.manual-copy')?.value === url)
+      card?.querySelector<HTMLInputElement>('.manual-copy')?.focus({ preventScroll: true })
     }
   }
 
   const confirmDownload = async (item: MediaResource, handoffId: string) => {
-    sending[item.id] = 'confirming'
+    const key = actionKey(item)
+    sending[key] = 'confirming'
     renderList()
     if (!await waitForDownloadConfirmation(message => browser.runtime.sendMessage(message), handoffId)) {
-      delete sending[item.id]
+      delete sending[key]
       renderList()
       return
     }
-    sending[item.id] = 'queued'
+    sending[key] = 'queued'
     renderList()
-    setTimeout(() => { delete sending[item.id]; renderList() }, 2_500)
+    setTimeout(() => { delete sending[key]; renderList() }, 2_500)
   }
 
   const send = async (item: MediaResource) => {
-    if (sending[item.id] && SEND_BUSY.has(sending[item.id])) return
+    const key = actionKey(item)
+    if (sending[key] && SEND_BUSY.has(sending[key])) return
     setError('')
-    sending[item.id] = 'sending'
+    sending[key] = 'sending'
     renderList()
     try {
       const response = await withDeadline(
@@ -630,7 +656,7 @@ async function main() {
       if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
       await confirmDownload(item, String(response.handoff?.id || ''))
     } catch (reason) {
-      sending[item.id] = 'retry'
+      sending[key] = 'retry'
       setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
       renderList()
     }

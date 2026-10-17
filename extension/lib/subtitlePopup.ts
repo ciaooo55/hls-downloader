@@ -64,6 +64,16 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   let busy = false
   let refreshing = false
   let live = false
+  let hasKey = false
+  let loadingProvider = true
+  const updateControls = () => {
+    for (const control of [enabled, site, page, source, target, offset, originals, prefetch, player]) control.disabled = busy
+    for (const control of [service, workspace, region, key, save]) control.disabled = busy || loadingProvider
+    clear.disabled = busy || loadingProvider || !hasKey
+    start.disabled = busy || !state || (!live && (!state.allowed || !player.options.length))
+    form.setAttribute('aria-busy', String(busy || loadingProvider))
+    start.setAttribute('aria-busy', String(busy))
+  }
   const report = (message: string) => { error.textContent = message; error.hidden = !message }
   const send = async (message: Record<string, unknown>) => {
     const response = await browser.runtime.sendMessage({ ...message, tabId })
@@ -71,19 +81,21 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     return response
   }
   const refresh = async () => {
-    if (busy || refreshing || tabId == null) return
+    if (root.hidden || busy || refreshing || tabId == null) return
     refreshing = true
     try {
       state = await send({ type: 'subtitle-state-get' })
       if (busy) return
       const settings = state.settings
       enabled.checked = settings.enabled
-      source.value = settings.source; target.value = settings.target; originals.checked = settings.showSource
+      if (document.activeElement !== source) source.value = settings.source
+      if (document.activeElement !== target) target.value = settings.target
+      originals.checked = settings.showSource
       prefetch.checked = settings.prefetch
       if (document.activeElement !== offset) offset.value = String(settings.offset)
       const rule = (value: unknown) => value == null ? 'inherit' : value ? 'on' : 'off'
-      site.value = rule(settings.sites[subtitleSite(state.pageUrl)])
-      page.value = rule(state.pages[subtitlePage(state.pageUrl)])
+      if (document.activeElement !== site) site.value = rule(settings.sites[subtitleSite(state.pageUrl)])
+      if (document.activeElement !== page) page.value = rule(state.pages[subtitlePage(state.pageUrl)])
       live = Boolean(state.session && !['stopped', 'failed'].includes(state.session.status))
       const playing = (state.players || []).some((p: any) => p.mediaId === state.session?.mediaId && p.frameId === state.session?.frameId && p.playing)
       status.textContent = !settings.enabled ? '全局已关闭' : !state.allowed ? '当前页已关闭' : live
@@ -94,7 +106,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       const options = (state.players || []).map((p: any, index: number) => ({ value: `${p.frameId}:${p.mediaId}`, label: `播放器 ${index + 1}${p.playing ? ' · 播放中' : ''} · ${String(p.label).slice(0, 36)}` }))
       const old = player.value
       const signature = JSON.stringify(options)
-      if (player.dataset.signature !== signature) {
+      if (document.activeElement !== player && player.dataset.signature !== signature) {
         player.replaceChildren(...options.map((p: {value: string; label: string}) => new Option(p.label, p.value)))
         player.dataset.signature = signature
         if (options.some((p: {value: string}) => p.value === old)) player.value = old
@@ -103,7 +115,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
           if (active) player.value = `${active.frameId}:${active.mediaId}`
         }
       }
-      start.disabled = !state.allowed || (!live && !options.length)
+      updateControls()
       const known = [...new Set<string>((state.players || []).flatMap((p: any) => p.tracks || []))]
       const resources = await browser.runtime.sendMessage({ type: 'list', tabId, pageUrl: state.pageUrl }).catch(() => [])
       for (const resource of Array.isArray(resources) ? resources : []) {
@@ -118,10 +130,11 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     finally { refreshing = false }
   }
   const change = async (message: Record<string, unknown>) => {
-    busy = true; start.disabled = true; report('')
+    if (busy) return
+    busy = true; updateControls(); report('')
     try { await send({ type: 'subtitle-settings', ...message }) }
     catch (reason) { report(reason instanceof Error ? reason.message : String(reason)) }
-    finally { busy = false; await refresh() }
+    finally { busy = false; updateControls(); await refresh() }
   }
   enabled.onchange = () => void change({ settings: { enabled: enabled.checked } })
   const ruleValue = (select: HTMLSelectElement) => select.value === 'inherit' ? null : select.value === 'on'
@@ -133,34 +146,38 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   prefetch.onchange = () => void change({ settings: { prefetch: prefetch.checked } })
   start.onclick = () => {
     if (busy) return
-    busy = true; start.disabled = true; report('')
+    busy = true; updateControls(); report('')
     const [frame, ...media] = player.value.split(':')
     void send(live ? { type: 'subtitle-stop' } : { type: 'subtitle-start', frameId: Number(frame), mediaId: media.join(':') })
       .catch(reason => report(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => { busy = false; void refresh() })
+      .finally(() => { busy = false; updateControls(); void refresh() })
   }
   const loadProvider = (config: any) => {
+    hasKey = Boolean(config.has_key)
     service.value = config.provider === 'qwencloud' ? 'qwencloud' : 'dashscope'
     updateProviderFields()
     workspace.value = config.workspace || ''; region.value = config.region || 'cn-beijing'
     key.value = ''; key.placeholder = config.has_key ? '已配置，留空保留原 Key' : 'API Key'
     keyState.textContent = config.has_key ? 'API Key 已加密保存' : '尚未配置 API Key'
-    clear.disabled = !config.has_key
+    updateControls()
   }
   const configure = (clearKey = false) => {
-    busy = true; save.disabled = true; clear.disabled = true; report('')
+    if (busy || loadingProvider) return
+    busy = true; updateControls(); report('')
     const request: Record<string, unknown> = { action: 'configure', provider: service.value,
       api_key: clearKey ? '' : key.value, clear_key: clearKey }
     if (service.value === 'dashscope') { request.workspace = workspace.value.trim(); request.region = region.value }
     void send({ type: 'subtitle-provider', request })
       .then(config => { loadProvider(config); keyState.textContent = clearKey ? 'API Key 已清除' : '服务设置已保存；API Key 已由桌面端加密保存' })
       .catch(reason => report(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => { key.value = ''; busy = false; save.disabled = false; void refresh() })
+      .finally(() => { busy = false; updateControls(); void refresh() })
   }
   form.onsubmit = event => { event.preventDefault(); configure() }
   clear.onclick = () => configure(true)
   void send({ type: 'subtitle-provider', request: { action: 'configuration' } }).then(loadProvider)
     .catch(() => { keyState.textContent = '请启动新版 HLS 桌面端后配置服务' })
+    .finally(() => { loadingProvider = false; updateControls() })
+  updateControls()
   void refresh()
   const timer = setInterval(() => void refresh(), 1000)
   window.addEventListener('pagehide', () => { clearInterval(timer); key.value = '' }, { once: true })

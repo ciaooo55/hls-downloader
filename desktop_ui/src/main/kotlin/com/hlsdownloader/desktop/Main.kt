@@ -2754,7 +2754,7 @@ private data class TaskContextMenuRequest(
             .semantics { contentDescription = "下载任务列表，共 ${tasks.size} 项，已选择 ${selected.size} 项" }
             .focusRequester(focusRequester).onFocusChanged { tableFocused = it.isFocused }.focusable()
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (!tableFocused || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (resolveTaskTableKeyCommand(event.key, event.isCtrlPressed, selected.size, tasks.size)) {
                     TaskTableKeyCommand.SelectAll -> {
                         onSelection(tasks.mapTo(mutableSetOf()) { it.id }); anchorId = tasks.lastOrNull()?.id; true
