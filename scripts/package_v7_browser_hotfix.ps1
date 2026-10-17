@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Runtime = "$PSScriptRoot\..\.tool-cache\runtime\HLSDownloader",
     [string]$Evidence = "$PSScriptRoot\..\artifacts\browser-main-acceptance",

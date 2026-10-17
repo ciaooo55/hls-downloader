@@ -601,7 +601,11 @@ fn download_hls_with_offset(
     if !live {
         if let Some(audio) = audio_uri.take() {
             audio_merged = Some(download_hls_with_offset(
-                &audio, headers, proxy, &task_dir.join("audio"), control,
+                &audio,
+                headers,
+                proxy,
+                &task_dir.join("audio"),
+                control,
                 HlsDownloadOptions {
                     concurrency: options.concurrency,
                     skip_ads: options.skip_ads,
@@ -609,14 +613,22 @@ fn download_hls_with_offset(
                     progress: options.progress.clone(),
                     ..HlsDownloadOptions::default()
                 },
-                (progress_offset.0, progress_offset.1,
-                    progress_offset.2 + pending_segments(&playlist, &[]).len() as u64),
+                (
+                    progress_offset.0,
+                    progress_offset.1,
+                    progress_offset.2 + pending_segments(&playlist, &[]).len() as u64,
+                ),
             )?);
-            if let Some(progress) = options.progress.as_ref()
+            if let Some(progress) = options
+                .progress
+                .as_ref()
                 .and_then(|path| fs::read_to_string(path).ok())
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok()) {
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            {
                 progress_offset.0 = progress["downloaded"].as_u64().unwrap_or(progress_offset.0);
-                progress_offset.1 = progress["completed_segments"].as_u64().unwrap_or(progress_offset.1);
+                progress_offset.1 = progress["completed_segments"]
+                    .as_u64()
+                    .unwrap_or(progress_offset.1);
             }
         }
     }
@@ -691,19 +703,32 @@ fn download_hls_with_offset(
         if previewable {
             let marker_root = control.parent().unwrap_or(task_dir);
             for item in &prepared {
-                if item.needs_download { super::preview::reset_ready(marker_root, &item.path)?; }
-                else { super::preview::mark_ready(marker_root, &item.path)?; }
-                if let Some(map) = &item.init_map_path { super::preview::mark_ready(marker_root, map)?; }
+                if item.needs_download {
+                    super::preview::reset_ready(marker_root, &item.path)?;
+                } else {
+                    super::preview::mark_ready(marker_root, &item.path)?;
+                }
+                if let Some(map) = &item.init_map_path {
+                    super::preview::mark_ready(marker_root, map)?;
+                }
             }
-            let entries: Vec<_> = prepared.iter().map(|item| TimelineEntry {
-                identity: item.identity.clone(), media_sequence: item.segment.media_sequence,
-                part_index: item.segment.part_index, path: item.path.clone(),
-                duration: item.segment.duration.max(0.0), discontinuity: item.segment.discontinuity,
-                init_map_path: item.init_map_path.clone(),
-            }).collect();
+            let entries: Vec<_> = prepared
+                .iter()
+                .map(|item| TimelineEntry {
+                    identity: item.identity.clone(),
+                    media_sequence: item.segment.media_sequence,
+                    part_index: item.segment.part_index,
+                    path: item.path.clone(),
+                    duration: item.segment.duration.max(0.0),
+                    discontinuity: item.segment.discontinuity,
+                    init_map_path: item.init_map_path.clone(),
+                })
+                .collect();
             // 完整时间轴供播放器定位；服务器在目标分片就绪前等待，不返回半个文件。
-            write_text_atomic(&task_dir.join("preview-video.m3u8"),
-                &timeline_playlist(playlist.target_duration, &entries, true))?;
+            write_text_atomic(
+                &task_dir.join("preview-video.m3u8"),
+                &timeline_playlist(playlist.target_duration, &entries, true),
+            )?;
         }
         let preview_update = Mutex::new((0usize, std::time::Instant::now()));
         let (completed, stop_error) = download_prepared_segments(
@@ -719,23 +744,43 @@ fn download_hls_with_offset(
                         .entries
                         .iter()
                         .map(|entry| file_len(&entry.path))
-                        .sum::<u64>() + progress_offset.0,
+                        .sum::<u64>()
+                        + progress_offset.0,
                     timeline.entries.len() as u64 + progress_offset.1,
-                    timeline.entries.len() as u64 + progress_offset.1 + prepared.len() as u64 + progress_offset.2,
+                    timeline.entries.len() as u64
+                        + progress_offset.1
+                        + prepared.len() as u64
+                        + progress_offset.2,
                     live,
                 )
             }),
             &|completed| {
                 // 点播前缀可以持续追加；直播/LL-HLS 会替换 part，暂不暴露为 EVENT 预览。
-                if !previewable { return; }
-                let ready = prepared.iter().take_while(|item| !item.needs_download || completed.contains(&item.path)).count();
+                if !previewable {
+                    return;
+                }
+                let ready = prepared
+                    .iter()
+                    .take_while(|item| !item.needs_download || completed.contains(&item.path))
+                    .count();
                 if let Ok(mut last) = preview_update.lock() {
-                    if ready == last.0 || (last.0 > 0 && ready < prepared.len()
-                        && last.1.elapsed() < std::time::Duration::from_millis(500)) { return; }
+                    if ready == last.0
+                        || (last.0 > 0
+                            && ready < prepared.len()
+                            && last.1.elapsed() < std::time::Duration::from_millis(500))
+                    {
+                        return;
+                    }
                     *last = (ready, std::time::Instant::now());
                 }
-                if let Err(error) = write_buffered_preview(task_dir, &timeline.entries, &prepared,
-                    completed, playlist.target_duration, has_external_audio) {
+                if let Err(error) = write_buffered_preview(
+                    task_dir,
+                    &timeline.entries,
+                    &prepared,
+                    completed,
+                    playlist.target_duration,
+                    has_external_audio,
+                ) {
                     eprintln!("HLS preview playlist update failed: {error}");
                 }
             },
@@ -791,7 +836,13 @@ fn download_hls_with_offset(
                 .map(|entry| file_len(&entry.path))
                 .sum();
             let completed = progress_offset.1 + timeline.entries.len() as u64;
-            crate::http_engine::write_media_progress(progress, progress_offset.0 + downloaded, completed, completed + progress_offset.2, live);
+            crate::http_engine::write_media_progress(
+                progress,
+                progress_offset.0 + downloaded,
+                completed,
+                completed + progress_offset.2,
+                live,
+            );
         }
         if live_limit.is_some_and(|limit| recorded_duration >= limit) {
             break;
@@ -1017,21 +1068,34 @@ fn write_buffered_preview(
 ) -> Result<(), String> {
     let mut entries = previous.to_vec();
     // 并行下载会乱序完成；只发布无缺口的前缀，不能让播放器跳过尚未落盘的片段。
-    for item in prepared.iter().take_while(|item| !item.needs_download || completed.contains(&item.path)) {
-        entries.retain(|entry| entry.identity != item.identity
-            && !(entry.media_sequence == item.segment.media_sequence
-                && (item.segment.part_index.is_none() || entry.part_index == item.segment.part_index)));
+    for item in prepared
+        .iter()
+        .take_while(|item| !item.needs_download || completed.contains(&item.path))
+    {
+        entries.retain(|entry| {
+            entry.identity != item.identity
+                && !(entry.media_sequence == item.segment.media_sequence
+                    && (item.segment.part_index.is_none()
+                        || entry.part_index == item.segment.part_index))
+        });
         entries.push(TimelineEntry {
-            identity: item.identity.clone(), media_sequence: item.segment.media_sequence,
-            part_index: item.segment.part_index, path: item.path.clone(),
-            duration: item.segment.duration.max(0.0), discontinuity: item.segment.discontinuity,
+            identity: item.identity.clone(),
+            media_sequence: item.segment.media_sequence,
+            part_index: item.segment.part_index,
+            path: item.path.clone(),
+            duration: item.segment.duration.max(0.0),
+            discontinuity: item.segment.discontinuity,
             init_map_path: item.init_map_path.clone(),
         });
     }
-    if entries.is_empty() { return Ok(()); }
+    if entries.is_empty() {
+        return Ok(());
+    }
     sort_timeline(&mut entries);
     write_timeline_playlist(task_dir, target_duration, &entries, false)?;
-    if external_audio && !task_dir.join("audio/local.m3u8").is_file() { return Ok(()); }
+    if external_audio && !task_dir.join("audio/local.m3u8").is_file() {
+        return Ok(());
+    }
     let master = if external_audio {
         "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/local.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\npreview-video.m3u8\n"
     } else {
@@ -1046,13 +1110,19 @@ fn write_timeline_playlist(
     entries: &[TimelineEntry],
     complete: bool,
 ) -> Result<(), String> {
-    write_text_atomic(&task_dir.join("local.m3u8"),
-        &timeline_playlist(target_duration, entries, complete))
+    write_text_atomic(
+        &task_dir.join("local.m3u8"),
+        &timeline_playlist(target_duration, entries, complete),
+    )
 }
 
 fn timeline_playlist(target_duration: f64, entries: &[TimelineEntry], complete: bool) -> String {
     let mut text = String::from("#EXTM3U\n#EXT-X-VERSION:9\n");
-    text.push_str(if complete { "#EXT-X-PLAYLIST-TYPE:VOD\n" } else { "#EXT-X-PLAYLIST-TYPE:EVENT\n" });
+    text.push_str(if complete {
+        "#EXT-X-PLAYLIST-TYPE:VOD\n"
+    } else {
+        "#EXT-X-PLAYLIST-TYPE:EVENT\n"
+    });
     let media_sequence = entries
         .first()
         .map(|entry| entry.media_sequence)
@@ -1364,7 +1434,18 @@ fn download_prepared_segments(
     let reused = prepared.iter().filter(|item| !item.needs_download).count() as u64;
     on_completed(&HashSet::new());
     if let Some((path, bytes, previous, total, live)) = progress {
-        crate::http_engine::write_media_progress(path, bytes + prepared.iter().filter(|item| !item.needs_download).map(|item| file_len(&item.path)).sum::<u64>(), previous + reused, total, live);
+        crate::http_engine::write_media_progress(
+            path,
+            bytes
+                + prepared
+                    .iter()
+                    .filter(|item| !item.needs_download)
+                    .map(|item| file_len(&item.path))
+                    .sum::<u64>(),
+            previous + reused,
+            total,
+            live,
+        );
     }
     if queue.is_empty() {
         return (HashSet::new(), None);
@@ -1382,7 +1463,8 @@ fn download_prepared_segments(
                 .iter()
                 .filter(|item| !item.needs_download)
                 .map(|item| file_len(&item.path))
-                .sum::<u64>(), reused,
+                .sum::<u64>(),
+        reused,
     ));
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
@@ -1396,8 +1478,12 @@ fn download_prepared_segments(
                 crate::net_policy::with_throttle_context(throttle, || {
                     crate::with_replay_json(&replay, || loop {
                         let work = queue.lock().ok().and_then(|mut queue| {
-                            if let Some(priority) = control.parent().and_then(super::preview::priority_file) {
-                                if let Some(index) = queue.iter().position(|work| work.path == priority) {
+                            if let Some(priority) =
+                                control.parent().and_then(super::preview::priority_file)
+                            {
+                                if let Some(index) =
+                                    queue.iter().position(|work| work.path == priority)
+                                {
                                     queue.rotate_left(index);
                                 }
                             }
@@ -1418,8 +1504,11 @@ fn download_prepared_segments(
                         ) {
                             Ok(_) => {
                                 if let Some(root) = control.parent() {
-                                    if let Err(error) = super::preview::mark_ready(root, &work.path) {
-                                        if let Ok(mut errors) = errors.lock() { errors.push(error); }
+                                    if let Err(error) = super::preview::mark_ready(root, &work.path)
+                                    {
+                                        if let Ok(mut errors) = errors.lock() {
+                                            errors.push(error);
+                                        }
                                         break;
                                     }
                                 }
@@ -1432,7 +1521,11 @@ fn download_prepared_segments(
                                         bytes.0 += file_len(&work.path);
                                         bytes.1 += 1;
                                         crate::http_engine::write_media_progress(
-                                            path, bytes.0, previous + bytes.1, total, live,
+                                            path,
+                                            bytes.0,
+                                            previous + bytes.1,
+                                            total,
+                                            live,
                                         );
                                     }
                                 }
@@ -1838,7 +1931,11 @@ fn download_vod_subtitle(
         return Err(format!("HLS subtitle HTTP {status}"));
     }
     let text = String::from_utf8_lossy(&body);
-    let merged = if text.trim_start_matches('\u{feff}').trim_start().starts_with("WEBVTT") {
+    let merged = if text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("WEBVTT")
+    {
         text.into_owned()
     } else {
         let playlist = parse_playlist(&text, uri)?;
@@ -1850,10 +1947,22 @@ fn download_vod_subtitle(
         let mut keys = HashMap::new();
         let mut texts = Vec::new();
         for (index, segment) in playlist.segments.iter().enumerate().filter(|(_, s)| !s.gap) {
-            let key = segment.key.as_ref().map(|key| load_key(key, headers, proxy, &mut keys)).transpose()?;
+            let key = segment
+                .key
+                .as_ref()
+                .map(|key| load_key(key, headers, proxy, &mut keys))
+                .transpose()?;
             let path = cache.join(format!("{index:08}.vtt"));
-            download_segment(segment, headers, proxy, &path, control,
-                key.as_ref(), segment.key.as_ref(), segment.media_sequence)?;
+            download_segment(
+                segment,
+                headers,
+                proxy,
+                &path,
+                control,
+                key.as_ref(),
+                segment.key.as_ref(),
+                segment.media_sequence,
+            )?;
             texts.push(fs::read_to_string(path).map_err(|error| error.to_string())?);
         }
         merge_webvtt_segments(&texts)
@@ -1867,7 +1976,8 @@ fn download_vod_subtitle(
         _ => {}
     }
     fs::write(output, &merged).map_err(|error| error.to_string())?;
-    fs::write(output.with_extension("srt"), webvtt_to_srt(&merged)).map_err(|error| error.to_string())
+    fs::write(output.with_extension("srt"), webvtt_to_srt(&merged))
+        .map_err(|error| error.to_string())
 }
 
 fn load_playlist(
@@ -2428,16 +2538,34 @@ mod tests {
 
     #[test]
     fn buffered_preview_waits_for_contiguous_segments_and_external_audio() {
-        let root = std::env::temp_dir().join(format!("hls-preview-prefix-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!(
+            "hls-preview-prefix-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         fs::create_dir_all(root.join("segments")).unwrap();
         let playlist = parse_playlist("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\na.ts\n#EXTINF:5,\nb.ts\n#EXTINF:2,\nc.ts\n#EXT-X-ENDLIST\n", "https://cdn.test/v.m3u8").unwrap();
-        let prepared: Vec<_> = playlist.segments.into_iter().enumerate().map(|(slot, segment)| {
-            let path = root.join(format!("segments/{slot:06}.ts"));
-            fs::write(&path, b"complete fragment").unwrap();
-            PreparedSegment { segment, identity: slot.to_string(), slot, path,
-                init_map_path: None, key_bytes: None, needs_download: true }
-        }).collect();
+        let prepared: Vec<_> = playlist
+            .segments
+            .into_iter()
+            .enumerate()
+            .map(|(slot, segment)| {
+                let path = root.join(format!("segments/{slot:06}.ts"));
+                fs::write(&path, b"complete fragment").unwrap();
+                PreparedSegment {
+                    segment,
+                    identity: slot.to_string(),
+                    slot,
+                    path,
+                    init_map_path: None,
+                    key_bytes: None,
+                    needs_download: true,
+                }
+            })
+            .collect();
         let mut landed = HashSet::from([prepared[1].path.clone()]);
         write_buffered_preview(&root, &[], &prepared, &landed, 6.0, false).unwrap();
         assert!(!root.join("preview.m3u8").exists());
@@ -2450,7 +2578,9 @@ mod tests {
         let video = fs::read_to_string(root.join("local.m3u8")).unwrap();
         assert!(video.contains("000000.ts") && video.contains("000001.ts"));
         assert!(!video.contains("000002.ts") && !video.contains("#EXT-X-ENDLIST"));
-        assert!(fs::read_to_string(root.join("preview.m3u8")).unwrap().contains("audio/local.m3u8"));
+        assert!(fs::read_to_string(root.join("preview.m3u8"))
+            .unwrap()
+            .contains("audio/local.m3u8"));
         fs::remove_dir_all(root).unwrap();
     }
 

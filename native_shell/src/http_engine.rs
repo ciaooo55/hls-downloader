@@ -206,7 +206,13 @@ pub fn write_progress(path: &Path, downloaded: u64, total: u64, speed: f64, stat
     }
 }
 
-pub(crate) fn write_media_progress(path: &Path, downloaded: u64, completed: u64, total: u64, live: bool) {
+pub(crate) fn write_media_progress(
+    path: &Path,
+    downloaded: u64,
+    completed: u64,
+    total: u64,
+    live: bool,
+) {
     let payload = serde_json::json!({
         "downloaded": downloaded, "total": 0, "speed": 0,
         "completed_segments": completed, "total_segments": if live { 0 } else { total },
@@ -219,8 +225,12 @@ pub(crate) fn write_media_progress(path: &Path, downloaded: u64, completed: u64,
 }
 
 pub(crate) fn write_media_merging(path: &Path) {
-    let Ok(text) = fs::read_to_string(path) else { return; };
-    let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&text) else { return; };
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
     payload["status"] = "merging".into();
     payload["speed"] = 0.into();
     let tmp = path.with_extension("json.tmp");
@@ -236,20 +246,29 @@ pub(crate) struct TransferRate {
 
 impl TransferRate {
     pub(crate) fn new(bytes: u64) -> Self {
-        Self { samples: std::collections::VecDeque::from([(Instant::now(), bytes)]) }
+        Self {
+            samples: std::collections::VecDeque::from([(Instant::now(), bytes)]),
+        }
     }
 
     pub(crate) fn sample(&mut self, bytes: u64) -> u64 {
         let now = Instant::now();
-        if self.samples.back().is_some_and(|(_, previous)| bytes < *previous) {
+        if self
+            .samples
+            .back()
+            .is_some_and(|(_, previous)| bytes < *previous)
+        {
             self.samples.clear();
             self.samples.push_back((now, bytes));
         }
-        while self.samples.len() > 1 && now.duration_since(self.samples[1].0) >= Duration::from_secs(3) {
+        while self.samples.len() > 1
+            && now.duration_since(self.samples[1].0) >= Duration::from_secs(3)
+        {
             self.samples.pop_front();
         }
         let (at, baseline) = self.samples[0];
-        let speed = (bytes.saturating_sub(baseline) as f64 / now.duration_since(at).as_secs_f64().max(0.5)) as u64;
+        let speed = (bytes.saturating_sub(baseline) as f64
+            / now.duration_since(at).as_secs_f64().max(0.5)) as u64;
         self.samples.push_back((now, bytes));
         speed
     }
@@ -1103,7 +1122,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         mark_file_sparse(&file);
     }
     if pending.is_empty() {
-        if !job.control.with_file_name("playback-byte-priority").exists() {
+        if !job
+            .control
+            .with_file_name("playback-byte-priority")
+            .exists()
+        {
             let _ = fs::remove_file(completed_ranges_path(job));
         }
         write_progress(&job.progress, total, total, 0.0, "done");
@@ -1167,8 +1190,12 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
             write_active_ranges(&progress_path, &progress_scheduler.active_ranges());
             if let Some(root) = progress_control.parent() {
                 if let Some(position) = fs::read_to_string(root.join("playback-byte-priority"))
-                    .ok().and_then(|text| text.trim().parse::<u64>().ok()) {
-                    progress_scheduler.playback_priority.store(position, Ordering::Relaxed);
+                    .ok()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+                {
+                    progress_scheduler
+                        .playback_priority
+                        .store(position, Ordering::Relaxed);
                 }
             }
             thread::sleep(Duration::from_millis(200));
@@ -1209,7 +1236,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         )));
     }
     // 边播边下必须继续依据已落盘范围读取，直至 Core 切换成品后统一清理。
-    if !job.control.with_file_name("playback-byte-priority").exists() {
+    if !job
+        .control
+        .with_file_name("playback-byte-priority")
+        .exists()
+    {
         let _ = fs::remove_file(completed_ranges_path(job));
     }
     write_progress(&job.progress, total, total, 0.0, "done");
@@ -1352,20 +1383,27 @@ impl RangeScheduler {
             return None;
         }
         let priority = self.playback_priority.load(Ordering::Relaxed);
-        let priority_index = pending.iter().position(|item| item.start <= priority && priority <= item.end);
-        let index = priority_index.or_else(|| pending
+        let priority_index = pending
             .iter()
-            .enumerate()
-            .max_by_key(|(_, item)| {
-                (
-                    item.end.saturating_sub(item.start),
-                    std::cmp::Reverse(item.start),
-                )
-            })
-            .map(|(index, _)| index))?;
+            .position(|item| item.start <= priority && priority <= item.end);
+        let index = priority_index.or_else(|| {
+            pending
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, item)| {
+                    (
+                        item.end.saturating_sub(item.start),
+                        std::cmp::Reverse(item.start),
+                    )
+                })
+                .map(|(index, _)| index)
+        })?;
         let mut range = pending.swap_remove(index);
         if priority_index.is_some() && priority > range.start {
-            pending.push(WorkRange { start: range.start, end: priority - 1 });
+            pending.push(WorkRange {
+                start: range.start,
+                end: priority - 1,
+            });
             range.start = priority;
         }
         drop(pending);
@@ -1753,7 +1791,10 @@ fn fetch_range(
             }
             cursor += take as u64;
             // 限速等待和磁盘写入不能占用进度锁，否则 active_ranges 会阻塞整个进度发布线程。
-            progress.lock().unwrap_or_else(|err| err.into_inner()).cursor = cursor;
+            progress
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .cursor = cursor;
             downloaded.fetch_add(take as u64, Ordering::SeqCst);
             if cursor.saturating_sub(durable_cursor) >= DURABLE_CHECKPOINT_BYTES {
                 scheduler.note_storage_latency(persist_range_progress(
@@ -1809,7 +1850,10 @@ enum Body {
     /// multi-gigabyte media download into an equally large allocation, which
     /// ends as an OOM kill mid-download.  The temp dir has to outlive the reader,
     /// so the variant owns it and `Drop` removes it on every exit path.
-    File { file: File, temp_dir: PathBuf },
+    File {
+        file: File,
+        temp_dir: PathBuf,
+    },
     #[cfg(windows)]
     WinHttp(winhttp::WinHttpBody),
 }
@@ -1867,7 +1911,12 @@ struct ChunkedReader<R> {
 
 impl<R: Read> ChunkedReader<R> {
     fn new(reader: R) -> Self {
-        Self { reader: BufReader::new(reader), remaining: 0, need_crlf: false, finished: false }
+        Self {
+            reader: BufReader::new(reader),
+            remaining: 0,
+            need_crlf: false,
+            finished: false,
+        }
     }
 
     fn line(&mut self) -> std::io::Result<Vec<u8>> {
@@ -1882,44 +1931,69 @@ impl<R: Read> ChunkedReader<R> {
                     line.truncate(line.len() - 2);
                     return Ok(line);
                 }
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked line missing CRLF"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "chunked line missing CRLF",
+                ));
             }
         }
-        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked line too long"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "chunked line too long",
+        ))
     }
 }
 
 impl<R: Read> Read for ChunkedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if buf.is_empty() || self.finished { return Ok(0); }
+        if buf.is_empty() || self.finished {
+            return Ok(0);
+        }
         if self.remaining == 0 {
             if self.need_crlf {
                 let mut crlf = [0; 2];
                 self.reader.read_exact(&mut crlf)?;
                 if crlf != *b"\r\n" {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked data missing CRLF"));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "chunked data missing CRLF",
+                    ));
                 }
                 self.need_crlf = false;
             }
             let line = self.line()?;
             let size = line.split(|byte| *byte == b';').next().unwrap_or_default();
-            let size = std::str::from_utf8(size).unwrap_or("").trim_end_matches([' ', '\t']);
+            let size = std::str::from_utf8(size)
+                .unwrap_or("")
+                .trim_end_matches([' ', '\t']);
             if size.is_empty() || !size.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunked size"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid chunked size",
+                ));
             }
-            self.remaining = u64::from_str_radix(size, 16)
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked size overflow"))?;
+            self.remaining = u64::from_str_radix(size, 16).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked size overflow")
+            })?;
             if self.remaining == 0 {
                 let mut trailer_bytes = 0;
                 loop {
                     let line = self.line()?;
                     trailer_bytes += line.len() + 2;
                     if trailer_bytes > 64 * 1024 {
-                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "chunked trailers too long"));
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "chunked trailers too long",
+                        ));
                     }
-                    if line.is_empty() { break; }
+                    if line.is_empty() {
+                        break;
+                    }
                     if !line.contains(&b':') {
-                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunked trailer"));
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "invalid chunked trailer",
+                        ));
                     }
                 }
                 self.finished = true;
@@ -1930,7 +2004,10 @@ impl<R: Read> Read for ChunkedReader<R> {
         let want = (buf.len() as u64).min(self.remaining) as usize;
         let count = self.reader.read(&mut buf[..want])?;
         if count == 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "chunked body truncated"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "chunked body truncated",
+            ));
         }
         self.remaining -= count as u64;
         Ok(count)
@@ -2448,12 +2525,21 @@ fn record_download_type(job: &Job, status: u16, headers: &str) {
     if !matches!(status, 200 | 206) || job.output.as_os_str().is_empty() {
         return;
     }
-    let value = |name| headers.lines().filter_map(|line| header_value(line, name)).last().unwrap_or("");
+    let value = |name| {
+        headers
+            .lines()
+            .filter_map(|line| header_value(line, name))
+            .next_back()
+            .unwrap_or("")
+    };
     let metadata = serde_json::json!({
         "content_type": value("Content-Type"),
         "content_disposition": value("Content-Disposition"),
     });
-    let _ = fs::write(job.progress.with_extension("response.json"), metadata.to_string());
+    let _ = fs::write(
+        job.progress.with_extension("response.json"),
+        metadata.to_string(),
+    );
 }
 
 #[derive(Default)]
@@ -2770,16 +2856,29 @@ fn http_get(
         .unwrap_or(0);
     let meta = parse_header_meta(&head);
     record_download_type(job, status, &head);
-    for value in head.lines().filter_map(|line| header_value(line, "Transfer-Encoding")) {
-        if value.split(',').any(|coding| !coding.trim().eq_ignore_ascii_case("chunked")) {
+    for value in head
+        .lines()
+        .filter_map(|line| header_value(line, "Transfer-Encoding"))
+    {
+        if value
+            .split(',')
+            .any(|coding| !coding.trim().eq_ignore_ascii_case("chunked"))
+        {
             return Err(EngineError::Failed("unsupported Transfer-Encoding".into()));
         }
     }
     let accept_ranges = meta.accept_ranges || meta.content_range.is_some();
-    let body = Body::Tcp { prefix: leftover, at: 0, stream, remaining: meta.content_length };
+    let body = Body::Tcp {
+        prefix: leftover,
+        at: 0,
+        stream,
+        remaining: meta.content_length,
+    };
     let body = if meta.chunked && !request_method(job).eq_ignore_ascii_case("HEAD") {
         Body::Chunked(ChunkedReader::new(Box::new(body)))
-    } else { body };
+    } else {
+        body
+    };
     Ok((
         status,
         meta.location,
@@ -2804,9 +2903,9 @@ mod winhttp {
         WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
         WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
         WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
-        WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_RANGE,
-        WINHTTP_QUERY_ETAG, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LAST_MODIFIED,
-        WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+        WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_RANGE, WINHTTP_QUERY_ETAG,
+        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LAST_MODIFIED, WINHTTP_QUERY_LOCATION,
+        WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_QUERY_STATUS_CODE,
     };
 
     // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY (stable WinHTTP ABI value).
@@ -3061,7 +3160,8 @@ mod winhttp {
                 return Err(EngineError::Failed(format!("WinHttpQueryHeaders {err}")));
             }
             let content_range = query_header_string(request, WINHTTP_QUERY_CONTENT_RANGE);
-            let raw_headers = query_header_string(request, WINHTTP_QUERY_RAW_HEADERS_CRLF).unwrap_or_default();
+            let raw_headers =
+                query_header_string(request, WINHTTP_QUERY_RAW_HEADERS_CRLF).unwrap_or_default();
             if !raw_headers.is_empty() {
                 super::record_download_type(job, status as u16, &raw_headers);
             }
@@ -3371,12 +3471,19 @@ mod tests {
         let scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 99 }], 2);
         scheduler.playback_priority.store(25, Ordering::Relaxed);
         let target = scheduler.claim(0).unwrap();
-        let target_range = { let state = target.progress.lock().unwrap(); (state.cursor, state.stop) };
+        let target_range = {
+            let state = target.progress.lock().unwrap();
+            (state.cursor, state.stop)
+        };
         assert_eq!(target_range, (25, 99));
         let head = scheduler.claim(1).unwrap();
-        let head_range = { let state = head.progress.lock().unwrap(); (state.cursor, state.stop) };
+        let head_range = {
+            let state = head.progress.lock().unwrap();
+            (state.cursor, state.stop)
+        };
         assert_eq!(head_range, (0, 24));
-        scheduler.complete(target.id); scheduler.complete(head.id);
+        scheduler.complete(target.id);
+        scheduler.complete(head.id);
         assert!(scheduler.claim(0).is_none());
     }
 

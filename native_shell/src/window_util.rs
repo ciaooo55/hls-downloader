@@ -209,7 +209,11 @@ pub fn activate_window_by_title(title: &str) -> bool {
             let focused = SetForegroundWindow(hwnd) != 0;
             let restored = SetWindowPos(
                 hwnd,
-                if was_topmost { HWND_TOPMOST } else { HWND_NOTOPMOST },
+                if was_topmost {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                },
                 0,
                 0,
                 0,

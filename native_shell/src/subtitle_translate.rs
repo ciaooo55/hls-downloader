@@ -42,7 +42,11 @@ enum Input {
         epoch: u64,
     },
     Reset(u64),
-    Commit { start: f64, end: f64, epoch: u64 },
+    Commit {
+        start: f64,
+        end: f64,
+        epoch: u64,
+    },
 }
 
 struct State {
@@ -173,8 +177,13 @@ impl SubtitleService {
             }
             let endpoint = realtime_endpoint(provider, workspace, string(&config, "region"))?;
             let epoch = request.get("epoch").and_then(Value::as_u64).unwrap_or(0);
-            let audio_source = request.get("audio_source").filter(|v| v.is_object()).cloned();
-            if let Some(source) = &audio_source { crate::subtitle_audio_source::validate(source)?; }
+            let audio_source = request
+                .get("audio_source")
+                .filter(|v| v.is_object())
+                .cloned();
+            if let Some(source) = &audio_source {
+                crate::subtitle_audio_source::validate(source)?;
+            }
             let manual = audio_source.is_some();
             let state = Arc::new(Mutex::new(State {
                 status: "connecting",
@@ -243,28 +252,44 @@ impl SubtitleService {
             .last_seen = Instant::now();
         match string(request, "action") {
             "prepare_audio" => {
-                let source = session.audio_source.clone().ok_or("当前会话使用播放器实时采集")?;
-                let position = request["position"].as_f64().filter(|v| v.is_finite() && *v >= 0.0)
+                let source = session
+                    .audio_source
+                    .clone()
+                    .ok_or("当前会话使用播放器实时采集")?;
+                let position = request["position"]
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
                     .ok_or("音轨预取时间无效")?;
-                let seconds = request["duration"].as_f64().filter(|v| v.is_finite() && *v > 0.0 && *v <= 12.0)
+                let seconds = request["duration"]
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v > 0.0 && *v <= 12.0)
                     .ok_or("音轨预取窗口必须在 12 秒以内")?;
                 let epoch = request["epoch"].as_u64().ok_or("字幕时间轴无效")?;
                 let state = session.state.clone();
                 drop(sessions);
                 crate::subtitle_audio_source::decode(&source, position, seconds, || {
                     let state = state.lock().unwrap();
-                    state.epoch != epoch || matches!(state.status, "stopping" | "stopped" | "failed")
+                    state.epoch != epoch
+                        || matches!(state.status, "stopping" | "stopped" | "failed")
                         || state.last_seen.elapsed() > Duration::from_secs(35)
                 })
             }
             "commit" => {
-                if session.audio_source.is_none() { return Err("实时采集由服务端断句".into()); }
-                let start = request["start"].as_f64().filter(|v| v.is_finite() && *v >= 0.0)
+                if session.audio_source.is_none() {
+                    return Err("实时采集由服务端断句".into());
+                }
+                let start = request["start"]
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
                     .ok_or("字幕窗口起点无效")?;
-                let end = request["end"].as_f64().filter(|v| v.is_finite() && *v > start && *v <= start + 12.01)
+                let end = request["end"]
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v > start && *v <= start + 12.01)
                     .ok_or("字幕窗口终点无效")?;
                 let epoch = request["epoch"].as_u64().ok_or("字幕时间轴无效")?;
-                session.input.try_send(Input::Commit { start, end, epoch })
+                session
+                    .input
+                    .try_send(Input::Commit { start, end, epoch })
                     .map_err(|_| "字幕提交队列繁忙")?;
                 Ok(json!({"ok": true}))
             }
@@ -431,8 +456,12 @@ struct Decoder {
 
 impl Decoder {
     fn manual_audio(&mut self, bytes: usize, position: f64, rate: f64) -> Result<(), String> {
-        if self.pending_window.is_some() || rate != 1.0
-            || self.uncommitted.is_some_and(|(_, end)| (position - end).abs() > 0.001) {
+        if self.pending_window.is_some()
+            || rate != 1.0
+            || self
+                .uncommitted
+                .is_some_and(|(_, end)| (position - end).abs() > 0.001)
+        {
             return Err("提前音频时间轴不连续或上一窗口尚未完成".into());
         }
         let start = self.uncommitted.map_or(position, |v| v.0);
@@ -442,8 +471,11 @@ impl Decoder {
     }
 
     fn commit_window(&mut self, start: f64, end: f64) -> Result<(), String> {
-        if self.pending_window.is_some() || !self.uncommitted.is_some_and(|(s, e)|
-            (s - start).abs() < 0.001 && (e - end).abs() < 0.001) {
+        if self.pending_window.is_some()
+            || !self
+                .uncommitted
+                .is_some_and(|(s, e)| (s - start).abs() < 0.001 && (e - end).abs() < 0.001)
+        {
             return Err("字幕提交范围与实际音频不一致".into());
         }
         self.uncommitted = None;
@@ -482,11 +514,15 @@ impl Decoder {
             .unwrap_or("");
         // QwenCloud 手动提交实测不会创建 user 项，音频项 ID 由 committed 确认。
         if self.manual && kind == "input_audio_buffer.committed" && !id.is_empty() {
-            if let Some(window) = self.pending_window { self.window_items.insert(id.into(), window); }
+            if let Some(window) = self.pending_window {
+                self.window_items.insert(id.into(), window);
+            }
         }
         if kind == "conversation.item.created" {
             if self.manual && event.pointer("/item/role").and_then(Value::as_str) == Some("user") {
-                if let Some(window) = self.pending_window { self.window_items.insert(id.into(), window); }
+                if let Some(window) = self.pending_window {
+                    self.window_items.insert(id.into(), window);
+                }
             }
             if let Some(previous) = event.get("previous_item_id").and_then(Value::as_str) {
                 if event.pointer("/item/role").and_then(Value::as_str) == Some("assistant") {
@@ -528,10 +564,16 @@ impl Decoder {
             self.links.get(id).map(String::as_str).unwrap_or(id)
         }
         .to_string();
-        let window = if self.manual { Some(*self.window_items.get(&utterance)?) } else { None };
+        let window = if self.manual {
+            Some(*self.window_items.get(&utterance)?)
+        } else {
+            None
+        };
         let utterance = if let Some((start, _)) = window {
             format!("window-{start:.6}")
-        } else { utterance };
+        } else {
+            utterance
+        };
         if utterance.is_empty() {
             return None;
         }
@@ -569,7 +611,10 @@ impl Decoder {
             self.ends.clear();
             self.links.clear();
         }
-        if self.window_items.len() > 256 { self.window_items.retain(|_, v| Some(*v) == self.pending_window); }
+        if self.window_items.len() > 256 {
+            self.window_items
+                .retain(|_, v| Some(*v) == self.pending_window);
+        }
         Some(
             json!({"type": "cue", "id": utterance, "role": if source { "source" } else { "translation" },
             "text": text.chars().take(4096).collect::<String>(), "final": final_text,
@@ -618,7 +663,9 @@ async fn run(
             .map_err(|_| "字幕连接超时，请检查网络")?
             .map_err(|_| "字幕服务连接失败，请检查服务配置、API Key 和网络")?;
         let mut configuration = setup(source, target);
-        if manual { configuration["session"]["turn_detection"] = Value::Null; }
+        if manual {
+            configuration["session"]["turn_detection"] = Value::Null;
+        }
         send(&mut socket, configuration).await?;
         let ready_result = tokio::select! {
             result = tokio::time::timeout(Duration::from_secs(8), async {
@@ -656,7 +703,10 @@ async fn run(
                 session_state.status = "running";
             }
         }
-        let mut decoder = Decoder { manual, ..Decoder::default() };
+        let mut decoder = Decoder {
+            manual,
+            ..Decoder::default()
+        };
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         let mut last_received = Instant::now();
         loop {
@@ -743,7 +793,11 @@ fn accept_event(
         return Err("字幕服务处理失败，请检查额度、模型权限和输入音频".into());
     }
     if decoder.manual && kind == "response.created" && decoder.pending_window.is_some() {
-        decoder.response_id = event.pointer("/response/id").and_then(Value::as_str).unwrap_or("").into();
+        decoder.response_id = event
+            .pointer("/response/id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .into();
     }
     if let Some(cue) = decoder.decode(event) {
         let mut state = state.lock().unwrap();
@@ -753,7 +807,9 @@ fn accept_event(
     }
     if decoder.manual && kind == "response.done" {
         if decoder.response_id.is_empty()
-            || event.pointer("/response/id").and_then(Value::as_str) != Some(decoder.response_id.as_str()) {
+            || event.pointer("/response/id").and_then(Value::as_str)
+                != Some(decoder.response_id.as_str())
+        {
             return Err("字幕服务响应无法对应当前音频窗口".into());
         }
         if event.pointer("/response/status").and_then(Value::as_str) != Some("completed") {
@@ -761,15 +817,27 @@ fn accept_event(
         }
         if let Some((start, end)) = decoder.pending_window {
             // 最终响应内的文本也是有效结果，不能依赖流式 text.done 一定先到达。
-            let text = event.pointer("/response/output").and_then(Value::as_array).into_iter().flatten()
-                .filter_map(|item| item["content"].as_array()).flatten()
-                .filter_map(|part| part["text"].as_str().or_else(|| part["transcript"].as_str()))
-                .collect::<Vec<_>>().join("\n");
+            let text = event
+                .pointer("/response/output")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["content"].as_array())
+                .flatten()
+                .filter_map(|part| {
+                    part["text"]
+                        .as_str()
+                        .or_else(|| part["transcript"].as_str())
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             let mut state = state.lock().unwrap();
             if state.epoch == epoch {
-                if !text.is_empty() { state.push(json!({"type":"cue", "id":format!("window-{start:.6}"),
+                if !text.is_empty() {
+                    state.push(json!({"type":"cue", "id":format!("window-{start:.6}"),
                     "role":"translation", "text":text.chars().take(4096).collect::<String>(),
-                    "final":true, "start":start, "end":end})); }
+                    "final":true, "start":start, "end":end}));
+                }
                 state.push(json!({"type": "ready", "start": start, "end": end}));
             }
             decoder.pending_window = None;
@@ -800,61 +868,112 @@ mod tests {
 
     #[test]
     fn manual_stop_discards_uncommitted_future_audio_before_finish() {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let endpoint = format!("ws://{}", listener.local_addr().unwrap());
-                let appended = Arc::new(Notify::new());
-                let received = appended.clone();
-                let provider = tokio::spawn(async move {
-                    let (tcp, _) = listener.accept().await.unwrap();
-                    let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
-                    let mut types = Vec::new();
-                    while let Some(Ok(frame)) = socket.next().await {
-                        let Message::Text(text) = frame else { continue };
-                        let event: Value = serde_json::from_str(&text).unwrap();
-                        let kind = string(&event, "type").to_string();
-                        types.push(kind.clone());
-                        match kind.as_str() {
-                            "session.update" => {
-                                assert!(event["session"]["turn_detection"].is_null());
-                                socket.send(Message::Text(json!({"type":"session.updated"}).to_string().into())).await.unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+                    let appended = Arc::new(Notify::new());
+                    let received = appended.clone();
+                    let provider = tokio::spawn(async move {
+                        let (tcp, _) = listener.accept().await.unwrap();
+                        let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                        let mut types = Vec::new();
+                        while let Some(Ok(frame)) = socket.next().await {
+                            let Message::Text(text) = frame else { continue };
+                            let event: Value = serde_json::from_str(&text).unwrap();
+                            let kind = string(&event, "type").to_string();
+                            types.push(kind.clone());
+                            match kind.as_str() {
+                                "session.update" => {
+                                    assert!(event["session"]["turn_detection"].is_null());
+                                    socket
+                                        .send(Message::Text(
+                                            json!({"type":"session.updated"}).to_string().into(),
+                                        ))
+                                        .await
+                                        .unwrap();
+                                }
+                                "input_audio_buffer.append" => received.notify_one(),
+                                "session.finish" => {
+                                    assert_eq!(
+                                        &types[types.len() - 2..],
+                                        &["input_audio_buffer.clear", "session.finish"]
+                                    );
+                                    socket
+                                        .send(Message::Text(
+                                            json!({"type":"session.finished"}).to_string().into(),
+                                        ))
+                                        .await
+                                        .unwrap();
+                                    break;
+                                }
+                                _ => {}
                             }
-                            "input_audio_buffer.append" => received.notify_one(),
-                            "session.finish" => {
-                                assert_eq!(&types[types.len()-2..], &["input_audio_buffer.clear", "session.finish"]);
-                                socket.send(Message::Text(json!({"type":"session.finished"}).to_string().into())).await.unwrap();
-                                break;
-                            }
-                            _ => {}
                         }
-                    }
-                });
-                let state = Arc::new(Mutex::new(State { status:"connecting", error:String::new(), epoch:0,
-                    sequence:0, events:VecDeque::new(), last_seen:Instant::now() }));
-                let (tx, rx) = mpsc::channel(16);
-                let stop = Arc::new(Notify::new());
-                let worker_state = state.clone();
-                let worker_stop = stop.clone();
-                let worker = tokio::spawn(async move {
-                    run(&endpoint, "test", "en", "zh", rx, worker_stop, worker_state, true).await
-                });
-                tx.send(Input::Audio { pcm:vec![0;8000], position:20.0, rate:1.0, epoch:0 }).await.unwrap();
-                appended.notified().await;
-                state.lock().unwrap().status = "stopping";
-                stop.notify_one();
-                worker.await.unwrap().unwrap();
-                provider.await.unwrap();
-                assert!(state.lock().unwrap().events.is_empty());
-            }).await.expect("manual stop timed out");
-        });
+                    });
+                    let state = Arc::new(Mutex::new(State {
+                        status: "connecting",
+                        error: String::new(),
+                        epoch: 0,
+                        sequence: 0,
+                        events: VecDeque::new(),
+                        last_seen: Instant::now(),
+                    }));
+                    let (tx, rx) = mpsc::channel(16);
+                    let stop = Arc::new(Notify::new());
+                    let worker_state = state.clone();
+                    let worker_stop = stop.clone();
+                    let worker = tokio::spawn(async move {
+                        run(
+                            &endpoint,
+                            "test",
+                            "en",
+                            "zh",
+                            rx,
+                            worker_stop,
+                            worker_state,
+                            true,
+                        )
+                        .await
+                    });
+                    tx.send(Input::Audio {
+                        pcm: vec![0; 8000],
+                        position: 20.0,
+                        rate: 1.0,
+                        epoch: 0,
+                    })
+                    .await
+                    .unwrap();
+                    appended.notified().await;
+                    state.lock().unwrap().status = "stopping";
+                    stop.notify_one();
+                    worker.await.unwrap().unwrap();
+                    provider.await.unwrap();
+                    assert!(state.lock().unwrap().events.is_empty());
+                })
+                .await
+                .expect("manual stop timed out");
+            });
     }
 
     #[test]
     fn prepared_window_requires_contiguous_original_audio_and_completed_translation() {
-        let state = Arc::new(Mutex::new(State { status: "running", error: String::new(), epoch: 2,
-            sequence: 0, events: VecDeque::new(), last_seen: Instant::now() }));
-        let mut decoder = Decoder { manual: true, ..Decoder::default() };
+        let state = Arc::new(Mutex::new(State {
+            status: "running",
+            error: String::new(),
+            epoch: 2,
+            sequence: 0,
+            events: VecDeque::new(),
+            last_seen: Instant::now(),
+        }));
+        let mut decoder = Decoder {
+            manual: true,
+            ..Decoder::default()
+        };
         decoder.manual_audio(8000, 10.0, 1.0).unwrap();
         assert!(decoder.manual_audio(8000, 10.5, 1.0).is_err());
         assert!(decoder.manual_audio(8000, 10.25, 2.0).is_err());
@@ -869,30 +988,65 @@ mod tests {
             json!({"type":"input_audio_buffer.committed", "item_id":"input"}),
             json!({"type":"conversation.item.input_audio_transcription.completed", "item_id":"input", "transcript":"source"}),
             json!({"type":"response.text.done", "item_id":"output", "text":"译文"}),
-        ] { accept_event(&event, &mut decoder, &state, 2).unwrap(); }
-        assert!(state.lock().unwrap().events.iter().all(|e| e["type"] != "ready"));
-        accept_event(&json!({"type":"response.done", "response":{"id":"response-1", "status":"completed"}}),
-            &mut decoder, &state, 2).unwrap();
+        ] {
+            accept_event(&event, &mut decoder, &state, 2).unwrap();
+        }
+        assert!(state
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .all(|e| e["type"] != "ready"));
+        accept_event(
+            &json!({"type":"response.done", "response":{"id":"response-1", "status":"completed"}}),
+            &mut decoder,
+            &state,
+            2,
+        )
+        .unwrap();
         let locked = state.lock().unwrap();
         let ready = locked.events.back().unwrap();
         assert_eq!(ready["type"], "ready");
         assert_eq!(ready["start"], 10.0);
         assert_eq!(ready["end"], 10.5);
-        assert!(locked.events.iter().filter(|e| e["type"] == "cue").all(|e| e["start"] == 10.0 && e["end"] == 10.5));
+        assert!(locked
+            .events
+            .iter()
+            .filter(|e| e["type"] == "cue")
+            .all(|e| e["start"] == 10.0 && e["end"] == 10.5));
     }
 
     #[test]
     fn incomplete_or_stale_responses_never_mark_a_window_ready() {
-        for (response_id, status, event_epoch) in [("wrong", "completed", 1), ("current", "failed", 1), ("current", "completed", 0)] {
-            let state = Arc::new(Mutex::new(State { status: "running", error: String::new(), epoch: 1,
-                sequence: 0, events: VecDeque::new(), last_seen: Instant::now() }));
-            let mut decoder = Decoder { manual: true, ..Decoder::default() };
+        for (response_id, status, event_epoch) in [
+            ("wrong", "completed", 1),
+            ("current", "failed", 1),
+            ("current", "completed", 0),
+        ] {
+            let state = Arc::new(Mutex::new(State {
+                status: "running",
+                error: String::new(),
+                epoch: 1,
+                sequence: 0,
+                events: VecDeque::new(),
+                last_seen: Instant::now(),
+            }));
+            let mut decoder = Decoder {
+                manual: true,
+                ..Decoder::default()
+            };
             decoder.manual_audio(8000, 0.0, 1.0).unwrap();
             decoder.commit_window(0.0, 0.25).unwrap();
             decoder.response_id = "current".into();
-            let result = accept_event(&json!({"type":"response.done", "response":{"id":response_id, "status":status}}),
-                &mut decoder, &state, event_epoch);
-            if event_epoch == 1 { assert!(result.is_err()); }
+            let result = accept_event(
+                &json!({"type":"response.done", "response":{"id":response_id, "status":status}}),
+                &mut decoder,
+                &state,
+                event_epoch,
+            );
+            if event_epoch == 1 {
+                assert!(result.is_err());
+            }
             assert!(state.lock().unwrap().events.is_empty());
         }
     }
@@ -1014,7 +1168,10 @@ mod tests {
             "audio":STANDARD.encode([0,0]),"position":121,"rate":1,"epoch":8}),
             )
             .unwrap();
-        state.lock().unwrap().push(json!({"type":"cue","text":"尾部字幕"}));
+        state
+            .lock()
+            .unwrap()
+            .push(json!({"type":"cue","text":"尾部字幕"}));
         service
             .dispatch(
                 &core,
@@ -1023,7 +1180,10 @@ mod tests {
             .unwrap();
         assert_eq!(state.lock().unwrap().status, "stopping");
         assert_eq!(service.sessions.lock().unwrap().len(), 1);
-        assert!(matches!(receiver.try_recv().unwrap(), Input::Audio { epoch: 8, .. }));
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Input::Audio { epoch: 8, .. }
+        ));
         let polled = service
             .dispatch(
                 &core,
@@ -1124,9 +1284,18 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                    assert!(run(&endpoint, "test", "auto", "zh", rx, Arc::new(Notify::new()), state.clone(), false)
-                        .await
-                        .is_err());
+                    assert!(run(
+                        &endpoint,
+                        "test",
+                        "auto",
+                        "zh",
+                        rx,
+                        Arc::new(Notify::new()),
+                        state.clone(),
+                        false
+                    )
+                    .await
+                    .is_err());
                     assert!(state.lock().unwrap().events.is_empty());
                     provider.await.unwrap();
                 })
@@ -1227,7 +1396,7 @@ mod tests {
                             json!({"type":"conversation.item.input_audio_transcription.completed","item_id":"source","transcript":"transport"}),
                         ];
                         if epoch == 0 {
-                            for event in events.iter().cloned() {
+                            for event in &events {
                                 socket.send(Message::Text(event.to_string().into())).await.unwrap();
                             }
                             while let Some(Ok(frame)) = socket.next().await { if matches!(frame, Message::Close(_)) { break; } }

@@ -49,9 +49,7 @@ pub struct TaskPaths {
 
 impl TaskPaths {
     pub fn for_task(task_id: &str, spec: &TaskSpec) -> Result<Self, String> {
-        if task_id.is_empty()
-            || task_id.contains(['/', '\\', ':'])
-            || matches!(task_id, "." | "..")
+        if task_id.is_empty() || task_id.contains(['/', '\\', ':']) || matches!(task_id, "." | "..")
         {
             return Err("invalid task directory identifier".into());
         }
@@ -1226,10 +1224,16 @@ impl CoreCoordinator {
         )
     }
 
-    pub(crate) fn player_thumbnail(&self, task_id: &str, seconds: Option<f64>) -> Result<String, String> {
+    pub(crate) fn player_thumbnail(
+        &self,
+        task_id: &str,
+        seconds: Option<f64>,
+    ) -> Result<String, String> {
         {
             let state = player_ui_state().lock().map_err(|_| "player state lock")?;
-            if !state.active || state.task_id != task_id { return Err("播放会话已改变".into()); }
+            if !state.active || state.task_id != task_id {
+                return Err("播放会话已改变".into());
+            }
         }
         let Some(seconds) = seconds else {
             crate::player_thumbnail::cancel();
@@ -1242,7 +1246,9 @@ impl CoreCoordinator {
         }
         let image = crate::player_thumbnail::decode(&player.source_url()?, seconds)?;
         let state = player_ui_state().lock().map_err(|_| "player state lock")?;
-        if !state.active || state.task_id != task_id { return Err("播放会话已改变".into()); }
+        if !state.active || state.task_id != task_id {
+            return Err("播放会话已改变".into());
+        }
         Ok(image)
     }
 
@@ -1305,11 +1311,13 @@ impl CoreCoordinator {
             if let Some(spec) = core.task_spec(&task.task_id) {
                 if let Ok(paths) = TaskPaths::for_task(&task.task_id, spec) {
                     task.output_path = resolved_task_output(&core, &task.task_id, &paths)
-                        .to_string_lossy().into_owned();
+                        .to_string_lossy()
+                        .into_owned();
                     task.playback_ready = if matches!(task.status.as_str(), "completed" | "done") {
                         Path::new(&task.output_path).is_file()
                     } else {
-                        playable_task_playlist(&paths).is_some() || playable_http_total(&paths, spec).is_some()
+                        playable_task_playlist(&paths).is_some()
+                            || playable_http_total(&paths, spec).is_some()
                     };
                 }
             }
@@ -1394,13 +1402,18 @@ impl CoreCoordinator {
             return self.dispatch_inner(command);
         }
         if let CoreCommand::ClearCompleted = command {
-            let ids: Vec<_> = self.lock()?.tasks().into_iter()
+            let ids: Vec<_> = self
+                .lock()?
+                .tasks()
+                .into_iter()
                 .filter(|task| matches!(task.status.as_str(), "completed" | "done"))
-                .map(|task| task.task_id).collect();
+                .map(|task| task.task_id)
+                .collect();
             let mut events = Vec::new();
             for task_id in ids {
                 events.extend(self.dispatch_inner(CoreCommand::TaskAction {
-                    task_id, action: "delete".into(),
+                    task_id,
+                    action: "delete".into(),
                 })?);
             }
             return Ok(events);
@@ -1842,7 +1855,8 @@ impl CoreCoordinator {
             }
             if action == "delete_files" {
                 return self.lock()?.handle(CoreCommand::TaskAction {
-                    task_id: task_id.clone(), action: "delete".into(),
+                    task_id: task_id.clone(),
+                    action: "delete".into(),
                 });
             }
         }
@@ -2605,7 +2619,9 @@ impl CoreCoordinator {
             validate_owned_task_directory(&paths)?;
             let published = if completed || paths.task_dir().join("published.path").is_file() {
                 Some(resolved_task_output(&core, task_id, &paths))
-            } else { None };
+            } else {
+                None
+            };
             (spec, published)
         };
         let paths = TaskPaths::for_task(task_id, &spec)?;
@@ -2623,12 +2639,18 @@ impl CoreCoordinator {
     fn cleanup_task_cache(&self, task_id: &str) -> Result<(), String> {
         let (paths, published) = {
             let core = self.lock()?;
-            let spec = core.task_spec(task_id).ok_or_else(|| format!("unknown task {task_id}"))?;
+            let spec = core
+                .task_spec(task_id)
+                .ok_or_else(|| format!("unknown task {task_id}"))?;
             let paths = TaskPaths::for_task(task_id, spec)?;
             let published = if paths.task_dir().join("published.path").is_file()
-                || core.tasks().iter().any(|task| task.task_id == task_id
-                    && matches!(task.status.as_str(), "completed" | "done"))
-            { Some(resolved_task_output(&core, task_id, &paths)) } else { None };
+                || core.tasks().iter().any(|task| {
+                    task.task_id == task_id && matches!(task.status.as_str(), "completed" | "done")
+                }) {
+                Some(resolved_task_output(&core, task_id, &paths))
+            } else {
+                None
+            };
             (paths, published)
         };
         stop_task_player(self, task_id)?;
@@ -3751,14 +3773,22 @@ fn complete_payload(
     // contradicts the reported status. finish_published_task logs instead.
     ensure_publish_allowed(&paths.control)?;
     let metadata = fs::read(paths.progress.with_extension("response.json"))
-        .ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).unwrap_or_default();
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or_default();
     let destination = crate::output_path::typed_output_path(
-        payload, &paths.final_output,
-        metadata.get("content_type").and_then(Value::as_str).unwrap_or(&spec.mime_type),
-        metadata.get("content_disposition").and_then(Value::as_str).unwrap_or(""),
+        payload,
+        &paths.final_output,
+        metadata
+            .get("content_type")
+            .and_then(Value::as_str)
+            .unwrap_or(&spec.mime_type),
+        metadata
+            .get("content_disposition")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
     )?;
-    let published =
-        crate::output_path::publish_file(payload, &destination, &policy, keep_temp)?;
+    let published = crate::output_path::publish_file(payload, &destination, &policy, keep_temp)?;
     remember_published(paths, &published);
     // Returns Ok by construction; the signature keeps the "must never fail" contract
     // visible and lets the regression test assert it directly.
@@ -3857,17 +3887,24 @@ fn finish_published_task(
     if download_subtitles {
         if let Err(error) = copy_subtitle_sidecars(&paths.task_dir(), published) {
             keep_subtitles = true;
-            let _ = writeln!(std::io::stderr(), "v7 task {task_id} subtitle copy failed: {error}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "v7 task {task_id} subtitle copy failed: {error}"
+            );
         }
     }
     // 与开始播放串行，避免播放器刚挂载分片就被收尾删除。
-    let player_state = player_ui_state().lock().map_err(|_| "player session lock".to_string());
+    let player_state = player_ui_state()
+        .lock()
+        .map_err(|_| "player session lock".to_string());
     let mut thumbnail_guard = None;
     let playback_released = match &player_state {
         Ok(state) if state.active && state.task_id == task_id => {
             crate::player_thumbnail::cancel_and_wait().and_then(|guard| {
                 thumbnail_guard = Some(guard);
-                shared_player().and_then(|player| player.finish_download(&published.to_string_lossy(), &state.title))
+                shared_player().and_then(|player| {
+                    player.finish_download(&published.to_string_lossy(), &state.title)
+                })
             })
         }
         Ok(_) => Ok(()),
@@ -3907,9 +3944,11 @@ fn finish_published_task(
             );
         }
     }
-    let keep_temp = core.lock().ok().and_then(|guard| {
-        guard.store().setting_bool("keep_temp_files", false).ok()
-    }).unwrap_or(true);
+    let keep_temp = core
+        .lock()
+        .ok()
+        .and_then(|guard| guard.store().setting_bool("keep_temp_files", false).ok())
+        .unwrap_or(true);
     if !keep_temp {
         let cleanup = playback_released.and_then(|_| {
             cleanup_completed_media(paths, published, keep_subtitles)?;
@@ -3919,11 +3958,16 @@ fn finish_published_task(
             Ok(())
         });
         if let Err(error) = cleanup {
-            let _ = writeln!(std::io::stderr(), "v7 task {task_id} cache cleanup failed: {error}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "v7 task {task_id} cache cleanup failed: {error}"
+            );
             if let Ok(mut guard) = core.lock() {
                 let _ = guard.emit(CoreEvent::Toast {
                     level: "warning".into(),
-                    message: format!("下载已完成，但缓存未完全清理：{error}。可用“清理已完成”重试。"),
+                    message: format!(
+                        "下载已完成，但缓存未完全清理：{error}。可用“清理已完成”重试。"
+                    ),
                 });
             }
         }
@@ -3946,22 +3990,42 @@ fn is_link_metadata(metadata: &fs::Metadata) -> bool {
         metadata.file_attributes() & 0x400 != 0
     }
     #[cfg(not(windows))]
-    { metadata.file_type().is_symlink() }
+    {
+        metadata.file_type().is_symlink()
+    }
 }
 
 fn cleanup_task_metadata(paths: &TaskPaths) -> Result<(), String> {
     let dir = paths.task_dir();
-    let Some(parent) = dir.parent() else { return Ok(()); };
-    if !matches!(parent.file_name().and_then(|name| name.to_str()), Some(".hls-tasks" | ".v6-tasks")) {
+    let Some(parent) = dir.parent() else {
+        return Ok(());
+    };
+    if !matches!(
+        parent.file_name().and_then(|name| name.to_str()),
+        Some(".hls-tasks" | ".v6-tasks")
+    ) {
         return Ok(());
     }
-    for name in ["control", "progress.json", "progress.json.tmp", "torrent-selection.json",
-        "published.path", "progress.response.json", "native-engine.active.json.tmp"] {
+    for name in [
+        "control",
+        "progress.json",
+        "progress.json.tmp",
+        "torrent-selection.json",
+        "published.path",
+        "progress.response.json",
+        "native-engine.active.json.tmp",
+    ] {
         remove_task_artifact(&dir.join(name))?;
     }
     match fs::remove_dir(&dir) {
-        Ok(()) => { let _ = fs::remove_dir(parent); }
-        Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty) => {},
+        Ok(()) => {
+            let _ = fs::remove_dir(parent);
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) => {}
         Err(error) => return Err(format!("{}: {error}", dir.display())),
     }
     Ok(())
@@ -3984,19 +4048,25 @@ fn remove_task_artifact(path: &Path) -> Result<(), String> {
         fs::remove_dir(path)
     } else {
         fs::remove_file(path)
-    }.map_err(|error| format!("{}: {error}", path.display()))
+    }
+    .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn validate_owned_task_directory(paths: &TaskPaths) -> Result<(), String> {
     let dir = paths.task_dir();
     let parent = dir.parent().ok_or("任务缓存目录没有父目录")?;
-    if !matches!(parent.file_name().and_then(|name| name.to_str()), Some(".hls-tasks" | ".v6-tasks")) {
+    if !matches!(
+        parent.file_name().and_then(|name| name.to_str()),
+        Some(".hls-tasks" | ".v6-tasks")
+    ) {
         return Err("拒绝清理非任务缓存目录".into());
     }
     for path in [parent, dir.as_path()] {
         match fs::symlink_metadata(path) {
-            Ok(meta) if is_link_metadata(&meta) => return Err(format!("拒绝清理重解析路径: {}", path.display())),
-            Ok(_) => {},
+            Ok(meta) if is_link_metadata(&meta) => {
+                return Err(format!("拒绝清理重解析路径: {}", path.display()))
+            }
+            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.to_string()),
         }
@@ -4023,10 +4093,15 @@ fn cleanup_completed_media(
     keep_subtitles: bool,
 ) -> Result<(), String> {
     let task_dir = paths.task_dir();
-    for path in [Some(task_dir.as_path()), task_dir.parent()].into_iter().flatten() {
+    for path in [Some(task_dir.as_path()), task_dir.parent()]
+        .into_iter()
+        .flatten()
+    {
         match fs::symlink_metadata(path) {
-            Ok(meta) if is_link_metadata(&meta) => return Err(format!("拒绝清理重解析路径: {}", path.display())),
-            Ok(_) => {},
+            Ok(meta) if is_link_metadata(&meta) => {
+                return Err(format!("拒绝清理重解析路径: {}", path.display()))
+            }
+            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.to_string()),
         }
@@ -4049,23 +4124,57 @@ fn cleanup_completed_media(
             let name = entry.file_name();
             let name = name.to_string_lossy();
             // 只删媒体引擎生成的内容；保留成品定位、进度统计和未知文件。
-            let temporary = matches!(name.as_ref(),
-                "segments" | "audio" | "subs" | "live-subtitles" |
-                "payload.downloading" | "merged.mp4" | "muxed.mp4" | "init.mp4" |
-                "local.m3u8" | "preview.m3u8" | "preview-video.m3u8" | "playback-ready" | "playback-priority" |
-                ".playback-priority.tmp" | "playback-byte-priority" | ".playback-byte-priority.tmp" |
-                "vod_segments.json" | "dash_vod_segments.json" | ".vod_segments.json.tmp" | ".dash_vod_segments.json.tmp" |
-                "live_state.json" | "live_subtitles.json" | "audio.control" |
-                "request-body.bin" | "native-engine.ranges.json" | "native-engine.active.json" |
-                "native-engine.ranges.json.tmp" | "native-engine.active.json.tmp" |
-                "progress.response.json" | "payload.progress.json" | "payload.progress.response.json" |
-                "init.progress.json" | "init.progress.response.json" | "sftp-resume.json" |
-                "ffmpeg-merge.log" | "muxed.ffmpeg.log" | "merged.ffmpeg.log" |
-                ".local.m3u8.tmp" | ".preview.m3u8.tmp" | ".preview-video.m3u8.tmp" |
-                ".live_state.json.tmp"
-            ) || name.strip_prefix("seg-").and_then(|name| name.split_once('.'))
-                .is_some_and(|(index, suffix)| !index.is_empty() && index.bytes().all(|ch| ch.is_ascii_digit())
-                    && matches!(suffix, "m4s" | "progress.json" | "progress.response.json"))
+            let temporary = matches!(
+                name.as_ref(),
+                "segments"
+                    | "audio"
+                    | "subs"
+                    | "live-subtitles"
+                    | "payload.downloading"
+                    | "merged.mp4"
+                    | "muxed.mp4"
+                    | "init.mp4"
+                    | "local.m3u8"
+                    | "preview.m3u8"
+                    | "preview-video.m3u8"
+                    | "playback-ready"
+                    | "playback-priority"
+                    | ".playback-priority.tmp"
+                    | "playback-byte-priority"
+                    | ".playback-byte-priority.tmp"
+                    | "vod_segments.json"
+                    | "dash_vod_segments.json"
+                    | ".vod_segments.json.tmp"
+                    | ".dash_vod_segments.json.tmp"
+                    | "live_state.json"
+                    | "live_subtitles.json"
+                    | "audio.control"
+                    | "request-body.bin"
+                    | "native-engine.ranges.json"
+                    | "native-engine.active.json"
+                    | "native-engine.ranges.json.tmp"
+                    | "native-engine.active.json.tmp"
+                    | "progress.response.json"
+                    | "payload.progress.json"
+                    | "payload.progress.response.json"
+                    | "init.progress.json"
+                    | "init.progress.response.json"
+                    | "sftp-resume.json"
+                    | "ffmpeg-merge.log"
+                    | "muxed.ffmpeg.log"
+                    | "merged.ffmpeg.log"
+                    | ".local.m3u8.tmp"
+                    | ".preview.m3u8.tmp"
+                    | ".preview-video.m3u8.tmp"
+                    | ".live_state.json.tmp"
+            ) || name
+                .strip_prefix("seg-")
+                .and_then(|name| name.split_once('.'))
+                .is_some_and(|(index, suffix)| {
+                    !index.is_empty()
+                        && index.bytes().all(|ch| ch.is_ascii_digit())
+                        && matches!(suffix, "m4s" | "progress.json" | "progress.response.json")
+                })
                 || (name.starts_with("torrent-selection.json.") && name.ends_with(".tmp"));
             if !temporary || (keep_subtitles && name == "subs") {
                 return Ok(());
@@ -4132,8 +4241,10 @@ fn resolve_published(paths: &TaskPaths) -> PathBuf {
 
 fn resolved_task_output(core: &PersistentCore, task_id: &str, paths: &TaskPaths) -> PathBuf {
     if !paths.task_dir().join("published.path").exists() {
-        if let Some(task) = core.snapshot(task_id)
-            .filter(|task| matches!(task.status.as_str(), "completed" | "done")) {
+        if let Some(task) = core
+            .snapshot(task_id)
+            .filter(|task| matches!(task.status.as_str(), "completed" | "done"))
+        {
             let saved = PathBuf::from(&task.output_path);
             if !task.output_path.is_empty() && published_path_allowed(&saved, paths) {
                 return saved;
@@ -4188,9 +4299,13 @@ fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) -> Result<(), Strin
         let parent_canon = logical_canonical(parent);
         let dest_canon = logical_canonical(&dest);
         if dest_canon != parent_canon && !dest_canon.starts_with(&parent_canon) {
-            return Err(format!("subtitle destination escapes output directory: {}", dest.display()));
+            return Err(format!(
+                "subtitle destination escapes output directory: {}",
+                dest.display()
+            ));
         }
-        fs::copy(&path, &dest).map_err(|error| format!("copy subtitle {}: {error}", path.display()))?;
+        fs::copy(&path, &dest)
+            .map_err(|error| format!("copy subtitle {}: {error}", path.display()))?;
     }
     Ok(())
 }
@@ -4271,7 +4386,16 @@ where
         let _ = sender.send(result);
     });
     let status = if live { "recording" } else { "downloading" };
-    let initial_bytes = core.lock().ok().and_then(|core| core.tasks().iter().find(|task| task.task_id == task_id).map(|task| task.downloaded_bytes)).unwrap_or(0);
+    let initial_bytes = core
+        .lock()
+        .ok()
+        .and_then(|core| {
+            core.tasks()
+                .iter()
+                .find(|task| task.task_id == task_id)
+                .map(|task| task.downloaded_bytes)
+        })
+        .unwrap_or(0);
     let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
     let mut last_downloaded = initial_bytes;
     loop {
@@ -4285,7 +4409,11 @@ where
                     }
                     last_downloaded = item.downloaded;
                     let merging = item.status == "merging";
-                    let speed = if merging { 0 } else { rate.sample(item.downloaded) };
+                    let speed = if merging {
+                        0
+                    } else {
+                        rate.sample(item.downloaded)
+                    };
                     let _ = mark_progress_speed(
                         core,
                         task_id,
@@ -4602,7 +4730,9 @@ fn emit_player_session(
 }
 
 fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
-    let mut current = player_ui_state().lock().map_err(|_| "player session lock")?;
+    let mut current = player_ui_state()
+        .lock()
+        .map_err(|_| "player session lock")?;
     let _thumbnails = crate::player_thumbnail::cancel_and_wait()?;
     let spec = coordinator
         .lock()?
@@ -4610,7 +4740,11 @@ fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let url = mount_task_url(coordinator, task_id, shared_local_media()?)?;
-    let title = if spec.title.trim().is_empty() { spec.filename } else { spec.title };
+    let title = if spec.title.trim().is_empty() {
+        spec.filename
+    } else {
+        spec.title
+    };
     shared_player()?.play(&url, &title)?;
     let state = PlayerUiState {
         active: true,
@@ -4626,7 +4760,9 @@ fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
 }
 
 fn stop_task_player(coordinator: &CoreCoordinator, task_id: &str) -> Result<(), String> {
-    let mut state = player_ui_state().lock().map_err(|_| "player session lock")?;
+    let mut state = player_ui_state()
+        .lock()
+        .map_err(|_| "player session lock")?;
     if state.active && state.task_id == task_id {
         let _thumbnails = crate::player_thumbnail::cancel_and_wait()?;
         shared_player()?.stop();
@@ -4643,20 +4779,52 @@ pub(crate) fn playable_task_playlist(paths: &TaskPaths) -> Option<PathBuf> {
 }
 
 pub(crate) fn playable_http_total(paths: &TaskPaths, spec: &TaskSpec) -> Option<u64> {
-    if spec.resource_kind != crate::ResourceKind::File { return None; }
-    let extension = paths.final_output.extension()?.to_str()?.to_ascii_lowercase();
-    if !matches!(extension.as_str(), "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" |
-        "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus" | "wav" | "ts") { return None; }
+    if spec.resource_kind != crate::ResourceKind::File {
+        return None;
+    }
+    let extension = paths
+        .final_output
+        .extension()?
+        .to_str()?
+        .to_ascii_lowercase();
+    if !matches!(
+        extension.as_str(),
+        "mp4"
+            | "mkv"
+            | "webm"
+            | "mov"
+            | "avi"
+            | "m4v"
+            | "mp3"
+            | "m4a"
+            | "aac"
+            | "flac"
+            | "ogg"
+            | "opus"
+            | "wav"
+            | "ts"
+    ) {
+        return None;
+    }
     let checkpoint: Value = serde_json::from_str(
-        &fs::read_to_string(paths.task_dir().join("native-engine.ranges.json")).ok()?).ok()?;
+        &fs::read_to_string(paths.task_dir().join("native-engine.ranges.json")).ok()?,
+    )
+    .ok()?;
     let total = checkpoint["total"].as_u64().filter(|total| *total > 0)?;
     if checkpoint["version"].as_u64() != Some(2)
         || checkpoint["ranges"].as_array()?.is_empty()
-        || paths.output.metadata().ok()?.len() != total { return None; }
+        || paths.output.metadata().ok()?.len() != total
+    {
+        return None;
+    }
     Some(total)
 }
 
-fn mount_task_url(coordinator: &CoreCoordinator, task_id: &str, server: &crate::playback::MediaServer) -> Result<String, String> {
+fn mount_task_url(
+    coordinator: &CoreCoordinator,
+    task_id: &str,
+    server: &crate::playback::MediaServer,
+) -> Result<String, String> {
     let spec = coordinator
         .lock()?
         .task_spec(task_id)
@@ -4666,12 +4834,15 @@ fn mount_task_url(coordinator: &CoreCoordinator, task_id: &str, server: &crate::
     let token = crate::playback::random_mount_token();
     let (completed, published) = {
         let core = coordinator.lock()?;
-        let completed = core.tasks().iter().any(|task| task.task_id == task_id
-            && matches!(task.status.as_str(), "completed" | "done"));
+        let completed = core.tasks().iter().any(|task| {
+            task.task_id == task_id && matches!(task.status.as_str(), "completed" | "done")
+        });
         (completed, resolved_task_output(&core, task_id, &paths))
     };
     let url = if completed {
-        if !published.is_file() { return Err("下载成品不存在".into()); }
+        if !published.is_file() {
+            return Err("下载成品不存在".into());
+        }
         server.mount(&token, published);
         server.url_for(&token)
     } else if playable_task_playlist(&paths).is_some() {
@@ -4682,9 +4853,12 @@ fn mount_task_url(coordinator: &CoreCoordinator, task_id: &str, server: &crate::
         server.mount_growing(&token, paths.task_dir(), paths.output.clone(), total);
         server.url_for(&token)
     } else {
-        return Err(if completed { "下载成品不存在" } else {
+        return Err(if completed {
+            "下载成品不存在"
+        } else {
             "可播放的分片、音轨或文件字节范围尚未就绪；请稍候或等待下载完成"
-        }.into());
+        }
+        .into());
     };
     Ok(url)
 }
@@ -5633,9 +5807,12 @@ fn player_control(action: &str) -> Result<(), String> {
         "vol_up" => player.adjust_volume(10.0),
         "vol_down" => player.adjust_volume(-10.0),
         "mute" => player.toggle_mute(),
-        other if other.starts_with("volume:") => {
-            player.set_volume(other.trim_start_matches("volume:").parse::<f64>().map_err(|_| "音量无效")?)
-        }
+        other if other.starts_with("volume:") => player.set_volume(
+            other
+                .trim_start_matches("volume:")
+                .parse::<f64>()
+                .map_err(|_| "音量无效")?,
+        ),
         "seek_fwd" => player.seek_relative(10.0),
         "seek_back" => player.seek_relative(-10.0),
         other if other.starts_with("speed:") => {
@@ -5645,9 +5822,12 @@ fn player_control(action: &str) -> Result<(), String> {
                 .unwrap_or(1.0);
             player.set_speed(speed)
         }
-        other if other.starts_with("seek_to:") => {
-            player.seek_absolute(other.trim_start_matches("seek_to:").parse::<f64>().map_err(|_| "播放时间无效")?)
-        }
+        other if other.starts_with("seek_to:") => player.seek_absolute(
+            other
+                .trim_start_matches("seek_to:")
+                .parse::<f64>()
+                .map_err(|_| "播放时间无效")?,
+        ),
         other if other.starts_with("audio:") => {
             player.set_audio_track(other.trim_start_matches("audio:"))
         }
@@ -5667,14 +5847,20 @@ fn player_control(action: &str) -> Result<(), String> {
         }
         other if other.starts_with("embed_host:") || other.starts_with("embed_main:") => {
             let mut parts = other
-                .split_once(':').map(|(_, rect)| rect).unwrap_or("")
+                .split_once(':')
+                .map(|(_, rect)| rect)
+                .unwrap_or("")
                 .split(',')
                 .filter_map(|item| item.parse::<i32>().ok());
             let x = parts.next().unwrap_or(0);
             let y = parts.next().unwrap_or(48);
             let w = parts.next().unwrap_or(720);
             let h = parts.next().unwrap_or(220);
-            let title = if other.starts_with("embed_main:") { "HLS Downloader" } else { crate::player::PLAYER_WINDOW_TITLE };
+            let title = if other.starts_with("embed_main:") {
+                "HLS Downloader"
+            } else {
+                crate::player::PLAYER_WINDOW_TITLE
+            };
             player.attach_embed_host(title, x, y, w, h)
         }
         _ => Err(format!("unknown player action {action}")),
@@ -5762,7 +5948,11 @@ fn read_progress(path: &Path) -> Option<Progress> {
     Some(Progress {
         downloaded: value.get("downloaded")?.as_u64()?,
         total: value.get("total").and_then(Value::as_u64).unwrap_or(0),
-        status: value.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
+        status: value
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -7508,7 +7698,10 @@ mod tests {
         while paths.task_dir().exists() && std::time::Instant::now() < deadline {
             std::thread::yield_now();
         }
-        assert!(!paths.task_dir().exists(), "completed torrent cache was retained");
+        assert!(
+            !paths.task_dir().exists(),
+            "completed torrent cache was retained"
+        );
 
         peer.join().unwrap();
         tracker.join().unwrap();
@@ -7731,10 +7924,18 @@ mod tests {
         let paths = TaskPaths::for_task("task-1", &spec).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&paths.final_output, b"local-media").unwrap();
-        coordinator.lock().unwrap().handle(CoreCommand::UpdateProgress {
-            task_id: "task-1".into(), downloaded_bytes: 11, total_bytes: Some(11),
-            speed_bytes_per_sec: 0, stage: "finished".into(), status: "completed".into(),
-        }).unwrap();
+        coordinator
+            .lock()
+            .unwrap()
+            .handle(CoreCommand::UpdateProgress {
+                task_id: "task-1".into(),
+                downloaded_bytes: 11,
+                total_bytes: Some(11),
+                speed_bytes_per_sec: 0,
+                stage: "finished".into(),
+                status: "completed".into(),
+            })
+            .unwrap();
 
         let play = coordinator
             .dispatch(CoreCommand::PlayTask {
@@ -9749,28 +9950,58 @@ fn a_published_payload_is_recorded_not_failed() {
 
 #[test]
 fn task_deletion_cleans_incomplete_cache_and_preserves_other_tasks_and_outputs() {
-    let root = std::env::temp_dir().join(format!("hls-delete-cache-{}-{}", std::process::id(), handoff_now_ms()));
+    let root = std::env::temp_dir().join(format!(
+        "hls-delete-cache-{}-{}",
+        std::process::id(),
+        handoff_now_ms()
+    ));
     let spec = TaskSpec {
-        url: "https://example.test/movie.bin".into(), filename: "movie.bin".into(),
-        download_dir: root.to_string_lossy().into_owned(), ..Default::default()
+        url: "https://example.test/movie.bin".into(),
+        filename: "movie.bin".into(),
+        download_dir: root.to_string_lossy().into_owned(),
+        ..Default::default()
     };
     let mut core = PersistentCore::in_memory().unwrap();
-    core.handle(CoreCommand::CreateTask { spec: spec.clone() }).unwrap();
-    core.handle(CoreCommand::CreateTask { spec: TaskSpec { url: "https://example.test/other.bin".into(), ..spec.clone() } }).unwrap();
+    core.handle(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    core.handle(CoreCommand::CreateTask {
+        spec: TaskSpec {
+            url: "https://example.test/other.bin".into(),
+            ..spec.clone()
+        },
+    })
+    .unwrap();
     let ids: Vec<_> = core.tasks().into_iter().map(|task| task.task_id).collect();
     let coordinator = CoreCoordinator::new(core);
     let first = TaskPaths::for_task(&ids[0], &spec).unwrap();
     let other = TaskPaths::for_task(&ids[1], &spec).unwrap();
-    first.prepare().unwrap(); other.prepare().unwrap();
+    first.prepare().unwrap();
+    other.prepare().unwrap();
     fs::create_dir_all(first.task_dir().join("segments")).unwrap();
-    fs::write(first.task_dir().join("segments/000000.ts"), b"unfinished fragment").unwrap();
-    fs::write(first.task_dir().join("unknown-engine-work.tmp"), b"task-owned work").unwrap();
+    fs::write(
+        first.task_dir().join("segments/000000.ts"),
+        b"unfinished fragment",
+    )
+    .unwrap();
+    fs::write(
+        first.task_dir().join("unknown-engine-work.tmp"),
+        b"task-owned work",
+    )
+    .unwrap();
     fs::write(&other.output, b"other task").unwrap();
     fs::write(&first.final_output, b"existing user output").unwrap();
-    coordinator.dispatch(CoreCommand::TaskAction { task_id: ids[0].clone(), action: "delete".into() }).unwrap();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: ids[0].clone(),
+            action: "delete".into(),
+        })
+        .unwrap();
     assert!(!first.task_dir().exists());
     assert_eq!(fs::read(&other.output).unwrap(), b"other task");
-    assert_eq!(fs::read(&first.final_output).unwrap(), b"existing user output");
+    assert_eq!(
+        fs::read(&first.final_output).unwrap(),
+        b"existing user output"
+    );
     assert_eq!(coordinator.tasks().unwrap().len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
@@ -9778,34 +10009,74 @@ fn task_deletion_cleans_incomplete_cache_and_preserves_other_tasks_and_outputs()
 #[test]
 fn completion_persists_renamed_output_before_removing_all_cache_metadata() {
     for keep_temp in [false, true] {
-        let root = std::env::temp_dir().join(format!("hls-finish-cache-{}-{}-{keep_temp}", std::process::id(), handoff_now_ms()));
+        let root = std::env::temp_dir().join(format!(
+            "hls-finish-cache-{}-{}-{keep_temp}",
+            std::process::id(),
+            handoff_now_ms()
+        ));
         let spec = TaskSpec {
-            url: "https://example.test/movie.bin".into(), filename: "movie.bin".into(),
-            download_dir: root.to_string_lossy().into_owned(), ..Default::default()
+            url: "https://example.test/movie.bin".into(),
+            filename: "movie.bin".into(),
+            download_dir: root.to_string_lossy().into_owned(),
+            ..Default::default()
         };
         let mut core = PersistentCore::in_memory().unwrap();
-        core.handle(CoreCommand::CreateTask { spec: spec.clone() }).unwrap();
-        core.store_mut().set_setting("keep_temp_files", keep_temp).unwrap();
+        core.handle(CoreCommand::CreateTask { spec: spec.clone() })
+            .unwrap();
+        core.store_mut()
+            .set_setting("keep_temp_files", keep_temp)
+            .unwrap();
         let id = core.tasks()[0].task_id.clone();
         let coordinator = CoreCoordinator::new(core);
-        let paths = TaskPaths::for_task(&id, &spec).unwrap(); paths.prepare().unwrap();
+        let paths = TaskPaths::for_task(&id, &spec).unwrap();
+        paths.prepare().unwrap();
         fs::write(&paths.final_output, b"existing user output").unwrap();
         fs::write(&paths.output, b"new output").unwrap();
-        fs::write(paths.task_dir().join("native-engine.ranges.json"), b"checkpoint").unwrap();
+        fs::write(
+            paths.task_dir().join("native-engine.ranges.json"),
+            b"checkpoint",
+        )
+        .unwrap();
         fs::write(paths.task_dir().join("ffmpeg-merge.log"), b"log").unwrap();
-        for name in ["seg-0001.m4s", "seg-0001.progress.json", "seg-0001.progress.response.json",
-            "init.progress.json", "init.progress.response.json", "sftp-resume.json",
-            "playback-priority", "playback-byte-priority"] {
+        for name in [
+            "seg-0001.m4s",
+            "seg-0001.progress.json",
+            "seg-0001.progress.response.json",
+            "init.progress.json",
+            "init.progress.response.json",
+            "sftp-resume.json",
+            "playback-priority",
+            "playback-byte-priority",
+        ] {
             fs::write(paths.task_dir().join(name), b"engine work").unwrap();
         }
         fs::create_dir_all(paths.task_dir().join("playback-ready/segments")).unwrap();
-        fs::write(paths.task_dir().join("playback-ready/segments/000001.ts"), b"123").unwrap();
+        fs::write(
+            paths.task_dir().join("playback-ready/segments/000001.ts"),
+            b"123",
+        )
+        .unwrap();
         let published = paths.publish_with("rename", keep_temp).unwrap();
         remember_published(&paths, &published);
-        finish_published_task(&coordinator.core, &id, &paths, &published, None, &spec, false).unwrap();
+        finish_published_task(
+            &coordinator.core,
+            &id,
+            &paths,
+            &published,
+            None,
+            &spec,
+            false,
+        )
+        .unwrap();
         assert_eq!(paths.task_dir().exists(), keep_temp);
-        assert_eq!(coordinator.tasks().unwrap()[0].output_path, published.to_string_lossy());
-        assert_eq!(fs::read(&paths.final_output).unwrap(), b"existing user output");
+        assert_eq!(
+            coordinator.tasks().unwrap()[0].output_path,
+            published.to_string_lossy()
+        );
+        assert_eq!(
+            fs::read(&paths.final_output).unwrap(),
+            b"existing user output"
+        );
         coordinator.dispatch(CoreCommand::ClearCompleted).unwrap();
         assert!(!paths.task_dir().exists());
         assert!(published.is_file());
@@ -9818,27 +10089,55 @@ fn completion_persists_renamed_output_before_removing_all_cache_metadata() {
 #[test]
 fn locked_cache_prevents_task_record_deletion() {
     use std::os::windows::fs::OpenOptionsExt;
-    let root = std::env::temp_dir().join(format!("hls-locked-cache-{}-{}", std::process::id(), handoff_now_ms()));
-    let spec = TaskSpec { url: "https://example.test/x.bin".into(), filename: "x.bin".into(),
-        download_dir: root.to_string_lossy().into_owned(), ..Default::default() };
+    let root = std::env::temp_dir().join(format!(
+        "hls-locked-cache-{}-{}",
+        std::process::id(),
+        handoff_now_ms()
+    ));
+    let spec = TaskSpec {
+        url: "https://example.test/x.bin".into(),
+        filename: "x.bin".into(),
+        download_dir: root.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
     let mut core = PersistentCore::in_memory().unwrap();
-    core.handle(CoreCommand::CreateTask { spec: spec.clone() }).unwrap();
+    core.handle(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
     let id = core.tasks()[0].task_id.clone();
     let coordinator = CoreCoordinator::new(core);
-    let paths = TaskPaths::for_task(&id, &spec).unwrap(); paths.prepare().unwrap();
+    let paths = TaskPaths::for_task(&id, &spec).unwrap();
+    paths.prepare().unwrap();
     fs::write(&paths.output, b"unfinished").unwrap();
-    let locked = fs::OpenOptions::new().read(true).share_mode(0).open(&paths.output).unwrap();
-    assert!(coordinator.dispatch(CoreCommand::TaskAction { task_id: id.clone(), action: "delete".into() }).is_err());
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&paths.output)
+        .unwrap();
+    assert!(coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: id.clone(),
+            action: "delete".into()
+        })
+        .is_err());
     assert_eq!(coordinator.tasks().unwrap().len(), 1);
     drop(locked);
-    coordinator.dispatch(CoreCommand::TaskAction { task_id: id, action: "delete".into() }).unwrap();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: id,
+            action: "delete".into(),
+        })
+        .unwrap();
     assert!(!paths.task_dir().exists());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn completed_media_cleans_segments_and_keeps_published_files() {
-    for kind in [crate::ResourceKind::Hls, crate::ResourceKind::Dash, crate::ResourceKind::Live] {
+    for kind in [
+        crate::ResourceKind::Hls,
+        crate::ResourceKind::Dash,
+        crate::ResourceKind::Live,
+    ] {
         let (core, paths, original, root) = published_task_fixture("media-cleanup");
         let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
         let mut spec = task_spec_for(&core, &task_id);
@@ -9849,11 +10148,27 @@ fn completed_media_cleans_segments_and_keeps_published_files() {
             fs::create_dir_all(root.join(dir)).unwrap();
             fs::write(root.join(dir).join("fragment.bin"), b"temporary media").unwrap();
         }
-        for name in ["merged.mp4", "muxed.mp4", "init.mp4", "seg-0000.m4s", "local.m3u8", "vod_segments.json", "dash_vod_segments.json"] {
+        for name in [
+            "merged.mp4",
+            "muxed.mp4",
+            "init.mp4",
+            "seg-0000.m4s",
+            "local.m3u8",
+            "vod_segments.json",
+            "dash_vod_segments.json",
+        ] {
             fs::write(root.join(name), b"temporary media").unwrap();
         }
-        fs::write(root.join("subs/zh.srt"), b"1\n00:00:00,000 --> 00:00:01,000\nsubtitle\n").unwrap();
-        fs::write(&paths.progress, br#"{"completed_segments":2,"total_segments":2}"#).unwrap();
+        fs::write(
+            root.join("subs/zh.srt"),
+            b"1\n00:00:00,000 --> 00:00:01,000\nsubtitle\n",
+        )
+        .unwrap();
+        fs::write(
+            &paths.progress,
+            br#"{"completed_segments":2,"total_segments":2}"#,
+        )
+        .unwrap();
         fs::write(root.join("user-notes.txt"), b"keep unknown files").unwrap();
 
         complete_payload(&core, &task_id, &paths, &root.join("merged.mp4"), &spec).unwrap();
@@ -9865,8 +10180,23 @@ fn completed_media_cleans_segments_and_keeps_published_files() {
         assert!(root.join("movie_1.zh.srt").is_file());
         assert!(!paths.progress.exists());
         assert!(root.join("user-notes.txt").is_file());
-        for name in ["segments", "audio", "live-subtitles", "subs", "merged.mp4", "muxed.mp4", "init.mp4", "seg-0000.m4s", "local.m3u8", "vod_segments.json", "dash_vod_segments.json"] {
-            assert!(!root.join(name).exists(), "leftover media work file: {name}");
+        for name in [
+            "segments",
+            "audio",
+            "live-subtitles",
+            "subs",
+            "merged.mp4",
+            "muxed.mp4",
+            "init.mp4",
+            "seg-0000.m4s",
+            "local.m3u8",
+            "vod_segments.json",
+            "dash_vod_segments.json",
+        ] {
+            assert!(
+                !root.join(name).exists(),
+                "leftover media work file: {name}"
+            );
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -9879,7 +10209,11 @@ fn completed_media_retains_opted_in_temps_and_failed_subtitle_copies() {
         let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
         let mut spec = task_spec_for(&core, &task_id);
         spec.resource_kind = crate::ResourceKind::Hls;
-        core.lock().unwrap().store_mut().set_setting("keep_temp_files", keep_temp).unwrap();
+        core.lock()
+            .unwrap()
+            .store_mut()
+            .set_setting("keep_temp_files", keep_temp)
+            .unwrap();
         fs::create_dir_all(root.join("segments")).unwrap();
         fs::write(root.join("segments/000000.jpeg"), b"media segment").unwrap();
         fs::create_dir_all(root.join("subs")).unwrap();
@@ -9890,7 +10224,10 @@ fn completed_media_retains_opted_in_temps_and_failed_subtitle_copies() {
         finish_published_task(&core, &task_id, &paths, &published, None, &spec, true).unwrap();
 
         assert_eq!(core.lock().unwrap().tasks()[0].status, "completed");
-        assert_eq!(fs::read(root.join("subs/zh.srt")).unwrap(), b"subtitle to preserve");
+        assert_eq!(
+            fs::read(root.join("subs/zh.srt")).unwrap(),
+            b"subtitle to preserve"
+        );
         assert_eq!(root.join("segments/000000.jpeg").exists(), keep_temp);
         assert_eq!(fs::read(&published).unwrap(), b"a complete payload");
         fs::remove_dir_all(root).unwrap();
@@ -9917,7 +10254,10 @@ fn incomplete_media_keeps_resumable_segments() {
             "cancel" => assert_eq!(error, "canceled"),
             _ => assert!(error.contains("size mismatch")),
         }
-        assert_eq!(fs::read(root.join("segments/000000.jpeg")).unwrap(), b"resumable segment");
+        assert_eq!(
+            fs::read(root.join("segments/000000.jpeg")).unwrap(),
+            b"resumable segment"
+        );
         assert!(merged.is_file());
         assert_eq!(fs::read(&published).unwrap(), b"a complete payload");
         fs::remove_dir_all(root).unwrap();

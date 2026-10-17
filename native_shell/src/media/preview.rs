@@ -6,7 +6,9 @@ use std::path::{Component, Path, PathBuf};
 pub(crate) fn relative_file(root: &Path, file: &Path) -> Option<String> {
     let relative = file.strip_prefix(root).ok()?;
     if relative.as_os_str().is_empty()
-        || relative.components().any(|part| !matches!(part, Component::Normal(_)))
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
         return None;
     }
@@ -16,7 +18,9 @@ pub(crate) fn relative_file(root: &Path, file: &Path) -> Option<String> {
 pub(crate) fn mark_ready(root: &Path, file: &Path) -> Result<(), String> {
     let relative = relative_file(root, file).ok_or("播放分片不属于任务目录")?;
     let size = fs::metadata(file).map_err(|error| error.to_string())?.len();
-    if size == 0 { return Err("播放分片为空".into()); }
+    if size == 0 {
+        return Err("播放分片为空".into());
+    }
     let marker = root.join("playback-ready").join(relative);
     super::hls::write_text_atomic(&marker, &size.to_string())
 }
@@ -32,9 +36,13 @@ pub(crate) fn reset_ready(root: &Path, file: &Path) -> Result<(), String> {
 
 pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
     let expected = fs::read_to_string(root.join("playback-ready").join(relative))
-        .ok().and_then(|text| text.parse::<u64>().ok());
-    expected.is_some_and(|size| size > 0 && fs::metadata(root.join(relative))
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == size))
+        .ok()
+        .and_then(|text| text.parse::<u64>().ok());
+    expected.is_some_and(|size| {
+        size > 0
+            && fs::metadata(root.join(relative))
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() == size)
+    })
 }
 
 pub(crate) fn request_priority(root: &Path, relative: &str) -> Result<(), String> {
@@ -45,8 +53,12 @@ pub(crate) fn priority_file(root: &Path) -> Option<PathBuf> {
     let text = fs::read_to_string(root.join("playback-priority")).ok()?;
     let relative = Path::new(text.trim());
     if relative.as_os_str().is_empty()
-        || relative.components().any(|part| !matches!(part, Component::Normal(_)))
-    { return None; }
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
     Some(root.join(relative))
 }
 

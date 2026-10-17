@@ -42,18 +42,26 @@ pub fn default_v7_download_dir() -> PathBuf {
 fn windows_downloads_folder() -> Option<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::Com::CoTaskMemFree;
-    use windows_sys::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_Downloads, KF_FLAG_DONT_VERIFY};
+    use windows_sys::Win32::UI::Shell::{
+        FOLDERID_Downloads, SHGetKnownFolderPath, KF_FLAG_DONT_VERIFY,
+    };
 
     // 系统 API 会跟随用户移动后的“下载”文件夹，不能从用户名或安装目录拼接。
     unsafe {
         let mut path = std::ptr::null_mut();
-        let result = SHGetKnownFolderPath(&FOLDERID_Downloads, KF_FLAG_DONT_VERIFY as u32, std::ptr::null_mut(), &mut path);
+        let result = SHGetKnownFolderPath(
+            &FOLDERID_Downloads,
+            KF_FLAG_DONT_VERIFY as u32,
+            std::ptr::null_mut(),
+            &mut path,
+        );
         let folder = if result >= 0 && !path.is_null() {
             let mut len = 0;
             while *path.add(len) != 0 {
                 len += 1;
             }
-            (len > 0).then(|| PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(path, len))))
+            (len > 0)
+                .then(|| PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(path, len))))
         } else {
             None
         };

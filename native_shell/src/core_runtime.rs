@@ -722,10 +722,15 @@ impl CoreRuntime {
             snapshot.status = effective_status.clone();
             snapshot.playback_ready = (matches!(effective_status.as_str(), "completed" | "done")
                 && !snapshot.output_missing)
-                || spec.as_ref()
-                    .is_some_and(|spec| crate::download_worker::TaskPaths::for_task(task_id, spec).ok()
-                        .is_some_and(|paths| crate::download_worker::playable_task_playlist(&paths).is_some()
-                            || crate::download_worker::playable_http_total(&paths, spec).is_some()));
+                || spec.as_ref().is_some_and(|spec| {
+                    crate::download_worker::TaskPaths::for_task(task_id, spec)
+                        .ok()
+                        .is_some_and(|paths| {
+                            crate::download_worker::playable_task_playlist(&paths).is_some()
+                                || crate::download_worker::playable_http_total(&paths, spec)
+                                    .is_some()
+                        })
+                });
             snapshot.completed_ranges =
                 if snapshot.total_ranges > 0 && snapshot.total_bytes.unwrap_or(0) > 0 {
                     snapshot
@@ -749,9 +754,15 @@ impl CoreRuntime {
                     .unwrap_or_else(|_| {
                         root.join(".hls-tasks").join(task_id).join("progress.json")
                     });
-                let media_counts = std::fs::read_to_string(&progress).ok()
+                let media_counts = std::fs::read_to_string(&progress)
+                    .ok()
                     .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                    .and_then(|value| Some((value.get("completed_segments")?.as_u64()?, value.get("total_segments")?.as_u64()?)));
+                    .and_then(|value| {
+                        Some((
+                            value.get("completed_segments")?.as_u64()?,
+                            value.get("total_segments")?.as_u64()?,
+                        ))
+                    });
                 if let Some((completed, total)) = media_counts {
                     snapshot.completed_ranges = completed;
                     snapshot.total_ranges = total;
@@ -764,7 +775,10 @@ impl CoreRuntime {
                     downloading,
                 );
                 if media_counts.is_none()
-                    && !matches!(spec.resource_kind, ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live)
+                    && !matches!(
+                        spec.resource_kind,
+                        ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
+                    )
                     && !parts.is_empty()
                 {
                     let (workers, completed, total, hint) = crate::summarize_parts(&parts);
@@ -867,7 +881,10 @@ impl CoreRuntime {
     pub fn set_output_path(&mut self, task_id: &str, path: String) {
         if let Some(snapshot) = self.tasks.get_mut(task_id) {
             if snapshot.output_path != path {
-                if let Some(filename) = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()) {
+                if let Some(filename) = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                {
                     if snapshot.title == snapshot.filename {
                         snapshot.title = filename.to_string();
                     }

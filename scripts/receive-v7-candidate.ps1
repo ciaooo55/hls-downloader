@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 [CmdletBinding()]
 param([string]$Repository = 'ciaooo55/hls-downloader')
 

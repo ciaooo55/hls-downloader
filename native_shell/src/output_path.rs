@@ -7,105 +7,248 @@ use std::sync::{Mutex, OnceLock};
 
 static OUTPUT_PUBLISH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-pub fn typed_output_path(payload: &Path, requested: &Path, mime: &str, disposition: &str) -> Result<PathBuf, String> {
+pub fn typed_output_path(
+    payload: &Path,
+    requested: &Path,
+    mime: &str,
+    disposition: &str,
+) -> Result<PathBuf, String> {
     let mut head = [0u8; 4096];
-    let count = fs::File::open(payload).and_then(|mut file| file.read(&mut head))
+    let count = fs::File::open(payload)
+        .and_then(|mut file| file.read(&mut head))
         .map_err(|error| format!("read downloaded file type: {error}"))?;
     let head = &head[..count];
-    let current = requested.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
-    let mime = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let current = requested
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     let server_ext = disposition_extension(disposition);
     let mime_ext = match mime.as_str() {
-        "video/mp4" | "application/mp4" => "mp4", "audio/mp4" | "audio/x-m4a" => "m4a",
-        "video/webm" | "audio/webm" => "webm", "video/x-matroska" => "mkv",
-        "video/quicktime" => "mov", "video/mp2t" => "ts", "video/x-msvideo" => "avi",
-        "audio/mpeg" => "mp3", "audio/aac" => "aac", "audio/flac" | "audio/x-flac" => "flac",
-        "audio/wav" | "audio/x-wav" => "wav", "audio/ogg" | "application/ogg" => "ogg",
-        "image/jpeg" => "jpg", "image/png" => "png", "image/gif" => "gif", "image/webp" => "webp",
-        "image/avif" => "avif", "application/pdf" => "pdf", "application/zip" => "zip",
+        "video/mp4" | "application/mp4" => "mp4",
+        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "video/webm" | "audio/webm" => "webm",
+        "video/x-matroska" => "mkv",
+        "video/quicktime" => "mov",
+        "video/mp2t" => "ts",
+        "video/x-msvideo" => "avi",
+        "audio/mpeg" => "mp3",
+        "audio/aac" => "aac",
+        "audio/flac" | "audio/x-flac" => "flac",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/ogg" | "application/ogg" => "ogg",
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/avif" => "avif",
+        "application/pdf" => "pdf",
+        "application/zip" => "zip",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
-        "application/epub+zip" => "epub", "application/gzip" => "gz",
-        "text/html" => "html", "text/plain" => "txt", "text/csv" => "csv",
-        "application/json" => "json", _ => "",
+        "application/epub+zip" => "epub",
+        "application/gzip" => "gz",
+        "text/html" => "html",
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/json" => "json",
+        _ => "",
     };
     let zip = head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06");
     let detected = if head.len() >= 12 && &head[4..8] == b"ftyp" {
         match &head[8..12] {
-            b"qt  " => "mov", b"M4A " | b"M4B " => "m4a",
-            b"avif" | b"avis" => "avif", b"heic" | b"heix" => "heic",
-            b"3gp4" | b"3gp5" | b"3gp6" => "3gp", _ => "mp4",
+            b"qt  " => "mov",
+            b"M4A " | b"M4B " => "m4a",
+            b"avif" | b"avis" => "avif",
+            b"heic" | b"heix" => "heic",
+            b"3gp4" | b"3gp5" | b"3gp6" => "3gp",
+            _ => "mp4",
         }
     } else if head.starts_with(b"\x1a\x45\xdf\xa3") {
-        if head.windows(4).any(|bytes| bytes == b"webm") { "webm" } else { "mkv" }
-    } else if head.starts_with(b"\x89PNG\r\n\x1a\n") { "png"
-    } else if head.starts_with(b"\xff\xd8\xff") { "jpg"
-    } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") { "gif"
-    } else if head.starts_with(b"%PDF-") { "pdf"
+        if head.windows(4).any(|bytes| bytes == b"webm") {
+            "webm"
+        } else {
+            "mkv"
+        }
+    } else if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "png"
+    } else if head.starts_with(b"\xff\xd8\xff") {
+        "jpg"
+    } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        "gif"
+    } else if head.starts_with(b"%PDF-") {
+        "pdf"
     } else if head.len() >= 12 && head.starts_with(b"RIFF") {
-        match &head[8..12] { b"WAVE" => "wav", b"AVI " => "avi", b"WEBP" => "webp", _ => "" }
-    } else if head.starts_with(b"fLaC") { "flac"
-    } else if head.starts_with(b"OggS") { "ogg"
-    } else if head.starts_with(b"ID3") || (head.len() >= 2 && head[0] == 0xff && head[1] & 0xe6 == 0xe2) { "mp3"
-    } else if head.len() >= 2 && head[0] == 0xff && head[1] & 0xf6 == 0xf0 { "aac"
-    } else if head.len() > 376 && head[0] == 0x47 && head[188] == 0x47 && head[376] == 0x47 { "ts"
-    } else if head.starts_with(b"\x1f\x8b") { "gz"
-    } else if head.starts_with(b"7z\xbc\xaf\x27\x1c") { "7z"
-    } else if head.starts_with(b"Rar!\x1a\x07") { "rar"
-    } else if zip { "zip"
-    } else { "" };
+        match &head[8..12] {
+            b"WAVE" => "wav",
+            b"AVI " => "avi",
+            b"WEBP" => "webp",
+            _ => "",
+        }
+    } else if head.starts_with(b"fLaC") {
+        "flac"
+    } else if head.starts_with(b"OggS") {
+        "ogg"
+    } else if head.starts_with(b"ID3")
+        || (head.len() >= 2 && head[0] == 0xff && head[1] & 0xe6 == 0xe2)
+    {
+        "mp3"
+    } else if head.len() >= 2 && head[0] == 0xff && head[1] & 0xf6 == 0xf0 {
+        "aac"
+    } else if head.len() > 376 && head[0] == 0x47 && head[188] == 0x47 && head[376] == 0x47 {
+        "ts"
+    } else if head.starts_with(b"\x1f\x8b") {
+        "gz"
+    } else if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
+        "7z"
+    } else if head.starts_with(b"Rar!\x1a\x07") {
+        "rar"
+    } else if zip {
+        "zip"
+    } else {
+        ""
+    };
     // ZIP 也是浏览器扩展和安装包的容器，改成 .zip 会破坏正常安装入口。
-    let zip_subtype = |ext: &str| matches!(ext, "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "epub" | "apk" | "jar" | "odt" | "ods" | "odp"
-        | "xpi" | "whl" | "vsix" | "nupkg" | "msix" | "msixbundle" | "appx" | "appxbundle" | "cbz");
+    let zip_subtype = |ext: &str| {
+        matches!(
+            ext,
+            "docx"
+                | "xlsx"
+                | "pptx"
+                | "docm"
+                | "xlsm"
+                | "pptm"
+                | "epub"
+                | "apk"
+                | "jar"
+                | "odt"
+                | "ods"
+                | "odp"
+                | "xpi"
+                | "whl"
+                | "vsix"
+                | "nupkg"
+                | "msix"
+                | "msixbundle"
+                | "appx"
+                | "appxbundle"
+                | "cbz"
+        )
+    };
     let extension = if zip {
-        if zip_subtype(&current) { current.as_str() }
-        else if zip_subtype(mime_ext) { mime_ext }
-        else if zip_subtype(&server_ext) { server_ext.as_str() }
-        else { "zip" }
+        if zip_subtype(&current) {
+            current.as_str()
+        } else if zip_subtype(mime_ext) {
+            mime_ext
+        } else if zip_subtype(&server_ext) {
+            server_ext.as_str()
+        } else {
+            "zip"
+        }
     } else if !detected.is_empty() {
         if (detected == "mp4" && matches!(current.as_str(), "m4v" | "m4a" | "m4b"))
             || (detected == "jpg" && current == "jpeg")
-            || (detected == "ogg" && matches!(current.as_str(), "oga" | "ogv" | "opus")) { current.as_str() }
-        else { detected }
-    } else if matches!(current.as_str(), "" | "bin" | "dat" | "php" | "asp" | "aspx" | "jsp" | "cgi" | "html" | "htm") {
-        if !mime_ext.is_empty() { mime_ext } else { server_ext.as_str() }
-    } else { "" };
-    Ok(if extension.is_empty() { requested.to_path_buf() } else { requested.with_extension(extension) })
+            || (detected == "ogg" && matches!(current.as_str(), "oga" | "ogv" | "opus"))
+        {
+            current.as_str()
+        } else {
+            detected
+        }
+    } else if matches!(
+        current.as_str(),
+        "" | "bin" | "dat" | "php" | "asp" | "aspx" | "jsp" | "cgi" | "html" | "htm"
+    ) {
+        if !mime_ext.is_empty() {
+            mime_ext
+        } else {
+            server_ext.as_str()
+        }
+    } else {
+        ""
+    };
+    Ok(if extension.is_empty() {
+        requested.to_path_buf()
+    } else {
+        requested.with_extension(extension)
+    })
 }
 
 fn disposition_extension(value: &str) -> String {
     let mut plain = String::new();
     let mut quoted = false;
     let mut escaped = false;
-    for part in value.split(|ch| {
-        if escaped { escaped = false; return false; }
-        if quoted && ch == '\\' { escaped = true; return false; }
-        if ch == '"' { quoted = !quoted; }
-        ch == ';' && !quoted
-    }).skip(1) {
-        let Some((key, raw)) = part.trim().split_once('=') else { continue; };
+    for part in value
+        .split(|ch| {
+            if escaped {
+                escaped = false;
+                return false;
+            }
+            if quoted && ch == '\\' {
+                escaped = true;
+                return false;
+            }
+            if ch == '"' {
+                quoted = !quoted;
+            }
+            ch == ';' && !quoted
+        })
+        .skip(1)
+    {
+        let Some((key, raw)) = part.trim().split_once('=') else {
+            continue;
+        };
         let key = key.trim();
-        if !key.eq_ignore_ascii_case("filename") && !key.eq_ignore_ascii_case("filename*") { continue; }
+        if !key.eq_ignore_ascii_case("filename") && !key.eq_ignore_ascii_case("filename*") {
+            continue;
+        }
         let raw = raw.trim().trim_matches('"');
         let name = if key.eq_ignore_ascii_case("filename*") {
-            let Some(encoded) = raw.splitn(3, '\'').nth(2) else { continue; };
+            let Some(encoded) = raw.splitn(3, '\'').nth(2) else {
+                continue;
+            };
             let mut decoded = Vec::new();
-            let bytes = encoded.as_bytes();let mut i = 0;
+            let bytes = encoded.as_bytes();
+            let mut i = 0;
             while i < bytes.len() {
                 if bytes[i] == b'%' && i + 2 < bytes.len() {
-                    if let (Some(a),Some(b)) = ((bytes[i+1] as char).to_digit(16),(bytes[i+2] as char).to_digit(16)) {
-                        decoded.push((a*16+b) as u8);i+=3;continue;
+                    if let (Some(a), Some(b)) = (
+                        (bytes[i + 1] as char).to_digit(16),
+                        (bytes[i + 2] as char).to_digit(16),
+                    ) {
+                        decoded.push((a * 16 + b) as u8);
+                        i += 3;
+                        continue;
                     }
                 }
-                decoded.push(bytes[i]);i+=1;
+                decoded.push(bytes[i]);
+                i += 1;
             }
             String::from_utf8_lossy(&decoded).into_owned()
-        } else { raw.to_string() };
-        let extension = Path::new(&name).extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
-        if extension.is_empty() || extension.len()>12 || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric()) { continue; }
-        if key.eq_ignore_ascii_case("filename*") { return extension; }
-        plain=extension;
+        } else {
+            raw.to_string()
+        };
+        let extension = Path::new(&name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if extension.is_empty()
+            || extension.len() > 12
+            || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        if key.eq_ignore_ascii_case("filename*") {
+            return extension;
+        }
+        plain = extension;
     }
     plain
 }

@@ -3,11 +3,10 @@
 slint::include_modules!();
 
 use hls_native_shell::{
-    activate_window_by_title, center_window_by_title,
-    claim_v7_presenter_instance, completion_sound, hide_window_from_taskbar_by_title, install_root,
-    is_already_running_error, os_reduce_motion, spawn_core, spawn_desktop_ui,
-    CoreCommand, CoreEvent, CoreIpcClient, CorePipeResponse,
-    EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
+    activate_window_by_title, center_window_by_title, claim_v7_presenter_instance,
+    completion_sound, hide_window_from_taskbar_by_title, install_root, is_already_running_error,
+    os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand, CoreEvent, CoreIpcClient,
+    CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -154,7 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.iter().any(|arg| arg == "--self-test") {
         let confirm = ConfirmWindow::new()?;
-    confirm.on_move_window({ let weak = confirm.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+        confirm.on_move_window({
+            let weak = confirm.as_weak();
+            move |dx, dy| {
+                if let Some(item) = weak.upgrade() {
+                    move_window(item.window(), dx, dy);
+                }
+            }
+        });
         confirm.set_window_title(CONFIRM.into());
         confirm.hide()?;
         attach_parent_console();
@@ -189,11 +195,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let initial_runtime = *runtime_settings.borrow();
 
     let confirm = ConfirmWindow::new()?;
-    confirm.on_move_window({ let weak = confirm.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+    confirm.on_move_window({
+        let weak = confirm.as_weak();
+        move |dx, dy| {
+            if let Some(item) = weak.upgrade() {
+                move_window(item.window(), dx, dy);
+            }
+        }
+    });
     let progress = ProgressWindow::new()?;
-    progress.on_move_window({ let weak = progress.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+    progress.on_move_window({
+        let weak = progress.as_weak();
+        move |dx, dy| {
+            if let Some(item) = weak.upgrade() {
+                move_window(item.window(), dx, dy);
+            }
+        }
+    });
     let complete = CompleteWindow::new()?;
-    complete.on_move_window({ let weak = complete.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+    complete.on_move_window({
+        let weak = complete.as_weak();
+        move |dx, dy| {
+            if let Some(item) = weak.upgrade() {
+                move_window(item.window(), dx, dy);
+            }
+        }
+    });
     correct_native_click_position(confirm.window());
     correct_native_click_position(progress.window());
     correct_native_click_position(complete.window());
@@ -418,7 +445,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = item.hide();
                 return;
             }
-            if item.get_action_busy() { return; }
+            if item.get_action_busy() {
+                return;
+            }
             let cancel_power = command == "cancel_power";
             let task_id = completed_task.borrow().clone();
             let request = if cancel_power {
@@ -428,7 +457,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     item.set_action_text("无法找到已完成任务，请在主窗口打开任务详情".into());
                     return;
                 };
-                CoreCommand::OpenCompleted { task_id, folder: command == "open_folder" }
+                CoreCommand::OpenCompleted {
+                    task_id,
+                    folder: command == "open_folder",
+                }
             } else {
                 return;
             };
@@ -436,14 +468,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             item.set_action_text("".into());
             let result_window = window.clone();
             thread::spawn(move || {
-                let result = CoreIpcClient::connect().and_then(|mut client| client.command(request));
+                let result =
+                    CoreIpcClient::connect().and_then(|mut client| client.command(request));
                 let _ = result_window.upgrade_in_event_loop(move |item| {
                     // 下一项下载完成后，旧窗口的操作结果不能隐藏新通知。
-                    if item.get_task_id().as_str() != task_id.as_deref().unwrap_or("") { return; }
+                    if item.get_task_id().as_str() != task_id.as_deref().unwrap_or("") {
+                        return;
+                    }
                     item.set_action_busy(false);
                     match result {
                         Ok(_) if cancel_power => item.set_power_hint("".into()),
-                        Ok(_) => { let _ = item.hide(); }
+                        Ok(_) => {
+                            let _ = item.hide();
+                        }
                         Err(error) => item.set_action_text(format!("操作失败：{error}").into()),
                     }
                 });
@@ -632,16 +669,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// by `--self-test`, which intentionally checks only component construction.
 fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::Error>> {
     let quit_timer = Timer::default();
-    let fixture_seconds = env::var("HLS_V7_PRESENTER_FIXTURE_SECONDS").ok()
-        .and_then(|value| value.parse::<u64>().ok()).unwrap_or(20).clamp(1, 600);
-    quit_timer.start(TimerMode::SingleShot, Duration::from_secs(fixture_seconds), || {
-        let _ = slint::quit_event_loop();
-    });
+    let fixture_seconds = env::var("HLS_V7_PRESENTER_FIXTURE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(20)
+        .clamp(1, 600);
+    quit_timer.start(
+        TimerMode::SingleShot,
+        Duration::from_secs(fixture_seconds),
+        || {
+            let _ = slint::quit_event_loop();
+        },
+    );
 
     match kind {
         "confirm" | "confirm-error" => {
             let window = ConfirmWindow::new()?;
-    window.on_move_window({ let weak = window.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+            window.on_move_window({
+                let weak = window.as_weak();
+                move |dx, dy| {
+                    if let Some(item) = weak.upgrade() {
+                        move_window(item.window(), dx, dy);
+                    }
+                }
+            });
             window.set_window_title(CONFIRM.into());
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
@@ -653,9 +704,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_download_host("media.example.test".into());
             window.set_resource_meta("HTTP · .mp4 · 128.0 MB".into());
             window.set_request_context("已安全继承网页凭据".into());
-            window.set_request_details(
-                "请求方式：GET · 内容类型：video/mp4".into(),
-            );
+            window.set_request_details("请求方式：GET · 内容类型：video/mp4".into());
             window.set_category("media".into());
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
             window.set_remaining("  ·  后面还有 2 个".into());
@@ -679,7 +728,14 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
         }
         "progress" => {
             let window = ProgressWindow::new()?;
-    window.on_move_window({ let weak = window.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+            window.on_move_window({
+                let weak = window.as_weak();
+                move |dx, dy| {
+                    if let Some(item) = weak.upgrade() {
+                        move_window(item.window(), dx, dy);
+                    }
+                }
+            });
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.set_headline(PROGRESS_HEADLINE.into());
@@ -691,7 +747,9 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_stage_label("正在下载".into());
             window.set_remaining("剩余约 3 秒".into());
             correct_native_click_position(window.window());
-            window.on_command(|_| { let _ = slint::quit_event_loop(); });
+            window.on_command(|_| {
+                let _ = slint::quit_event_loop();
+            });
             window.show()?;
             round_native_window(window.window());
             write_ready_marker();
@@ -699,7 +757,14 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
         }
         "complete" => {
             let window = CompleteWindow::new()?;
-    window.on_move_window({ let weak = window.as_weak(); move |dx, dy| { if let Some(item) = weak.upgrade() { move_window(item.window(), dx, dy); } } });
+            window.on_move_window({
+                let weak = window.as_weak();
+                move |dx, dy| {
+                    if let Some(item) = weak.upgrade() {
+                        move_window(item.window(), dx, dy);
+                    }
+                }
+            });
             window.set_window_title(COMPLETE.into());
             window.global::<Tokens>().set_dark(dark);
             window.global::<Tokens>().set_reduce_motion(true);
@@ -707,7 +772,9 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_details("128.0 MB · 已保存到本地".into());
             window.set_power_hint("将在 5 分钟后关机".into());
             correct_native_click_position(window.window());
-            window.on_command(|_| { let _ = slint::quit_event_loop(); });
+            window.on_command(|_| {
+                let _ = slint::quit_event_loop();
+            });
             window.show()?;
             round_native_window(window.window());
             write_ready_marker();
@@ -1021,30 +1088,61 @@ fn confirm_window_logical_size(work_area: (u32, u32), scale_factor: f32) -> Opti
 
 // 仅在真实确认或 fixture 的 show() 成功后调用；离屏预热不参与尺寸适配。
 fn fit_confirm_window(confirm: &ConfirmWindow) {
-    #[cfg(windows)] {
+    #[cfg(windows)]
+    {
         let weak = confirm.as_weak();
         // show() 和首个计时器都可能早于 HWND 创建，等待 Winit 的实际创建通知。
         let _ = slint::spawn_local(async move {
-            let Some(confirm) = weak.upgrade() else { return; };
-            use slint::winit_030::{winit::{dpi::{PhysicalPosition, PhysicalSize}, raw_window_handle::{HasWindowHandle, RawWindowHandle}}, WinitWindowAccessor};
-            use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+            let Some(confirm) = weak.upgrade() else {
+                return;
+            };
+            use slint::winit_030::{
+                winit::{
+                    dpi::{PhysicalPosition, PhysicalSize},
+                    raw_window_handle::{HasWindowHandle, RawWindowHandle},
+                },
+                WinitWindowAccessor,
+            };
+            use windows_sys::Win32::Graphics::Gdi::{
+                GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+            };
             let native = match confirm.window().winit_window().await {
                 Ok(native) => native,
-                Err(error) => { trace(&format!("fit confirm: {error}")); return; }
+                Err(error) => {
+                    trace(&format!("fit confirm: {error}"));
+                    return;
+                }
             };
-            let Ok(handle) = native.window_handle() else { return; };
-            let RawWindowHandle::Win32(handle) = handle.as_raw() else { return; };
+            let Ok(handle) = native.window_handle() else {
+                return;
+            };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+                return;
+            };
             let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
             info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-            let monitor = unsafe { MonitorFromWindow(handle.hwnd.get() as _, MONITOR_DEFAULTTONEAREST) };
-            if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 { trace(&format!("fit confirm: monitor query failed {}", std::io::Error::last_os_error())); return; }
+            let monitor =
+                unsafe { MonitorFromWindow(handle.hwnd.get() as _, MONITOR_DEFAULTTONEAREST) };
+            if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+                trace(&format!(
+                    "fit confirm: monitor query failed {}",
+                    std::io::Error::last_os_error()
+                ));
+                return;
+            }
             let work_width = (info.rcWork.right - info.rcWork.left) as u32;
             let work_height = (info.rcWork.bottom - info.rcWork.top) as u32;
             let scale = native.scale_factor() as f32;
-            let Some((width, height)) = confirm_window_logical_size((work_width, work_height), scale) else { return; };
+            let Some((width, height)) =
+                confirm_window_logical_size((work_width, work_height), scale)
+            else {
+                return;
+            };
             let width = (width * scale).round() as u32;
             let height = (height * scale).round() as u32;
-            trace(&format!("fit confirm work={work_width}x{work_height} scale={scale} size={width}x{height}"));
+            trace(&format!(
+                "fit confirm work={work_width}x{work_height} scale={scale} size={width}x{height}"
+            ));
             let _ = native.request_inner_size(PhysicalSize::new(width, height));
             native.set_outer_position(PhysicalPosition::new(
                 info.rcWork.left + ((work_width - width) / 2) as i32,
@@ -1053,7 +1151,8 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
             round_native_window(confirm.window());
         });
     }
-    #[cfg(not(windows))] let _ = confirm;
+    #[cfg(not(windows))]
+    let _ = confirm;
 }
 
 fn show_next_offer(
@@ -1235,7 +1334,13 @@ unsafe extern "system" fn frameless_window_proc(
     subclass_id: usize,
     _data: usize,
 ) -> isize {
-    use windows_sys::Win32::UI::{Shell::{DefSubclassProc, RemoveWindowSubclass}, WindowsAndMessaging::{GWL_STYLE, STYLESTRUCT, WM_STYLECHANGING, WM_NCACTIVATE, WM_NCPAINT, WM_NCDESTROY, WS_CAPTION}};
+    use windows_sys::Win32::UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass},
+        WindowsAndMessaging::{
+            GWL_STYLE, STYLESTRUCT, WM_NCACTIVATE, WM_NCDESTROY, WM_NCPAINT, WM_STYLECHANGING,
+            WS_CAPTION,
+        },
+    };
     match message {
         // 保留 Winit 的焦点状态更新，但禁止 DefWindowProc 在失焦时绘制系统标题和白边。
         WM_NCACTIVATE => DefSubclassProc(hwnd, message, wparam, -1),
@@ -1254,38 +1359,78 @@ unsafe extern "system" fn frameless_window_proc(
 }
 
 fn round_native_window(window: &slint::Window) {
-    #[cfg(windows)] {
-        use slint::winit_030::{winit::raw_window_handle::{HasWindowHandle, RawWindowHandle}, WinitWindowAccessor};
-        use windows_sys::Win32::{Foundation::RECT, Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn}, UI::WindowsAndMessaging::{GetWindowRect, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, WS_CAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE}};
+    #[cfg(windows)]
+    {
+        use slint::winit_030::{
+            winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
+            WinitWindowAccessor,
+        };
+        use windows_sys::Win32::{
+            Foundation::RECT,
+            Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
+            UI::WindowsAndMessaging::{
+                GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION,
+            },
+        };
         let _ = window.with_winit_window(|native| {
-            let Ok(handle) = native.window_handle() else { return; };
-            let RawWindowHandle::Win32(handle) = handle.as_raw() else { return; };
+            let Ok(handle) = native.window_handle() else {
+                return;
+            };
+            let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+                return;
+            };
             unsafe {
                 let hwnd = handle.hwnd.get() as _;
-                windows_sys::Win32::UI::Shell::SetWindowSubclass(hwnd, Some(frameless_window_proc), 1, 0);
+                windows_sys::Win32::UI::Shell::SetWindowSubclass(
+                    hwnd,
+                    Some(frameless_window_proc),
+                    1,
+                    0,
+                );
                 let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
                 if style & WS_CAPTION as isize != 0 {
                     SetWindowLongPtrW(hwnd, GWL_STYLE, style & !(WS_CAPTION as isize));
-                    SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
-                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    SetWindowPos(
+                        hwnd,
+                        std::ptr::null_mut(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
                 }
                 let mut bounds: RECT = std::mem::zeroed();
-                if GetWindowRect(hwnd, &mut bounds) == 0 { return; }
+                if GetWindowRect(hwnd, &mut bounds) == 0 {
+                    return;
+                }
                 let diameter = (28.0 * window.scale_factor()).round() as i32;
-                let region = CreateRoundRectRgn(0, 0, bounds.right - bounds.left + 1, bounds.bottom - bounds.top + 1, diameter, diameter);
+                let region = CreateRoundRectRgn(
+                    0,
+                    0,
+                    bounds.right - bounds.left + 1,
+                    bounds.bottom - bounds.top + 1,
+                    diameter,
+                    diameter,
+                );
                 if !region.is_null() && SetWindowRgn(hwnd, region, 1) == 0 {
                     DeleteObject(region);
                 }
             }
         });
     }
-    #[cfg(not(windows))] let _ = window;
+    #[cfg(not(windows))]
+    let _ = window;
 }
 
 fn move_window(window: &slint::Window, dx: f32, dy: f32) {
     let position = window.position();
     let scale = window.scale_factor();
-    trace(&format!("move window by {dx},{dy} from {},{}", position.x, position.y));
+    trace(&format!(
+        "move window by {dx},{dy} from {},{}",
+        position.x, position.y
+    ));
     window.set_position(slint::PhysicalPosition::new(
         position.x + (dx * scale).round() as i32,
         position.y + (dy * scale).round() as i32,
@@ -1307,7 +1452,11 @@ fn correct_native_click_position(window: &slint::Window) {
         let cursor_position = std::cell::Cell::new(None::<slint::LogicalPosition>);
         let left_pressed = std::cell::Cell::new(false);
         window.on_winit_window_event(move |window, event| {
-            if matches!(event, winit::event::WindowEvent::Resized(_) | winit::event::WindowEvent::ScaleFactorChanged { .. }) {
+            if matches!(
+                event,
+                winit::event::WindowEvent::Resized(_)
+                    | winit::event::WindowEvent::ScaleFactorChanged { .. }
+            ) {
                 round_native_window(window);
             }
             if let winit::event::WindowEvent::CursorMoved { position, .. } = event {
@@ -1316,7 +1465,8 @@ fn correct_native_click_position(window: &slint::Window) {
                     position.y as f32 / window.scale_factor(),
                 );
                 cursor_position.set(Some(position));
-                let _ = window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                let _ = window
+                    .try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
                 return EventResult::PreventDefault;
             }
             if matches!(event, winit::event::WindowEvent::CursorLeft { .. }) && left_pressed.get() {
@@ -1353,7 +1503,10 @@ fn correct_native_click_position(window: &slint::Window) {
                             point.y as f32 / window.scale_factor(),
                         )
                     };
-                    Some((handle.hwnd.get() as windows_sys::Win32::Foundation::HWND, position))
+                    Some((
+                        handle.hwnd.get() as windows_sys::Win32::Foundation::HWND,
+                        position,
+                    ))
                 })
                 .flatten();
             let Some((hwnd, position)) = native_position else {
@@ -1361,9 +1514,12 @@ fn correct_native_click_position(window: &slint::Window) {
             };
             if *state == winit::event::ElementState::Pressed {
                 // 默认鼠标事件被下方拦截，需自行捕获才能在拖出窗口后继续收到移动和释放。
-                unsafe { SetCapture(hwnd); }
+                unsafe {
+                    SetCapture(hwnd);
+                }
                 left_pressed.set(true);
-                let _ = window.try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                let _ = window
+                    .try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
             }
             let button = slint::platform::PointerEventButton::Left;
             let event = if *state == winit::event::ElementState::Pressed {
@@ -1377,7 +1533,9 @@ fn correct_native_click_position(window: &slint::Window) {
             ));
             let _ = window.try_dispatch_event(event);
             if *state == winit::event::ElementState::Released {
-                unsafe { ReleaseCapture(); }
+                unsafe {
+                    ReleaseCapture();
+                }
                 left_pressed.set(false);
                 cursor_position.set(None);
                 let _ = window.take_snapshot();
@@ -1556,7 +1714,9 @@ fn update_task_windows(
         }
         if settings.show_complete {
             if let Some(item) = complete.upgrade() {
-                item.set_details(format!("{} · 已保存到本地", format_bytes(snapshot.downloaded_bytes)).into());
+                item.set_details(
+                    format!("{} · 已保存到本地", format_bytes(snapshot.downloaded_bytes)).into(),
+                );
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
                 if item.show().is_ok() {
@@ -1618,26 +1778,50 @@ fn render_progress_hud(
     item.set_filename(snapshot.filename.clone().into());
     let processing = matches!(snapshot.status.as_str(), "merging" | "checking");
     item.set_processing(processing);
-    item.set_speed(if processing { "本地处理中".into() } else { format_speed(snapshot.speed_bytes_per_sec).into() });
+    item.set_speed(if processing {
+        "本地处理中".into()
+    } else {
+        format_speed(snapshot.speed_bytes_per_sec).into()
+    });
     item.set_remaining(if processing {
         "请稍候".into()
     } else if snapshot.speed_bytes_per_sec > 0 {
-        snapshot.total_bytes.filter(|total| *total > snapshot.downloaded_bytes)
+        snapshot
+            .total_bytes
+            .filter(|total| *total > snapshot.downloaded_bytes)
             .map(|total| {
-                let seconds = (total - snapshot.downloaded_bytes).div_ceil(snapshot.speed_bytes_per_sec);
-                if seconds >= 60 { format!("剩余约 {} 分 {} 秒", seconds / 60, seconds % 60) }
-                else { format!("剩余约 {seconds} 秒") }
-            }).unwrap_or_default().into()
-    } else { "".into() });
-    item.set_stage_label(match snapshot.status.as_str() {
-        "merging" => "正在合并音视频",
-        "checking" => "正在校验文件",
-        "recording" => "正在录制",
-        _ => "正在下载",
-    }.into());
+                let seconds =
+                    (total - snapshot.downloaded_bytes).div_ceil(snapshot.speed_bytes_per_sec);
+                if seconds >= 60 {
+                    format!("剩余约 {} 分 {} 秒", seconds / 60, seconds % 60)
+                } else {
+                    format!("剩余约 {seconds} 秒")
+                }
+            })
+            .unwrap_or_default()
+            .into()
+    } else {
+        "".into()
+    });
+    item.set_stage_label(
+        match snapshot.status.as_str() {
+            "merging" => "正在合并音视频",
+            "checking" => "正在校验文件",
+            "recording" => "正在录制",
+            _ => "正在下载",
+        }
+        .into(),
+    );
     item.set_progress(task_progress(snapshot));
-    item.set_progress_known(snapshot.total_bytes.is_some_and(|total| total > 0)
-        || (!snapshot.is_live && matches!(snapshot.resource_kind, ResourceKind::Hls | ResourceKind::Dash) && snapshot.total_ranges > 0));
+    item.set_progress_known(
+        snapshot.total_bytes.is_some_and(|total| total > 0)
+            || (!snapshot.is_live
+                && matches!(
+                    snapshot.resource_kind,
+                    ResourceKind::Hls | ResourceKind::Dash
+                )
+                && snapshot.total_ranges > 0),
+    );
     item.set_transferred(match snapshot.total_bytes.filter(|total| *total > 0) {
         Some(total) => format!(
             "已下载 {} / {}",
@@ -1645,7 +1829,13 @@ fn render_progress_hud(
             format_bytes(total)
         )
         .into(),
-        None if !snapshot.is_live && snapshot.total_ranges > 0 => format!("{} · 分片 {} / {}", format_bytes(snapshot.downloaded_bytes), snapshot.completed_ranges, snapshot.total_ranges).into(),
+        None if !snapshot.is_live && snapshot.total_ranges > 0 => format!(
+            "{} · 分片 {} / {}",
+            format_bytes(snapshot.downloaded_bytes),
+            snapshot.completed_ranges,
+            snapshot.total_ranges
+        )
+        .into(),
         None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
     });
     let first_show = !item.window().is_visible();
@@ -1858,7 +2048,10 @@ fn task_progress(task: &TaskSnapshot) -> f32 {
     if matches!(task.status.as_str(), "completed" | "done") {
         return 1.0;
     }
-    if !task.is_live && matches!(task.resource_kind, ResourceKind::Hls | ResourceKind::Dash) && task.total_ranges > 0 {
+    if !task.is_live
+        && matches!(task.resource_kind, ResourceKind::Hls | ResourceKind::Dash)
+        && task.total_ranges > 0
+    {
         return (task.completed_ranges as f32 / task.total_ranges as f32).clamp(0.0, 1.0);
     }
     task.total_bytes

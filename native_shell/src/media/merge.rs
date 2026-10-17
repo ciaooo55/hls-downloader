@@ -124,7 +124,8 @@ fn run_ffmpeg(command: &mut Command, log_path: &Path) -> Result<(), String> {
         log.seek(SeekFrom::Start(size.saturating_sub(4096)))
             .map_err(|error| error.to_string())?;
         let mut tail = Vec::new();
-        log.read_to_end(&mut tail).map_err(|error| error.to_string())?;
+        log.read_to_end(&mut tail)
+            .map_err(|error| error.to_string())?;
         Err(format!(
             "ffmpeg 合流失败 ({status}): {}；完整日志: {}",
             String::from_utf8_lossy(&tail).trim(),

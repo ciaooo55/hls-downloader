@@ -381,7 +381,11 @@ fn validate_installer_identity_fields(
     }
     let release_version = expected_version.trim().trim_start_matches('v');
     let product_version = match release_version.rsplit_once("-r") {
-        Some((base, revision)) if !revision.is_empty() && revision.chars().all(|ch| ch.is_ascii_digit()) => base,
+        Some((base, revision))
+            if !revision.is_empty() && revision.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            base
+        }
         _ => release_version,
     };
     if identity.product_version != product_version {

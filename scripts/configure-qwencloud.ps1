@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ProtectedKeyPath = (Join-Path $PSScriptRoot '..\outputs\private-user-backup\qwencloud-api-key.dpapi'),
     [switch]$SaveOnly
 )
