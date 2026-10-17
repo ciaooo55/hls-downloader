@@ -46,36 +46,36 @@
       "actual": {
         "seconds": 5.015999999999963,
         "logical_cpus": 8,
-        "cpu_one_core_percent": 0.3115031897926658,
-        "cpu_machine_percent": 0.03893789872408322,
+        "cpu_one_core_percent": 0.6230063795853316,
+        "cpu_machine_percent": 0.07787579744816645,
         "processes": {
-          "2100": {
+          "1244": {
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.15625,
+            "rss_bytes": 18001920,
+            "private_bytes": 3837952
+          },
+          "2676": {
+            "name": "HLSDownloader.exe",
+            "cpu": 9.78125,
+            "rss_bytes": 185581568,
+            "private_bytes": 213909504
+          },
+          "4608": {
             "name": "HLSDownloader.exe",
             "cpu": 0.0,
-            "rss_bytes": 6410240,
-            "private_bytes": 1404928
+            "rss_bytes": 6705152,
+            "private_bytes": 1413120
           },
-          "4032": {
-            "name": "HLSDownloader.exe",
-            "cpu": 8.546875,
-            "rss_bytes": 189915136,
-            "private_bytes": 218689536
-          },
-          "4292": {
+          "5144": {
             "name": "HLSDownloaderEngine.exe",
-            "cpu": 0.125,
-            "rss_bytes": 17616896,
-            "private_bytes": 5357568
-          },
-          "4552": {
-            "name": "HLSDownloaderPresenter.exe",
-            "cpu": 0.171875,
-            "rss_bytes": 17924096,
-            "private_bytes": 4141056
+            "cpu": 0.140625,
+            "rss_bytes": 17874944,
+            "private_bytes": 4923392
           }
         },
-        "rss_sum_bytes": 231866368,
-        "private_sum_bytes": 229593088
+        "rss_sum_bytes": 228163584,
+        "private_sum_bytes": 224083968
       }
     },
     {
@@ -83,8 +83,8 @@
       "actual": true
     }
   ],
-  "msi_sha256": "75f315f327407236266506e0a8b482472ce00c6f0dcee9c3d34fbe9e1f2a074b",
-  "installed_bytes": 675423713,
+  "msi_sha256": "0536637a1f65aad034907ba23bd68df3e6017ed8ccb123b7c570f3b125d90393",
+  "installed_bytes": 675426872,
   "installed_files": 265,
   "largest_files": [
     {
@@ -113,7 +113,7 @@
     },
     {
       "path": "app/resources/HLSDownloaderEngine.exe",
-      "bytes": 14556160
+      "bytes": 14559232
     },
     {
       "path": "app/skiko-windows-x64.dll",
@@ -137,44 +137,44 @@
     }
   ],
   "installed_components_sha256": {
-    "HLSDownloaderEngine.exe": "099233e6b3c0c650bbff133af5db2573c0d8b5e385f2b2043d79f936846be183",
-    "HLSDownloaderNativeHost.exe": "8007b8b39d06ca06adbeffe8f68711b131656a1d7a6f6f43153a62f559ea11a0",
-    "HLSDownloaderUpdater.exe": "c6dd1e8173fa71426ca7559d274be623e1b3927eaebf7f6410d933e022af6cb9"
+    "HLSDownloaderEngine.exe": "6bae7b72bfbf308fcb25b9baadd124d3e31ef7e11f5d6780351e18f07ba11adb",
+    "HLSDownloaderNativeHost.exe": "46c28d999af2eed43c60174dcbf6639e3f52890e0c14a3801de83a4507405ec5",
+    "HLSDownloaderUpdater.exe": "18fef9a36af3851a80ab8b78f8e01cb820d547b11264b967c51cb4dc1cccb49e"
   },
   "ui_exercised": true,
-  "ui_visible_connected_seconds": 7.218999999999994,
+  "ui_visible_connected_seconds": 6.25,
   "idle": {
     "seconds": 5.015999999999963,
     "logical_cpus": 8,
-    "cpu_one_core_percent": 0.3115031897926658,
-    "cpu_machine_percent": 0.03893789872408322,
+    "cpu_one_core_percent": 0.6230063795853316,
+    "cpu_machine_percent": 0.07787579744816645,
     "processes": {
-      "2100": {
+      "1244": {
+        "name": "HLSDownloaderPresenter.exe",
+        "cpu": 0.15625,
+        "rss_bytes": 18001920,
+        "private_bytes": 3837952
+      },
+      "2676": {
+        "name": "HLSDownloader.exe",
+        "cpu": 9.78125,
+        "rss_bytes": 185581568,
+        "private_bytes": 213909504
+      },
+      "4608": {
         "name": "HLSDownloader.exe",
         "cpu": 0.0,
-        "rss_bytes": 6410240,
-        "private_bytes": 1404928
+        "rss_bytes": 6705152,
+        "private_bytes": 1413120
       },
-      "4032": {
-        "name": "HLSDownloader.exe",
-        "cpu": 8.546875,
-        "rss_bytes": 189915136,
-        "private_bytes": 218689536
-      },
-      "4292": {
+      "5144": {
         "name": "HLSDownloaderEngine.exe",
-        "cpu": 0.125,
-        "rss_bytes": 17616896,
-        "private_bytes": 5357568
-      },
-      "4552": {
-        "name": "HLSDownloaderPresenter.exe",
-        "cpu": 0.171875,
-        "rss_bytes": 17924096,
-        "private_bytes": 4141056
+        "cpu": 0.140625,
+        "rss_bytes": 17874944,
+        "private_bytes": 4923392
       }
     },
-    "rss_sum_bytes": 231866368,
-    "private_sum_bytes": 229593088
+    "rss_sum_bytes": 228163584,
+    "private_sum_bytes": 224083968
   }
 }

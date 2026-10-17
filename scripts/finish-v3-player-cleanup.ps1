@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell/src/player.rs'))
 
 $desktop = [Environment]::GetFolderPath('Desktop')
 $latest = Join-Path $desktop 'HLSDownloader-7.0.3-r5-未签名.msi'
-$latestHash = '75f315f327407236266506e0a8b482472ce00c6f0dcee9c3d34fbe9e1f2a074b'
+$latestHash = '0536637a1f65aad034907ba23bd68df3e6017ed8ccb123b7c570f3b125d90393'
 $oldPackages = @{
     'HLSDownloader-7.0.3-cache-playback-未签名.msi' = 'dca68bc346f6b262c4b2887e21f10cec37f9b53e347e98b0d6fab092bdeb971a'
     'HLSDownloader-7.0.3-v3-player-未签名.msi' = '96158caea3914bb3857703efd34bf48798545a629735e67057abde1d79fe6b5c'
