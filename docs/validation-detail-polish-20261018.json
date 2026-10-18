@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-18T03:40:32.555953+08:00",
-  "status": "scoped_validation_100_passed",
+  "date": "2026-10-18T13:41:46.157008+08:00",
+  "status": "scoped_validation_passed",
   "base_commit": "215e7768d3d90353e6fea93a44d5e2c7927b37c2",
   "source_sha256": {
     "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "70054a71143c3e77ec529fdbd96df5a186cc6a2d16ffaeb7dee3a6c2dae4b2b9",
@@ -144,6 +144,218 @@
           "actual": true
         }
       ]
+    },
+    "popup-final-150": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "real toolbar popup light fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1325,
+            "theme": "light",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "real toolbar popup dark fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 472,
+            "footerBottom": 600,
+            "horizontal": false,
+            "mainHeight": 600,
+            "scrollHeight": 1325,
+            "theme": "dark",
+            "viewport": [
+              400,
+              600
+            ]
+          }
+        },
+        {
+          "name": "native popup tabs: arrows, End and Home preserve keyboard focus and lazy Subtitle mounts",
+          "actual": true
+        },
+        {
+          "name": "native quality selection updates metadata and retains focus",
+          "actual": {
+            "meta": "HLS · .m3u8 · 720p · 1280×720 · 2.0 Mbps · 142 B",
+            "text": "720p · 2.0 Mbps",
+            "value": "http://localhost:49696/high.m3u8"
+          }
+        },
+        {
+          "name": "pre-copy native coordinates",
+          "actual": {
+            "disabled": false,
+            "scale": 1.5,
+            "x": 843.3333129882812,
+            "y": 323.7666702270508
+          }
+        },
+        {
+          "name": "clipboard contains selected quality URL; repeated copy preserves SVG and resets label",
+          "actual": true
+        },
+        {
+          "name": "Async clipboard rejection falls back to real synchronous copy and restores button focus",
+          "actual": true
+        },
+        {
+          "name": "Both clipboard methods denied: full URL is visible, selected and Ctrl+C copies exact selected rendition",
+          "actual": {
+            "end": 32,
+            "focused": true,
+            "readonly": true,
+            "start": 0,
+            "value": "http://localhost:49696/high.m3u8"
+          }
+        },
+        {
+          "name": "Clipboard recovery removes obsolete error field and keeps normal card compact",
+          "actual": true
+        },
+        {
+          "name": "Pending high rendition does not disable low rendition; switching back restores matching status; two exact URLs sent",
+          "actual": [
+            "http://localhost:49696/high.m3u8",
+            "http://localhost:49696/low.m3u8"
+          ]
+        },
+        {
+          "name": "Hidden Subtitle tab stops polling; visible tab resumes without remount",
+          "actual": true
+        },
+        {
+          "name": "Save failure preserves entered key, restores Clear and prevents overlapping form submissions",
+          "actual": {
+            "clearEnabled": true,
+            "configure": 1,
+            "error": "QA simulated configuration failure",
+            "key": "qa-not-a-real-key"
+          }
+        },
+        {
+          "name": "Failed Clear can retry; successful Clear removes typed key and correctly disables Clear",
+          "actual": true
+        }
+      ]
+    },
+    "popup-short-150": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "real toolbar popup light fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 272,
+            "footerBottom": 400,
+            "horizontal": false,
+            "mainHeight": 400,
+            "scrollHeight": 1325,
+            "theme": "light",
+            "viewport": [
+              400,
+              400
+            ]
+          }
+        },
+        {
+          "name": "real toolbar popup dark fits viewport",
+          "actual": {
+            "bodyWidth": 400,
+            "cards": 8,
+            "clientHeight": 272,
+            "footerBottom": 400,
+            "horizontal": false,
+            "mainHeight": 400,
+            "scrollHeight": 1325,
+            "theme": "dark",
+            "viewport": [
+              400,
+              400
+            ]
+          }
+        },
+        {
+          "name": "native popup tabs: arrows, End and Home preserve keyboard focus and lazy Subtitle mounts",
+          "actual": true
+        },
+        {
+          "name": "native quality selection updates metadata and retains focus",
+          "actual": {
+            "meta": "HLS · .m3u8 · 720p · 1280×720 · 2.0 Mbps · 0:03 · 142 B",
+            "text": "720p · 2.0 Mbps",
+            "value": "http://localhost:49766/high.m3u8"
+          }
+        },
+        {
+          "name": "pre-copy native coordinates",
+          "actual": {
+            "disabled": false,
+            "scale": 1.5,
+            "x": 843.3333129882812,
+            "y": 323.7666702270508
+          }
+        },
+        {
+          "name": "clipboard contains selected quality URL; repeated copy preserves SVG and resets label",
+          "actual": true
+        },
+        {
+          "name": "Async clipboard rejection falls back to real synchronous copy and restores button focus",
+          "actual": true
+        },
+        {
+          "name": "Both clipboard methods denied: full URL is visible, selected and Ctrl+C copies exact selected rendition",
+          "actual": {
+            "end": 32,
+            "focused": true,
+            "readonly": true,
+            "start": 0,
+            "value": "http://localhost:49766/high.m3u8"
+          }
+        },
+        {
+          "name": "Clipboard recovery removes obsolete error field and keeps normal card compact",
+          "actual": true
+        },
+        {
+          "name": "Pending high rendition does not disable low rendition; switching back restores matching status; two exact URLs sent",
+          "actual": [
+            "http://localhost:49766/high.m3u8",
+            "http://localhost:49766/low.m3u8"
+          ]
+        },
+        {
+          "name": "Hidden Subtitle tab stops polling; visible tab resumes without remount",
+          "actual": true
+        },
+        {
+          "name": "Save failure preserves entered key, restores Clear and prevents overlapping form submissions",
+          "actual": {
+            "clearEnabled": true,
+            "configure": 1,
+            "error": "QA simulated configuration failure",
+            "key": "qa-not-a-real-key"
+          }
+        },
+        {
+          "name": "Failed Clear can retry; successful Clear removes typed key and correctly disables Clear",
+          "actual": true
+        }
+      ]
     }
   },
   "not_run": [
@@ -152,10 +364,15 @@
     "投屏/TVBox实体接收设备",
     "本轮全套 Core 回归；Core 源码未改"
   ],
-  "delivery": "r10 发布包尚未包含本轮改动；r11 安装包验收后才可发布",
+  "delivery": "r11 candidate MSI passed sandbox installation and payload verification; see validation-r11-installer-20261018.json",
   "limits": [
     "字幕保存失败与清晰度等待状态使用真实 Firefox 原生弹窗中的本地响应注入，不是云端或设备端验收",
     "无新增依赖；未在本机安装；未签名；未操作用户下载或其他项目",
-    "此前缓存和桌面旧包删除被自动审批拒绝，本轮未重试"
+    "此前缓存和桌面旧包删除被自动审批拒绝，本轮未重试",
+    "Firefox 150% 为 layout.css.devPixelsPerPx=1.5；受限高度测试额外注入 main max-height:400px，仅用于验收，不改变产品产物。"
+  ],
+  "fixture_notes": [
+    "初次 150% 脚本在点击复制后失去原生弹窗，未计为通过。恢复沙盒并固定显示尺寸后，使用同一插件产物完整通过；另外将原生弹窗内容约束至 400 CSS px，在 150% 下再次完成全部交互。未据此宣称已确认初次关闭的具体原因。",
+    "第一次 MSI 验收夹具误用 r10 的 JAR 预期哈希，已修正为本轮记录。MSI 无需修改，重新安装和完整验收通过。"
   ]
 }
