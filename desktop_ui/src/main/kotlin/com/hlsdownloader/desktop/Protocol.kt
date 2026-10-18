@@ -903,11 +903,11 @@ object EnginePipeClient {
     fun recognizeResourceKind(url: String): String {
         val path = url.substringBefore('?').substringBefore('#').lowercase()
         return when {
+            url.startsWith("sftp:", true) -> "sftp"
+            url.startsWith("ftp:", true) || url.startsWith("ftps:", true) -> "ftp"
             url.startsWith("magnet:", true) || path.endsWith(".torrent") -> "torrent"
             path.endsWith(".m3u8") -> "hls"
             path.endsWith(".mpd") -> "dash"
-            url.startsWith("sftp:", true) -> "sftp"
-            url.startsWith("ftp:", true) -> "ftp"
             else -> "file"
         }
     }
@@ -917,7 +917,7 @@ object EnginePipeClient {
         require(url.isNotEmpty()) { "下载链接不能为空" }
         require(url.none(Char::isISOControl)) { "下载链接包含无效控制字符" }
         val localTorrent = url.substringBefore('?').substringBefore('#').endsWith(".torrent", true)
-        require(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("ftp://", true) || url.startsWith("sftp://", true) || url.startsWith("magnet:", true) || localTorrent) { "不支持的下载链接格式" }
+        require(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("ftp://", true) || url.startsWith("ftps://", true) || url.startsWith("sftp://", true) || url.startsWith("magnet:", true) || localTorrent) { "不支持的下载链接格式" }
         if (!url.startsWith("magnet:", true) && !localTorrent) {
             require(runCatching { URI(url) }.getOrNull()?.host?.isNotBlank() == true) { "下载链接缺少有效主机名" }
         }

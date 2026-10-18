@@ -121,6 +121,8 @@ class ProtocolTest {
     @Test fun urlNormalizationTrimsAndRejectsUnsafeInput() {
         assertEquals("https://example.test/a.m3u8", EnginePipeClient.normalizeDownloadUrl("  https://example.test/a.m3u8  "))
         assertEquals("https://example.test/page", EnginePipeClient.normalizeHttpUrl("https://example.test/page"))
+        assertEquals("FTPS://files.test/file.bin", EnginePipeClient.normalizeDownloadUrl("  FTPS://files.test/file.bin  "))
+        assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeDownloadUrl("ftps:///missing-host") }
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeDownloadUrl(" ") }
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeDownloadUrl("javascript:alert(1)") }
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeDownloadUrl("https://example.test/a\u0000.m3u8") }
@@ -135,6 +137,9 @@ class ProtocolTest {
         assertEquals("torrent", EnginePipeClient.recognizeResourceKind("magnet:?xt=urn:btih:abc"))
         assertEquals("sftp", EnginePipeClient.recognizeResourceKind("sftp://host/path/file.bin"))
         assertEquals("ftp", EnginePipeClient.recognizeResourceKind("ftp://host/path/file.bin"))
+        assertEquals("ftp", EnginePipeClient.recognizeResourceKind("ftps://host/path/file.bin"))
+        assertEquals("ftp", EnginePipeClient.recognizeResourceKind("ftps://host/path/playlist.m3u8"))
+        assertEquals("sftp", EnginePipeClient.recognizeResourceKind("sftp://host/path/manifest.mpd"))
         assertEquals("file", EnginePipeClient.recognizeResourceKind("https://cdn.test/file.zip"))
     }
 

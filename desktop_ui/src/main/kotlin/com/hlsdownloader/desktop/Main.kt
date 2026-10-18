@@ -736,10 +736,12 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var darkMode by remember { mutableStateOf(visualTheme == "dark") }
     var newTaskDialog by remember { mutableStateOf(visualFixture == "new_task") }
     var batchDialog by remember { mutableStateOf(visualFixture == "batch") }
+    var batchCreateBusy by remember { mutableStateOf(false) }
     var harvestDialog by remember { mutableStateOf(visualFixture == "harvest") }
     var settingsDialog by remember { mutableStateOf(auditSettingsTab(visualFixture) != null) }
     var settingsDeviceScanActive by remember { mutableStateOf(visualFixture == "settings_devices") }
     var queueManagerDialog by remember { mutableStateOf(visualFixture == "queues") }
+    var queueSaveBusy by remember { mutableStateOf(false) }
     var queueAssignTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var extensionDialog by remember { mutableStateOf(visualFixture == "extension") }
     var newTaskUrl by remember { mutableStateOf("") }
@@ -764,6 +766,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var probeResult by remember { mutableStateOf<UiSignal.Probe?>(null) }
     var probeDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var newTaskProbeBusy by remember { mutableStateOf(false) }
+    var newTaskCreateBusy by remember { mutableStateOf(false) }
     var torrentProbe by remember { mutableStateOf<UiSignal.TorrentProbe?>(null) }
     var torrentDraft by remember { mutableStateOf<TaskDraft?>(null) }
     var deviceResult by remember { mutableStateOf<UiSignal.Devices?>(when (visualFixture) {
@@ -1070,10 +1073,11 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         "settings" -> { settingsDialog = true; true }
         "refresh" -> { refreshKey++; true }
         "escape" -> when {
-            newTaskDialog -> { newTaskDialog = false; true }
-            batchDialog -> { batchDialog = false; true }
+            newTaskDialog -> { if (!newTaskProbeBusy && !newTaskCreateBusy) newTaskDialog = false; true }
+            batchDialog -> { if (!batchCreateBusy) batchDialog = false; true }
             harvestDialog -> { harvestDialog = false; true }
-            settingsDialog -> { settingsDialog = false; true }
+            settingsDialog -> { if (!settingsSaveBusy) settingsDialog = false; true }
+            queueManagerDialog -> { if (!queueSaveBusy) queueManagerDialog = false; true }
             extensionDialog -> { extensionDialog = false; true }
             detailTaskId != null -> { detailTaskId = null; detailTaskFallback = null; true }
             searchFocused && query.isNotEmpty() -> { query = ""; true }
@@ -1520,8 +1524,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
         }
     }
-    if (newTaskDialog) NewTaskDialog({ newTaskDialog = false }, newTaskUrl, settings, probing = newTaskProbeBusy, onProbe = { draft ->
-        if (newTaskProbeBusy) return@NewTaskDialog
+    if (newTaskDialog) NewTaskDialog({ if (!newTaskProbeBusy && !newTaskCreateBusy) newTaskDialog = false }, newTaskUrl, settings, probing = newTaskProbeBusy, creating = newTaskCreateBusy, onProbe = { draft ->
+        if (newTaskProbeBusy || newTaskCreateBusy) return@NewTaskDialog
         newTaskProbeBusy = true
         if (taskProbeTarget(draft) == ResourceProbeTarget.Torrent) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
@@ -1539,12 +1543,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
         }
     }) { draft ->
+        if (newTaskCreateBusy || newTaskProbeBusy) return@NewTaskDialog
+        newTaskCreateBusy = true
         if (draft.kind.equals("torrent", true)) {
             torrentDraft = draft.copy(queueId = selectedQueueId ?: "default")
             scope.launch {
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.probeTorrent(draft.url) } }
                     .onSuccess { newTaskDialog = false }
                     .onFailure { torrentDraft = null; notice = UiSignal.Notice("error", describeTaskActionFailure(it, "种子分析失败")) }
+                newTaskCreateBusy = false
             }
             return@NewTaskDialog
         }
@@ -1555,6 +1562,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             } }
                 .onSuccess { newTaskDialog = false; refreshKey++ }
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建下载失败")) }
+            newTaskCreateBusy = false
         }
     }
     if (torrentDraft != null && torrentProbe == null && !newTaskDialog) {
@@ -1565,7 +1573,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 Text("正在连接节点并读取种子元数据…", color = ink, fontSize = TypeScale.body)
             }
             Text("节点无响应时解析可能较慢。关闭窗口不会创建下载任务。", color = muted, fontSize = TypeScale.caption)
-        }, actions = { DialogSecondary("关闭", { torrentDraft = null }) })
+        }, actions = { DialogSecondary("关闭") { torrentDraft = null } })
     }
     torrentProbe?.let { signal -> TorrentSelectionDialog(signal.data, { torrentProbe = null; torrentDraft = null }) { files ->
         val draft = torrentDraft ?: return@TorrentSelectionDialog
@@ -1579,13 +1587,25 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "创建种子任务失败")) }
         }
     } }
-    if (batchDialog) BatchAddDialog({ batchDialog = false }) { urls ->
-        scope.launch {
-            runCatching { withContext(Dispatchers.IO) { urls.forEach { EnginePipeClient.createTask(TaskDraft(url = it, queueId = selectedQueueId ?: "default")) } } }
-                .onSuccess { refreshKey++ }
-                .onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "批量创建任务失败")) }
+    if (batchDialog) BatchAddDialog({ if (!batchCreateBusy) batchDialog = false }, batchCreateBusy) { urls ->
+        batchCreateBusy = true
+        val queueId = selectedQueueId ?: "default"
+        try {
+            val failures = withContext(Dispatchers.IO) {
+                urls.mapNotNull { url ->
+                    runCatching { EnginePipeClient.createTask(TaskDraft(url = url, queueId = queueId)) }
+                        .exceptionOrNull()?.let { url to describeTaskActionFailure(it, "创建任务失败") }
+                }
+            }
+            refreshKey++
+            if (failures.isEmpty()) {
+                batchDialog = false
+                notice = UiSignal.Notice("success", "已处理 ${urls.size} 条下载链接")
+            }
+            failures
+        } finally {
+            batchCreateBusy = false
         }
-        batchDialog = false
     }
     if (harvestDialog) HarvestDialog({ harvestDialog = false }, settings.defaultReferer) { url, referer ->
         val effectiveReferer = referer.ifBlank { url }
@@ -1643,7 +1663,9 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             settingsSaveBusy = false
         }
     }
-    if (queueManagerDialog) QueueManagerDialog(settings.queueProfiles, { queueManagerDialog = false }) { profiles ->
+    if (queueManagerDialog) QueueManagerDialog(settings.queueProfiles, { if (!queueSaveBusy) queueManagerDialog = false }, saving = queueSaveBusy) { profiles ->
+        if (queueSaveBusy) return@QueueManagerDialog
+        queueSaveBusy = true
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
                 EnginePipeClient.saveSettings(settings.copy(queueProfiles = profiles))
@@ -1654,6 +1676,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 refreshKey++
                 notice = UiSignal.Notice("success", "队列设置已保存")
             }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "队列设置保存失败")) }
+            queueSaveBusy = false
         }
     }
     if (queueAssignTaskIds.isNotEmpty()) QueueAssignDialog(
@@ -3358,7 +3381,7 @@ internal fun WorkbenchDialog(
     }
 }
 @Composable internal fun DialogPrimary(label: String, enabled: Boolean = true, onClick: () -> Unit) = Button(onClick = onClick, enabled = enabled, shape = RoundedCornerShape(Radius.md), contentPadding = PaddingValues(horizontal = 15.dp), colors = ButtonDefaults.buttonColors(containerColor = blue, contentColor = onBlue), modifier = Modifier.reportControlBounds("dialog.primary.$label")) { Text(label, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) }
-@Composable internal fun DialogSecondary(label: String, onClick: () -> Unit) = TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 12.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("dialog.secondary.$label")) { Text(label, fontSize = TypeScale.body, color = muted) }
+@Composable internal fun DialogSecondary(label: String, enabled: Boolean = true, onClick: () -> Unit) = TextButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(horizontal = 12.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("dialog.secondary.$label")) { Text(label, fontSize = TypeScale.body, color = if (enabled) muted else faint) }
 @Composable internal fun DialogLabel(value: String) = Text(value, color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 5.dp))
 
 /**
@@ -3490,7 +3513,7 @@ private fun QueueAssignDialog(
             }
         },
         actions = {
-            DialogSecondary("取消", onDismiss)
+            DialogSecondary("取消", onClick = onDismiss)
             DialogPrimary("移动", selectedId.isNotBlank()) { onAssign(selectedId) }
         },
     )
@@ -3500,13 +3523,21 @@ private fun QueueAssignDialog(
 private fun QueueManagerDialog(
     current: List<QueueProfileDto>,
     onDismiss: () -> Unit,
+    saving: Boolean = false,
     onSave: (List<QueueProfileDto>) -> Unit,
 ) {
     var profiles by remember(current) { mutableStateOf(current.ifEmpty { listOf(QueueProfileDto()) }) }
     var selectedId by remember(current) { mutableStateOf(profiles.first().id) }
     val selected = profiles.firstOrNull { it.id == selectedId } ?: profiles.first()
-    val valid = queueProfilesValid(profiles)
+    var priorityInput by remember(selected.id) { mutableStateOf(selected.priority.toString()) }
+    var maxActiveInput by remember(selected.id) { mutableStateOf(selected.maxActive.toString()) }
+    var speedInput by remember(selected.id) { mutableStateOf(selected.speedLimitKib.toString()) }
+    val priorityValid = priorityInput.toIntOrNull()?.let { it in -100..100 } == true
+    val maxActiveValid = maxActiveInput.toIntOrNull()?.let { it in 1..64 } == true
+    val speedValid = speedInput.toLongOrNull()?.let { it in 0..1_048_576 } == true
+    val valid = queueProfilesValid(profiles) && priorityValid && maxActiveValid && speedValid
     fun update(transform: (QueueProfileDto) -> QueueProfileDto) {
+        if (saving) return
         profiles = profiles.map { if (it.id == selected.id) transform(it) else it }
     }
     fun move(delta: Int) {
@@ -3520,6 +3551,7 @@ private fun QueueManagerDialog(
         "下载队列",
         "不同队列按优先级、并发、限速、时间表和完成动作独立运行",
         780.dp,
+        dismissible = !saving,
         scrollable = false,
         content = {
             Row(Modifier.fillMaxWidth().heightIn(min = 360.dp, max = 420.dp)) {
@@ -3528,9 +3560,11 @@ private fun QueueManagerDialog(
                         Text("队列", color = muted, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         IconButton(onClick = {
                             val id = "queue-${System.currentTimeMillis().toString(36)}"
-                            profiles = profiles + QueueProfileDto(id = id, name = "新队列", priority = (profiles.maxOfOrNull { it.priority } ?: 0) + 1)
+                            val names = profiles.map { it.name }.toSet()
+                            val name = generateSequence(1) { it + 1 }.map { if (it == 1) "新队列" else "新队列 $it" }.first { it !in names }
+                            profiles = profiles + QueueProfileDto(id = id, name = name, priority = ((profiles.maxOfOrNull { it.priority } ?: 0) + 1).coerceAtMost(100))
                             selectedId = id
-                        }, modifier = Modifier.size(30.dp)) { Icon(Icons.Outlined.Add, "新建队列", tint = blue, modifier = Modifier.size(18.dp)) }
+                        }, enabled = !saving && profiles.size < 32, modifier = Modifier.size(30.dp)) { Icon(Icons.Outlined.Add, "新建队列", tint = blue, modifier = Modifier.size(18.dp)) }
                     }
                     Spacer(Modifier.height(5.dp))
                     Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
@@ -3544,7 +3578,7 @@ private fun QueueManagerDialog(
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md))
                                     .pressFeedback(feedback)
-                                    .clickable(interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
+                                    .clickable(enabled = !saving, interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
                                     .padding(horizontal = 10.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -3560,39 +3594,41 @@ private fun QueueManagerDialog(
                     }
                     HorizontalDivider(color = border)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        IconButton(onClick = { move(-1) }, enabled = profiles.indexOf(selected) > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移队列", tint = muted) }
-                        IconButton(onClick = { move(1) }, enabled = profiles.indexOf(selected) < profiles.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "下移队列", tint = muted) }
+                        IconButton(onClick = { move(-1) }, enabled = !saving && profiles.indexOf(selected) > 0) { Icon(Icons.Outlined.KeyboardArrowUp, "上移队列", tint = muted) }
+                        IconButton(onClick = { move(1) }, enabled = !saving && profiles.indexOf(selected) < profiles.lastIndex) { Icon(Icons.Outlined.KeyboardArrowDown, "下移队列", tint = muted) }
                         IconButton(onClick = {
                             if (selected.id != "default" && profiles.size > 1) {
                                 profiles = profiles.filterNot { it.id == selected.id }
                                 selectedId = profiles.first().id
                             }
-                        }, enabled = selected.id != "default" && profiles.size > 1) { Icon(Icons.Outlined.DeleteOutline, "删除队列", tint = if (selected.id == "default") faint else errorStrong) }
+                        }, enabled = !saving && selected.id != "default" && profiles.size > 1) { Icon(Icons.Outlined.DeleteOutline, "删除队列", tint = if (selected.id == "default") faint else errorStrong) }
                     }
                 }
                 Box(Modifier.width(1.dp).fillMaxHeight().background(border))
                 Column(Modifier.weight(1f).fillMaxHeight().padding(start = 16.dp).verticalScroll(rememberScrollState())) {
                     DialogLabel("队列名称")
-                    OutlinedTextField(selected.name, { value -> update { it.copy(name = value.take(40)) } }, Modifier.fillMaxWidth(), singleLine = true, isError = selected.name.isBlank(), shape = RoundedCornerShape(Radius.md))
+                    OutlinedTextField(selected.name, { value -> update { it.copy(name = value.take(40)) } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = selected.name.isBlank(), shape = RoundedCornerShape(Radius.md))
                     Spacer(Modifier.height(8.dp))
                     SettingRow("启用队列", "停用后保留任务，但不会开始新的下载", selected.enabled) { value -> update { it.copy(enabled = value) } }
                     Row(Modifier.fillMaxWidth()) {
                         Column(Modifier.weight(1f)) {
                             DialogLabel("优先级 (-100 至 100)")
-                            OutlinedTextField(selected.priority.toString(), { value -> value.toIntOrNull()?.let { number -> update { it.copy(priority = number.coerceIn(-100, 100)) } } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
+                            OutlinedTextField(priorityInput, { value -> priorityInput = value; value.toIntOrNull()?.takeIf { it in -100..100 }?.let { number -> update { it.copy(priority = number) } } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = !priorityValid, shape = RoundedCornerShape(Radius.md))
                         }
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             DialogLabel("最大活动任务")
-                            OutlinedTextField(selected.maxActive.toString(), { value -> value.toIntOrNull()?.let { number -> update { it.copy(maxActive = number.coerceIn(1, 64)) } } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md))
+                            OutlinedTextField(maxActiveInput, { value -> maxActiveInput = value; value.toIntOrNull()?.takeIf { it in 1..64 }?.let { number -> update { it.copy(maxActive = number) } } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = !maxActiveValid, shape = RoundedCornerShape(Radius.md))
                         }
                     }
                     Spacer(Modifier.height(8.dp))
                     DialogLabel("队列总限速（KiB/s）")
                     OutlinedTextField(
-                        selected.speedLimitKib.toString(),
-                        { value -> value.toLongOrNull()?.let { number -> update { it.copy(speedLimitKib = number.coerceIn(0, 1_048_576)) } } },
+                        speedInput,
+                        { value -> speedInput = value; value.toLongOrNull()?.takeIf { it in 0..1_048_576 }?.let { number -> update { it.copy(speedLimitKib = number) } } },
                         Modifier.fillMaxWidth(),
+                        enabled = !saving,
+                        isError = !speedValid,
                         singleLine = true,
                         supportingText = { Text("0 表示不限速；同一队列的活动任务共享该速度", color = faint, fontSize = TypeScale.micro) },
                         shape = RoundedCornerShape(Radius.md),
@@ -3627,13 +3663,13 @@ private fun QueueManagerDialog(
                         }
                     }
                     Text("只有该队列中的任务全部成功完成后才会触发，执行前可取消。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 4.dp))
-                    if (!valid) Text("请检查队列名称、时间范围和重复名称。", color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 8.dp))
+                    if (!valid) Text("请检查名称是否重复、时间与星期，以及优先级、并发和限速范围。", color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 8.dp))
                 }
             }
         },
         actions = {
-            DialogSecondary("取消", onDismiss)
-            DialogPrimary("保存队列", valid) { onSave(profiles) }
+            DialogSecondary("取消", onClick = onDismiss, enabled = !saving)
+            DialogPrimary(if (saving) "保存中…" else "保存队列", valid && !saving) { onSave(profiles) }
         },
     )
 }
@@ -3644,6 +3680,7 @@ private fun NewTaskDialog(
     initialUrl: String,
     defaults: EngineSettingsDto,
     probing: Boolean,
+    creating: Boolean = false,
     onProbe: (TaskDraft) -> Unit,
     onCreate: (TaskDraft) -> Unit,
 ) {
@@ -3695,7 +3732,7 @@ private fun NewTaskDialog(
             completionAction = completionAction,
         )
     }
-    WorkbenchDialog(onDismiss, "新建下载", "创建文件、媒体、远程协议或 BT 下载任务", 760.dp, content = {
+    WorkbenchDialog(onDismiss, "新建下载", "创建文件、媒体、远程协议或 BT 下载任务", 760.dp, dismissible = !probing && !creating, content = {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) { listOf("基本", "连接", "请求", "计划").forEach { item -> TextButton(onClick = { tab = item }, Modifier.weight(1f).clip(RoundedCornerShape(Radius.sm)).background(segmentBackground(tab == item, rail, Color.Transparent)).reportControlBounds("newtask.tab.$item"), hoverColor = if (tab == item) rail else surface3, pressedColor = if (tab == item) rail else pressedSurface, pressScale = SEGMENT_SCALE) { Text(item, color = if (tab == item) blue else muted, fontSize = TypeScale.caption, fontWeight = if (tab == item) FontWeight.SemiBold else FontWeight.Normal) } } }
         Spacer(Modifier.height(14.dp))
         when (tab) {
@@ -3769,14 +3806,14 @@ private fun NewTaskDialog(
             }
         }
     }, actions = {
-        DialogSecondary("取消", onDismiss)
+        DialogSecondary("取消", onClick = onDismiss, enabled = !probing && !creating)
         TextButton(
             onClick = { if (!probing && normalized != null && parsedHeaders.isSuccess) onProbe(buildDraft()) },
-            enabled = !probing && normalized != null && parsedHeaders.isSuccess,
+            enabled = !probing && !creating && normalized != null && parsedHeaders.isSuccess,
             contentPadding = PaddingValues(horizontal = 12.dp),
             modifier = Modifier.reportControlBounds("newtask.probe"),
         ) { Text(if (probing) "分析中…" else "分析资源", fontSize = TypeScale.body, color = if (!probing && normalized != null && parsedHeaders.isSuccess) muted else faint) }
-        DialogPrimary("创建下载", !probing && validInput && parsedHeaders.isSuccess) {
+        DialogPrimary(if (creating) "创建中…" else "创建下载", !probing && !creating && validInput && parsedHeaders.isSuccess) {
             onCreate(buildDraft())
         }
     })
@@ -3802,23 +3839,39 @@ internal fun parseRequestHeaderLines(value: String): Map<String, String> {
     }
     return headers
 }
-@Composable private fun BatchAddDialog(onDismiss: () -> Unit, onCreate: (List<String>) -> Unit) {
+@Composable private fun BatchAddDialog(onDismiss: () -> Unit, busy: Boolean, onCreate: suspend (List<String>) -> List<Pair<String, String>>) {
     var urls by remember { mutableStateOf("") }
+    var feedback by remember { mutableStateOf("") }
+    var failureDetails by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     val inputFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(120); inputFocus.requestFocus() }
     val entries = urls.lineSequence().map(String::trim).filter(String::isNotBlank).toList()
     val invalidLines = urls.lineSequence().mapIndexedNotNull { index, line ->
         (index + 1).takeIf { line.isNotBlank() && runCatching { EnginePipeClient.normalizeDownloadUrl(line.trim()) }.isFailure }
     }.toList()
-    WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，请修正无效链接后创建", 620.dp, content = {
+    WorkbenchDialog(onDismiss, "批量添加", "每行一个下载链接，请修正无效链接后创建", 620.dp, dismissible = !busy, content = {
         DialogLabel("链接列表")
-        OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus,
+        OutlinedTextField(urls, { urls = it }, Modifier.fillMaxWidth().heightIn(min = 180.dp), focusRequester = inputFocus, enabled = !busy,
             placeholder = { Text("https://example.com/file.zip") }, minLines = 7, maxLines = 10, shape = RoundedCornerShape(Radius.md))
         Text(if (invalidLines.isEmpty()) "共 ${entries.size} 条链接" else "第 ${invalidLines.take(8).joinToString("、")} 行链接无效${if (invalidLines.size > 8) "等 ${invalidLines.size} 行" else ""}，请修正后创建",
             color = if (invalidLines.isNotEmpty()) warningColor else faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 7.dp))
+        if (feedback.isNotEmpty()) {
+            Text(feedback, color = warningColor, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 9.dp))
+            Text(failureDetails, color = muted, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
+        }
     }, actions = {
-        DialogSecondary("取消", onDismiss)
-        DialogPrimary("创建 ${entries.size} 个任务", entries.isNotEmpty() && invalidLines.isEmpty()) { onCreate(entries) }
+        DialogSecondary("取消", onClick = onDismiss, enabled = !busy)
+        DialogPrimary(if (busy) "添加中…" else "添加 ${entries.size} 条链接", !busy && entries.isNotEmpty() && invalidLines.isEmpty()) {
+            scope.launch {
+                val failures = onCreate(entries)
+                if (failures.isNotEmpty()) {
+                    urls = failures.joinToString("\n") { it.first }
+                    feedback = "成功处理 ${entries.size - failures.size} 条（新建或复用已有任务）；${failures.size} 条失败，已保留在输入框中。"
+                    failureDetails = failures.take(3).joinToString("\n") { it.second } + if (failures.size > 3) "\n其余 ${failures.size - 3} 个任务也未创建。" else ""
+                }
+            }
+        }
     })
 }
 @Composable
@@ -3870,7 +3923,7 @@ private fun HarvestDialog(
             Text("用于需要来源页校验的文件和媒体地址。", color = faint, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 7.dp))
         },
         actions = {
-            DialogSecondary("取消", onDismiss)
+            DialogSecondary("取消", onClick = onDismiss)
             DialogPrimary("抓取本页链接", validUrl && validReferer) { onHarvest(url.trim(), referer.trim()) }
         },
     )
@@ -4329,8 +4382,8 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     Spacer(Modifier.height(6.dp))
     Text("日志与诊断数据仅保存在本机。", color = faint, fontSize = TypeScale.caption)
 }, actions = {
-    DialogSecondary("打开日志文件夹", onOpenLogs)
-    DialogSecondary("项目主页", onOpenHomepage)
+    DialogSecondary("打开日志文件夹", onClick = onOpenLogs)
+    DialogSecondary("项目主页", onClick = onOpenHomepage)
     DialogPrimary("关闭", onClick = onDismiss)
 })
 
@@ -4364,7 +4417,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
     )
         }
     }
-}, actions = { if (entries.isNotEmpty()) DialogSecondary("清空记录", onClear); DialogPrimary("关闭", onClick = onDismiss) })
+}, actions = { if (entries.isNotEmpty()) DialogSecondary("清空记录", onClick = onClear); DialogPrimary("关闭", onClick = onDismiss) })
 
 @Composable private fun NoticeToast(signal: UiSignal.Notice, modifier: Modifier = Modifier, onDismiss: () -> Unit) {
         val tone = if (signal.level == "error") errorStrong else if (signal.level == "success") successColor else blue
@@ -4419,7 +4472,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
             }
         }
     }, actions = {
-        DialogSecondary("取消", onDismiss)
+        DialogSecondary("取消", onClick = onDismiss)
         if (files.isEmpty()) {
             DialogPrimary("直接创建磁力任务", true) { onCreate(emptyList()) }
         } else {
@@ -4447,7 +4500,7 @@ private fun failureStageLabel(stage: String) = when (stage.lowercase()) {
                 Column(Modifier.weight(1f)) { Text(variant.label.ifBlank { variant.name.ifBlank { "媒体轨道" } }, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold); Text(listOfNotNull(variant.height.takeIf { it > 0 }?.let { "${it}p" }, variant.bandwidth.takeIf { it > 0 }?.let { formatRate(it / 8) }, variant.kind.takeIf(String::isNotBlank)).joinToString(" · "), color = muted, fontSize = TypeScale.micro) }
             }
         }
-    }, actions = { DialogSecondary("取消", onDismiss); DialogPrimary("创建下载") { onCreate(selected) } })
+    }, actions = { DialogSecondary("取消", onClick = onDismiss); DialogPrimary("创建下载") { onCreate(selected) } })
 }
 
 private val harvestCategories = listOf(
@@ -4607,7 +4660,7 @@ private fun HarvestResultDialog(
             }
         },
         actions = {
-            DialogSecondary("取消", onDismiss)
+            DialogSecondary("取消", onClick = onDismiss)
             DialogPrimary("创建 ${selectedVisible.size} 个下载", selectedVisible.isNotEmpty() && refererValid && parsedConcurrency > 0L && !probing) {
                 onCreate(HarvestCreateRequest(selectedVisible.map { it.url }, effectiveReferer, parsedConcurrency))
             }
@@ -4662,7 +4715,7 @@ private fun HarvestResultDialog(
         }
         if (error.isNotEmpty()) Text(error, color = errorStrong, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 9.dp))
     }, actions = {
-        DialogSecondary("取消", onDismiss)
+        DialogSecondary("取消", onClick = onDismiss)
         if (source == "local") DialogPrimary("选择本机文件") {
             val path = chooseMediaPath()
             if (path != null) onChoose(MediaSourceSelection(path = path, title = java.io.File(path).name))
@@ -4763,7 +4816,7 @@ private fun HarvestResultDialog(
             }
         }
     }, actions = {
-        if (!connecting) DialogSecondary("取消", onDismiss)
+        if (!connecting) DialogSecondary("取消", onClick = onDismiss)
         TextButton(onClick = onRescan, enabled = !busy && !connecting, contentPadding = PaddingValues(horizontal = 12.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("device.rescan")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(16.dp)); Spacer(Modifier.width(5.dp)); Text("重新搜索", fontSize = TypeScale.body) }
         if (mode != "tvbox") DialogPrimary("局域网播放", !busy && !connecting, onPublish)
         DialogPrimary(if (connecting) "正在连接…" else if (mode == "tvbox") "确认推送" else "连接设备", selected != null && !busy && !connecting) { selected?.let(onSelect) }
@@ -4772,7 +4825,7 @@ private fun HarvestResultDialog(
 
 @Composable private fun DuplicateDialog(signal: UiSignal.Duplicate, onDismiss: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(onDismiss, "发现重复任务", signal.message, 520.dp, content = {
     Text("已有任务可以${actionLabel(signal.action)}，继续将对现有任务执行该操作。", color = muted, fontSize = TypeScale.body)
-}, actions = { DialogSecondary("取消", onDismiss); DialogPrimary(actionLabel(signal.action), onClick = onConfirm) })
+}, actions = { DialogSecondary("取消", onClick = onDismiss); DialogPrimary(actionLabel(signal.action), onClick = onConfirm) })
 
 @Composable private fun UpdateDialog(signal: UiSignal.Update, busy: Boolean, onDismiss: () -> Unit, onRelease: () -> Unit, onDownload: () -> Unit) = WorkbenchDialog(onDismiss, "发现新版本", "安全覆盖升级", 590.dp, dismissible = !busy, content = {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4802,8 +4855,8 @@ private fun HarvestResultDialog(
     }
     Spacer(Modifier.height(12.dp)); Text("安装程序将覆盖当前版本，配置、任务数据库和下载文件会保留。开始安装前会安全暂停活动任务并保存断点；升级不会自动重启 Windows。", color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody)
 }, actions = {
-    DialogSecondary("稍后", onDismiss)
-    if (signal.releaseUrl.isNotBlank()) DialogSecondary("查看发布页", onRelease)
+    DialogSecondary("稍后", onClick = onDismiss)
+    if (signal.releaseUrl.isNotBlank()) DialogSecondary("查看发布页", onClick = onRelease)
     DialogPrimary(if (busy) "下载并校验中…" else "下载更新", !busy && signal.installerSize > 0 && signal.sha256Verified && signal.installerName.endsWith(".msi", true), onDownload)
 })
 
@@ -4838,7 +4891,7 @@ private fun HarvestResultDialog(
         }
     },
     actions = {
-        DialogSecondary("稍后安装", onDismiss)
+        DialogSecondary("稍后安装", onClick = onDismiss)
         DialogPrimary(if (busy) "正在保存断点…" else "立即安装并重启", !busy, onInstall)
     },
 )
@@ -4856,7 +4909,7 @@ private fun HarvestResultDialog(
         Surface(color = errorSurface, shape = RoundedCornerShape(Radius.md), modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Outlined.WarningAmber, null, tint = errorStrong); Spacer(Modifier.width(10.dp)); Text(if (request.action == "delete_files") "任务记录、已下载文件和过程文件都会删除。" else "只删除任务记录，已完成文件将保留。", color = errorBody, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle) }
         }
-    }, actions = { DialogSecondary("取消", onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = destructiveFill, contentColor = Color.White), shape = RoundedCornerShape(Radius.md), modifier = Modifier.reportControlBounds("dialog.primary.确认删除")) { Text("确认删除", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } },
+    }, actions = { DialogSecondary("取消", onClick = onDismiss); Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = destructiveFill, contentColor = Color.White), shape = RoundedCornerShape(Radius.md), modifier = Modifier.reportControlBounds("dialog.primary.确认删除")) { Text("确认删除", fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold) } },
 )
 
 @Composable private fun PowerActionDialog(signal: UiSignal.PowerPending, onCancel: () -> Unit, onConfirm: () -> Unit) = WorkbenchDialog(
@@ -4869,7 +4922,7 @@ private fun HarvestResultDialog(
         Text("${signal.title.ifBlank { "下载任务" }} 已完成。${signal.delaySeconds} 秒后将$action。", color = ink, fontSize = TypeScale.body, lineHeight = TypeScale.lineTitle)
         Text("可以立即执行，或取消本次操作。", color = muted, fontSize = TypeScale.caption, modifier = Modifier.padding(top = 8.dp))
     },
-    actions = { DialogSecondary("取消操作", onCancel); DialogPrimary("立即执行", onClick = onConfirm) },
+    actions = { DialogSecondary("取消操作", onClick = onCancel); DialogPrimary("立即执行", onClick = onConfirm) },
 )
 
 @Composable private fun CastSessionHud(signal: UiSignal.Cast, task: DownloadTask?, busy: Boolean, onCopy: (String) -> Unit, onAction: (String, Long) -> Unit) {

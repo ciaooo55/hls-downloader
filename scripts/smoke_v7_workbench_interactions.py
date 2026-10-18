@@ -726,11 +726,11 @@ def run(args):
                 focus_text_field()
                 enter(url+"?batch=1\ninvalid input\n"+url+"?batch=2")
                 node("第 2 行链接无效，请修正后创建")
-                assert "enabled" not in node("创建 3 个任务", True)["states"]
+                assert "enabled" not in node("添加 3 条链接", True)["states"]
                 assert not any("batch=" in t["url"] for t in tasks())
                 enter(url+"?batch=1\n"+url+"?batch=2", replace=True)
                 node("共 2 条链接")
-                click("创建 2 个任务")
+                click("添加 2 条链接")
                 wait(lambda: len([t for t in tasks() if "batch=" in t["url"] and t["status"] == "completed"]) == 2,
                      "Batch button did not complete both valid downloads", 90)
                 record("batch blocks invalid input, then downloads both corrected links")

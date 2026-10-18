@@ -394,7 +394,7 @@ internal fun FullSettingsDialog(
             }
         }
     }, actions = {
-        DialogSecondary("取消", dismiss)
+        DialogSecondary("取消", onClick = dismiss)
         DialogPrimary("保存设置", enabled = siteRuleError == null && !saving) {
             val encodedSiteRules = encodeSiteRules(siteRules.map { item ->
                 item.rule.copy(
