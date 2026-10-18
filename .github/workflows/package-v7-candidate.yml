@@ -54,7 +54,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & .\scripts\bootstrap-v7-toolchain.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $mediaDir = & .\scripts\bootstrap-v7-media-tools.ps1
+          $mediaDir = & .\scripts\build\bootstrap-v7-media-tools.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ([String]::IsNullOrWhiteSpace($mediaDir)) { throw 'FFmpeg bootstrap did not return a media directory.' }
           "HLS_V7_FFMPEG_DIR=$mediaDir" >> $env:GITHUB_ENV
@@ -75,7 +75,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\report-v7-package-size.ps1 -MaxArtifactMiB 384
+          & .\scripts\build\report-v7-package-size.ps1 -MaxArtifactMiB 384
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload candidate installers and extensions
@@ -93,7 +93,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $manifest = Get-Content artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json -Raw -Encoding UTF8 | ConvertFrom-Json
           $archive = Join-Path 'artifacts\v7-productization\candidate' ([string]$manifest.artifacts.portable.path)
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\smoke-v7-portable-upgrade.ps1 -ArchivePath $archive
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\smoke-v7-portable-upgrade.ps1 -ArchivePath $archive
           if ($LASTEXITCODE -ne 0) { throw 'Packaged portable upgrade/rollback failed.' }
 
       - name: Verify real MSI upgrade and failure rollback on isolated Windows
@@ -102,7 +102,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:HLS_V7_PYTHON = (Get-Command python.exe -ErrorAction Stop).Source
           foreach ($scenario in @('Upgrade', 'FailureRollback')) {
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
             if ($LASTEXITCODE -ne 0) { throw "MSI lifecycle failed: $scenario" }
           }
 

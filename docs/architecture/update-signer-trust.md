@@ -15,7 +15,7 @@ For signed builds, `HLS_V7_SIGN_CERT_THUMBPRINT` selects the primary signer iden
 The updater helper uses two local sources only:
 
 1. **Primary compiled signer.** `HLS_V7_SIGN_CERT_THUMBPRINT` is read with Rust `option_env!` and embedded when `HLSDownloaderUpdater.exe` is compiled. The current unsigned formal release does not require this secret. A build without a primary signer rejects automatic installation, including payloads signed by a rollover identity.
-2. **Versioned rollover set.** `artifacts/v7-productization/update-signer-trust.json` is compiled into the helper. Network release JSON, asset metadata, release notes, or URLs cannot add a signer.
+2. **Versioned rollover set.** `config/release/update-signer-trust.json` is compiled into the helper. Network release JSON, asset metadata, release notes, or URLs cannot add a signer.
 
 The identity is the normalized 40-hex SHA-1 thumbprint of the already-verified Authenticode leaf certificate. SHA-1 is used here only as the Windows certificate identity for signed automatic-update payloads; file integrity remains SHA-256 and Authenticode chain validation remains `WinVerifyTrust`.
 

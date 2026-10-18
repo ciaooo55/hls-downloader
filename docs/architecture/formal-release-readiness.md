@@ -1,71 +1,25 @@
-# Formal v7 release readiness boundaries
+# 正式发布就绪边界
 
-This document is the durable architecture-level output of HLS-C003. It distinguishes repository-enforced release contracts from prerequisites that deliberately live outside the repository.
+## 三种状态分开核对
 
-The operator's 2026-10-02 instruction supersedes the earlier code-signing prerequisite: current formal Windows packages are unsigned, with no code-signed variant. Certificates, signing tools and timestamp services are not required for this release. Unsigned packages require manual installation; runtime automatic-update signature and signer-trust checks remain enforced.
+- `config/release/feature-parity.json` 是当前源码的 canonical 功能合同。状态、排除项和版本以受测提交中的实际内容为准。
+- 包内 provenance 描述具体交付物。r12 是 `unsigned-prerelease`，自身 `release_ready=false`，不等于 canonical 的状态。
+- 验收报告只证明列明的提交、产物哈希、环境和场景。候选构建成功或历史报告不能替代最终提交证据。
 
-## Source-enforced release chain
+正式构建调用脚本检查 canonical completeness、readiness、残留 gap、干净工作树和同提交发布证据；不能只修改元数据或文字绕过。当前范围及排除项见 [验证状态](../validation/v7-verification.md)。
 
-The formal v7 release path is one frozen-source pipeline:
+## 冻结与发布
 
-1. Dispatch only from current `main`.
-2. Resolve the canonical product version from `artifacts/v7-productization/feature-parity.json`.
-3. Require successful exact-SHA conclusions for the canonical workflow paths: `workflow_dispatch` for `v7 Candidate Package`, and `push` for `v7 CI`, `Maintenance Security`, and `Rust Security`. Both readiness and formal release use the same assertion script.
-4. Run on an on-demand ephemeral self-hosted Windows x64 `hls-release` runner and verify the fixed `E:\h` lifecycle environment. Readiness uses `hls-readiness`. Both workflows use only the clean local `main` in `A:\Ubuntu\测试\hls-downloader`, perform no checkout, and require local HEAD, dispatch SHA and remote `main` to match.
-5. Build a candidate from that same source SHA.
-6. Produce browser, performance, browser media-push (real TVBox device selection), MSI upgrade, and forced-rollback evidence from that candidate manifest.
-7. Reconfirm that remote `main` has not moved.
-8. Build the formal package from the same evidence.
-9. Retain unsigned public Windows artifacts according to the operator's 2026-10-02 instruction and identify manual installation in the release notes.
-10. Stage the source bundle, SBOM/evidence, release assets and checksums.
-11. Create or resume only an annotated tag/draft release proven to belong to the same frozen commit.
-12. Verify uploaded asset byte sizes and SHA-256 digests before publication.
-13. Publish Latest only when the dispatch explicitly requests publication.
+正式发布以最终冻结的 `main` SHA 为单位。后续任何提交都会产生新的待验证 SHA，包括文档提交；旧 SHA 的 CI 不能直接套用。
 
-HLS-C002 and HLS-C007 close the two currently reproduced source-level defects in this chain: exact-SHA prerequisite workflow starvation and stale v7.0.1 MSI lifecycle candidate assumptions.
+流水线要求同 SHA 的 CI、安全工作流和手动候选构建成功，再在专用交互式 Windows runner 上产生 candidate 绑定的 browser、performance、browser_media_push、installer 和 rollback 五项证据。构建正式包前复查远端 main 未移动。
 
-## Formal package decision gate
+runner、真实 Edge/Firefox、局域网接收端、专用 MSI 生命周期环境及发布权限是外部前提。缺少前提应报告阻塞，不能用模拟设备、直接 Core 调用或跳过门禁冒充真实链路。详见 [runner 合同](../releases/v7-release-runner.md)。
 
-The candidate path and formal package path intentionally have different requirements. Candidate packaging may run while the iteration is still closing evidence, but formal packaging calls the canonical feature verifier with complete-feature, `release_ready`, release-evidence and clean-worktree requirements.
+## 信任与授权
 
-Therefore `release_ready=false` is a real formal-package blocker by design, not an implementation defect to bypass. Changing it is a reviewed readiness decision outside HLS-C003.
+Windows 包按用户要求不签名，手动安装；自动更新的签名和 signer 信任检查保持启用。网络元数据不能增加受信签名者。
 
-Release evidence generation does not violate the clean-worktree gate. Repository `.gitignore` ignores generated content under `artifacts/v7-productization/*` while explicitly keeping only the canonical `feature-parity.json` tracked. The aggregate and per-gate evidence, candidate artifacts and formal staging files can therefore be created without modifying tracked source. The evidence recorder additionally binds reports to the current source commit/tree and candidate manifest digest.
+正式流程只为同一冻结提交创建或续用可核对的 annotated tag/draft，逐项核对上传字节数和 SHA-256。只有显式授权并启用发布输入才公开发布。文档整理、候选验收或 metadata readiness 均不构成发布授权。
 
-## External trust boundary
-
-The following inputs must **not** be manufactured or relaxed by repository code merely to make a release pass:
-
-- on-demand ephemeral self-hosted Windows x64 runner with `hls-release` for publication or `hls-readiness` for readiness evidence;
-- sole clean source directory `A:\Ubuntu\测试\hls-downloader` prepared at the dispatched `main` SHA, without workflow checkout;
-- physical/logical `E:` volume supporting the fixed `E:\h` lifecycle test;
-- Edge and Firefox installations for real browser evidence;
-- network connectivity to pinned tool downloads and GitHub;
-- protected `v7-release` environment and operator approval controls;
-- final operator choice to publish after draft asset verification.
-
-These are release infrastructure and governance prerequisites. A missing prerequisite should produce a blocked formal release, not a code change that bypasses the check.
-
-## Freeze semantics
-
-The exact-SHA model means the releaseable unit is the **final frozen main SHA**, not "the product code before some later docs commits". Any commit that moves `main` creates a new prospective release SHA and requires fresh exact-SHA prerequisite conclusions. Concurrency cancellation of an older SHA after a newer push is therefore expected and safe.
-
-Operational consequence: complete and review changes on the sole local `main` before freezing the release SHA. Push only with explicit operator authorization, then explicitly dispatch candidate packaging from `main` and stop moving `main` until that run and the three required push workflows finish for the same SHA and the formal release dispatch either completes or is abandoned. Do not create additional branches or worktrees.
-
-## Draft and publication boundary
-
-The workflow creates or resumes only a draft release associated with the exact frozen commit. It then compares every uploaded asset's byte size and GitHub-reported SHA-256 digest with the local staging files. The release must still be a draft during this verification. Conversion to Latest occurs only when the workflow-dispatch `publish` input is explicitly true.
-
-This separates "formal artifacts have been built and uploaded" from "the public release is authorized" and avoids treating an interrupted draft upload as an implicit publication decision.
-
-## Readiness truth source
-
-`feature-parity.json` currently declares v7.0.2 with `release_ready=false`. HLS-C003 treats that state as authoritative and does not change it. Candidate CI success, repository source completeness, or availability of a draft package is insufficient by itself to authorize a formal public release.
-
-Root `AGENTS.md` now follows the same tracked metadata contract: v7.0.2 is the active product line, canonical feature parity/readiness is the source of truth, and formal packaging additionally requires an explicitly reviewed `release_ready=true` decision plus the visual, performance, installer and rollback gates. This documentation contract does not replace or weaken the executable workflow.
-
-## Documentation boundary
-
-HLS-C008 reconciled the current-facing release, install and branch guidance to v7.0.2, and HLS-C015 reconciles the remaining live root `AGENTS.md` active-version/readiness instruction. Historical v7.0.1 candidates, measurements, hashes and migration evidence may remain when they are clearly labeled historical.
-
-After those reconciliations there is no known current-facing v7.0.1 release-governance wording being carried as an intentional open item. Future documentation drift should be treated as a new reproducible task. Documentation alignment itself never authorizes `release_ready=true`, a formal dispatch, tagging or publication.
+历史源码直接从 Git 读取；不为发布建立额外分支或源码副本。

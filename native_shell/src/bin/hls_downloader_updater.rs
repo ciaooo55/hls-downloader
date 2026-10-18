@@ -6,8 +6,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const SIGNER_TRUST_JSON: &str =
-    include_str!("../../../artifacts/v7-productization/update-signer-trust.json");
+const SIGNER_TRUST_JSON: &str = include_str!("../../../config/release/update-signer-trust.json");
 const EXPECTED_TRUST_IDENTITY: &str = "authenticode_leaf_certificate_sha1";
 const EXPECTED_TRUST_POLICY: &str = "formal-build-signer-or-explicit-rollover";
 

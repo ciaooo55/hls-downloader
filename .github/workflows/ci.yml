@@ -11,7 +11,7 @@ on:
       - 'desktop_ui/**'
       - 'extension/**'
       - 'assets/**'
-      - 'artifacts/v7-productization/feature-parity.json'
+      - 'config/**'
       - 'scripts/**'
 
 concurrency:
@@ -41,13 +41,13 @@ jobs:
           # locally and under both PowerShell editions in CI; it used to be checked
           # against build-v7.ps1 only, which let two personal conda fallbacks ship.
 
-          foreach ($path in @('scripts\build-v7.ps1', 'scripts\smoke-v7-compose-frames.ps1')) {
+          foreach ($path in @('scripts\build-v7.ps1', 'scripts\validation\smoke-v7-compose-frames.ps1')) {
             $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
             if ($source -match '(?i)[A-Z]:\\HLSDownloaderBuildCache\\') {
               throw "$path must not fall back to a legacy fixed-drive build cache."
             }
           }
-          foreach ($path in @('scripts\bootstrap-v7-toolchain.ps1', 'scripts\build-v7.ps1', 'scripts\cleanup-v7-build-cache.ps1', 'scripts\smoke-v7-compose-frames.ps1')) {
+          foreach ($path in @('scripts\bootstrap-v7-toolchain.ps1', 'scripts\build-v7.ps1', 'scripts\cleanup-v7-build-cache.ps1', 'scripts\validation\smoke-v7-compose-frames.ps1')) {
             $source = Get-Content -LiteralPath $path -Raw -Encoding UTF8
             if ($source -notmatch '\$env:HLS_V7_BUILD_CACHE') {
               throw "$path must honor the shared HLS_V7_BUILD_CACHE override."
@@ -81,25 +81,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validate-powershell.ps1
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-v7-feature-parity.ps1
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell powershell.exe
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-release-gap-contract.ps1 -Shell pwsh.exe
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-received-msi.ps1
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-received-msi.ps1
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-media-push-wrapper.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/validate-powershell.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/validate-powershell.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release/verify-v7-feature-parity.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release/verify-v7-feature-parity.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-release-gap-contract.ps1 -Shell powershell.exe
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-release-gap-contract.ps1 -Shell pwsh.exe
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-received-msi.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-received-msi.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-media-push-wrapper.ps1
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-media-push-wrapper.ps1
           # Release scripts must not carry a developer-specific profile path. The
           # guard lives in validate-powershell.ps1, but a guard nobody exercises can
           # be narrowed back to one file without anyone noticing.
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-script-hygiene.ps1 -Shell powershell.exe
-          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-v7-script-hygiene.ps1 -Shell pwsh.exe
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-script-hygiene.ps1 -Shell powershell.exe
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-script-hygiene.ps1 -Shell pwsh.exe
           # Every Python tool in scripts/ used to be unchecked except one file, so a
           # syntax error in a validator could sit there until an operator ran it by hand.
           # py_compile only checks syntax, so a broken tool now fails CI instead.
-          Get-ChildItem -Path scripts -Filter *.py | ForEach-Object {
+          Get-ChildItem -Path scripts -Filter *.py -File -Recurse | ForEach-Object {
             python.exe -m py_compile $_.FullName
           }
 

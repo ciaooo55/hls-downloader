@@ -33,7 +33,7 @@ function Assert-AppImage([string]$Root) {
     if ([int]$provenance.schema -ne 1 -or
         [string]$provenance.product_version -ne $productVersion -or
         @('candidate', 'formal') -notcontains [string]$provenance.package_tier -or
-        [string]$provenance.feature_parity_path -ne 'artifacts/v7-productization/feature-parity.json' -or
+        @('artifacts/v7-productization/feature-parity.json', 'config/release/feature-parity.json') -notcontains [string]$provenance.feature_parity_path -or
         [string]$provenance.source_commit -notmatch '^[0-9a-fA-F]{40}$' -or
         [string]$provenance.source_tree -notmatch '^[0-9a-fA-F]{40}$') {
         throw "v7 portable image provenance is invalid: $Root"

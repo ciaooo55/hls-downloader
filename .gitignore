@@ -14,7 +14,7 @@ venv/
 
 # Frontend
 node_modules/
-/scripts/probe/*.class
+/scripts/validation/probe/*.class
 /target/
 native_shell/target/
 native_shell/site-cache/
@@ -29,16 +29,13 @@ desktop_ui/.kotlin/
 bin/
 !native_shell/src/bin/
 !native_shell/src/bin/*.rs
-build/
-release/
+/build/
+/desktop_ui/build/
+/release/
 tools/
 .tool-cache/
-# Keep release evidence local, except for the canonical feature contract used
-# by the formal package gate.
-artifacts/*
-!artifacts/v7-productization/
-artifacts/v7-productization/*
-!artifacts/v7-productization/feature-parity.json
+# Generated packages and active validation output; source contracts live in config/.
+/artifacts/
 desktop_ui/resources/common/
 
 # Runtime state

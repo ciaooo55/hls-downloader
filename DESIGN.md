@@ -6,7 +6,7 @@ Compose is the only main workbench. Rust Core is the only task, transfer and dat
 
 ## Workbench geometry
 
-- Windows title bar and 48dp command bar.
+- Custom Windows title bar and 48dp command bar.
 - Queue/category sidebar, virtualized task table and bottom status bar.
 - One total progress indicator per task row; connection parts belong in details.
 - Minimum effective workspace 1024x600 at 100%, 125% and 150% scaling.
@@ -24,6 +24,8 @@ Compose is the only main workbench. Rust Core is the only task, transfer and dat
 
 Task selection supports Ctrl, Shift, select-all, keyboard navigation, secondary-click menus and drag ordering. Every action must map to a structured Core command and observable success/error result. Internal protocol or implementation names never appear in product copy.
 
+Local playback opens in a main-workbench overlay with controls inside that surface. Picture-in-picture reuses the playback session. Casting and TVBox controls remain separate.
+
 ## Release contract
 
-The default branch does not publish a package until feature parity, real transfer, presenter latency, UI Automation, performance and clean-machine installation gates pass. Historical UI and behavior references are read from Git tags, not copied source trees.
+Formal publication requires the canonical contract, source-bound evidence, real transfer, presenter latency, UI Automation, performance and clean-machine installation gates. Unsigned prereleases explicitly state their tested scope and exclusions; they do not imply all formal gates passed. Publication requires operator authorization. Historical UI and behavior references are read from Git tags, not copied source trees.

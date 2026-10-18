@@ -54,7 +54,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           $remoteMain = (git ls-remote origin refs/heads/main).Split("`t")[0].Trim()
           if ($head -ne $env:GITHUB_SHA -or $head -ne $remoteMain) { throw "Release source identity mismatch: HEAD=$head dispatch=$env:GITHUB_SHA main=$remoteMain" }
-          $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $feature = Get-Content 'config\release\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
           $version = [string]$feature.product_version
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid product version: $version" }
           $tag = "v$version"
@@ -103,7 +103,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          & .\scripts\assert-v7-exact-main-workflows.ps1
+          & .\scripts\release\assert-v7-exact-main-workflows.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify dedicated Windows release runner
@@ -152,7 +152,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $output = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-media-tools.ps1)
+          $output = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\build\bootstrap-v7-media-tools.ps1)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $mediaDir = @($output | Where-Object { -not [String]::IsNullOrWhiteSpace($_) }) | Select-Object -Last 1
           if ([String]::IsNullOrWhiteSpace($mediaDir) -or -not (Test-Path -LiteralPath $mediaDir -PathType Container)) { throw 'FFmpeg bootstrap did not return a valid media directory.' }
@@ -164,7 +164,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $output = @(& .\scripts\receive-v7-candidate.ps1 -Repository $env:GITHUB_REPOSITORY)
+          $output = @(& .\scripts\release\receive-v7-candidate.ps1 -Repository $env:GITHUB_REPOSITORY)
           $receipt = $output[-1] | ConvertFrom-Json
           "HLS_V7_CANDIDATE_MANIFEST=$($receipt.candidate_manifest)" >> $env:GITHUB_ENV
           "HLS_V7_MSI_EVIDENCE=$($receipt.msi_evidence)" >> $env:GITHUB_ENV
@@ -173,7 +173,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\invoke-v7-release-gates.ps1 -CandidateManifestPath $env:HLS_V7_CANDIDATE_MANIFEST -MsiEvidenceRoot $env:HLS_V7_MSI_EVIDENCE
+          & .\scripts\release\invoke-v7-release-gates.ps1 -CandidateManifestPath $env:HLS_V7_CANDIDATE_MANIFEST -MsiEvidenceRoot $env:HLS_V7_MSI_EVIDENCE
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Reconfirm frozen main before formal package
@@ -211,7 +211,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\stage-v7-release.ps1 -FirefoxSources $env:HLS_V7_FIREFOX_SOURCES
+          & .\scripts\release\stage-v7-release.ps1 -FirefoxSources $env:HLS_V7_FIREFOX_SOURCES
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload verified release staging artifact
@@ -296,6 +296,6 @@ jobs:
         shell: pwsh
         run: |
           foreach ($root in @('artifacts\v7-productization\candidate-browser\portable\HLSDownloader', 'artifacts\v7-productization\performance\candidate-runtime\HLSDownloader')) {
-            & .\scripts\shutdown-running.ps1 -InstallDir (Join-Path (Get-Location).Path $root) -IncludeNativeHost
+            & .\scripts\install\shutdown-running.ps1 -InstallDir (Join-Path (Get-Location).Path $root) -IncludeNativeHost
           }
           exit 0

@@ -11,8 +11,6 @@ import kotlin.test.assertTrue
  * 背景是一个真实缺陷：`selected` 从不随筛选收敛，于是
  * - 表头的"N 已选"读 `selected.isNotEmpty()`，屏幕上却一行都没选中；
  * - 批量删除走 `tasks.filter { it.id in selected }`，会命中被筛掉的任务。
- * Linux 上连点 全部→进行中→排队中→已暂停→已完成→失败，`selectedCount` 一直是 4
- * （见 `docs/v7-iteration-log.md` 第三十四轮）。
  *
  * 同时盯住两条容易在重构里悄悄改变的边界：可见集为空时不动选择，
  * 以及没有变化时必须返回同一实例（否则每次列表刷新都会触发一次多余重组）。

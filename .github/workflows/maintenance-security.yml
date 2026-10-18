@@ -48,7 +48,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $audit = @(& pnpm audit --json)
-          $audit | node ../scripts/verify-extension-security.mjs
+          $audit | node ../scripts/validation/verify-extension-security.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Firefox extension

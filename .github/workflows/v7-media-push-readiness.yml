@@ -51,7 +51,7 @@ jobs:
           if ([String]::IsNullOrWhiteSpace($env:HLS_V7_TVBOX_EXPECTED_HOST)) {
             throw 'v7-release environment must configure HLS_V7_TVBOX_EXPECTED_HOST; real LAN validation never skips.'
           }
-          $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $feature = Get-Content 'config\release\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
           if ([bool]$feature.release_ready) {
             throw 'Pre-readiness media-push validation expects release_ready=false; use the formal release gate after readiness is granted.'
           }
@@ -62,14 +62,14 @@ jobs:
           HLS_V7_ACTIONS_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\assert-v7-exact-main-workflows.ps1
+          & .\scripts\release\assert-v7-exact-main-workflows.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Require interactive release desktop
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\scripts\assert-v7-interactive-runner.ps1
+          & .\scripts\release\assert-v7-interactive-runner.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Set isolated v7 build cache
@@ -105,7 +105,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & .\scripts\bootstrap-v7-toolchain.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $mediaDir = & .\scripts\bootstrap-v7-media-tools.ps1
+          $mediaDir = & .\scripts\build\bootstrap-v7-media-tools.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ([String]::IsNullOrWhiteSpace($mediaDir)) { throw 'FFmpeg bootstrap did not return a media directory.' }
           "HLS_V7_FFMPEG_DIR=$mediaDir" >> $env:GITHUB_ENV
@@ -130,7 +130,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $arguments = @(
             '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
-            '-File','.\scripts\verify-v7-browser-media-push.ps1',
+            '-File','.\scripts\validation\verify-v7-browser-media-push.ps1',
             '-CandidateManifestPath','artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json',
             '-ExpectedTvboxHost',$env:HLS_V7_TVBOX_EXPECTED_HOST,
             '-Python',$env:HLS_V7_PYTHON,
@@ -165,7 +165,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $manifest = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json'
-          $feature = Get-Content 'artifacts\v7-productization\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $feature = Get-Content 'config\release\feature-parity.json' -Raw -Encoding UTF8 | ConvertFrom-Json
           $summaryPath = 'artifacts\v7-productization\release-evidence\browser-media-push\GATE-SUMMARY.json'
           if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) { throw 'Persisted media-push gate summary is missing.' }
           $summary = Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8 | ConvertFrom-Json

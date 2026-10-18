@@ -33,7 +33,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
-最新修订版：[7.0.3-r12（未签名预发布版）](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r12)。提供未签名 MSI、Chromium/Firefox 插件、插件源码、Firefox 审核源码包和完整项目源码。本版修复批量添加部分失败、队列数字编辑与重复命名、FTPS 入口，保留主窗口播放器、边播边下及缓存清理；重新执行下载协议、恢复、播放与安装验收。实际范围和限制见[发布说明](docs/release-v7-r12.md)及附件。
+最新修订版：[7.0.3-r12（未签名预发布版）](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r12)。提供未签名 MSI、Chromium/Firefox 插件、插件源码、Firefox 审核源码包和完整项目源码。本版修复批量添加部分失败、队列数字编辑与重复命名、FTPS 入口，保留主窗口播放器、边播边下及缓存清理；重新执行下载协议、恢复、播放与安装验收。实际范围和限制见[发布说明](docs/releases/release-v7-r12.md)及附件。
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 
@@ -51,7 +51,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 > [!NOTE]
 > 当前 `main` 是 **7.0.3** 源码开发线。公开安装包以 Releases 页面为准；带 `candidate` / `pre-release` 标记的版本应按测试版使用。
 
-网页在线字幕可在播放器上的“翻译字幕”按钮或插件弹窗中开启。插件可设置全局、本站、本页开关，以及来源和目标语言，默认自动识别到中文。播放器支持字幕时间微调、跳到下一句，并对可独立读取的点播音轨最多提前翻译 30 秒。开始翻译前，在插件字幕服务设置中选择 QwenCloud 并保存 API Key，或选择百炼并填写业务空间、地域和 API Key；Key 由配套桌面端加密保存。[QwenCloud 配置与使用方法](docs/qwencloud-subtitles.md)包含本机加密备份导入和其他电脑的配置说明。
+网页在线字幕可在播放器上的“翻译字幕”按钮或插件弹窗中开启。插件可设置全局、本站、本页开关，以及来源和目标语言，默认自动识别到中文。播放器支持字幕时间微调、跳到下一句，并对可独立读取的点播音轨最多提前翻译 30 秒。开始翻译前，在插件字幕服务设置中选择 QwenCloud 并保存 API Key，或选择百炼并填写业务空间、地域和 API Key；Key 由配套桌面端加密保存。[QwenCloud 配置与使用方法](docs/guides/qwencloud-subtitles.md)包含本机加密备份导入和其他电脑的配置说明。
 
 ## ✨ 为什么用它
 
@@ -112,7 +112,8 @@ flowchart LR
 | `presenter_ui/` | 低延迟的原生确认、进度与完成窗口 |
 | `extension/` | WXT 构建的 Chromium / Firefox Manifest V3 扩展 |
 | `scripts/` | Windows 构建、测试、安装、升级、打包与验证脚本 |
-| `docs/` | v7 架构、模块图、验证记录、升级说明与源码历史 |
+| `docs/` | [文档索引](docs/README.md)：使用、架构、发布和历史验收证据 |
+| `config/` | [版本化产品合同](config/README.md)，与生成物、用户配置分离 |
 
 ## 🛠️ 从源码构建
 
@@ -150,11 +151,13 @@ pnpm run build
 
 更完整的实现与验证细节见：
 
-- [v7 架构](docs/v7-architecture.md)
-- [v7 模块与功能衔接](docs/v7-module-map.md)
-- [v7 验证状态](docs/v7-verification.md)
-- [本地升级与回滚](docs/v7-local-upgrade.md)
-- [源码布局与历史版本](docs/source-layout-and-history.md)
+- [维护脚本入口](scripts/README.md)
+- [完整文档索引及各文件用途](docs/README.md)
+- [v7 架构](docs/architecture/v7-architecture.md)
+- [v7 模块与功能衔接](docs/architecture/v7-module-map.md)
+- [v7 验证状态](docs/validation/v7-verification.md)
+- [本地升级与回滚](docs/guides/v7-local-upgrade.md)
+- [源码布局与历史版本](docs/architecture/source-layout-and-history.md)
 
 ## 🧬 一个仓库，多代实现
 

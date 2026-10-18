@@ -1,4 +1,4 @@
-# HLS Downloader Desktop 7.0.2
+# HLS Downloader Desktop 7.0.3
 
 Compose Desktop workbench for HLS Downloader. This module is the 7.x desktop interface; `HLSDownloaderEngine.exe` owns all download state and SQLite through the existing framed IPC protocol.
 
@@ -25,4 +25,4 @@ $env:HLS_UI_RENDER_API = 'DIRECT3D'
 .\gradlew.bat run -PhlsRenderApi=OPENGL
 ```
 
-Accepted values are `SOFTWARE`, `ANGLE`, `DIRECT3D`, and `OPENGL`. Release builds should keep the default unless a renderer-specific validation run is intentional. `OPENGL` is a diagnostic option for supported Windows architectures; on Windows ARM64 prefer `ANGLE` or `DIRECT3D`.
+Accepted values are `SOFTWARE`, `ANGLE`, `DIRECT3D`, and `OPENGL`. Release builds should keep the default unless a renderer-specific validation run is intentional. The packaged product supports Windows x64 only; these diagnostic backend options do not imply ARM64 support.

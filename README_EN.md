@@ -33,7 +33,7 @@ The recommended way to get HLS Downloader is from **GitHub Releases**:
 
 Release bundles may include Windows x64 **EXE / MSI / Portable ZIP** packages together with matching **Chromium / Firefox browser extensions**.
 
-Latest revision: [7.0.3-r12 (unsigned prerelease)](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r12). Includes the unsigned MSI, Chromium/Firefox extensions, extension sources, Firefox review sources and complete project source. Fixes partial batch failures, queue numeric editing and naming, and the FTPS entry flow. Retains the inline player, playback during download and cache cleanup, with renewed protocol, recovery, playback and installation checks. See the [release notes](docs/release-v7-r12.md) and attached evidence for the actual scope and limitations.
+Latest revision: [7.0.3-r12 (unsigned prerelease)](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r12). Includes the unsigned MSI, Chromium/Firefox extensions, extension sources, Firefox review sources and complete project source. Fixes partial batch failures, queue numeric editing and naming, and the FTPS entry flow. Retains the inline player, playback during download and cache cleanup, with renewed protocol, recovery, playback and installation checks. See the [release notes](docs/releases/release-v7-r12.md) and attached evidence for the actual scope and limitations.
 
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
 
@@ -112,7 +112,8 @@ The architectural rule is intentionally simple: **the Core is the only owner of 
 | `presenter_ui/` | Low-latency native confirmation, progress, and completion windows |
 | `extension/` | WXT-based Chromium / Firefox Manifest V3 extension |
 | `scripts/` | Windows build, test, install, upgrade, package, and verification scripts |
-| `docs/` | v7 architecture, module map, verification, upgrade notes, and source history |
+| `docs/` | [Documentation index](docs/README.md): guides, architecture, releases and validation evidence |
+| `config/` | [Versioned product contracts](config/README.md), separate from generated output and user settings |
 
 ## 🛠️ Build from source
 
@@ -150,11 +151,13 @@ pnpm run build
 
 For deeper implementation and verification details, see:
 
-- [v7 architecture](docs/v7-architecture.md)
-- [v7 module map](docs/v7-module-map.md)
-- [v7 verification status](docs/v7-verification.md)
-- [Local upgrade and rollback](docs/v7-local-upgrade.md)
-- [Source layout and version history](docs/source-layout-and-history.md)
+- [Maintenance script entry points](scripts/README.md)
+- [Documentation index and file purposes](docs/README.md)
+- [v7 architecture](docs/architecture/v7-architecture.md)
+- [v7 module map](docs/architecture/v7-module-map.md)
+- [v7 verification status](docs/validation/v7-verification.md)
+- [Local upgrade and rollback](docs/guides/v7-local-upgrade.md)
+- [Source layout and version history](docs/architecture/source-layout-and-history.md)
 
 ## 🧬 One repository, multiple generations
 

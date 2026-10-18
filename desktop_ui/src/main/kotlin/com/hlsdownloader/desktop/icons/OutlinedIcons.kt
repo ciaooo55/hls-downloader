@@ -15,7 +15,7 @@
  */
 
 // Selected unchanged vectors from Compose Material Icons 1.7.3; only package/imports are adapted.
-// Source archives and SHA256 are recorded in docs/package-slimming.md.
+// Source archives and SHA256 are recorded in docs/guides/package-slimming.md.
 
 package com.hlsdownloader.desktop.icons
 

@@ -16,7 +16,7 @@ $extensionProtocolSource = Get-Content -LiteralPath (Join-Path $repo 'extension\
 if ($extensionProtocolSource -notmatch "V7_CORE_PROTOCOL\s*=\s*'hls-downloader-v7-core'") {
     throw 'v7 build refused: browser extension v7 Core protocol contract is missing.'
 }
-$featureParity = Join-Path $repo 'artifacts\v7-productization\feature-parity.json'
+$featureParity = Join-Path $repo 'config\release\feature-parity.json'
 $productVersion = [string](Get-Content -LiteralPath $featureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $composeBuildSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\build.gradle.kts') -Raw -Encoding UTF8
 $moduleVersions = @(
@@ -72,7 +72,7 @@ if ($Task -eq 'candidate') {
     # Write provenance outside the replaceable candidate directory first, so a
     # Failed gates never destroy the last candidate that passed validation.
     $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.candidate.' + [guid]::NewGuid().ToString('n') + '.tmp')
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireNoBlocked -RequireCleanWorktree -PackageTier candidate -ProvenancePath $packageProvenanceTemp
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\release\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireNoBlocked -RequireCleanWorktree -PackageTier candidate -ProvenancePath $packageProvenanceTemp
     if ($LASTEXITCODE -ne 0) {
         Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
         exit $LASTEXITCODE
@@ -81,7 +81,7 @@ if ($Task -eq 'candidate') {
 if ($Task -eq 'package') {
     # Formal packages add the release_ready decision after candidate validation.
     $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.formal.' + [guid]::NewGuid().ToString('n') + '.tmp')
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $packageProvenanceTemp
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\release\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $packageProvenanceTemp
     if ($LASTEXITCODE -ne 0) {
         Remove-Item -LiteralPath $packageProvenanceTemp -Force -ErrorAction SilentlyContinue
         exit $LASTEXITCODE
@@ -428,7 +428,7 @@ $env:HLS_ENGINE_PATH = $engine
         # 把 createRuntimeImage 显式拉进同一次任务图并强制重跑，只重跑本次显式请求的任务，依赖仍可命中增量缓存。
         'candidate' { & .\gradlew.bat clean createRuntimeImage --rerun createDistributable packageDistributionForCurrentOS }
         'package' { & .\gradlew.bat clean createRuntimeImage --rerun createDistributable packageDistributionForCurrentOS }
-        'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\adversarial-v7.ps1" -Scope native }
+        'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\validation\adversarial-v7.ps1" -Scope native }
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {
@@ -439,18 +439,18 @@ $env:HLS_ENGINE_PATH = $engine
         $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
         $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
         $repackedMsi = Join-Path $artifactRoot '.HLSDownloader-repacked.msi'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\repack-v7-msi.ps1" -MsiPath $msi.FullName -OutMsiPath $repackedMsi -WixRoot (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'wix311')
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\repack-v7-msi.ps1" -MsiPath $msi.FullName -OutMsiPath $repackedMsi -WixRoot (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'wix311')
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Move-Item -LiteralPath $repackedMsi -Destination $msi.FullName -Force
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\set-v7-exe-msi.ps1" -ExePath $exe.FullName -MsiPath $msi.FullName
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\set-v7-exe-msi.ps1" -ExePath $exe.FullName -MsiPath $msi.FullName
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
         Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")) -Force
         Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")) -Force
         $portablePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64-Portable$artifactSuffix.zip")
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\create-v7-portable.ps1" -OutZip $portablePath
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\create-v7-portable.ps1" -OutZip $portablePath
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $extensionEvidence = [ordered]@{}
         $portableCheck = Join-Path $artifactRoot ('.portable-verify-' + [guid]::NewGuid().ToString('n'))
