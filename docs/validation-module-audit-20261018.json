@@ -1,0 +1,3396 @@
+{
+  "date": "2026-10-18T06:33:42.139753+00:00",
+  "status": "scoped_validation_passed",
+  "product_version": "7.0.3",
+  "revision": "r12",
+  "production_source_commit": "36af74606f3d5398ba9e767251f0fc7cdeef939d",
+  "artifact_sha256": {
+    "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+    "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+    "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00",
+    "HLSDownloaderDesktop-7.0.3.jar": "80fbcd7f578b4c8396fad84b1cd3caf5540277d2ef023910581b43227e50ba4c",
+    "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e",
+    "Chromium.zip": "825c946a5a4332b63cd03646738209e3b522af550b6f334b7afa8e27443479fe",
+    "Firefox.zip": "de7f37a5def14d3f6ce4c3adc5b3454d297c5963305019037eb58873a550ab86"
+  },
+  "automated": {
+    "desktop_test_classes": 22,
+    "desktop": {
+      "tests": 126,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "desktop_jar_build": "passed"
+  },
+  "sandbox": {
+    "protocol": {
+      "passed": true,
+      "raw_report_sha256": "5ce9c91e2d83a17e90040b77b5cefa2d54d9c07a1ee56ad4ae793eb924275e6d",
+      "checks": [
+        {
+          "name": "real FTP password login, pause, REST resume and SHA256",
+          "passed": true,
+          "actual": {
+            "paused_bytes": 4194304,
+            "bytes": 8388608,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "real SFTP password login, pinned host key, pause, offset resume and SHA256",
+          "passed": true,
+          "actual": {
+            "paused_bytes": 1572786,
+            "bytes": 8388608,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "cURL import -> actual authenticated POST with Cookie and exact body",
+          "passed": true,
+          "actual": {
+            "bytes": 8388608,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+            "secrets_absent_from_snapshot": true
+          }
+        },
+        {
+          "name": "checksum match completes; mismatch fails without publishing corrupt file",
+          "passed": true,
+          "actual": {
+            "correct_verified": true,
+            "incorrect_failed": "checksum mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, got 7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "export JSON -> delete record -> import, preserving configuration and future schedule",
+          "passed": true,
+          "actual": {
+            "configuration_preserved": true,
+            "runtime_state_not_imported": true,
+            "future_schedule_prevents_transfer": true
+          }
+        },
+        {
+          "name": "scheduling and rate: near-term schedule waits then downloads with SHA256",
+          "passed": true,
+          "actual": {
+            "scheduled_start_at": "2026-10-18T05:59:14Z",
+            "pre_due_status": "queued",
+            "pre_due_downloaded_bytes": 0,
+            "pre_due_http_requests": 0,
+            "post_due_status": "completed",
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "scheduling and rate: measured per-task KiB limit then unlimited completion",
+          "passed": true,
+          "actual": {
+            "limit_kib": 64,
+            "observation_seconds": 4.187000000000012,
+            "observed_downloaded_delta": 262144,
+            "allowed_delta_bytes": 798687,
+            "paused_bytes": 524288,
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "expired signed URL -> visible failure -> refresh URL and resume same task",
+          "passed": true,
+          "actual": {
+            "same_task_id": "task-10",
+            "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions HTTP 403 visible classified failure and same-task recovery",
+          "passed": true,
+          "actual": {
+            "error_code": "HTTP_403",
+            "hint": "访问凭据或短效签名可能已过期，请回到原网页刷新后重新发送资源",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions HTTP 404 visible classified failure and same-task recovery",
+          "passed": true,
+          "actual": {
+            "error_code": "HTTP_404",
+            "hint": "资源地址已失效或文件已被移动，请回到来源页面重新识别",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions HTTP 200 login HTML is rejected as media without false success",
+          "passed": true,
+          "actual": {
+            "error": "服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试",
+            "media_file_not_published": true
+          }
+        },
+        {
+          "name": "exceptions invalid save directory fails clearly and valid directory recovers",
+          "passed": true,
+          "actual": {
+            "failure": {
+              "type": "error",
+              "request_id": 2,
+              "code": "core_command_failed",
+              "message": "下载目录必须位于默认下载根目录内"
+            },
+            "blocking_file_preserved": true,
+            "valid_directory_recovers": true
+          }
+        },
+        {
+          "name": "exceptions interrupted response fails without corrupt output then retry completes same task",
+          "passed": true,
+          "actual": {
+            "failure": "range 32768-2097151 made no progress after 5 attempts: range response ended without data",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+            "same_task_id": "task-15"
+          }
+        },
+        {
+          "name": "exceptions offline endpoint refusal is visible and recovered after link refresh",
+          "passed": true,
+          "actual": {
+            "failure": "WinHttpSendRequest 12029",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "exceptions real default HTTP response timeout and same-task recovery",
+          "passed": true,
+          "actual": {
+            "failure": "WinHttpReceiveResponse 12002",
+            "hint": "查看任务日志确认失败位置，修正网络或站点设置后重试",
+            "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+          }
+        },
+        {
+          "name": "LAN share actual published address serves correct Range; stop revokes address",
+          "passed": true,
+          "actual": {
+            "lan_url": "http://172.31.68.43:49808/media/me0b1435e80923a1b467b41b0a37d9052/file.bin",
+            "range_bytes_match": true,
+            "stop_revokes_url": true
+          }
+        }
+      ],
+      "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa"
+    },
+    "public-ftps": {
+      "passed": true,
+      "raw_report_sha256": "be4e969b2e001c4201bb90c885e8495c37eb49cd998b9e2dad492c7b7fb21c95",
+      "checks": [
+        {
+          "name": "public FTPS Rebex endpoint actual TLS and independent file SHA256",
+          "passed": true,
+          "actual": {
+            "bytes": 379,
+            "sha256": "b004de45d8a133e9713a369f9c912237e8ad35dd9140c0279d27bada067797f4",
+            "resume_file_bytes": 80000,
+            "resume_sha256": "23947a161ed84ed08525209bcf34ea4d1e39c717a6ed8430ce52ef824d6989c1",
+            "resume_checkpoints": [
+              {
+                "mode": "explicit",
+                "paused_bytes": 32768
+              }
+            ],
+            "server_documentation": "https://test.rebex.net/",
+            "reference_protocol": "explicit FTPS (public test file)",
+            "core_protocols": [
+              "explicit"
+            ]
+          }
+        }
+      ],
+      "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa"
+    },
+    "http_boundaries": {
+      "passed": true,
+      "raw_report_sha256": "5c8696338bcb277bf76468d1fcf42606f9494208bc5c1793489ffcbf88596a50",
+      "checks": [
+        {
+          "name": "signed-redirect-cookie-referer-complete-sha256",
+          "actual": true
+        },
+        {
+          "name": "actual-post-body-download-sha256",
+          "actual": true
+        },
+        {
+          "name": "http-403-fails-with-visible-task-error",
+          "actual": "HTTP 403"
+        },
+        {
+          "name": "failed-http-download-retry-recovers-sha256",
+          "actual": true
+        },
+        {
+          "name": "http-404-fails-with-visible-task-error",
+          "actual": "HTTP 404"
+        },
+        {
+          "name": "actual-http-connection-loss-visible-error-and-retry-sha256",
+          "actual": true
+        },
+        {
+          "name": "login-html-never-published-as-video",
+          "actual": true
+        },
+        {
+          "name": "browser-media-mime-survives-opaque-filename",
+          "actual": true
+        },
+        {
+          "name": "offer-confirmation-preserves-media-mime-and-rejects-html-without-extension",
+          "actual": true
+        },
+        {
+          "name": "intentional-html-file-download-still-works",
+          "actual": true
+        },
+        {
+          "name": "invalid-save-directory-visible-error-preserves-existing-file",
+          "actual": "create task directory: 当文件已存在时，无法创建该文件。 (os error 183)"
+        },
+        {
+          "name": "invalid-directory-task-does-not-block-following-download",
+          "actual": true
+        },
+        {
+          "name": "actual-core-restart-preserves-paused-task-and-resumes-sha256",
+          "actual": true
+        }
+      ],
+      "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa"
+    },
+    "stream_archive": {
+      "passed": true,
+      "raw_report_sha256": "e8853d633017fb9f163c7ca2482291af47428405f8c92b6cebe159fa9f457cfa",
+      "checks": [
+        {
+          "name": "preserve-zip-container-xpi",
+          "passed": true,
+          "detail": {
+            "filename": "package.xpi",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-whl",
+          "passed": true,
+          "detail": {
+            "filename": "package.whl",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-vsix",
+          "passed": true,
+          "detail": {
+            "filename": "package.vsix",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-nupkg",
+          "passed": true,
+          "detail": {
+            "filename": "package.nupkg",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-msix",
+          "passed": true,
+          "detail": {
+            "filename": "package.msix",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-appx",
+          "passed": true,
+          "detail": {
+            "filename": "package.appx",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-cbz",
+          "passed": true,
+          "detail": {
+            "filename": "package.cbz",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "preserve-zip-container-docx",
+          "passed": true,
+          "detail": {
+            "filename": "package.docx",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "server-supplied-xpi-extension",
+          "passed": true,
+          "detail": {
+            "filename": "package_1.xpi",
+            "requests": 2,
+            "sha256": "376be337b4329b0d7ad1a34c17f336ef2ccd56875b0516e3832967f08807e5a7"
+          }
+        },
+        {
+          "name": "quoted-semicolon-filename",
+          "passed": true,
+          "detail": {
+            "filename": "report.csv",
+            "requests": 2,
+            "sha256": "492d5ea496056f1a6a6592241032fab764c321596317930b4fa0e1e8bc3b7470"
+          }
+        },
+        {
+          "name": "chunked-extensions-trailers-sha256",
+          "passed": true,
+          "detail": {
+            "filename": "stream.bin",
+            "requests": 2,
+            "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+          }
+        },
+        {
+          "name": "chunked-ignores-conflicting-content-length",
+          "passed": true,
+          "detail": {
+            "filename": "stream_1.bin",
+            "requests": 2,
+            "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+          }
+        },
+        {
+          "name": "system-proxy-chunked-conflicting-length",
+          "passed": true,
+          "detail": {
+            "filename": "system.bin",
+            "requests": 4,
+            "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+          }
+        },
+        {
+          "name": "chunked-post-only-once",
+          "passed": true,
+          "detail": {
+            "filename": "post.bin",
+            "requests": 1,
+            "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+          }
+        },
+        {
+          "name": "chunk-truncated-never-published",
+          "passed": true,
+          "detail": "failed to fill whole buffer"
+        },
+        {
+          "name": "chunk-bad-size-never-published",
+          "passed": true,
+          "detail": "invalid chunked size"
+        },
+        {
+          "name": "chunk-overflow-never-published",
+          "passed": true,
+          "detail": "chunked size overflow"
+        },
+        {
+          "name": "chunk-bad-crlf-never-published",
+          "passed": true,
+          "detail": "chunked data missing CRLF"
+        },
+        {
+          "name": "chunked-pause-resume-sha256",
+          "passed": true,
+          "detail": {
+            "requests": 4
+          }
+        },
+        {
+          "name": "corrected-extension-rename-skip-overwrite-preserves-files",
+          "passed": true,
+          "detail": {
+            "rename": [
+              "same.xpi",
+              "same_1.xpi"
+            ],
+            "skip_preserved": true,
+            "overwrite": "same.xpi"
+          }
+        }
+      ],
+      "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa"
+    },
+    "desktop": {
+      "passed": true,
+      "raw_report_sha256": "fe09f86383e0530789ba85754d9bcd5a76f4d6fd67abd444d6a2b6bb250874e9",
+      "checks": [
+        "Empty library has correct message and disabled global start/pause",
+        "After task failure, one mouse click switches each theme without waiting for the notice",
+        "Row resume, pause and retry produce real Core state changes",
+        "Row action has distinct rendered hover and pressed feedback",
+        "Tab reaches row retry with visible focus; Space retries the actual task",
+        "Focused row retry: Enter retries actual HTTP request without opening details",
+        "Row play opens inline player and close returns to task list",
+        "Completed document does not offer playback or active start/pause",
+        "Single media opens/closes the inline player; multi-selection omits single-item media actions",
+        "Mixed batch resumes/retries eligible tasks, preserves completed file and clears selection",
+        "Search clear button, focused Escape and empty-result reset restore rows",
+        "Filtered cleanup cancel preserves all; confirm removes one record and preserves both output files",
+        "1024x600 layout keeps contextual and global controls within the window",
+        "Image details defer decoding until Preview and reuse the decoded image across tabs"
+      ]
+    },
+    "playback": {
+      "passed": true,
+      "raw_report_sha256": "700b8cbde395e934a4ffb3c034dd93fe717288543e039b8fe1d35051d68b2f29",
+      "checks": [
+        {
+          "name": "ts: thumbnail leaves playback position, pause and speed unchanged",
+          "actual": true
+        },
+        {
+          "name": "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+          "actual": {
+            "kind": "player_session",
+            "active": true,
+            "title": "ts.mp4",
+            "task_id": "task-1",
+            "status": "PAUSED",
+            "paused": true,
+            "speed": 1.5,
+            "position_seconds": 48.0,
+            "duration_seconds": 60.0,
+            "position_available": true,
+            "audio_tracks": 1,
+            "subtitle_tracks": 0,
+            "volume": 100.0,
+            "muted": false,
+            "buffered_end_seconds": 48.0,
+            "buffering": false,
+            "tracks": [
+              {
+                "id": "1",
+                "kind": "audio",
+                "title": "",
+                "language": "",
+                "selected": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+          "actual": {
+            "window": [
+              {
+                "hwnd": 590180,
+                "pid": 1936,
+                "rect": [
+                  260,
+                  122,
+                  1275,
+                  693
+                ]
+              }
+            ],
+            "final": {
+              "kind": "player_session",
+              "active": true,
+              "title": "ts.mp4",
+              "task_id": "task-1",
+              "status": "PAUSED",
+              "paused": true,
+              "speed": 1.5,
+              "position_seconds": 51.661333,
+              "duration_seconds": 60.032,
+              "position_available": true,
+              "audio_tracks": 1,
+              "subtitle_tracks": 0,
+              "volume": 100.0,
+              "muted": false,
+              "buffered_end_seconds": 53.021333,
+              "buffering": false,
+              "tracks": [
+                {
+                  "id": "1",
+                  "kind": "audio",
+                  "title": "",
+                  "language": "",
+                  "selected": true
+                }
+              ]
+            },
+            "output_sha256": "b2912ccdc0e82aba3095e1ec9fd1285dfbfbc09b7c615a952a4deadece0b49d7",
+            "origin_requests": [
+              {
+                "path": "/ts/index.m3u8",
+                "range": null,
+                "at": 888.906
+              },
+              {
+                "path": "/ts/s000.jpeg",
+                "range": null,
+                "at": 888.984
+              },
+              {
+                "path": "/ts/s001.jpeg",
+                "range": null,
+                "at": 889.656
+              },
+              {
+                "path": "/ts/s002.jpeg",
+                "range": null,
+                "at": 890.343
+              },
+              {
+                "path": "/ts/s003.jpeg",
+                "range": null,
+                "at": 891.0
+              },
+              {
+                "path": "/ts/s004.jpeg",
+                "range": null,
+                "at": 891.687
+              },
+              {
+                "path": "/ts/s005.jpeg",
+                "range": null,
+                "at": 892.343
+              },
+              {
+                "path": "/ts/s006.jpeg",
+                "range": null,
+                "at": 893.031
+              },
+              {
+                "path": "/ts/s007.jpeg",
+                "range": null,
+                "at": 893.703
+              },
+              {
+                "path": "/ts/s008.jpeg",
+                "range": null,
+                "at": 894.375
+              },
+              {
+                "path": "/ts/s009.jpeg",
+                "range": null,
+                "at": 895.109
+              },
+              {
+                "path": "/ts/s048.jpeg",
+                "range": null,
+                "at": 895.781
+              },
+              {
+                "path": "/ts/s049.jpeg",
+                "range": null,
+                "at": 896.453
+              },
+              {
+                "path": "/ts/s050.jpeg",
+                "range": null,
+                "at": 897.125
+              },
+              {
+                "path": "/ts/s051.jpeg",
+                "range": null,
+                "at": 897.812
+              },
+              {
+                "path": "/ts/s052.jpeg",
+                "range": null,
+                "at": 898.468
+              },
+              {
+                "path": "/ts/s053.jpeg",
+                "range": null,
+                "at": 899.171
+              },
+              {
+                "path": "/ts/s054.jpeg",
+                "range": null,
+                "at": 899.843
+              },
+              {
+                "path": "/ts/s055.jpeg",
+                "range": null,
+                "at": 900.546
+              },
+              {
+                "path": "/ts/s056.jpeg",
+                "range": null,
+                "at": 901.218
+              },
+              {
+                "path": "/ts/s057.jpeg",
+                "range": null,
+                "at": 901.89
+              },
+              {
+                "path": "/ts/s058.jpeg",
+                "range": null,
+                "at": 901.89
+              },
+              {
+                "path": "/ts/s059.jpeg",
+                "range": null,
+                "at": 901.906
+              },
+              {
+                "path": "/ts/s010.jpeg",
+                "range": null,
+                "at": 901.921
+              },
+              {
+                "path": "/ts/s011.jpeg",
+                "range": null,
+                "at": 901.937
+              },
+              {
+                "path": "/ts/s012.jpeg",
+                "range": null,
+                "at": 901.953
+              },
+              {
+                "path": "/ts/s013.jpeg",
+                "range": null,
+                "at": 901.953
+              },
+              {
+                "path": "/ts/s014.jpeg",
+                "range": null,
+                "at": 901.968
+              },
+              {
+                "path": "/ts/s015.jpeg",
+                "range": null,
+                "at": 901.984
+              },
+              {
+                "path": "/ts/s016.jpeg",
+                "range": null,
+                "at": 902.0
+              },
+              {
+                "path": "/ts/s017.jpeg",
+                "range": null,
+                "at": 902.015
+              },
+              {
+                "path": "/ts/s018.jpeg",
+                "range": null,
+                "at": 902.015
+              },
+              {
+                "path": "/ts/s019.jpeg",
+                "range": null,
+                "at": 902.031
+              },
+              {
+                "path": "/ts/s020.jpeg",
+                "range": null,
+                "at": 902.046
+              },
+              {
+                "path": "/ts/s021.jpeg",
+                "range": null,
+                "at": 902.062
+              },
+              {
+                "path": "/ts/s022.jpeg",
+                "range": null,
+                "at": 902.078
+              },
+              {
+                "path": "/ts/s023.jpeg",
+                "range": null,
+                "at": 902.093
+              },
+              {
+                "path": "/ts/s024.jpeg",
+                "range": null,
+                "at": 902.109
+              },
+              {
+                "path": "/ts/s025.jpeg",
+                "range": null,
+                "at": 902.125
+              },
+              {
+                "path": "/ts/s026.jpeg",
+                "range": null,
+                "at": 902.14
+              },
+              {
+                "path": "/ts/s027.jpeg",
+                "range": null,
+                "at": 902.156
+              },
+              {
+                "path": "/ts/s028.jpeg",
+                "range": null,
+                "at": 902.156
+              },
+              {
+                "path": "/ts/s029.jpeg",
+                "range": null,
+                "at": 902.171
+              },
+              {
+                "path": "/ts/s030.jpeg",
+                "range": null,
+                "at": 902.187
+              },
+              {
+                "path": "/ts/s031.jpeg",
+                "range": null,
+                "at": 902.203
+              },
+              {
+                "path": "/ts/s032.jpeg",
+                "range": null,
+                "at": 902.218
+              },
+              {
+                "path": "/ts/s033.jpeg",
+                "range": null,
+                "at": 902.234
+              },
+              {
+                "path": "/ts/s034.jpeg",
+                "range": null,
+                "at": 902.25
+              },
+              {
+                "path": "/ts/s035.jpeg",
+                "range": null,
+                "at": 902.265
+              },
+              {
+                "path": "/ts/s036.jpeg",
+                "range": null,
+                "at": 902.281
+              },
+              {
+                "path": "/ts/s037.jpeg",
+                "range": null,
+                "at": 902.281
+              },
+              {
+                "path": "/ts/s038.jpeg",
+                "range": null,
+                "at": 902.296
+              },
+              {
+                "path": "/ts/s039.jpeg",
+                "range": null,
+                "at": 902.312
+              },
+              {
+                "path": "/ts/s040.jpeg",
+                "range": null,
+                "at": 902.328
+              },
+              {
+                "path": "/ts/s041.jpeg",
+                "range": null,
+                "at": 902.343
+              },
+              {
+                "path": "/ts/s042.jpeg",
+                "range": null,
+                "at": 902.359
+              },
+              {
+                "path": "/ts/s043.jpeg",
+                "range": null,
+                "at": 902.359
+              },
+              {
+                "path": "/ts/s044.jpeg",
+                "range": null,
+                "at": 902.375
+              },
+              {
+                "path": "/ts/s045.jpeg",
+                "range": null,
+                "at": 902.39
+              },
+              {
+                "path": "/ts/s046.jpeg",
+                "range": null,
+                "at": 902.406
+              },
+              {
+                "path": "/ts/s047.jpeg",
+                "range": null,
+                "at": 902.421
+              }
+            ]
+          }
+        },
+        {
+          "name": "fmp4: thumbnail leaves playback position, pause and speed unchanged",
+          "actual": true
+        },
+        {
+          "name": "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+          "actual": {
+            "kind": "player_session",
+            "active": true,
+            "title": "fmp4.mp4",
+            "task_id": "task-2",
+            "status": "PAUSED",
+            "paused": true,
+            "speed": 1.5,
+            "position_seconds": 48.0,
+            "duration_seconds": 60.0,
+            "position_available": true,
+            "audio_tracks": 1,
+            "subtitle_tracks": 0,
+            "volume": 100.0,
+            "muted": false,
+            "buffered_end_seconds": 48.0,
+            "buffering": false,
+            "tracks": [
+              {
+                "id": "1",
+                "kind": "audio",
+                "title": "",
+                "language": "",
+                "selected": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+          "actual": {
+            "window": [
+              {
+                "hwnd": 524498,
+                "pid": 3856,
+                "rect": [
+                  260,
+                  122,
+                  1275,
+                  693
+                ]
+              }
+            ],
+            "final": {
+              "kind": "player_session",
+              "active": true,
+              "title": "fmp4.mp4",
+              "task_id": "task-2",
+              "status": "PAUSED",
+              "paused": true,
+              "speed": 1.5,
+              "position_seconds": 48.301406,
+              "duration_seconds": 60.021333,
+              "position_available": true,
+              "audio_tracks": 1,
+              "subtitle_tracks": 0,
+              "volume": 100.0,
+              "muted": false,
+              "buffered_end_seconds": 49.661406,
+              "buffering": false,
+              "tracks": [
+                {
+                  "id": "1",
+                  "kind": "audio",
+                  "title": "",
+                  "language": "",
+                  "selected": true
+                }
+              ]
+            },
+            "output_sha256": "2786427263a08559d500ffe28b4a6396a5227f045a3ec923fc69536240a9a8c8",
+            "origin_requests": [
+              {
+                "path": "/fmp4/index.m3u8",
+                "range": null,
+                "at": 904.5
+              },
+              {
+                "path": "/fmp4/init.mp4",
+                "range": null,
+                "at": 904.5
+              },
+              {
+                "path": "/fmp4/s000.m4s",
+                "range": null,
+                "at": 904.75
+              },
+              {
+                "path": "/fmp4/s001.m4s",
+                "range": null,
+                "at": 905.421
+              },
+              {
+                "path": "/fmp4/s002.m4s",
+                "range": null,
+                "at": 906.109
+              },
+              {
+                "path": "/fmp4/s003.m4s",
+                "range": null,
+                "at": 906.765
+              },
+              {
+                "path": "/fmp4/s004.m4s",
+                "range": null,
+                "at": 907.546
+              },
+              {
+                "path": "/fmp4/s005.m4s",
+                "range": null,
+                "at": 908.234
+              },
+              {
+                "path": "/fmp4/s048.m4s",
+                "range": null,
+                "at": 908.906
+              },
+              {
+                "path": "/fmp4/s049.m4s",
+                "range": null,
+                "at": 909.562
+              },
+              {
+                "path": "/fmp4/s050.m4s",
+                "range": null,
+                "at": 910.234
+              },
+              {
+                "path": "/fmp4/s051.m4s",
+                "range": null,
+                "at": 910.89
+              },
+              {
+                "path": "/fmp4/s052.m4s",
+                "range": null,
+                "at": 911.562
+              },
+              {
+                "path": "/fmp4/s053.m4s",
+                "range": null,
+                "at": 911.562
+              },
+              {
+                "path": "/fmp4/s054.m4s",
+                "range": null,
+                "at": 911.578
+              },
+              {
+                "path": "/fmp4/s055.m4s",
+                "range": null,
+                "at": 911.593
+              },
+              {
+                "path": "/fmp4/s056.m4s",
+                "range": null,
+                "at": 911.593
+              },
+              {
+                "path": "/fmp4/s057.m4s",
+                "range": null,
+                "at": 911.609
+              },
+              {
+                "path": "/fmp4/s058.m4s",
+                "range": null,
+                "at": 911.625
+              },
+              {
+                "path": "/fmp4/s059.m4s",
+                "range": null,
+                "at": 911.64
+              },
+              {
+                "path": "/fmp4/s006.m4s",
+                "range": null,
+                "at": 911.656
+              },
+              {
+                "path": "/fmp4/s007.m4s",
+                "range": null,
+                "at": 911.671
+              },
+              {
+                "path": "/fmp4/s008.m4s",
+                "range": null,
+                "at": 911.687
+              },
+              {
+                "path": "/fmp4/s009.m4s",
+                "range": null,
+                "at": 911.703
+              },
+              {
+                "path": "/fmp4/s010.m4s",
+                "range": null,
+                "at": 911.718
+              },
+              {
+                "path": "/fmp4/s011.m4s",
+                "range": null,
+                "at": 911.718
+              },
+              {
+                "path": "/fmp4/s012.m4s",
+                "range": null,
+                "at": 911.734
+              },
+              {
+                "path": "/fmp4/s013.m4s",
+                "range": null,
+                "at": 911.75
+              },
+              {
+                "path": "/fmp4/s014.m4s",
+                "range": null,
+                "at": 911.765
+              },
+              {
+                "path": "/fmp4/s015.m4s",
+                "range": null,
+                "at": 911.765
+              },
+              {
+                "path": "/fmp4/s016.m4s",
+                "range": null,
+                "at": 911.781
+              },
+              {
+                "path": "/fmp4/s017.m4s",
+                "range": null,
+                "at": 911.796
+              },
+              {
+                "path": "/fmp4/s018.m4s",
+                "range": null,
+                "at": 911.796
+              },
+              {
+                "path": "/fmp4/s019.m4s",
+                "range": null,
+                "at": 911.812
+              },
+              {
+                "path": "/fmp4/s020.m4s",
+                "range": null,
+                "at": 911.828
+              },
+              {
+                "path": "/fmp4/s021.m4s",
+                "range": null,
+                "at": 911.828
+              },
+              {
+                "path": "/fmp4/s022.m4s",
+                "range": null,
+                "at": 911.843
+              },
+              {
+                "path": "/fmp4/s023.m4s",
+                "range": null,
+                "at": 911.859
+              },
+              {
+                "path": "/fmp4/s024.m4s",
+                "range": null,
+                "at": 911.859
+              },
+              {
+                "path": "/fmp4/s025.m4s",
+                "range": null,
+                "at": 911.875
+              },
+              {
+                "path": "/fmp4/s026.m4s",
+                "range": null,
+                "at": 911.89
+              },
+              {
+                "path": "/fmp4/s027.m4s",
+                "range": null,
+                "at": 911.906
+              },
+              {
+                "path": "/fmp4/s028.m4s",
+                "range": null,
+                "at": 911.906
+              },
+              {
+                "path": "/fmp4/s029.m4s",
+                "range": null,
+                "at": 911.921
+              },
+              {
+                "path": "/fmp4/s030.m4s",
+                "range": null,
+                "at": 911.937
+              },
+              {
+                "path": "/fmp4/s031.m4s",
+                "range": null,
+                "at": 911.953
+              },
+              {
+                "path": "/fmp4/s032.m4s",
+                "range": null,
+                "at": 911.953
+              },
+              {
+                "path": "/fmp4/s033.m4s",
+                "range": null,
+                "at": 911.968
+              },
+              {
+                "path": "/fmp4/s034.m4s",
+                "range": null,
+                "at": 911.984
+              },
+              {
+                "path": "/fmp4/s035.m4s",
+                "range": null,
+                "at": 912.0
+              },
+              {
+                "path": "/fmp4/s036.m4s",
+                "range": null,
+                "at": 912.0
+              },
+              {
+                "path": "/fmp4/s037.m4s",
+                "range": null,
+                "at": 912.015
+              },
+              {
+                "path": "/fmp4/s038.m4s",
+                "range": null,
+                "at": 912.046
+              },
+              {
+                "path": "/fmp4/s039.m4s",
+                "range": null,
+                "at": 912.062
+              },
+              {
+                "path": "/fmp4/s040.m4s",
+                "range": null,
+                "at": 912.078
+              },
+              {
+                "path": "/fmp4/s041.m4s",
+                "range": null,
+                "at": 912.093
+              },
+              {
+                "path": "/fmp4/s042.m4s",
+                "range": null,
+                "at": 912.093
+              },
+              {
+                "path": "/fmp4/s043.m4s",
+                "range": null,
+                "at": 912.109
+              },
+              {
+                "path": "/fmp4/s044.m4s",
+                "range": null,
+                "at": 912.125
+              },
+              {
+                "path": "/fmp4/s045.m4s",
+                "range": null,
+                "at": 912.125
+              },
+              {
+                "path": "/fmp4/s046.m4s",
+                "range": null,
+                "at": 912.14
+              },
+              {
+                "path": "/fmp4/s047.m4s",
+                "range": null,
+                "at": 912.156
+              }
+            ]
+          }
+        },
+        {
+          "name": "aes: thumbnail leaves playback position, pause and speed unchanged",
+          "actual": true
+        },
+        {
+          "name": "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+          "actual": {
+            "kind": "player_session",
+            "active": true,
+            "title": "aes.mp4",
+            "task_id": "task-3",
+            "status": "PAUSED",
+            "paused": true,
+            "speed": 1.5,
+            "position_seconds": 48.0,
+            "duration_seconds": 60.0,
+            "position_available": true,
+            "audio_tracks": 1,
+            "subtitle_tracks": 0,
+            "volume": 100.0,
+            "muted": false,
+            "buffered_end_seconds": 48.0,
+            "buffering": false,
+            "tracks": [
+              {
+                "id": "1",
+                "kind": "audio",
+                "title": "",
+                "language": "",
+                "selected": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+          "actual": {
+            "window": [
+              {
+                "hwnd": 590034,
+                "pid": 4396,
+                "rect": [
+                  260,
+                  122,
+                  1275,
+                  693
+                ]
+              }
+            ],
+            "final": {
+              "kind": "player_session",
+              "active": true,
+              "title": "aes.mp4",
+              "task_id": "task-3",
+              "status": "PAUSED",
+              "paused": true,
+              "speed": 1.5,
+              "position_seconds": 48.301333,
+              "duration_seconds": 60.032,
+              "position_available": true,
+              "audio_tracks": 1,
+              "subtitle_tracks": 0,
+              "volume": 100.0,
+              "muted": false,
+              "buffered_end_seconds": 49.661333,
+              "buffering": false,
+              "tracks": [
+                {
+                  "id": "1",
+                  "kind": "audio",
+                  "title": "",
+                  "language": "",
+                  "selected": true
+                }
+              ]
+            },
+            "output_sha256": "b2912ccdc0e82aba3095e1ec9fd1285dfbfbc09b7c615a952a4deadece0b49d7",
+            "origin_requests": [
+              {
+                "path": "/aes/index.m3u8",
+                "range": null,
+                "at": 913.984
+              },
+              {
+                "path": "/aes/key.bin",
+                "range": null,
+                "at": 913.984
+              },
+              {
+                "path": "/aes/s000.jpeg",
+                "range": null,
+                "at": 914.0
+              },
+              {
+                "path": "/aes/s001.jpeg",
+                "range": null,
+                "at": 914.687
+              },
+              {
+                "path": "/aes/s002.jpeg",
+                "range": null,
+                "at": 915.375
+              },
+              {
+                "path": "/aes/s003.jpeg",
+                "range": null,
+                "at": 916.046
+              },
+              {
+                "path": "/aes/s004.jpeg",
+                "range": null,
+                "at": 916.75
+              },
+              {
+                "path": "/aes/s048.jpeg",
+                "range": null,
+                "at": 917.453
+              },
+              {
+                "path": "/aes/s049.jpeg",
+                "range": null,
+                "at": 918.109
+              },
+              {
+                "path": "/aes/s050.jpeg",
+                "range": null,
+                "at": 918.796
+              },
+              {
+                "path": "/aes/s051.jpeg",
+                "range": null,
+                "at": 919.5
+              },
+              {
+                "path": "/aes/s052.jpeg",
+                "range": null,
+                "at": 920.171
+              },
+              {
+                "path": "/aes/s053.jpeg",
+                "range": null,
+                "at": 920.203
+              },
+              {
+                "path": "/aes/s054.jpeg",
+                "range": null,
+                "at": 920.234
+              },
+              {
+                "path": "/aes/s055.jpeg",
+                "range": null,
+                "at": 920.265
+              },
+              {
+                "path": "/aes/s056.jpeg",
+                "range": null,
+                "at": 920.281
+              },
+              {
+                "path": "/aes/s057.jpeg",
+                "range": null,
+                "at": 920.312
+              },
+              {
+                "path": "/aes/s058.jpeg",
+                "range": null,
+                "at": 920.343
+              },
+              {
+                "path": "/aes/s059.jpeg",
+                "range": null,
+                "at": 920.359
+              },
+              {
+                "path": "/aes/s005.jpeg",
+                "range": null,
+                "at": 920.39
+              },
+              {
+                "path": "/aes/s006.jpeg",
+                "range": null,
+                "at": 920.421
+              },
+              {
+                "path": "/aes/s007.jpeg",
+                "range": null,
+                "at": 920.453
+              },
+              {
+                "path": "/aes/s008.jpeg",
+                "range": null,
+                "at": 920.468
+              },
+              {
+                "path": "/aes/s009.jpeg",
+                "range": null,
+                "at": 920.484
+              },
+              {
+                "path": "/aes/s010.jpeg",
+                "range": null,
+                "at": 920.515
+              },
+              {
+                "path": "/aes/s011.jpeg",
+                "range": null,
+                "at": 920.531
+              },
+              {
+                "path": "/aes/s012.jpeg",
+                "range": null,
+                "at": 920.562
+              },
+              {
+                "path": "/aes/s013.jpeg",
+                "range": null,
+                "at": 920.578
+              },
+              {
+                "path": "/aes/s014.jpeg",
+                "range": null,
+                "at": 920.609
+              },
+              {
+                "path": "/aes/s015.jpeg",
+                "range": null,
+                "at": 920.64
+              },
+              {
+                "path": "/aes/s016.jpeg",
+                "range": null,
+                "at": 920.656
+              },
+              {
+                "path": "/aes/s017.jpeg",
+                "range": null,
+                "at": 920.671
+              },
+              {
+                "path": "/aes/s018.jpeg",
+                "range": null,
+                "at": 920.687
+              },
+              {
+                "path": "/aes/s019.jpeg",
+                "range": null,
+                "at": 920.703
+              },
+              {
+                "path": "/aes/s020.jpeg",
+                "range": null,
+                "at": 920.718
+              },
+              {
+                "path": "/aes/s021.jpeg",
+                "range": null,
+                "at": 920.734
+              },
+              {
+                "path": "/aes/s022.jpeg",
+                "range": null,
+                "at": 920.75
+              },
+              {
+                "path": "/aes/s023.jpeg",
+                "range": null,
+                "at": 920.781
+              },
+              {
+                "path": "/aes/s024.jpeg",
+                "range": null,
+                "at": 920.796
+              },
+              {
+                "path": "/aes/s025.jpeg",
+                "range": null,
+                "at": 920.812
+              },
+              {
+                "path": "/aes/s026.jpeg",
+                "range": null,
+                "at": 920.828
+              },
+              {
+                "path": "/aes/s027.jpeg",
+                "range": null,
+                "at": 920.843
+              },
+              {
+                "path": "/aes/s028.jpeg",
+                "range": null,
+                "at": 920.875
+              },
+              {
+                "path": "/aes/s029.jpeg",
+                "range": null,
+                "at": 920.89
+              },
+              {
+                "path": "/aes/s030.jpeg",
+                "range": null,
+                "at": 920.906
+              },
+              {
+                "path": "/aes/s031.jpeg",
+                "range": null,
+                "at": 920.921
+              },
+              {
+                "path": "/aes/s032.jpeg",
+                "range": null,
+                "at": 920.953
+              },
+              {
+                "path": "/aes/s033.jpeg",
+                "range": null,
+                "at": 920.968
+              },
+              {
+                "path": "/aes/s034.jpeg",
+                "range": null,
+                "at": 920.984
+              },
+              {
+                "path": "/aes/s035.jpeg",
+                "range": null,
+                "at": 921.0
+              },
+              {
+                "path": "/aes/s036.jpeg",
+                "range": null,
+                "at": 921.015
+              },
+              {
+                "path": "/aes/s037.jpeg",
+                "range": null,
+                "at": 921.031
+              },
+              {
+                "path": "/aes/s038.jpeg",
+                "range": null,
+                "at": 921.062
+              },
+              {
+                "path": "/aes/s039.jpeg",
+                "range": null,
+                "at": 921.093
+              },
+              {
+                "path": "/aes/s040.jpeg",
+                "range": null,
+                "at": 921.109
+              },
+              {
+                "path": "/aes/s041.jpeg",
+                "range": null,
+                "at": 921.14
+              },
+              {
+                "path": "/aes/s042.jpeg",
+                "range": null,
+                "at": 921.156
+              },
+              {
+                "path": "/aes/s043.jpeg",
+                "range": null,
+                "at": 921.187
+              },
+              {
+                "path": "/aes/s044.jpeg",
+                "range": null,
+                "at": 921.234
+              },
+              {
+                "path": "/aes/s045.jpeg",
+                "range": null,
+                "at": 921.265
+              },
+              {
+                "path": "/aes/s046.jpeg",
+                "range": null,
+                "at": 921.296
+              },
+              {
+                "path": "/aes/s047.jpeg",
+                "range": null,
+                "at": 921.312
+              }
+            ]
+          }
+        },
+        {
+          "name": "external: thumbnail leaves playback position, pause and speed unchanged",
+          "actual": true
+        },
+        {
+          "name": "external: unfinished download decodes, exposes full duration and seeks to 80%",
+          "actual": {
+            "kind": "player_session",
+            "active": true,
+            "title": "external.mp4",
+            "task_id": "task-4",
+            "status": "PAUSED",
+            "paused": true,
+            "speed": 1.5,
+            "position_seconds": 48.0,
+            "duration_seconds": 60.0,
+            "position_available": true,
+            "audio_tracks": 1,
+            "subtitle_tracks": 0,
+            "volume": 100.0,
+            "muted": false,
+            "buffered_end_seconds": 48.0,
+            "buffering": false,
+            "tracks": [
+              {
+                "id": "1",
+                "kind": "audio",
+                "title": "Audio",
+                "language": "",
+                "selected": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "external: same-window final switch; complete decode; cache removed; delete preserves output",
+          "actual": {
+            "window": [
+              {
+                "hwnd": 655570,
+                "pid": 4736,
+                "rect": [
+                  260,
+                  122,
+                  1275,
+                  693
+                ]
+              }
+            ],
+            "final": {
+              "kind": "player_session",
+              "active": true,
+              "title": "external.mp4",
+              "task_id": "task-4",
+              "status": "PAUSED",
+              "paused": true,
+              "speed": 1.5,
+              "position_seconds": 48.52,
+              "duration_seconds": 60.032,
+              "position_available": true,
+              "audio_tracks": 1,
+              "subtitle_tracks": 0,
+              "volume": 100.0,
+              "muted": false,
+              "buffered_end_seconds": 49.88,
+              "buffering": false,
+              "tracks": [
+                {
+                  "id": "1",
+                  "kind": "audio",
+                  "title": "",
+                  "language": "",
+                  "selected": true
+                }
+              ]
+            },
+            "output_sha256": "cf5d4e3dd6b38675125385d94d7d5cd3df9d1f0932e4e89e4466a1a905f91fa4",
+            "origin_requests": [
+              {
+                "path": "/external/index.m3u8",
+                "range": null,
+                "at": 923.453
+              },
+              {
+                "path": "/external/video.m3u8",
+                "range": null,
+                "at": 923.453
+              },
+              {
+                "path": "/external/audio.m3u8",
+                "range": null,
+                "at": 923.468
+              },
+              {
+                "path": "/external/a000.ts",
+                "range": null,
+                "at": 923.5
+              },
+              {
+                "path": "/external/a001.ts",
+                "range": null,
+                "at": 923.515
+              },
+              {
+                "path": "/external/a002.ts",
+                "range": null,
+                "at": 923.531
+              },
+              {
+                "path": "/external/a003.ts",
+                "range": null,
+                "at": 923.531
+              },
+              {
+                "path": "/external/a004.ts",
+                "range": null,
+                "at": 923.546
+              },
+              {
+                "path": "/external/a005.ts",
+                "range": null,
+                "at": 923.562
+              },
+              {
+                "path": "/external/a006.ts",
+                "range": null,
+                "at": 923.562
+              },
+              {
+                "path": "/external/a007.ts",
+                "range": null,
+                "at": 923.578
+              },
+              {
+                "path": "/external/a008.ts",
+                "range": null,
+                "at": 923.578
+              },
+              {
+                "path": "/external/a009.ts",
+                "range": null,
+                "at": 923.593
+              },
+              {
+                "path": "/external/a010.ts",
+                "range": null,
+                "at": 923.593
+              },
+              {
+                "path": "/external/a011.ts",
+                "range": null,
+                "at": 923.609
+              },
+              {
+                "path": "/external/a012.ts",
+                "range": null,
+                "at": 923.625
+              },
+              {
+                "path": "/external/a013.ts",
+                "range": null,
+                "at": 923.625
+              },
+              {
+                "path": "/external/a014.ts",
+                "range": null,
+                "at": 923.64
+              },
+              {
+                "path": "/external/a015.ts",
+                "range": null,
+                "at": 923.64
+              },
+              {
+                "path": "/external/a016.ts",
+                "range": null,
+                "at": 923.656
+              },
+              {
+                "path": "/external/a017.ts",
+                "range": null,
+                "at": 923.671
+              },
+              {
+                "path": "/external/a018.ts",
+                "range": null,
+                "at": 923.671
+              },
+              {
+                "path": "/external/a019.ts",
+                "range": null,
+                "at": 923.687
+              },
+              {
+                "path": "/external/a020.ts",
+                "range": null,
+                "at": 923.703
+              },
+              {
+                "path": "/external/a021.ts",
+                "range": null,
+                "at": 923.703
+              },
+              {
+                "path": "/external/a022.ts",
+                "range": null,
+                "at": 923.718
+              },
+              {
+                "path": "/external/a023.ts",
+                "range": null,
+                "at": 923.718
+              },
+              {
+                "path": "/external/a024.ts",
+                "range": null,
+                "at": 923.734
+              },
+              {
+                "path": "/external/a025.ts",
+                "range": null,
+                "at": 923.75
+              },
+              {
+                "path": "/external/a026.ts",
+                "range": null,
+                "at": 923.75
+              },
+              {
+                "path": "/external/a027.ts",
+                "range": null,
+                "at": 923.765
+              },
+              {
+                "path": "/external/a028.ts",
+                "range": null,
+                "at": 923.765
+              },
+              {
+                "path": "/external/a029.ts",
+                "range": null,
+                "at": 923.781
+              },
+              {
+                "path": "/external/a030.ts",
+                "range": null,
+                "at": 923.781
+              },
+              {
+                "path": "/external/a031.ts",
+                "range": null,
+                "at": 923.796
+              },
+              {
+                "path": "/external/a032.ts",
+                "range": null,
+                "at": 923.812
+              },
+              {
+                "path": "/external/a033.ts",
+                "range": null,
+                "at": 923.812
+              },
+              {
+                "path": "/external/a034.ts",
+                "range": null,
+                "at": 923.828
+              },
+              {
+                "path": "/external/a035.ts",
+                "range": null,
+                "at": 923.843
+              },
+              {
+                "path": "/external/a036.ts",
+                "range": null,
+                "at": 923.843
+              },
+              {
+                "path": "/external/a037.ts",
+                "range": null,
+                "at": 923.859
+              },
+              {
+                "path": "/external/a038.ts",
+                "range": null,
+                "at": 923.875
+              },
+              {
+                "path": "/external/a039.ts",
+                "range": null,
+                "at": 923.875
+              },
+              {
+                "path": "/external/a040.ts",
+                "range": null,
+                "at": 923.89
+              },
+              {
+                "path": "/external/a041.ts",
+                "range": null,
+                "at": 923.906
+              },
+              {
+                "path": "/external/a042.ts",
+                "range": null,
+                "at": 923.906
+              },
+              {
+                "path": "/external/a043.ts",
+                "range": null,
+                "at": 923.921
+              },
+              {
+                "path": "/external/a044.ts",
+                "range": null,
+                "at": 923.937
+              },
+              {
+                "path": "/external/a045.ts",
+                "range": null,
+                "at": 923.953
+              },
+              {
+                "path": "/external/a046.ts",
+                "range": null,
+                "at": 923.953
+              },
+              {
+                "path": "/external/a047.ts",
+                "range": null,
+                "at": 923.968
+              },
+              {
+                "path": "/external/a048.ts",
+                "range": null,
+                "at": 923.968
+              },
+              {
+                "path": "/external/a049.ts",
+                "range": null,
+                "at": 923.984
+              },
+              {
+                "path": "/external/a050.ts",
+                "range": null,
+                "at": 924.0
+              },
+              {
+                "path": "/external/a051.ts",
+                "range": null,
+                "at": 924.015
+              },
+              {
+                "path": "/external/a052.ts",
+                "range": null,
+                "at": 924.031
+              },
+              {
+                "path": "/external/a053.ts",
+                "range": null,
+                "at": 924.031
+              },
+              {
+                "path": "/external/a054.ts",
+                "range": null,
+                "at": 924.046
+              },
+              {
+                "path": "/external/a055.ts",
+                "range": null,
+                "at": 924.062
+              },
+              {
+                "path": "/external/a056.ts",
+                "range": null,
+                "at": 924.062
+              },
+              {
+                "path": "/external/a057.ts",
+                "range": null,
+                "at": 924.078
+              },
+              {
+                "path": "/external/a058.ts",
+                "range": null,
+                "at": 924.093
+              },
+              {
+                "path": "/external/a059.ts",
+                "range": null,
+                "at": 924.093
+              },
+              {
+                "path": "/external/a060.ts",
+                "range": null,
+                "at": 924.109
+              },
+              {
+                "path": "/external/v000.ts",
+                "range": null,
+                "at": 924.187
+              },
+              {
+                "path": "/external/v001.ts",
+                "range": null,
+                "at": 924.875
+              },
+              {
+                "path": "/external/v002.ts",
+                "range": null,
+                "at": 925.546
+              },
+              {
+                "path": "/external/v003.ts",
+                "range": null,
+                "at": 926.265
+              },
+              {
+                "path": "/external/v004.ts",
+                "range": null,
+                "at": 926.937
+              },
+              {
+                "path": "/external/v048.ts",
+                "range": null,
+                "at": 927.609
+              },
+              {
+                "path": "/external/v049.ts",
+                "range": null,
+                "at": 928.265
+              },
+              {
+                "path": "/external/v050.ts",
+                "range": null,
+                "at": 928.937
+              },
+              {
+                "path": "/external/v051.ts",
+                "range": null,
+                "at": 929.64
+              },
+              {
+                "path": "/external/v052.ts",
+                "range": null,
+                "at": 930.296
+              },
+              {
+                "path": "/external/v053.ts",
+                "range": null,
+                "at": 930.312
+              },
+              {
+                "path": "/external/v054.ts",
+                "range": null,
+                "at": 930.328
+              },
+              {
+                "path": "/external/v055.ts",
+                "range": null,
+                "at": 930.343
+              },
+              {
+                "path": "/external/v056.ts",
+                "range": null,
+                "at": 930.343
+              },
+              {
+                "path": "/external/v057.ts",
+                "range": null,
+                "at": 930.359
+              },
+              {
+                "path": "/external/v058.ts",
+                "range": null,
+                "at": 930.375
+              },
+              {
+                "path": "/external/v059.ts",
+                "range": null,
+                "at": 930.39
+              },
+              {
+                "path": "/external/v005.ts",
+                "range": null,
+                "at": 930.406
+              },
+              {
+                "path": "/external/v006.ts",
+                "range": null,
+                "at": 930.421
+              },
+              {
+                "path": "/external/v007.ts",
+                "range": null,
+                "at": 930.437
+              },
+              {
+                "path": "/external/v008.ts",
+                "range": null,
+                "at": 930.453
+              },
+              {
+                "path": "/external/v009.ts",
+                "range": null,
+                "at": 930.453
+              },
+              {
+                "path": "/external/v010.ts",
+                "range": null,
+                "at": 930.468
+              },
+              {
+                "path": "/external/v011.ts",
+                "range": null,
+                "at": 930.5
+              },
+              {
+                "path": "/external/v012.ts",
+                "range": null,
+                "at": 930.515
+              },
+              {
+                "path": "/external/v013.ts",
+                "range": null,
+                "at": 930.531
+              },
+              {
+                "path": "/external/v014.ts",
+                "range": null,
+                "at": 930.546
+              },
+              {
+                "path": "/external/v015.ts",
+                "range": null,
+                "at": 930.546
+              },
+              {
+                "path": "/external/v016.ts",
+                "range": null,
+                "at": 930.562
+              },
+              {
+                "path": "/external/v017.ts",
+                "range": null,
+                "at": 930.578
+              },
+              {
+                "path": "/external/v018.ts",
+                "range": null,
+                "at": 930.593
+              },
+              {
+                "path": "/external/v019.ts",
+                "range": null,
+                "at": 930.609
+              },
+              {
+                "path": "/external/v020.ts",
+                "range": null,
+                "at": 930.625
+              },
+              {
+                "path": "/external/v021.ts",
+                "range": null,
+                "at": 930.64
+              },
+              {
+                "path": "/external/v022.ts",
+                "range": null,
+                "at": 930.656
+              },
+              {
+                "path": "/external/v023.ts",
+                "range": null,
+                "at": 930.671
+              },
+              {
+                "path": "/external/v024.ts",
+                "range": null,
+                "at": 930.687
+              },
+              {
+                "path": "/external/v025.ts",
+                "range": null,
+                "at": 930.703
+              },
+              {
+                "path": "/external/v026.ts",
+                "range": null,
+                "at": 930.718
+              },
+              {
+                "path": "/external/v027.ts",
+                "range": null,
+                "at": 930.718
+              },
+              {
+                "path": "/external/v028.ts",
+                "range": null,
+                "at": 930.734
+              },
+              {
+                "path": "/external/v029.ts",
+                "range": null,
+                "at": 930.75
+              },
+              {
+                "path": "/external/v030.ts",
+                "range": null,
+                "at": 930.781
+              },
+              {
+                "path": "/external/v031.ts",
+                "range": null,
+                "at": 930.796
+              },
+              {
+                "path": "/external/v032.ts",
+                "range": null,
+                "at": 930.812
+              },
+              {
+                "path": "/external/v033.ts",
+                "range": null,
+                "at": 930.828
+              },
+              {
+                "path": "/external/v034.ts",
+                "range": null,
+                "at": 930.843
+              },
+              {
+                "path": "/external/v035.ts",
+                "range": null,
+                "at": 930.859
+              },
+              {
+                "path": "/external/v036.ts",
+                "range": null,
+                "at": 930.875
+              },
+              {
+                "path": "/external/v037.ts",
+                "range": null,
+                "at": 930.875
+              },
+              {
+                "path": "/external/v038.ts",
+                "range": null,
+                "at": 930.89
+              },
+              {
+                "path": "/external/v039.ts",
+                "range": null,
+                "at": 930.906
+              },
+              {
+                "path": "/external/v040.ts",
+                "range": null,
+                "at": 930.921
+              },
+              {
+                "path": "/external/v041.ts",
+                "range": null,
+                "at": 930.937
+              },
+              {
+                "path": "/external/v042.ts",
+                "range": null,
+                "at": 930.953
+              },
+              {
+                "path": "/external/v043.ts",
+                "range": null,
+                "at": 930.953
+              },
+              {
+                "path": "/external/v044.ts",
+                "range": null,
+                "at": 930.968
+              },
+              {
+                "path": "/external/v045.ts",
+                "range": null,
+                "at": 930.968
+              },
+              {
+                "path": "/external/v046.ts",
+                "range": null,
+                "at": 930.984
+              },
+              {
+                "path": "/external/v047.ts",
+                "range": null,
+                "at": 931.0
+              }
+            ]
+          }
+        },
+        {
+          "name": "dash: thumbnail leaves playback position, pause and speed unchanged",
+          "actual": true
+        },
+        {
+          "name": "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+          "actual": {
+            "kind": "player_session",
+            "active": true,
+            "title": "dash.mp4",
+            "task_id": "task-5",
+            "status": "PAUSED",
+            "paused": true,
+            "speed": 1.5,
+            "position_seconds": 48.0,
+            "duration_seconds": 60.0,
+            "position_available": true,
+            "audio_tracks": 1,
+            "subtitle_tracks": 0,
+            "volume": 100.0,
+            "muted": false,
+            "buffered_end_seconds": 48.0,
+            "buffering": false,
+            "tracks": [
+              {
+                "id": "1",
+                "kind": "audio",
+                "title": "Audio",
+                "language": "",
+                "selected": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+          "actual": {
+            "window": [
+              {
+                "hwnd": 786642,
+                "pid": 1704,
+                "rect": [
+                  260,
+                  122,
+                  1275,
+                  693
+                ]
+              }
+            ],
+            "final": {
+              "kind": "player_session",
+              "active": true,
+              "title": "dash.mp4",
+              "task_id": "task-5",
+              "status": "PAUSED",
+              "paused": true,
+              "speed": 1.5,
+              "position_seconds": 48.48,
+              "duration_seconds": 60.021333,
+              "position_available": true,
+              "audio_tracks": 1,
+              "subtitle_tracks": 0,
+              "volume": 100.0,
+              "muted": false,
+              "buffered_end_seconds": 49.84,
+              "buffering": false,
+              "tracks": [
+                {
+                  "id": "1",
+                  "kind": "audio",
+                  "title": "",
+                  "language": "",
+                  "selected": true
+                }
+              ]
+            },
+            "output_sha256": "a6936c519c44b5deab90ce4a7ac7bd2fe0b39e7482cd195120f201889b33ae2c",
+            "origin_requests": [
+              {
+                "path": "/dash/index.mpd",
+                "range": null,
+                "at": 932.953
+              },
+              {
+                "path": "/dash/init-stream1.m4s",
+                "range": null,
+                "at": 932.968
+              },
+              {
+                "path": "/dash/chunk-stream1-00001.m4s",
+                "range": null,
+                "at": 932.984
+              },
+              {
+                "path": "/dash/chunk-stream1-00002.m4s",
+                "range": null,
+                "at": 932.984
+              },
+              {
+                "path": "/dash/chunk-stream1-00003.m4s",
+                "range": null,
+                "at": 933.0
+              },
+              {
+                "path": "/dash/chunk-stream1-00004.m4s",
+                "range": null,
+                "at": 933.015
+              },
+              {
+                "path": "/dash/chunk-stream1-00005.m4s",
+                "range": null,
+                "at": 933.015
+              },
+              {
+                "path": "/dash/chunk-stream1-00006.m4s",
+                "range": null,
+                "at": 933.031
+              },
+              {
+                "path": "/dash/chunk-stream1-00007.m4s",
+                "range": null,
+                "at": 933.046
+              },
+              {
+                "path": "/dash/chunk-stream1-00008.m4s",
+                "range": null,
+                "at": 933.062
+              },
+              {
+                "path": "/dash/chunk-stream1-00009.m4s",
+                "range": null,
+                "at": 933.078
+              },
+              {
+                "path": "/dash/chunk-stream1-00010.m4s",
+                "range": null,
+                "at": 933.093
+              },
+              {
+                "path": "/dash/chunk-stream1-00011.m4s",
+                "range": null,
+                "at": 933.109
+              },
+              {
+                "path": "/dash/chunk-stream1-00012.m4s",
+                "range": null,
+                "at": 933.125
+              },
+              {
+                "path": "/dash/chunk-stream1-00013.m4s",
+                "range": null,
+                "at": 933.156
+              },
+              {
+                "path": "/dash/chunk-stream1-00014.m4s",
+                "range": null,
+                "at": 933.171
+              },
+              {
+                "path": "/dash/chunk-stream1-00015.m4s",
+                "range": null,
+                "at": 933.187
+              },
+              {
+                "path": "/dash/chunk-stream1-00016.m4s",
+                "range": null,
+                "at": 933.203
+              },
+              {
+                "path": "/dash/chunk-stream1-00017.m4s",
+                "range": null,
+                "at": 933.218
+              },
+              {
+                "path": "/dash/chunk-stream1-00018.m4s",
+                "range": null,
+                "at": 933.234
+              },
+              {
+                "path": "/dash/chunk-stream1-00019.m4s",
+                "range": null,
+                "at": 933.25
+              },
+              {
+                "path": "/dash/chunk-stream1-00020.m4s",
+                "range": null,
+                "at": 933.25
+              },
+              {
+                "path": "/dash/chunk-stream1-00021.m4s",
+                "range": null,
+                "at": 933.281
+              },
+              {
+                "path": "/dash/chunk-stream1-00022.m4s",
+                "range": null,
+                "at": 933.281
+              },
+              {
+                "path": "/dash/chunk-stream1-00023.m4s",
+                "range": null,
+                "at": 933.296
+              },
+              {
+                "path": "/dash/chunk-stream1-00024.m4s",
+                "range": null,
+                "at": 933.312
+              },
+              {
+                "path": "/dash/chunk-stream1-00025.m4s",
+                "range": null,
+                "at": 933.328
+              },
+              {
+                "path": "/dash/chunk-stream1-00026.m4s",
+                "range": null,
+                "at": 933.343
+              },
+              {
+                "path": "/dash/chunk-stream1-00027.m4s",
+                "range": null,
+                "at": 933.359
+              },
+              {
+                "path": "/dash/chunk-stream1-00028.m4s",
+                "range": null,
+                "at": 933.375
+              },
+              {
+                "path": "/dash/chunk-stream1-00029.m4s",
+                "range": null,
+                "at": 933.39
+              },
+              {
+                "path": "/dash/chunk-stream1-00030.m4s",
+                "range": null,
+                "at": 933.406
+              },
+              {
+                "path": "/dash/chunk-stream1-00031.m4s",
+                "range": null,
+                "at": 933.421
+              },
+              {
+                "path": "/dash/chunk-stream1-00032.m4s",
+                "range": null,
+                "at": 933.437
+              },
+              {
+                "path": "/dash/chunk-stream1-00033.m4s",
+                "range": null,
+                "at": 933.468
+              },
+              {
+                "path": "/dash/chunk-stream1-00034.m4s",
+                "range": null,
+                "at": 933.484
+              },
+              {
+                "path": "/dash/chunk-stream1-00035.m4s",
+                "range": null,
+                "at": 933.5
+              },
+              {
+                "path": "/dash/chunk-stream1-00036.m4s",
+                "range": null,
+                "at": 933.515
+              },
+              {
+                "path": "/dash/chunk-stream1-00037.m4s",
+                "range": null,
+                "at": 933.531
+              },
+              {
+                "path": "/dash/chunk-stream1-00038.m4s",
+                "range": null,
+                "at": 933.546
+              },
+              {
+                "path": "/dash/chunk-stream1-00039.m4s",
+                "range": null,
+                "at": 933.562
+              },
+              {
+                "path": "/dash/chunk-stream1-00040.m4s",
+                "range": null,
+                "at": 933.578
+              },
+              {
+                "path": "/dash/chunk-stream1-00041.m4s",
+                "range": null,
+                "at": 933.593
+              },
+              {
+                "path": "/dash/chunk-stream1-00042.m4s",
+                "range": null,
+                "at": 933.609
+              },
+              {
+                "path": "/dash/chunk-stream1-00043.m4s",
+                "range": null,
+                "at": 933.609
+              },
+              {
+                "path": "/dash/chunk-stream1-00044.m4s",
+                "range": null,
+                "at": 933.625
+              },
+              {
+                "path": "/dash/chunk-stream1-00045.m4s",
+                "range": null,
+                "at": 933.64
+              },
+              {
+                "path": "/dash/chunk-stream1-00046.m4s",
+                "range": null,
+                "at": 933.656
+              },
+              {
+                "path": "/dash/chunk-stream1-00047.m4s",
+                "range": null,
+                "at": 933.671
+              },
+              {
+                "path": "/dash/chunk-stream1-00048.m4s",
+                "range": null,
+                "at": 933.687
+              },
+              {
+                "path": "/dash/chunk-stream1-00049.m4s",
+                "range": null,
+                "at": 933.703
+              },
+              {
+                "path": "/dash/chunk-stream1-00050.m4s",
+                "range": null,
+                "at": 933.718
+              },
+              {
+                "path": "/dash/chunk-stream1-00051.m4s",
+                "range": null,
+                "at": 933.734
+              },
+              {
+                "path": "/dash/chunk-stream1-00052.m4s",
+                "range": null,
+                "at": 933.75
+              },
+              {
+                "path": "/dash/chunk-stream1-00053.m4s",
+                "range": null,
+                "at": 933.765
+              },
+              {
+                "path": "/dash/chunk-stream1-00054.m4s",
+                "range": null,
+                "at": 933.781
+              },
+              {
+                "path": "/dash/chunk-stream1-00055.m4s",
+                "range": null,
+                "at": 933.812
+              },
+              {
+                "path": "/dash/chunk-stream1-00056.m4s",
+                "range": null,
+                "at": 933.843
+              },
+              {
+                "path": "/dash/chunk-stream1-00057.m4s",
+                "range": null,
+                "at": 933.875
+              },
+              {
+                "path": "/dash/chunk-stream1-00058.m4s",
+                "range": null,
+                "at": 933.89
+              },
+              {
+                "path": "/dash/chunk-stream1-00059.m4s",
+                "range": null,
+                "at": 933.906
+              },
+              {
+                "path": "/dash/chunk-stream1-00060.m4s",
+                "range": null,
+                "at": 933.921
+              },
+              {
+                "path": "/dash/init-stream0.m4s",
+                "range": null,
+                "at": 934.187
+              },
+              {
+                "path": "/dash/chunk-stream0-00001.m4s",
+                "range": null,
+                "at": 934.218
+              },
+              {
+                "path": "/dash/chunk-stream0-00002.m4s",
+                "range": null,
+                "at": 934.906
+              },
+              {
+                "path": "/dash/chunk-stream0-00003.m4s",
+                "range": null,
+                "at": 935.578
+              },
+              {
+                "path": "/dash/chunk-stream0-00004.m4s",
+                "range": null,
+                "at": 936.265
+              },
+              {
+                "path": "/dash/chunk-stream0-00005.m4s",
+                "range": null,
+                "at": 936.937
+              },
+              {
+                "path": "/dash/chunk-stream0-00048.m4s",
+                "range": null,
+                "at": 937.609
+              },
+              {
+                "path": "/dash/chunk-stream0-00049.m4s",
+                "range": null,
+                "at": 938.281
+              },
+              {
+                "path": "/dash/chunk-stream0-00050.m4s",
+                "range": null,
+                "at": 938.968
+              },
+              {
+                "path": "/dash/chunk-stream0-00051.m4s",
+                "range": null,
+                "at": 939.64
+              },
+              {
+                "path": "/dash/chunk-stream0-00052.m4s",
+                "range": null,
+                "at": 940.343
+              },
+              {
+                "path": "/dash/chunk-stream0-00053.m4s",
+                "range": null,
+                "at": 941.015
+              },
+              {
+                "path": "/dash/chunk-stream0-00054.m4s",
+                "range": null,
+                "at": 941.031
+              },
+              {
+                "path": "/dash/chunk-stream0-00055.m4s",
+                "range": null,
+                "at": 941.062
+              },
+              {
+                "path": "/dash/chunk-stream0-00056.m4s",
+                "range": null,
+                "at": 941.078
+              },
+              {
+                "path": "/dash/chunk-stream0-00057.m4s",
+                "range": null,
+                "at": 941.109
+              },
+              {
+                "path": "/dash/chunk-stream0-00058.m4s",
+                "range": null,
+                "at": 941.14
+              },
+              {
+                "path": "/dash/chunk-stream0-00059.m4s",
+                "range": null,
+                "at": 941.156
+              },
+              {
+                "path": "/dash/chunk-stream0-00060.m4s",
+                "range": null,
+                "at": 941.203
+              },
+              {
+                "path": "/dash/chunk-stream0-00006.m4s",
+                "range": null,
+                "at": 941.234
+              },
+              {
+                "path": "/dash/chunk-stream0-00007.m4s",
+                "range": null,
+                "at": 941.265
+              },
+              {
+                "path": "/dash/chunk-stream0-00008.m4s",
+                "range": null,
+                "at": 941.281
+              },
+              {
+                "path": "/dash/chunk-stream0-00009.m4s",
+                "range": null,
+                "at": 941.296
+              },
+              {
+                "path": "/dash/chunk-stream0-00010.m4s",
+                "range": null,
+                "at": 941.328
+              },
+              {
+                "path": "/dash/chunk-stream0-00011.m4s",
+                "range": null,
+                "at": 941.343
+              },
+              {
+                "path": "/dash/chunk-stream0-00012.m4s",
+                "range": null,
+                "at": 941.375
+              },
+              {
+                "path": "/dash/chunk-stream0-00013.m4s",
+                "range": null,
+                "at": 941.39
+              },
+              {
+                "path": "/dash/chunk-stream0-00014.m4s",
+                "range": null,
+                "at": 941.421
+              },
+              {
+                "path": "/dash/chunk-stream0-00015.m4s",
+                "range": null,
+                "at": 941.453
+              },
+              {
+                "path": "/dash/chunk-stream0-00016.m4s",
+                "range": null,
+                "at": 941.468
+              },
+              {
+                "path": "/dash/chunk-stream0-00017.m4s",
+                "range": null,
+                "at": 941.5
+              },
+              {
+                "path": "/dash/chunk-stream0-00018.m4s",
+                "range": null,
+                "at": 941.531
+              },
+              {
+                "path": "/dash/chunk-stream0-00019.m4s",
+                "range": null,
+                "at": 941.546
+              },
+              {
+                "path": "/dash/chunk-stream0-00020.m4s",
+                "range": null,
+                "at": 941.578
+              },
+              {
+                "path": "/dash/chunk-stream0-00021.m4s",
+                "range": null,
+                "at": 941.609
+              },
+              {
+                "path": "/dash/chunk-stream0-00022.m4s",
+                "range": null,
+                "at": 941.625
+              },
+              {
+                "path": "/dash/chunk-stream0-00023.m4s",
+                "range": null,
+                "at": 941.656
+              },
+              {
+                "path": "/dash/chunk-stream0-00024.m4s",
+                "range": null,
+                "at": 941.671
+              },
+              {
+                "path": "/dash/chunk-stream0-00025.m4s",
+                "range": null,
+                "at": 941.703
+              },
+              {
+                "path": "/dash/chunk-stream0-00026.m4s",
+                "range": null,
+                "at": 941.718
+              },
+              {
+                "path": "/dash/chunk-stream0-00027.m4s",
+                "range": null,
+                "at": 941.75
+              },
+              {
+                "path": "/dash/chunk-stream0-00028.m4s",
+                "range": null,
+                "at": 941.781
+              },
+              {
+                "path": "/dash/chunk-stream0-00029.m4s",
+                "range": null,
+                "at": 941.812
+              },
+              {
+                "path": "/dash/chunk-stream0-00030.m4s",
+                "range": null,
+                "at": 941.843
+              },
+              {
+                "path": "/dash/chunk-stream0-00031.m4s",
+                "range": null,
+                "at": 941.875
+              },
+              {
+                "path": "/dash/chunk-stream0-00032.m4s",
+                "range": null,
+                "at": 941.906
+              },
+              {
+                "path": "/dash/chunk-stream0-00033.m4s",
+                "range": null,
+                "at": 941.937
+              },
+              {
+                "path": "/dash/chunk-stream0-00034.m4s",
+                "range": null,
+                "at": 941.968
+              },
+              {
+                "path": "/dash/chunk-stream0-00035.m4s",
+                "range": null,
+                "at": 942.015
+              },
+              {
+                "path": "/dash/chunk-stream0-00036.m4s",
+                "range": null,
+                "at": 942.062
+              },
+              {
+                "path": "/dash/chunk-stream0-00037.m4s",
+                "range": null,
+                "at": 942.109
+              },
+              {
+                "path": "/dash/chunk-stream0-00038.m4s",
+                "range": null,
+                "at": 942.14
+              },
+              {
+                "path": "/dash/chunk-stream0-00039.m4s",
+                "range": null,
+                "at": 942.171
+              },
+              {
+                "path": "/dash/chunk-stream0-00040.m4s",
+                "range": null,
+                "at": 942.203
+              },
+              {
+                "path": "/dash/chunk-stream0-00041.m4s",
+                "range": null,
+                "at": 942.234
+              },
+              {
+                "path": "/dash/chunk-stream0-00042.m4s",
+                "range": null,
+                "at": 942.25
+              },
+              {
+                "path": "/dash/chunk-stream0-00043.m4s",
+                "range": null,
+                "at": 942.281
+              },
+              {
+                "path": "/dash/chunk-stream0-00044.m4s",
+                "range": null,
+                "at": 942.312
+              },
+              {
+                "path": "/dash/chunk-stream0-00045.m4s",
+                "range": null,
+                "at": 942.343
+              },
+              {
+                "path": "/dash/chunk-stream0-00046.m4s",
+                "range": null,
+                "at": 942.359
+              },
+              {
+                "path": "/dash/chunk-stream0-00047.m4s",
+                "range": null,
+                "at": 942.39
+              }
+            ]
+          }
+        },
+        {
+          "name": "http: thumbnail leaves playback position, pause and speed unchanged",
+          "actual": true
+        },
+        {
+          "name": "http: unfinished download decodes, exposes full duration and seeks to 80%",
+          "actual": {
+            "kind": "player_session",
+            "active": true,
+            "title": "http.mp4",
+            "task_id": "task-6",
+            "status": "PAUSED",
+            "paused": true,
+            "speed": 1.5,
+            "position_seconds": 48.0,
+            "duration_seconds": 60.0,
+            "position_available": true,
+            "audio_tracks": 1,
+            "subtitle_tracks": 0,
+            "volume": 100.0,
+            "muted": false,
+            "buffered_end_seconds": 48.0,
+            "buffering": false,
+            "tracks": [
+              {
+                "id": "1",
+                "kind": "audio",
+                "title": "",
+                "language": "",
+                "selected": true
+              }
+            ]
+          }
+        },
+        {
+          "name": "http: same-window final switch; complete decode; cache removed; delete preserves output",
+          "actual": {
+            "window": [
+              {
+                "hwnd": 852178,
+                "pid": 5620,
+                "rect": [
+                  260,
+                  122,
+                  1275,
+                  693
+                ]
+              }
+            ],
+            "final": {
+              "kind": "player_session",
+              "active": true,
+              "title": "http.mp4",
+              "task_id": "task-6",
+              "status": "PAUSED",
+              "paused": true,
+              "speed": 1.5,
+              "position_seconds": 48.44,
+              "duration_seconds": 60.0,
+              "position_available": true,
+              "audio_tracks": 1,
+              "subtitle_tracks": 0,
+              "volume": 100.0,
+              "muted": false,
+              "buffered_end_seconds": 49.36,
+              "buffering": false,
+              "tracks": [
+                {
+                  "id": "1",
+                  "kind": "audio",
+                  "title": "",
+                  "language": "",
+                  "selected": true
+                }
+              ]
+            },
+            "output_sha256": "60ccd5f2e0d630225c70cc9ce2979bca3af63bec00bb41e3c12275ec2eea206e",
+            "origin_requests": [
+              {
+                "path": "/source.mp4",
+                "range": "bytes=0-0",
+                "at": 944.656
+              },
+              {
+                "path": "/source.mp4",
+                "range": "bytes=0-5838450",
+                "at": 944.656
+              },
+              {
+                "path": "/source.mp4",
+                "range": "bytes=5838451-11676901",
+                "at": 955.531
+              },
+              {
+                "path": "/source.mp4",
+                "range": "bytes=11676902-17515352",
+                "at": 966.343
+              },
+              {
+                "path": "/source.mp4",
+                "range": "bytes=18361827-23353803",
+                "at": 977.156
+              },
+              {
+                "path": "/source.mp4",
+                "range": "bytes=17515353-18361826",
+                "at": 986.39
+              }
+            ]
+          }
+        },
+        {
+          "name": "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+          "actual": true
+        },
+        {
+          "name": "closing playback during download stays closed after completion and allows cleanup",
+          "actual": true
+        },
+        {
+          "name": "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output",
+          "actual": true
+        }
+      ],
+      "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa"
+    },
+    "creation-final-pass": {
+      "passed": true,
+      "raw_report_sha256": "4546b48773cfe4272962fdeea9f15c49fa598f3f03fd8a9a09883c4baf7d3989",
+      "checks": [
+        "Queue numeric drafts accept minus and blank edits, reject out-of-range values and recover",
+        "Two new queues have distinct names and can be saved without manual renaming",
+        "Queue Save persists priority, concurrency and limit to the real Core settings",
+        "Middle input rejected by Core does not skip later valid input; partial failure keeps dialog and exact counts",
+        "Retry submits only remaining edited input; previously successful tasks are not duplicated",
+        "New task creation sends one task and returns to workbench",
+        "FTPS is accepted by the actual New Task UI and is classified as FTP despite manifest suffix",
+        "All four accepted inputs actually download and produce exact bytes"
+      ]
+    },
+    "queue/report": {
+      "passed": true,
+      "raw_report_sha256": "dcafa8c6a7193d05d20f5598baa18f338d3a547893f60532c95bb8535fb70b48",
+      "checks": [
+        {
+          "name": "prepared completed download fixture for remaining UI actions",
+          "actual": true
+        },
+        {
+          "name": "queue manager creates and saves real queue",
+          "actual": "新队列"
+        },
+        {
+          "name": "selected task moves into saved queue",
+          "actual": true
+        },
+        {
+          "name": "test task count",
+          "actual": 2
+        }
+      ]
+    },
+    "torrent/report": {
+      "passed": true,
+      "raw_report_sha256": "1d192f85b4c8a0ea7fa28219d4638c4169370e5442181f8eac41c7498e2a311e",
+      "checks": [
+        {
+          "name": "real new-task torrent probe, deselect-all disabled submit, select two files, peer transfer and selected-only publication",
+          "actual": {
+            "ui_action_and_accessibility_observation_ms": 990.8399999999347,
+            "first_peer_ms": 6452.635799999825,
+            "metadata_requests": [],
+            "tracker_requests": 1,
+            "requested_pieces": [
+              0,
+              2
+            ],
+            "selected_sha256": [
+              "1dfa33e4c49e3c0a9ef0b609c3fb26c5211f7cff763fa72194d884d15d86e68e",
+              "b007fe445ff5b583c095c4688c75d8afef66d4c93eb6aeebcea0942e670e1cd3"
+            ]
+          }
+        }
+      ]
+    },
+    "magnet/report": {
+      "passed": true,
+      "raw_report_sha256": "ffbee1ab953f24016f59fdaaaec7d27bbc3e7c0b5c6e8eefe5be5023efe75b24",
+      "checks": [
+        {
+          "name": "torrent shows metadata loading; close remains responsive; late result does not reopen selection or create task",
+          "actual": true
+        },
+        {
+          "name": "invalid torrent preserves parse error in notification history and leaves loading state",
+          "actual": true
+        },
+        {
+          "name": "real new-task magnet probe, deselect-all disabled submit, select two files, peer transfer and selected-only publication",
+          "actual": {
+            "ui_action_and_accessibility_observation_ms": 1011.5114000000176,
+            "first_peer_ms": 166.1579999999958,
+            "metadata_requests": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "tracker_requests": 0,
+            "requested_pieces": [
+              0,
+              2
+            ],
+            "selected_sha256": [
+              "1dfa33e4c49e3c0a9ef0b609c3fb26c5211f7cff763fa72194d884d15d86e68e",
+              "b007fe445ff5b583c095c4688c75d8afef66d4c93eb6aeebcea0942e670e1cd3"
+            ]
+          }
+        }
+      ]
+    },
+    "live": {
+      "passed": true,
+      "raw_report_sha256": "b10041a7b3b6fdab0b2f117dec2de6bc4139680e6216226be7a81f6c1d5d65be",
+      "checks": [
+        {
+          "name": "HLS live finite window, pause/resume and full decode",
+          "passed": true,
+          "video_frames": 60,
+          "audio": true,
+          "duration": "4.021354",
+          "bytes": 60248
+        }
+      ],
+      "engine_sha256": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "live_checkpoint": {
+        "recording_bytes": 59348,
+        "paused_bytes": 59348
+      }
+    }
+  },
+  "earlier_functional_run": {
+    "passed": false,
+    "completed_checks": [
+      {
+        "name": "new-task invalid input, disabled submit, analyze, actual 32MiB download and SHA256",
+        "actual": true
+      },
+      {
+        "name": "real task row click selects downloaded task",
+        "actual": true
+      },
+      {
+        "name": "real task right-click exposes legal actions",
+        "actual": [
+          "open",
+          "open_folder",
+          "retry",
+          "delete",
+          "delete_files"
+        ]
+      },
+      {
+        "name": "task details tab: 概览",
+        "actual": true
+      },
+      {
+        "name": "task details tab: 连接",
+        "actual": true
+      },
+      {
+        "name": "task details tab: 速度",
+        "actual": true
+      },
+      {
+        "name": "task details tab: 日志",
+        "actual": true
+      },
+      {
+        "name": "all-start, all-pause, selected-task resume, checkpoint and SHA256",
+        "actual": true
+      },
+      {
+        "name": "batch blocks invalid input, then downloads both corrected links",
+        "actual": true
+      },
+      {
+        "name": "harvest size filter: ≥ 1 MB",
+        "actual": true
+      },
+      {
+        "name": "harvest size filter: ≥ 10 MB",
+        "actual": true
+      },
+      {
+        "name": "harvest size filter: 全部大小",
+        "actual": true
+      },
+      {
+        "name": "page harvest, size probing, category selection, select/deselect and selected download",
+        "actual": true
+      },
+      {
+        "name": "queue manager creates and saves real queue",
+        "actual": "新队列"
+      }
+    ],
+    "reason": "Old fixture selected a completed task, where Move Queue is intentionally disabled. Corrected to a scheduled queued task and reran queue, torrent and magnet successfully."
+  },
+  "fixture_corrections": [
+    "Initial protocol run lacked paramiko; isolated test dependency installed, rerun passed.",
+    "Creation fixture used an unsupported BACK_SPACE key name and literal newline typing. Corrected to BACKSPACE and line-by-line Enter.",
+    "A download failure is not a creation rejection. Partial-batch case changed to an invalid Metalink rejected by Core during creation.",
+    "Creation cases finished but cleanup had a psutil pid-exit race. Replaced with owned subprocess wait/kill; final complete run exited zero.",
+    "Initial MSI upgrade command quoted the complete INSTALLDIR property and returned 1639. Corrected value-only quoting; successful fresh run retained separately."
+  ],
+  "unchanged_extension_evidence": {
+    "report": "validation-detail-polish-20261018.json",
+    "tests": 380,
+    "test_files": 50,
+    "reexecuted_this_round": false,
+    "same_zip_hashes": true
+  },
+  "not_executed": [
+    "Chromium native UI for this revision",
+    "Real cloud subtitle upload",
+    "Physical casting and TVBox",
+    "Real OS power actions"
+  ],
+  "host_audit": {
+    "historical_paths": [
+      {
+        "path": "C:\\Program Files\\HLSDownloader",
+        "exists": false
+      },
+      {
+        "path": "C:\\Program Files\\HLS Downloader",
+        "exists": false
+      },
+      {
+        "path": "E:\\h",
+        "exists": false
+      },
+      {
+        "path": "%LOCALAPPDATA%\\HLSDownloader",
+        "exists": false
+      }
+    ],
+    "native_host_registrations": [],
+    "product_processes": [],
+    "installed_products": [],
+    "checked_at": "2026-10-18T14:32:19.0467805+08:00"
+  },
+  "cleanup": {
+    "completed": false,
+    "cache_and_old_delivery_deletion": "Previously blocked by automatic approval (blocked by policy); not retried. Guarded script updated only.",
+    "preserved": [
+      "User downloads",
+      "User backups",
+      "Other projects"
+    ]
+  }
+}

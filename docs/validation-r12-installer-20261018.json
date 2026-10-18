@@ -1,0 +1,248 @@
+{
+  "date": "2026-10-18T06:33:42.148755+00:00",
+  "production_source_commit": "36af74606f3d5398ba9e767251f0fc7cdeef939d",
+  "package": {
+    "product_code": "{EDE7B47D-840A-47F7-BF3B-0E4C22918B09}",
+    "source_commit": "36af74606f3d5398ba9e767251f0fc7cdeef939d",
+    "sha256": "801eefe5ef096bbc57a7807e78bfc2343bb15f20236c80ebe2eeb1d9f758c4d7",
+    "bytes": 203108352,
+    "signed": false
+  },
+  "installer": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "MSI staged on VM local disk with matching SHA256",
+        "actual": true
+      },
+      {
+        "name": "MSI installs at requested path containing spaces",
+        "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+      },
+      {
+        "name": "final Core/UI and reused binaries match r12 provenance; omitted tools remain absent",
+        "actual": {
+          "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+          "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+          "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00",
+          "HLSDownloaderDesktop-7.0.3.jar": "80fbcd7f578b4c8396fad84b1cd3caf5540277d2ef023910581b43227e50ba4c",
+          "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+        }
+      },
+      {
+        "name": "installed extension ZIPs and unpacked files are identical",
+        "actual": {
+          "Chromium": {
+            "background_sha256": "dde85d2c265d9d291add1a94126792c95fa1e8f4c25f977bef283cc01cc59b1a",
+            "archives_sha256": {
+              "HLSDownloader-7.0.3-Chromium.zip": "825c946a5a4332b63cd03646738209e3b522af550b6f334b7afa8e27443479fe",
+              "HLSDownloader-Extension-Chromium.zip": "825c946a5a4332b63cd03646738209e3b522af550b6f334b7afa8e27443479fe"
+            }
+          },
+          "Firefox": {
+            "background_sha256": "3d9f74141f72ac6ce5ec612df89df89dbc0a529d39a4de2f6f37f84e270b2f63",
+            "archives_sha256": {
+              "HLSDownloader-7.0.3-Firefox.zip": "de7f37a5def14d3f6ce4c3adc5b3454d297c5963305019037eb58873a550ab86",
+              "HLSDownloader-Extension-Firefox.zip": "de7f37a5def14d3f6ce4c3adc5b3454d297c5963305019037eb58873a550ab86"
+            }
+          }
+        }
+      },
+      {
+        "name": "default download directory matches Windows Known Folder",
+        "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+      },
+      {
+        "name": "real public MDN video downloads into the default folder with identical bytes",
+        "actual": {
+          "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+          "bytes": 554058,
+          "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+        }
+      },
+      {
+        "name": "installed UI opens visibly and connects to the installed Core",
+        "actual": {
+          "x": 68,
+          "y": 0,
+          "width": 1400,
+          "height": 816,
+          "active": true,
+          "showing": true,
+          "iconCount": 1,
+          "iconWidth": 192,
+          "iconHeight": 192,
+          "scaleX": 1.25,
+          "scaleY": 1.25,
+          "deviceX": 85,
+          "deviceY": 0,
+          "deviceWidth": 1750,
+          "deviceHeight": 1020
+        }
+      },
+      {
+        "name": "measured installed runtime idle CPU and memory",
+        "actual": {
+          "seconds": 5.0150000000001,
+          "logical_cpus": 8,
+          "cpu_one_core_percent": 0.6231306081754612,
+          "cpu_machine_percent": 0.07789132602193265,
+          "processes": {
+            "3856": {
+              "name": "HLSDownloader.exe",
+              "cpu": 6.921875,
+              "rss_bytes": 208904192,
+              "private_bytes": 228032512
+            },
+            "6704": {
+              "name": "HLSDownloaderPresenter.exe",
+              "cpu": 0.1875,
+              "rss_bytes": 17592320,
+              "private_bytes": 3751936
+            },
+            "6816": {
+              "name": "HLSDownloaderEngine.exe",
+              "cpu": 0.171875,
+              "rss_bytes": 17567744,
+              "private_bytes": 5054464
+            },
+            "6948": {
+              "name": "HLSDownloader.exe",
+              "cpu": 0.015625,
+              "rss_bytes": 6369280,
+              "private_bytes": 1396736
+            }
+          },
+          "rss_sum_bytes": 250433536,
+          "private_sum_bytes": 238235648
+        }
+      },
+      {
+        "name": "MSI uninstalls and removes its product registration",
+        "actual": true
+      }
+    ],
+    "msi_sha256": "801eefe5ef096bbc57a7807e78bfc2343bb15f20236c80ebe2eeb1d9f758c4d7",
+    "installed_bytes": 472749889,
+    "installed_files": 263,
+    "largest_files": [
+      {
+        "path": "app/resources/ffmpeg.exe",
+        "bytes": 165155840
+      },
+      {
+        "path": "app/resources/libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "path": "runtime/lib/modules",
+        "bytes": 54030811
+      },
+      {
+        "path": "app/resources/HLSDownloaderPresenter.exe",
+        "bytes": 28685824
+      },
+      {
+        "path": "app/resources/HLSDownloaderEngine.exe",
+        "bytes": 14513664
+      },
+      {
+        "path": "app/skiko-windows-x64.dll",
+        "bytes": 14109696
+      },
+      {
+        "path": "runtime/bin/server/jvm.dll",
+        "bytes": 13919872
+      },
+      {
+        "path": "app/icudtl.dat",
+        "bytes": 10468208
+      },
+      {
+        "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+        "bytes": 4740663
+      },
+      {
+        "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+        "bytes": 4069888
+      },
+      {
+        "path": "app/resources/HLSDownloaderNativeHost.exe",
+        "bytes": 3773952
+      },
+      {
+        "path": "app/ui-desktop-1.12.0-c7e12ceabbe9ad2921953e527c30ea.jar",
+        "bytes": 3713949
+      }
+    ],
+    "installed_components_sha256": {
+      "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+      "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00"
+    },
+    "verified_payload_sha256": {
+      "HLSDownloaderEngine.exe": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "HLSDownloaderNativeHost.exe": "071e4de743d4514138918a1c68c216e9a1bf5fe03dbecd2d4fb924f5a9524a30",
+      "HLSDownloaderUpdater.exe": "31d4d1becd441ddd8b0bb16b978d1221a4ffc33871d68981420d775627992f00",
+      "HLSDownloaderDesktop-7.0.3.jar": "80fbcd7f578b4c8396fad84b1cd3caf5540277d2ef023910581b43227e50ba4c",
+      "HLSDownloaderPresenter.exe": "a043e5337b200a2e5b7186ccb3bfd5432c2da16637f6611c5aa4d26404a5133e"
+    },
+    "ui_exercised": true,
+    "ui_visible_connected_seconds": 5.4370000000001255,
+    "idle": {
+      "seconds": 5.0150000000001,
+      "logical_cpus": 8,
+      "cpu_one_core_percent": 0.6231306081754612,
+      "cpu_machine_percent": 0.07789132602193265,
+      "processes": {
+        "3856": {
+          "name": "HLSDownloader.exe",
+          "cpu": 6.921875,
+          "rss_bytes": 208904192,
+          "private_bytes": 228032512
+        },
+        "6704": {
+          "name": "HLSDownloaderPresenter.exe",
+          "cpu": 0.1875,
+          "rss_bytes": 17592320,
+          "private_bytes": 3751936
+        },
+        "6816": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.171875,
+          "rss_bytes": 17567744,
+          "private_bytes": 5054464
+        },
+        "6948": {
+          "name": "HLSDownloader.exe",
+          "cpu": 0.015625,
+          "rss_bytes": 6369280,
+          "private_bytes": 1396736
+        }
+      },
+      "rss_sum_bytes": 250433536,
+      "private_sum_bytes": 238235648
+    }
+  },
+  "revision_upgrade": {
+    "passed": true,
+    "checks": [
+      "r11 installs at a custom path with exact baseline UI hash",
+      "same-version r11 to r12 upgrade replaces UI and retains exactly the new MSI product",
+      "real persisted scheduled task and settings survive the upgrade and Core restart",
+      "upgraded application uninstalls successfully in Sandbox"
+    ],
+    "old_msi_sha256": "f5fc3139536c889595b4b5cd6884f77f77bbbafd59e48bbeee7965ac199cbd8c",
+    "new_msi_sha256": "801eefe5ef096bbc57a7807e78bfc2343bb15f20236c80ebe2eeb1d9f758c4d7",
+    "uninstall_exit_code": 0
+  },
+  "installation_scope": "Windows Sandbox only",
+  "raw_report_sha256": {
+    "installer": "0e6afb3ab170947b713f1831a0baa54afb6842f027897524b8c89f151b5ca936",
+    "upgrade": "af99932102c34c1fd245965a366aed2e0e593d0a1b1fba92054d865ffff7169e"
+  },
+  "initial_upgrade_fixture_failure": {
+    "exit_code": 1639,
+    "reason": "MSI property quoting; no installation performed by this failed command. Corrected command used a fresh custom directory."
+  }
+}

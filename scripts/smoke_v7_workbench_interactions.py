@@ -766,13 +766,21 @@ def run(args):
             new_queue = wait(lambda: next((p for p in core({"type":"load_settings","request_id":8})["queue_profiles"]
                                           if p["id"] not in old_ids), None), "Queue save did not reach Core", 15)
             record("queue manager creates and saves real queue", new_queue["name"])
-            pointer(row)
-            wait(lambda: downloaded["task_id"] in ui("state")["selectedTaskIds"], "Queue target not selected", 10)
+            # 队列调度只支持排队或暂停的任务，已完成任务的移动按钮应禁用。
+            pending_result = core({"type": "command", "request_id": 9, "command": {
+                "kind": "create_task", "spec": {"url": url + "?move-queue=1", "resource_kind": "file",
+                    "scheduled_start_at": "2999-01-01T00:00:00Z"}}})
+            pending_id = next(item["event"]["snapshot"]["task_id"] for item in pending_result["events"]
+                              if item["event"]["kind"] == "task_created")
+            created_tasks.add(pending_id)
+            wait(lambda: "taskrow." + pending_id in ui("state")["controlBounds"], "Queue target row missing", 10)
+            pointer("taskrow." + pending_id)
+            wait(lambda: pending_id in ui("state")["selectedTaskIds"], "Queue target not selected", 10)
             pointer("toolbar.移动队列")
             node("移动到队列")
             click("选择队列 " + new_queue["name"])
             click("移动")
-            wait(lambda: any(t["task_id"] == downloaded["task_id"] and t["queue_id"] == new_queue["id"] for t in tasks()),
+            wait(lambda: any(t["task_id"] == pending_id and t["queue_id"] == new_queue["id"] for t in tasks()),
                  "Queue assignment did not reach Core", 15)
             record("selected task moves into saved queue")
 

@@ -1,54 +1,21 @@
-# HLS Downloader 7.0.2 模块与功能衔接
+# HLS Downloader 7.0.3 模块与功能衔接
 
-## 运行时边界
+更新于 2026-10-18。当前交付为 r12 未签名预发布版；验收范围见 [验证索引](v7-verification.md)。历史版本的固定安装路径和独立播放器说明不再描述本版。
 
-```text
-浏览器扩展 (WXT MV3)
-        | Native Messaging: bounded JSON
-        v
-Rust Core + SQLite (唯一状态/凭据/传输所有者)
-        | v7 framed JSON over \\.\pipe\HLSDownloader.v7
-        +--> Compose Desktop workbench (主工作台)
-        +--> native presenter (热确认/进度/完成)
-        +--> player child / LAN cast publisher (隔离子进程或临时服务)
-```
+| 板块 | 主要实现 | 当前行为 |
+| --- | --- | --- |
+| 任务与持久状态 | `native_shell/src/core_service.rs`、`store.rs`、`contract.rs` | Rust Core 持有任务、设置和凭据；桌面及插件通过 IPC 发命令、读事件 |
+| 下载与恢复 | `download_worker.rs`、`http_engine.rs`、`media/` | HTTP、HLS、DASH、FTP/FTPS、SFTP、BT；暂停/续传、重试、计划、校验和、请求刷新 |
+| 下载缓存 | `download_worker.rs` 的完成和任务删除路径 | 成品发布和字幕处理后按保留临时文件设置清理；失败/暂停保留续传数据；删除任务按操作处理缓存和成品 |
+| 主工作台 | `desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt`、`Protocol.kt` | 新建、批量、抓取、队列、搜索筛选、详情、选择操作和错误反馈；设置通过 Core 持久化 |
+| 内置播放器 | 同目录 `VideoPlayer.kt`；Core player 会话与媒体服务 | 主窗口内浮层、时间轴、缓冲、音量、倍速、音轨/字幕、全屏/画中画；下载中播放，完成后原会话切换成品 |
+| 浏览器插件 | `extension/entrypoints`、`extension/lib` | 媒体发现、清晰度选择、下载接管、复制、字幕设置及推送；实际传输交给 Core |
+| Native Messaging | `native_host.rs`、`native_host_registration.rs` | 浏览器与 Core 之间的有界消息及精确 Host 注册 |
+| 确认/进度/完成窗口 | `presenter_ui/src/hot_main.rs` | 独立提示窗口，通过同一 Core 获取任务和发送操作 |
+| 字幕 | Core 字幕链路、插件字幕入口 | 音频预取和翻译状态；本轮没有上传音频或重新验收真实云端服务 |
+| 投屏与 TVBox | Core 媒体推送和控制链路 | 独立控制用途；实体设备仍在本轮验收排除范围 |
+| 安装与交付 | MSI、`scripts` 的打包及生命周期工具 | 安装可选路径；新配置默认 Windows Known Folder Downloads，支持被用户迁移的下载文件夹；未签名包手动升级 |
 
-| 模块 | 负责的功能 | 对外契约 | 不负责 |
-| --- | --- | --- | --- |
-| `native_shell/src/core_server.rs` + `core_service.rs` + `store.rs` | Core 生命周期、SQLite、任务快照/事件、有界任务日志、设置、迁移 | `CoreCommand` / `CoreEvent` / `CoreResponse` | UI 渲染、浏览器 DOM |
-| `native_shell/src/download_worker.rs` + `http_engine.rs` + `media/` | HTTP/HLS/DASH/FTP/SFTP/BT 下载、真实 worker ranges、恢复、校验 | `create_task`、`task_action`、`refresh_task_request`、进度事件 | 独立数据库、第二调度器 |
-| `native_shell/src/native_host.rs` + `native_host_registration.rs` | Native Messaging、浏览器凭据封装、Host 注册 | `ping`、资源识别、handoff/media push | 直接写 UI 状态 |
-| `native_shell/src/core_ipc.rs` + `contract.rs` | v7 命名管道、长度帧、版本协商、错误边界 | `hls-downloader-v7-core`、`\\.\pipe\HLSDownloader.v7` | v6 默认启动路径 |
-| `desktop_ui/src/main/.../Main.kt` + `Protocol.kt` | 主工作台、任务/队列/设置/播放/投屏操作 | 只通过 Core IPC 读快照、发命令 | SQLite、浏览器 Cookie |
-| `presenter_ui/src/hot_main.rs` | 预热确认、进度、完成窗口；Core 重连 | 同一 Core 事件/命令契约 | 主工作台、SQLite |
-| `extension/entrypoints` + `extension/lib` | 下载接管、HLS/DASH 识别、媒体发现、用户授权 | Native Messaging 请求/响应；本地浏览器存储 | 传输执行、持久任务状态 |
-| `scripts/install-v7-local.ps1` + `upgrade-v7-portable.ps1` | 本机/便携升级、回滚、Host 注册、扩展分发 | `E:\h` 单一安装；桌面每浏览器一个 ZIP | 编译、正式发布门禁 |
+主窗口关闭和传输生命周期由不同进程负责，关闭播放器不会删除任务。任务删除、删除任务及文件、筛选清理的范围不同，操作按界面确认执行。安装目录大小主要来自 FFmpeg、libmpv 和裁剪 JRE，不等同于常驻内存。
 
-## 功能链路
-
-| 用户功能 | 起点 | Core 命令/事件 | 终点 |
-| --- | --- | --- | --- |
-| 新建与批量导入 | Compose `NewTaskDialog` / drop target；扩展资源识别 | `probe_url` → `create_task` → `task_created` | 队列中的持久任务 |
-| 浏览器接管 | 扩展 `background.ts` / `nativeBridge.ts` | Native Messaging → handoff → `task_created` / 错误 | 热确认 Presenter，失败时 Compose 回退 |
-| 下载控制 | Compose `TaskTable`；Presenter 快捷操作 | `task_action` → `task_updated` / `task_progress` | Core worker 持续执行，UI 可关闭 |
-| 任务详情 | Compose `TaskDetailsDialog` | `get_task_log` / speed action → 持久日志、快照、真实活动 ranges | 日志、速度、连接图与实际 Core 状态一致 |
-| 认证恢复 | Compose 详情表单；扩展 request context | `refresh_task_request`，凭据仅在 Core 出站请求使用 | 断点恢复，不进入公共快照 |
-| 播放/投屏/TVBox | Compose player/device picker；扩展 media push | `play_task`、`cast_to_device`、`share_media` → session 事件 | 隔离播放器或 LAN 发布地址 |
-| 设置与升级 | Compose Settings；本地脚本 | `get_settings` / `set_settings_atomic`；安装脚本注册 Host | 单一 Core 配置与单一 `E:\h` 安装 |
-
-## 当前收敛点
-
-- 当前功能矩阵为 `27/28 verified`、`1 partial`、`release_ready=false`。唯一 partial 是 `browser.media_push_device_selection`，仍需安装包中的真实浏览器注册和真实局域网设备门禁；candidate CI 不替代该证据。计划任务由调度器认领时统一重置 control，最终发布与完成状态在 Core 同一互斥区提交；handoff/media-push 旁路行与事件 checkpoint 同事务提交，交接解析失败时仍保留内存 offer 供重试。
-- 浏览器 pending handoff 可跨重连恢复；扩展不会再把本地轮询超时伪装成 Core 终态，不确定所有权保持浏览器任务暂停并由持久 alarm 复核，用户已自行处理的任务会终止跟进。
-- Core 已在启动阶段报告 named pipe ready，失败会返回明确错误；pending media push 会从 SQLite 恢复到运行时，可跨重启 resolve。
-- Core IPC 对完全空闲帧头设置 120 秒上限，对完整帧头后的帧体设置不可续期的 15 秒预算；BT/磁力探测使用单后台槽，避免阻塞请求线程或无界并发。
-- Core 启动恢复的 SQLite 写失败会向启动方传播，watcher 只在恢复成功后创建；v7 `Shutdown` 会先暂停活动 worker、等待断点状态收敛，再唤醒命名管道 accept 有序停服。
-- Compose 主工作台通过跨进程文件锁保持单实例，重复启动仅发送 `open_main`；系统关闭按钮和自绘标题栏关闭按钮共用托盘驻留规则；Presenter 的暂停/取消与打开主窗口操作不再阻塞 UI 线程，并按当前任务隔离反馈。
-- NativeBridge 只接受与当前请求严格匹配的 v7 response id；首次发送同步失败时主动断开无效端口，避免队列错配和 Native Host 连接泄漏。
-- 发布门禁自洽：`verify-v7-feature-parity.ps1` 的 requiredGateIds 已与 invoke/record 三方统一为五项（`browser`、`performance`、`browser_media_push`、`installer`、`rollback`），`validate-powershell.ps1` 增加三方契约断言，正式打包路径不再自我阻断。`native_shell` 的媒体测试夹具改为 `#[cfg(test)]`；`store.rs` 与 `profile_paths.rs` 的重复路径函数收敛为一处；`default_core_bind()` 坏环境变量改为错误传播而非 panic；扩展删除已 no-op 的 `directBackend` 桥。
-- 构建门禁核对扩展协议常量；安装覆盖前验证 `E:\h` 所有权；Portable 升级与回滚验证 Chromium/Firefox 扩展身份连续。
-- 设置保存先完成 Core 持久化，失败时保留对话框草稿；Presenter 探测完成前暂存接管事件，避免启动竞态。
-- 工作台在事件序列断档时重新读取快照；Presenter 每次重连都恢复任务快照和待处理交接，托盘/Presenter 唤起优先激活已有工作台。
-- candidate/formal 产物目录写入 `ARTIFACT-MANIFEST.json`，统一记录 EXE、MSI、Portable 和扩展摘要。
-- 构建与安装同时校验扩展 MV3、Chromium 公钥和 Firefox Gecko ID。
-- 新增功能时先扩展 `contract.rs` 的命令/事件，再接 Core handler，最后接 Compose/Presenter/extension 的单一路径；不要新增第二个状态所有者。
+当前 canonical 功能合同为 `artifacts/v7-productization/feature-parity.json`：29 项中 27 verified、2 partial，`release_ready=true` 带有其自身排除条件。该合同不等于本轮所有板块都重新完成发布级认证；r12 包的 `BUILD-PROVENANCE.json` 明确为 `release_ready=false`、未签名预发布。
