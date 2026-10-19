@@ -119,6 +119,8 @@ if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env
 $libMpvCache = Join-Path $cacheRoot 'libmpv-20260814'
 $sevenZipExe = Join-Path $libMpvCache '7zr.exe'
 $libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
+$libMpvDll = Join-Path $libMpvCache 'libmpv-2.dll'
+$libMpvDllSha256 = 'f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea'
 $sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
 $sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
 $libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
@@ -156,8 +158,13 @@ function Get-VerifiedFile([string]$Url, [string]$Path, [string]$Expected, [strin
 }
 
 function Copy-LibMpv([string]$Destination) {
-    Get-VerifiedFile $sevenZipUrl $sevenZipExe $sevenZipSha256 '7zr.exe'
-    Get-VerifiedFile $libMpvArchiveUrl $libMpvArchive $libMpvArchiveSha256 'libmpv archive'
+    # 上游日构建会过期；已校验的同版 DLL 可独立缓存，不能因归档消失而被迫升级引擎。
+    if (Test-Path -LiteralPath $libMpvDll) {
+        Assert-FileSha256 $libMpvDll $libMpvDllSha256 'cached libmpv-2.dll'
+    } else {
+        Get-VerifiedFile $sevenZipUrl $sevenZipExe $sevenZipSha256 '7zr.exe'
+        Get-VerifiedFile $libMpvArchiveUrl $libMpvArchive $libMpvArchiveSha256 'libmpv archive'
+    }
     Get-VerifiedFile $vulkanRuntimeUrl $vulkanRuntimeArchive $vulkanRuntimeArchiveSha256 "Vulkan Runtime Components $vulkanRuntimeVersion archive"
     $extract = Join-Path $libMpvCache 'extract'
     $vulkanExtract = Join-Path $vulkanRuntimeCache 'extract'
@@ -166,12 +173,16 @@ function Copy-LibMpv([string]$Destination) {
     New-Item -ItemType Directory -Force -Path $extract | Out-Null
     New-Item -ItemType Directory -Force -Path $vulkanExtract | Out-Null
     try {
-        & $sevenZipExe e -y "-o$extract" $libMpvArchive 'libmpv-2.dll'
-        if ($LASTEXITCODE -ne 0) { throw "7zr failed to extract libmpv-2.dll (exit $LASTEXITCODE)" }
-        $dll = Get-ChildItem -LiteralPath $extract -Filter 'libmpv-2.dll' -Recurse -File | Select-Object -First 1
-        if (-not $dll) { throw 'libmpv archive did not contain libmpv-2.dll' }
-        Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $Destination 'libmpv-2.dll') -Force
-        Assert-FileSha256 (Join-Path $Destination 'libmpv-2.dll') ((Get-FileHash -LiteralPath $dll.FullName -Algorithm SHA256).Hash) 'bundled libmpv-2.dll'
+        if (-not (Test-Path -LiteralPath $libMpvDll)) {
+            & $sevenZipExe e -y "-o$extract" $libMpvArchive 'libmpv-2.dll'
+            if ($LASTEXITCODE -ne 0) { throw "7zr failed to extract libmpv-2.dll (exit $LASTEXITCODE)" }
+            $dll = Get-ChildItem -LiteralPath $extract -Filter 'libmpv-2.dll' -Recurse -File | Select-Object -First 1
+            if (-not $dll) { throw 'libmpv archive did not contain libmpv-2.dll' }
+            Assert-FileSha256 $dll.FullName $libMpvDllSha256 'extracted libmpv-2.dll'
+            Copy-Item -LiteralPath $dll.FullName -Destination $libMpvDll -Force
+        }
+        Copy-Item -LiteralPath $libMpvDll -Destination (Join-Path $Destination 'libmpv-2.dll') -Force
+        Assert-FileSha256 (Join-Path $Destination 'libmpv-2.dll') $libMpvDllSha256 'bundled libmpv-2.dll'
         Expand-Archive -LiteralPath $vulkanRuntimeArchive -DestinationPath $vulkanExtract -Force
         $vulkanRoot = Join-Path $vulkanExtract "VulkanRT-X64-$vulkanRuntimeVersion-Components"
         $vulkanDll = Join-Path $vulkanRoot 'x64\vulkan-1.dll'
