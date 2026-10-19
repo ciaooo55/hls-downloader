@@ -1,0 +1,204 @@
+{
+  "scope": "Download takeover, confirmation details, subtitle visibility, media overlay and desktop CPU",
+  "cloud_calls": false,
+  "host_installation": false,
+  "desktop_tests": {
+    "tests": 129,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "extension_tests": {
+    "files": 50,
+    "tests": 385,
+    "passed": true,
+    "typecheck_in_test_script": true
+  },
+  "extension_builds": [
+    "Chromium",
+    "Firefox",
+    "Firefox review sources"
+  ],
+  "firefox_lint": {
+    "errors": 0,
+    "notices": 0,
+    "warnings": 0
+  },
+  "presenter_units": {
+    "tests": 9,
+    "exit": 0
+  },
+  "native_ui": {
+    "details_expand": "Observed in final presenter: source page, download URL and request details visible; scroll area moves to details.",
+    "cancel": "Clicked and browser recovery SHA256 passed before final layout rebuild; same cancel handler.",
+    "collapse_final_and_cancel_final": "Not completed through GUI: window capture switched to another host window; no further input sent there."
+  },
+  "browser_protocol_checks": {
+    "edge-rejection": {
+      "passed": true,
+      "checks": [
+        "targeted-browser-recovery-sha256",
+        "one-resolved-handoff-reject"
+      ]
+    },
+    "edge-fallback": {
+      "passed": true,
+      "checks": [
+        "targeted-desktop-http-failure",
+        "targeted-browser-recovery-sha256",
+        "one-resolved-handoff-fallback"
+      ]
+    },
+    "edge-public": {
+      "passed": true,
+      "checks": [
+        "independent-public-source",
+        "default-takeover-enabled-for-all-sizes",
+        "original-website-link-reaches-confirmation-before-task",
+        "one-Core-file-completed-with-source-SHA256",
+        "browser-keeps-no-second-file"
+      ]
+    },
+    "firefox-rejection": {
+      "passed": true,
+      "checks": [
+        "targeted-browser-recovery-sha256",
+        "one-resolved-handoff-reject"
+      ]
+    },
+    "firefox-fallback": {
+      "passed": true,
+      "checks": [
+        "targeted-desktop-http-failure",
+        "targeted-browser-recovery-sha256",
+        "one-resolved-handoff-fallback"
+      ]
+    },
+    "firefox-public": {
+      "passed": true,
+      "checks": [
+        "independent-public-source",
+        "default-takeover-enabled-for-all-sizes",
+        "original-website-link-reaches-confirmation-before-task",
+        "one-Core-file-completed-with-source-SHA256",
+        "browser-keeps-no-second-file"
+      ]
+    }
+  },
+  "media": [
+    {
+      "url": "https://hlsjs.video-dev.org/demo/basic-usage",
+      "resource_count": 1,
+      "subtitle_enable_disable_passed": true,
+      "mse_overlay_passed": true
+    },
+    {
+      "url": "https://hlsjs.video-dev.org/demo/?src=https%3A%2F%2Ftest-streams.mux.dev%2Fx36xhzz%2Fx36xhzz.m3u8",
+      "resource_count": 1,
+      "mse_overlay_passed": true
+    },
+    {
+      "url": "https://missav.ai/cn/hjmo-699-uncensored-leak",
+      "blocked": "Just a moment..."
+    }
+  ],
+  "cpu": {
+    "environment": "Same Windows Sandbox, vGPU disabled, 8 logical CPUs; 12-second windows; one sequential baseline/candidate pair. CPU percentages normalized across all 8 logical CPUs. Includes JVM cold-start/JIT effects; not a hardware-independent guarantee.",
+    "baseline-final-cpu": {
+      "idle": {
+        "main_machine_percent": 0.0,
+        "presenter_machine_percent": 0.0,
+        "tasks": []
+      },
+      "known-download": {
+        "main_machine_percent": 14.841474198918176,
+        "presenter_machine_percent": 0.42264877236787796,
+        "tasks": [
+          {
+            "status": "downloading",
+            "total_bytes": 67108864,
+            "downloaded_bytes": 10420224
+          }
+        ]
+      },
+      "unknown-download": {
+        "main_machine_percent": 9.57462026633385,
+        "presenter_machine_percent": 0.32511444028298303,
+        "tasks": [
+          {
+            "status": "downloading",
+            "total_bytes": null,
+            "downloaded_bytes": 10551296
+          }
+        ]
+      }
+    },
+    "cadence-cpu": {
+      "idle": {
+        "main_machine_percent": 0.0,
+        "presenter_machine_percent": 0.0,
+        "tasks": []
+      },
+      "known-download": {
+        "main_machine_percent": 8.317057291666668,
+        "presenter_machine_percent": 0.17903645833333331,
+        "tasks": [
+          {
+            "status": "downloading",
+            "total_bytes": 67108864,
+            "downloaded_bytes": 10682368
+          }
+        ]
+      },
+      "unknown-download": {
+        "main_machine_percent": 3.059895833333333,
+        "presenter_machine_percent": 0.13020833333333331,
+        "tasks": [
+          {
+            "status": "downloading",
+            "total_bytes": null,
+            "downloaded_bytes": 10616832
+          }
+        ]
+      }
+    }
+  },
+  "limitations": [
+    "The user-provided site returned Just a moment; its player was not reached or validated.",
+    "Cloud transcription/translation was not invoked.",
+    "Browser protocol confirmations are not native GUI button tests."
+  ],
+  "source_commit": "46d09b5e8a49fdc0ad729d506be7d66a22fa5950",
+  "installer": {
+    "passed": true,
+    "mode": "sandbox silent custom-path install, payload hashes and uninstall",
+    "checks": [],
+    "msi_sha256": "bbbae37fc0878b74363f57bfbd4bcfb2c0480101e23115f3b6d06ec00a5df542",
+    "install_exit": 0,
+    "install_directory": "C:\\QAWork\\Custom Install Path\\HLSDownloader",
+    "payload_hashes_match": true,
+    "installed_bytes": 469405842,
+    "file_count": 222,
+    "uninstall_exit": 0
+  },
+  "delivery_files": [
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "sha256": "24733de1caa3b28feb3445313d96ee4b4bd56688bc62955d1a65c44ce1ce412c"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "sha256": "05e7c6abb767be31c703ac4a895732c996b123affa43bacee0896e854b41a66e"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "sha256": "c88ec86680155e98e1dbe585d77cd943308ff0c8d56ed8eaa5f505c3ce2e2c64"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-main-46d09b5-未签名.msi",
+      "sha256": "bbbae37fc0878b74363f57bfbd4bcfb2c0480101e23115f3b6d06ec00a5df542"
+    }
+  ],
+  "delivery_directory": "Desktop/HLSDownloader/最新-46d09b5",
+  "cleanup_limit": "Automatic approval rejected the combined overwrite/delete operation for old Desktop delivery files (blocked by policy, no further reason). New packages were copied to a new directory without modifying old files."
+}
