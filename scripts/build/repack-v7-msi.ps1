@@ -137,12 +137,12 @@ try {
         @('BUILD-PROVENANCE.json', $ProvenanceReplacement)
     )) {
         if ([string]::IsNullOrWhiteSpace($replacement[1])) { continue }
-        $files = if ($replacement[0] -eq 'HLSDownloaderDesktop-7.0.3.jar') {
+        $files = @(if ($replacement[0] -eq 'HLSDownloaderDesktop-7.0.3.jar') {
             # jpackage 可能为桌面 JAR 添加内容哈希；仍须唯一匹配当前启动器的桌面模块。
             $model.SelectNodes("//*[local-name()='File' and starts-with(@Name, 'HLSDownloaderDesktop-7.0.3') and substring(@Name, string-length(@Name) - 3)='.jar']")
         } else {
             $model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']")
-        }
+        })
         if ($files.Count -ne 1) { throw "Installer replacement file is not unique: $($replacement[0])" }
         $destination = [IO.Path]::GetFullPath((Join-Path $work $files[0].GetAttribute('Source')))
         if (-not $destination.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Replacement target escaped the extracted installer.' }
@@ -193,6 +193,8 @@ try {
             $archivePath = Join-Path $archives "$family.zip"
             if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) { throw "Missing current extension archive: $family.zip" }
             $familyDirectories = $model.SelectNodes("//*[local-name()='Directory' and @Name='$family']")
+            # 当前精简包仅内置 ZIP，没有解压后的插件目录；上面已替换其 ZIP。
+            if ($familyDirectories.Count -eq 0 -and $model.SelectNodes("//*[local-name()='File' and starts-with(@Name, 'HLSDownloader-') and contains(@Name, '-$family.zip')]").Count -eq 1) { continue }
             if ($familyDirectories.Count -ne 1) { throw "Installer extension directory is not unique: $family" }
             $familyDirectory = $familyDirectories[0]
             $installerFiles = @{}
