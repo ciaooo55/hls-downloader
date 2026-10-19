@@ -333,7 +333,7 @@ internal fun workbenchShortcut(ctrl: Boolean, shift: Boolean, keyCode: Int): Str
     keyCode == AwtKeyEvent.VK_ESCAPE -> "escape"
     else -> null
 }
-private sealed interface UiSignal {
+internal sealed interface UiSignal {
     data class Notice(val level: String, val message: String) : UiSignal
     data class Clipboard(val urls: List<String>) : UiSignal
     data class Probe(val url: String, val variants: List<StreamVariantDto>) : UiSignal
@@ -1237,44 +1237,44 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         refreshKey++
                     }
                     eventSequence = maxOf(eventSequence, envelope.sequence)
-                    val eventKind = envelope.event["kind"]?.jsonPrimitive?.content.orEmpty()
+                    val eventKind = envelope.event.string("kind")
                     if (eventKind == "settings_changed" ||
-                        (eventKind == "ui_show" && envelope.event["surface"]?.jsonPrimitive?.content == "main")) {
+                        (eventKind == "ui_show" && envelope.event.stringOrNull("surface") == "main")) {
                         refreshKey++
                     }
                     val attentionRequired = when (eventKind) {
                         // 浏览器交接由独立确认窗处理，工作台只响应明确的打开请求。
                         "error", "open_main" -> true
-                        "ui_show" -> envelope.event["surface"]?.jsonPrimitive?.content == "main"
-                        "update_install_result" -> envelope.event["status"]?.jsonPrimitive?.content != "success"
+                        "ui_show" -> envelope.event.stringOrNull("surface") == "main"
+                        "update_install_result" -> envelope.event.stringOrNull("status") != "success"
                         "task_created", "task_updated", "task_progress" -> {
-                            val snapshot = envelope.event["snapshot"]?.jsonObject
-                            val taskId = snapshot?.get("task_id")?.jsonPrimitive?.content.orEmpty()
+                            val snapshot = envelope.event.objectOrNull("snapshot")
+                            val taskId = snapshot?.string("task_id").orEmpty()
                             val previousStatus = taskPositions[taskId]?.let { tasks[it].source.status }.orEmpty().lowercase()
-                            val nextStatus = snapshot?.get("status")?.jsonPrimitive?.content.orEmpty().lowercase()
+                            val nextStatus = snapshot?.string("status").orEmpty().lowercase()
                             previousStatus != nextStatus && nextStatus in setOf("failed", "error")
                         }
                         else -> false
                     }
                     if (eventKind == "error") {
-                        if (envelope.event["code"]?.jsonPrimitive?.content == "torrent_probe_failed") {
+                        if (envelope.event.stringOrNull("code") == "torrent_probe_failed") {
                             torrentDraft = null
                         }
-                        val engineMessage = envelope.event["message"]?.jsonPrimitive?.content ?: "下载引擎报告错误"
+                        val engineMessage = envelope.event.stringOrNull("message")?.takeIf(String::isNotBlank) ?: "下载引擎报告错误"
                         UiDiagnostics.warning(
                             "engine.event.error",
                             engineMessage,
-                            envelope.event["task_id"]?.jsonPrimitive?.content.orEmpty(),
-                            envelope.event["request_id"]?.jsonPrimitive?.content.orEmpty(),
+                            envelope.event.string("task_id"),
+                            envelope.event.string("request_id"),
                         )
                         recordNotice("error", engineMessage)
                     }
                     if (eventKind in setOf("task_created", "task_updated", "task_progress")) {
-                        val snapshot = envelope.event["snapshot"]?.jsonObject
-                        val status = snapshot?.get("status")?.jsonPrimitive?.content.orEmpty().lowercase()
+                        val snapshot = envelope.event.objectOrNull("snapshot")
+                        val status = snapshot?.string("status").orEmpty().lowercase()
                         if (status in setOf("failed", "error")) {
-                            val hint = snapshot?.get("error_hint")?.jsonPrimitive?.content.orEmpty()
-                            val message = snapshot?.get("error_message")?.jsonPrimitive?.content.orEmpty()
+                            val hint = snapshot?.string("error_hint").orEmpty()
+                            val message = snapshot?.string("error_message").orEmpty()
                             if (hint.isNotBlank() || message.isNotBlank()) {
                                 notice = UiSignal.Notice("error", hint.ifBlank { message })
                             }
@@ -1674,6 +1674,15 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             deviceResult = UiSignal.Devices(emptyList())
             scope.launch {
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.discoverCastDevices(mode) } }
+                    .onSuccess { result ->
+                        result.events.forEach { envelope ->
+                            val signal = applyEngineEvent(tasks, taskPositions, envelope.event, { extensionText = it }, {}, {}, {})
+                            if (signal is UiSignal.Devices && settingsDeviceScanActive) {
+                                deviceResult = signal
+                            }
+                        }
+                        if (settingsDeviceScanActive) castDiscovering = false
+                    }
                     .onFailure { error ->
                         castDiscovering = false
                         notice = UiSignal.Notice("error", describeFailure(error, "设备扫描失败"))
@@ -1694,6 +1703,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 saved
             } }
                 .onSuccess { saved ->
+                    settingsEpoch++
                     settings = saved
                     darkMode = saved.darkMode
                     settingsDialog = false
@@ -1712,6 +1722,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             runCatching { withContext(Dispatchers.IO) {
                 EnginePipeClient.saveSettings(settings.copy(queueProfiles = profiles))
             } }.onSuccess { saved ->
+                settingsEpoch++
                 settings = saved
                 if (selectedQueueId !in profiles.map { it.id }) selectedQueueId = null
                 queueManagerDialog = false
@@ -2225,7 +2236,7 @@ internal fun auditTasks(count: Int): List<DownloadTask> = List(count.coerceAtLea
         ),
     )
 }
-private fun applyEngineEvent(
+internal fun applyEngineEvent(
     tasks: MutableList<DownloadTask>,
     taskPositions: MutableMap<String, Int>,
     event: kotlinx.serialization.json.JsonObject,
@@ -2234,109 +2245,109 @@ private fun applyEngineEvent(
     resolveHandoff: (String) -> Unit,
     taskDeleted: (String) -> Unit,
 ): UiSignal? {
-    return when (event["kind"]?.toString()?.trim('"')) {
+    return when (event.stringOrNull("kind")) {
         // This was the only decode in this `when` without `runCatching`, so a
         // Core snapshot that failed to decode threw straight out of the poller
         // above.  The snapshot is untrusted pipe input; a bad one now skips that
         // event instead of killing the stream.
-        "task_created", "task_updated", "task_progress" -> event["snapshot"]?.jsonObject?.let { snapshot ->
+        "task_created", "task_updated", "task_progress" -> event.objectOrNull("snapshot")?.let { snapshot ->
             val task = runCatching {
                 downloadTask(protocolJson.decodeFromJsonElement(TaskDto.serializer(), snapshot))
             }.getOrNull() ?: return@let null
             upsertDownloadTask(tasks, taskPositions, task)
             null
         }
-        "task_deleted" -> event["task_id"]?.toString()?.trim('"')?.let { id -> removeDownloadTask(tasks, taskPositions, id); taskDeleted(id); null }
-        "browser_status" -> { setExtension(if (event["connected"]?.toString() == "true") "浏览器插件 · 已连接" else Product.extensionDisconnected); null }
+        "task_deleted" -> event.stringOrNull("task_id")?.takeIf(String::isNotBlank)?.let { id -> removeDownloadTask(tasks, taskPositions, id); taskDeleted(id); null }
+        "browser_status" -> { setExtension(if (event.stringOrNull("connected") == "true") "浏览器插件 · 已连接" else Product.extensionDisconnected); null }
         "clipboard_offer" -> UiSignal.Clipboard(
-            event["urls"]?.jsonArray.orEmpty().mapNotNull { item -> runCatching { item.jsonPrimitive.content }.getOrNull() }.filter(String::isNotBlank),
+            event.arrayOrNull("urls").orEmpty().mapNotNull { item -> item.stringOrNull() }.filter(String::isNotBlank),
         )
-        "handoff_offered" -> event["offer"]?.jsonObject?.let { offer ->
+        "handoff_offered" -> event.objectOrNull("offer")?.let { offer ->
             runCatching { protocolJson.decodeFromJsonElement(HandoffOfferDto.serializer(), offer) }.getOrNull()?.let(offerHandoff)
             null
         }
-        "handoff_resolved" -> event["handoff_id"]?.toString()?.trim('"')?.let { resolveHandoff(it); null }
+        "handoff_resolved" -> event.stringOrNull("handoff_id")?.takeIf(String::isNotBlank)?.let { resolveHandoff(it); null }
         "probe_result" -> UiSignal.Probe(
-            event["url"]?.toString()?.trim('"').orEmpty(),
-            event["variants"]?.jsonArray.orEmpty().mapNotNull { runCatching { protocolJson.decodeFromJsonElement(StreamVariantDto.serializer(), it) }.getOrNull() },
+            event.string("url"),
+            event.arrayOrNull("variants").orEmpty().mapNotNull { runCatching { protocolJson.decodeFromJsonElement(StreamVariantDto.serializer(), it) }.getOrNull() },
         )
         "torrent_probe_result" -> UiSignal.TorrentProbe(
             TorrentProbeDto(
-                source = event["source"]?.jsonPrimitive?.content.orEmpty(),
-                name = event["name"]?.jsonPrimitive?.content ?: "torrent",
-                totalSize = event["total_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
-                files = event["files"]?.jsonArray.orEmpty().mapNotNull { item -> runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull() },
-                magnet = event["magnet"]?.jsonPrimitive?.content == "true",
+                source = event.string("source"),
+                name = event.stringOrNull("name") ?: "torrent",
+                totalSize = event.longOrNull("total_size") ?: 0,
+                files = event.arrayOrNull("files").orEmpty().mapNotNull { item -> runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull() },
+                magnet = event.stringOrNull("magnet") == "true",
             ),
         )
         "torrent_selection_result" -> UiSignal.TorrentSelection(
-            source = event["source"]?.jsonPrimitive?.content.orEmpty(),
-            files = event["selections"]?.jsonArray.orEmpty().mapNotNull { item -> runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull() },
-            totalSize = event["total_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+            source = event.string("source"),
+            files = event.arrayOrNull("selections").orEmpty().mapNotNull { item -> runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull() },
+            totalSize = event.longOrNull("total_size") ?: 0,
         )
-        "cast_devices" -> UiSignal.Devices(event["devices"]?.jsonArray.orEmpty().mapNotNull { runCatching { protocolJson.decodeFromJsonElement(CastDeviceDto.serializer(), it) }.getOrNull() })
-        "media_push_requested" -> event["request"]?.jsonObject?.let { request -> runCatching { UiSignal.MediaPush(protocolJson.decodeFromJsonElement(MediaPushRequestDto.serializer(), request)) }.getOrNull() }
-        "media_push_resolved" -> event["request"]?.jsonObject?.let { request -> runCatching { UiSignal.MediaPushResolved(protocolJson.decodeFromJsonElement(MediaPushRequestDto.serializer(), request)) }.getOrNull() }
+        "cast_devices" -> UiSignal.Devices(event.arrayOrNull("devices").orEmpty().mapNotNull { runCatching { protocolJson.decodeFromJsonElement(CastDeviceDto.serializer(), it) }.getOrNull() })
+        "media_push_requested" -> event.objectOrNull("request")?.let { request -> runCatching { UiSignal.MediaPush(protocolJson.decodeFromJsonElement(MediaPushRequestDto.serializer(), request)) }.getOrNull() }
+        "media_push_resolved" -> event.objectOrNull("request")?.let { request -> runCatching { UiSignal.MediaPushResolved(protocolJson.decodeFromJsonElement(MediaPushRequestDto.serializer(), request)) }.getOrNull() }
         "power_action_pending" -> UiSignal.PowerPending(
-            event["action"]?.jsonPrimitive?.content.orEmpty(),
-            event["title"]?.jsonPrimitive?.content.orEmpty(),
-            event["delay_seconds"]?.jsonPrimitive?.content?.toLongOrNull() ?: 30,
+            event.string("action"),
+            event.string("title"),
+            event.longOrNull("delay_seconds") ?: 30,
         )
         "harvest_result" -> UiSignal.Harvest(
-            event["url"]?.toString()?.trim('"').orEmpty(),
-            event["links"]?.jsonArray.orEmpty().mapNotNull { item ->
-                item.jsonObject.let { value ->
+            event.string("url"),
+            event.arrayOrNull("links").orEmpty().mapNotNull { item ->
+                (item as? kotlinx.serialization.json.JsonObject)?.let { value ->
                     HarvestCandidateUi(
-                        url = value["url"]?.jsonPrimitive?.content.orEmpty(),
-                        filename = value["filename"]?.jsonPrimitive?.content.orEmpty(),
-                        category = value["category"]?.jsonPrimitive?.content.orEmpty(),
-                        size = value["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
-                        extension = value["extension"]?.jsonPrimitive?.content.orEmpty(),
+                        url = value.string("url"),
+                        filename = value.string("filename"),
+                        category = value.string("category"),
+                        size = value.longOrNull("size") ?: 0,
+                        extension = value.string("extension"),
                     )
-                }.takeIf { it.url.isNotBlank() }
+                }?.takeIf { it.url.isNotBlank() }
             },
         )
-        "task_log" -> UiSignal.Log(event["task_id"]?.jsonPrimitive?.content.orEmpty(), event["lines"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content })
-        "duplicate_offered" -> UiSignal.Duplicate(event["task_id"]?.jsonPrimitive?.content.orEmpty(), event["action"]?.jsonPrimitive?.content.orEmpty(), event["message"]?.jsonPrimitive?.content ?: "发现重复任务")
-        "toast" -> UiSignal.Notice(event["level"]?.jsonPrimitive?.content ?: "info", event["message"]?.jsonPrimitive?.content ?: "操作已完成")
+        "task_log" -> UiSignal.Log(event.string("task_id"), event.arrayOrNull("lines").orEmpty().mapNotNull { it.stringOrNull() })
+        "duplicate_offered" -> UiSignal.Duplicate(event.string("task_id"), event.string("action"), event.stringOrNull("message") ?: "发现重复任务")
+        "toast" -> UiSignal.Notice(event.stringOrNull("level") ?: "info", event.stringOrNull("message") ?: "操作已完成")
         "update_available" -> UiSignal.Update(
-            current = event["current"]?.jsonPrimitive?.content.orEmpty(),
-            latest = event["latest"]?.jsonPrimitive?.content.orEmpty(),
-            notes = event["notes"]?.jsonPrimitive?.content.orEmpty(),
-            releaseUrl = event["release_url"]?.jsonPrimitive?.content.orEmpty(),
-            installerName = event["installer_name"]?.jsonPrimitive?.content.orEmpty(),
-            installerSize = event["installer_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
-            sha256Verified = event["sha256_verified"]?.jsonPrimitive?.content == "true",
+            current = event.string("current"),
+            latest = event.string("latest"),
+            notes = event.string("notes"),
+            releaseUrl = event.string("release_url"),
+            installerName = event.string("installer_name"),
+            installerSize = event.longOrNull("installer_size") ?: 0,
+            sha256Verified = event.stringOrNull("sha256_verified") == "true",
         )
-        "update_current" -> UiSignal.Notice("success", "已是最新版本 ${event["current"]?.jsonPrimitive?.content.orEmpty()}")
+        "update_current" -> UiSignal.Notice("success", "已是最新版本 ${event.string("current")}")
         "update_ready" -> UiSignal.UpdatePrepared(
-            latest = event["latest"]?.jsonPrimitive?.content.orEmpty(),
-            installerPath = event["installer_path"]?.jsonPrimitive?.content.orEmpty(),
-            sha256 = event["sha256"]?.jsonPrimitive?.content.orEmpty(),
-            productName = event["product_name"]?.jsonPrimitive?.content.orEmpty(),
-            productVersion = event["product_version"]?.jsonPrimitive?.content.orEmpty(),
-            upgradeCode = event["upgrade_code"]?.jsonPrimitive?.content.orEmpty(),
+            latest = event.string("latest"),
+            installerPath = event.string("installer_path"),
+            sha256 = event.string("sha256"),
+            productName = event.string("product_name"),
+            productVersion = event.string("product_version"),
+            upgradeCode = event.string("upgrade_code"),
         )
-        "update_install_started" -> UiSignal.Notice("info", "任务断点已保存，正在关闭并安装版本 ${event["latest"]?.jsonPrimitive?.content.orEmpty()}")
+        "update_install_started" -> UiSignal.Notice("info", "任务断点已保存，正在关闭并安装版本 ${event.string("latest")}")
         "update_install_result" -> UiSignal.Notice(
-            if (event["status"]?.jsonPrimitive?.content == "success") "success" else "error",
-            event["message"]?.jsonPrimitive?.content ?: "覆盖升级结果未知",
+            if (event.stringOrNull("status") == "success") "success" else "error",
+            event.stringOrNull("message") ?: "覆盖升级结果未知",
         )
-        "error" -> UiSignal.Notice("error", event["message"]?.jsonPrimitive?.content ?: "操作失败")
+        "error" -> UiSignal.Notice("error", event.stringOrNull("message") ?: "操作失败")
         "cast_session" -> UiSignal.Cast(
-            active = event["active"]?.jsonPrimitive?.content == "true",
-            title = event["title"]?.jsonPrimitive?.content.orEmpty(),
-            device = event["device"]?.jsonPrimitive?.content.orEmpty(),
-            status = event["status"]?.jsonPrimitive?.content.orEmpty(),
-            taskId = event["task_id"]?.jsonPrimitive?.content.orEmpty(),
-            mediaUrl = event["media_url"]?.jsonPrimitive?.content.orEmpty(),
-            deviceKind = event["device_kind"]?.jsonPrimitive?.content.orEmpty(),
-            supportedActions = event["supported_actions"]?.jsonArray.orEmpty().map { it.jsonPrimitive.content },
-            playing = event["playing"]?.jsonPrimitive?.content == "true",
-            paused = event["paused"]?.jsonPrimitive?.content == "true",
-            positionSeconds = event["position_seconds"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
-            durationSeconds = event["duration_seconds"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
-            positionAvailable = event["position_available"]?.jsonPrimitive?.content == "true",
+            active = event.stringOrNull("active") == "true",
+            title = event.string("title"),
+            device = event.string("device"),
+            status = event.string("status"),
+            taskId = event.string("task_id"),
+            mediaUrl = event.string("media_url"),
+            deviceKind = event.string("device_kind"),
+            supportedActions = event.arrayOrNull("supported_actions").orEmpty().mapNotNull { it.stringOrNull() },
+            playing = event.stringOrNull("playing") == "true",
+            paused = event.stringOrNull("paused") == "true",
+            positionSeconds = event.longOrNull("position_seconds") ?: 0,
+            durationSeconds = event.longOrNull("duration_seconds") ?: 0,
+            positionAvailable = event.stringOrNull("position_available") == "true",
         )
         else -> null
     }
@@ -2426,7 +2437,7 @@ internal fun visibleTasks(tasks: List<DownloadTask>, filter: TaskFilter, categor
 private fun taskProgressKnown(task: TaskDto): Boolean = task.status in setOf("completed", "done") || (task.totalBytes ?: 0) > 0 || (!task.isLive && task.resourceKind in setOf("hls", "dash") && task.totalRanges > 0)
 private fun taskProgressLabel(task: DownloadTask): String = if (taskProgressKnown(task.source)) "${(task.progress * 100).toInt()}%" else if (task.source.isLive) "录制中" else "大小待定"
 private fun formatRate(bytes: Long): String = when { bytes <= 0 -> "0 KB/s"; bytes >= 1024L * 1024L -> "%.1f MB/s".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); else -> "%.0f KB/s".format(java.util.Locale.ROOT, bytes / 1024.0) }
-private fun formatEta(seconds: Long): String = when { seconds < 60 -> "${seconds}s"; seconds < 3600 -> "${seconds / 60} 分钟"; else -> "${seconds / 3600} 小时" }
+private fun formatEta(seconds: Long): String { val safe = seconds.coerceAtLeast(0); return when { safe < 60 -> "${safe}s"; safe < 3600 -> "${safe / 60} 分钟"; else -> "${safe / 3600} 小时" } }
 internal fun chooseDirectory(initialPath: String = "", title: String = "选择目录"): String? {
     val chooser = JFileChooser().apply {
         dialogTitle = title
@@ -2880,7 +2891,7 @@ private data class TaskContextMenuRequest(
             onDetails(id)
         }
     }
-    DisposableEffect(Unit) { onDispose { UiTestState.installTaskSelector(null); UiTestState.installTaskContextOpener(null); UiTestState.installTaskDetailsOpener(null) } }
+    DisposableEffect(Unit) { onDispose { UiTestState.installTaskSelector(null); UiTestState.installTaskContextOpener(null); UiTestState.installTaskContextActionInvoker(null); UiTestState.installTaskDetailsOpener(null) } }
     BoxWithConstraints(
         modifier.fillMaxWidth().background(rail)
             .semantics { contentDescription = "下载任务列表，共 ${tasks.size} 项，已选择 ${selected.size} 项" }
@@ -3375,7 +3386,7 @@ internal fun taskExtensionLabel(task: TaskDto): String {
         else -> ""
     }
 }
-private fun formatBytes(bytes: Long) = when { bytes >= 1024L * 1024L * 1024L -> "%.2f GB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0 / 1024.0); bytes >= 1024L * 1024L -> "%.2f MB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); bytes >= 1024L -> "%.1f KB".format(java.util.Locale.ROOT, bytes / 1024.0); else -> "$bytes B" }
+private fun formatBytes(bytes: Long) = when { bytes >= 1024L * 1024L * 1024L -> "%.2f GB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0 / 1024.0); bytes >= 1024L * 1024L -> "%.2f MB".format(java.util.Locale.ROOT, bytes / 1024.0 / 1024.0); bytes >= 1024L -> "%.1f KB".format(java.util.Locale.ROOT, bytes / 1024.0); else -> "${bytes.coerceAtLeast(0)} B" }
 private fun actionLabel(action: String) = mapOf("details" to "详情与日志", "start" to "开始", "pause" to "暂停", "resume" to "继续", "retry" to "重试", "cancel" to "取消", "open" to "打开文件", "open_folder" to "打开所在位置", "launch" to "运行文件", "copy_file" to "复制文件", "drag_file" to "拖出文件", "delete" to "删除任务", "delete_files" to "删除任务和文件", "play" to "播放", "cast" to "投屏", "push_tvbox" to "TVBox 推送", "move_queue" to "移动到队列", "queue_up" to "上移", "queue_down" to "下移", "queue_top" to "置顶", "queue_bottom" to "置底")[action] ?: action
 @Composable private fun StatusBadge(status: String, modifier: Modifier = Modifier) {
     val color = when(status) { "已完成" -> successColor; "失败", "下载失败" -> errorStrong; "已暂停" -> warningColor; "排队中" -> muted; else -> blue }
@@ -5105,7 +5116,7 @@ private fun HarvestResultDialog(
 
 private fun formatClock(seconds: Long): String {
     val value = seconds.coerceAtLeast(0)
-    return if (value >= 3600) "%d:%02d:%02d".format(value / 3600, (value / 60) % 60, value % 60) else "%02d:%02d".format(value / 60, value % 60)
+    return if (value >= 3600) "%d:%02d:%02d".format(java.util.Locale.ROOT, value / 3600, (value / 60) % 60, value % 60) else "%02d:%02d".format(java.util.Locale.ROOT, value / 60, value % 60)
 }
 
 private fun castProtocolLabel(kind: String) = when (kind.lowercase()) {

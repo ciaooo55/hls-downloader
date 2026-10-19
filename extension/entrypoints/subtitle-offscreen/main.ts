@@ -7,7 +7,10 @@ let heartbeat: ReturnType<typeof setInterval> | undefined
 browser.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.target !== 'subtitle-offscreen') return
   if (message.type === 'stop') {
-    if (message.sessionId && message.sessionId !== current) return
+    if (message.sessionId && message.sessionId !== current) {
+      respond({ ok: true })
+      return
+    }
     const sessionId = current
     const cleanup = stop; stop = undefined
     clearInterval(heartbeat)
@@ -22,7 +25,8 @@ browser.runtime.onMessage.addListener((message, _sender, respond) => {
   }
   if (message.type !== 'start') return
   const attempt = ++generation
-  stop?.(); stop = undefined
+  const previousCleanup = stop; stop = undefined
+  void Promise.resolve(previousCleanup?.()).catch(() => undefined)
   clearInterval(heartbeat)
   current = String(message.sessionId)
   const sessionId = current
@@ -35,10 +39,10 @@ browser.runtime.onMessage.addListener((message, _sender, respond) => {
         if (!response?.ok) throw new Error('音频尾部未能提交给字幕服务')
       })
     })
-    if (attempt !== generation) { cleanup(); return }
+    if (attempt !== generation) { await cleanup().catch(() => undefined); return }
     stop = cleanup
     stream.getAudioTracks()[0]?.addEventListener('ended', () => {
-      void browser.runtime.sendMessage({ target: 'subtitle-background', type: 'capture-ended', sessionId })
+      void browser.runtime.sendMessage({ target: 'subtitle-background', type: 'capture-ended', sessionId }).catch(() => undefined)
     })
     // 离屏文档的心跳能在暂停视频时唤醒 MV3 worker；单靠 setInterval 不行。
     heartbeat = setInterval(() => {

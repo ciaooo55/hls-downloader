@@ -52,13 +52,15 @@ def run(args):
     resources = args.runtime / 'app/resources'
     port, main_port, pip_port = free_port(), free_port(), free_port()
     token = uuid.uuid4().hex
+    pipe = rf'\\.\pipe\HLSOverlay-{uuid.uuid4().hex}'
     active_port = main_port
     env = {**os.environ, 'HLS_V7_DATA_DIR': str(root/'data'),
            'HLS_V7_DOWNLOAD_DIR': str(root/'downloads'), 'HLS_V7_CORE_TCP': '1',
            'HLS_V7_CORE_BIND': f'127.0.0.1:{port}', 'HLS_UI_TEST_API': '1',
            'HLS_UI_TEST_PORT': str(main_port), 'HLS_UI_TEST_PIP_PORT': str(pip_port),
            'HLS_UI_TEST_TOKEN': token}
-    env.pop('HLS_V7_PIPE', None)
+    env['HLS_V7_PIPE'] = pipe
+    env['JAVA_TOOL_OPTIONS'] = env.get('JAVA_TOOL_OPTIONS', '') + f' -Dhls.engine.pipe={pipe}'
     if args.ui_scale is not None:
         env['JAVA_TOOL_OPTIONS'] = env.get('JAVA_TOOL_OPTIONS', '') + f' -Dsun.java2d.uiScale={args.ui_scale}'
     log = args.report.with_suffix('.runtime.log').open('wb')
@@ -187,6 +189,10 @@ def run(args):
                 bounds('surface')
                 wait(lambda: player()['position_available'], 'UI did not start playback')
             open_player()
+            listeners = [c.laddr.ip for c in psutil.Process(processes[0].pid).net_connections(kind='tcp')
+                         if c.status == psutil.CONN_LISTEN]
+            report['local_playback_listeners'] = listeners
+            assert listeners and all(address in ('127.0.0.1', '::1') for address in listeners), listeners
             assert player()['duration_seconds'] >= 45, 'Overlay acceptance requires a >=45-second multitrack fixture; short media clamps the 10-second seek'
             click('暂停')
             wait(lambda: player()['paused'], 'Pause did not reach mpv')

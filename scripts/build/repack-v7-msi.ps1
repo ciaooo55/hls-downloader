@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$MsiPath,
     [Parameter(Mandatory = $true)][string]$OutMsiPath,
@@ -122,13 +122,13 @@ try {
         @('HLSDownloaderNativeHost.exe', $NativeHostReplacement),
         @('HLSDownloaderPresenter.exe', $PresenterReplacement),
         @('HLSDownloaderUpdater.exe', $UpdaterReplacement),
-        @('HLSDownloaderDesktop-7.0.3.jar', $DesktopJarReplacement),
+        @('HLSDownloaderDesktop.jar', $DesktopJarReplacement),
         @('BUILD-PROVENANCE.json', $ProvenanceReplacement)
     )) {
         if ([string]::IsNullOrWhiteSpace($replacement[1])) { continue }
-        $files = @(if ($replacement[0] -eq 'HLSDownloaderDesktop-7.0.3.jar') {
+        $files = @(if ($replacement[0] -eq 'HLSDownloaderDesktop.jar') {
             # jpackage 可能为桌面 JAR 添加内容哈希；仍须唯一匹配当前启动器的桌面模块。
-            $model.SelectNodes("//*[local-name()='File' and starts-with(@Name, 'HLSDownloaderDesktop-7.0.3') and substring(@Name, string-length(@Name) - 3)='.jar']")
+            $model.SelectNodes("//*[local-name()='File' and starts-with(@Name, 'HLSDownloaderDesktop-') and substring(@Name, string-length(@Name) - 3)='.jar']")
         } else {
             $model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']")
         })

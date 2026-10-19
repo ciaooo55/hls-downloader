@@ -148,7 +148,7 @@ internal fun FullSettingsDialog(
         when {
             config?.provider == "dashscope" && !config.workspace.trim().matches(Regex("[A-Za-z0-9-]{1,128}")) -> "请填写有效的百炼业务空间 ID"
             config?.hasKey == true && config.provider != subtitleInitialProvider && subtitleEdit?.apiKey.isNullOrBlank() && subtitleEdit?.clearKey != true -> "切换字幕服务时，请输入对应服务的 API Key 或清除旧密钥"
-            subtitleOffset.toDoubleOrNull()?.let { it.isFinite() && it in -30.0..30.0 } != true -> "字幕偏移必须在 -30 到 30 秒之间"
+            subtitleOffset.trim().toDoubleOrNull()?.let { it.isFinite() && it in -30.0..30.0 } != true -> "字幕偏移必须在 -30 到 30 秒之间"
             else -> null
         }
     } else null
@@ -502,7 +502,7 @@ internal fun FullSettingsDialog(
                 defaultCookie.isNotEmpty() -> defaultCookie
                 else -> null
             }, credentialEdits, subtitleEdit?.takeIf { subtitleDirty }?.let { edit ->
-                edit.copy(configuration = edit.configuration.copy(preferences = (edit.configuration.preferences ?: SubtitlePreferencesDto()).copy(offset = subtitleOffset.toDouble())))
+                edit.copy(configuration = edit.configuration.copy(preferences = (edit.configuration.preferences ?: SubtitlePreferencesDto()).copy(offset = subtitleOffset.trim().toDoubleOrNull() ?: 0.0)))
             })
         }
     })

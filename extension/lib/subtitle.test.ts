@@ -1,9 +1,28 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SubtitlePcm } from './subtitlePcm'
-import { waitForSubtitleAudio } from './subtitleAudio'
+import { captureSubtitleAudio, waitForSubtitleAudio } from './subtitleAudio'
 import { subtitleAllowed, subtitleReadyEnd, subtitleSettings, visibleSubtitle } from './subtitleSettings'
 import { parseHlsManifest } from './hlsManifest'
 import { prefetchSubtitleAudio, subtitleWindowEnd } from './subtitlePrefetch'
+
+vi.mock('wxt/browser', () => ({ browser: { runtime: { getURL: (path: string) => `moz-extension://fixture/${path}` } } }))
+
+function audioFixture(module: Promise<void>) {
+  const track = { stop: vi.fn() }
+  const stream = { getTracks: () => [track] } as unknown as MediaStream
+  const source = { connect: vi.fn(), disconnect: vi.fn() }
+  const port = {
+    onmessage: null as ((event: { data: unknown }) => void) | null,
+    postMessage: () => queueMicrotask(() => port.onmessage?.({ data: { type: 'flushed' } })),
+  }
+  const worklet = { port, connect: vi.fn(), disconnect: vi.fn() }
+  const context = { audioWorklet: { addModule: () => module }, createMediaStreamSource: () => source,
+    createGain: () => ({ gain: { value: 0 }, connect: vi.fn() }),
+    resume: vi.fn(async () => undefined), close: vi.fn(async () => undefined) }
+  vi.stubGlobal('AudioContext', function () { return context })
+  vi.stubGlobal('AudioWorkletNode', function () { return worklet })
+  return { stream, track, context, source, worklet }
+}
 
 describe('提前字幕的连续窗口和取消', () => {
   it('较晚完成的字幕不能跨越未翻译的空洞，回看能复用连续就绪范围', () => {
@@ -102,6 +121,43 @@ describe('提前字幕的连续窗口和取消', () => {
 })
 
 describe('字幕的实际行为边界', () => {
+  it('浏览器拒绝创建音频上下文时仍须释放已取得的媒体轨道', async () => {
+    const fixture = audioFixture(Promise.resolve())
+    vi.stubGlobal('AudioContext', function () { throw new Error('音频设备不可用') })
+    try {
+      await expect(captureSubtitleAudio(fixture.stream, false, () => undefined)).rejects.toThrow('音频设备不可用')
+      expect(fixture.track.stop).toHaveBeenCalledOnce()
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('音频处理模块加载不结束时必须超时并释放采集轨道', async () => {
+    vi.useFakeTimers()
+    const fixture = audioFixture(new Promise<void>(() => undefined))
+    try {
+      const capture = captureSubtitleAudio(fixture.stream, false, () => undefined)
+      let failure: unknown
+      void capture.catch(reason => { failure = reason })
+      await vi.advanceTimersByTimeAsync(5001)
+      expect(failure).toBeInstanceOf(Error)
+      expect(fixture.track.stop).toHaveBeenCalledOnce()
+      expect(fixture.context.close).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.unstubAllGlobals(); vi.useRealTimers() }
+  })
+
+  it('同步发送错误不能逃出音频回调，停止时应报告失败并释放资源', async () => {
+    const fixture = audioFixture(Promise.resolve())
+    let cleanup: (() => Promise<void>) | undefined
+    try {
+      cleanup = await captureSubtitleAudio(fixture.stream, false, () => { throw new Error('扩展连接已失效') })
+      expect(() => fixture.worklet.port.onmessage?.({ data: new Uint8Array([0, 1]).buffer })).not.toThrow()
+      await expect(cleanup()).rejects.toThrow('扩展连接已失效')
+      expect(fixture.source.disconnect).toHaveBeenCalledOnce()
+      expect(fixture.track.stop).toHaveBeenCalledOnce()
+      expect(fixture.context.close).toHaveBeenCalledOnce()
+    } finally { await cleanup?.().catch(() => undefined); vi.unstubAllGlobals() }
+  })
+
   it('自动播放权限或媒体请求不结束时启动会失败，成功和失败都不遗留定时器', async () => {
     vi.useFakeTimers()
     try {

@@ -412,7 +412,7 @@ def run(args):
                     wait(lambda:evaluate(page,"window.testMedia.currentTime > 0.5"),"next cue did not seek into prepared subtitles")
                     prefetch_checks.extend(['manual commit waits for completed translation', 'originally paused player stays paused', 'PCM positions remain accurate during page thread stall', 'bounded pretranslation stops PCM', 'next cue seeks into prepared cache'])
                     core.hold_ready = True
-                    evaluate(page, 'window.testMedia.currentTime=40; window.testMedia.play().then(()=>true)')
+                    evaluate(page, '(()=>{window.testMedia.currentTime=40; return window.testMedia.play().then(()=>true)})()')
                     wait(lambda:evaluate(page, 'window.testMedia.paused'), 'playback did not pause for missing subtitles')
                     wait(lambda:any(s['pending'] for s in core.sessions.values()), 'new seek window not committed', timeout=20)
                     assert evaluate(page, 'window.testMedia.currentTime < 40.5'), 'player ran ahead of untranslated seek window'

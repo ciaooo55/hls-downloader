@@ -51,7 +51,7 @@ The installer lets you select the installation directory. New profiles save to t
 > [!NOTE]
 > `main` currently tracks the **7.0.3** source line. Public installers are published through Releases; builds marked `candidate` or `pre-release` should be treated as test builds.
 
-Online subtitles can be enabled from the player button or extension popup. Global, site and page rules, source/target languages (auto to Chinese by default), timing offset and next-caption seeking are available. Independently readable on-demand audio can be translated up to 30 seconds ahead. Configure a DashScope workspace and API key in the extension before starting; the desktop Core encrypts the key at rest.
+Online subtitles can be enabled from the video player button or the extension popup, and dragged directly over the video; if the page has multiple videos, you can switch the bound player from the popup. Subtitle translation service, API key, global toggle, target language, sync mode, source text display, and default offset are configured in the desktop main window under `Settings -> Subtitle Translation` (the key is encrypted at rest by the local Core), while the browser extension only controls the per-page toggle, player selection, and starting/stopping subtitles; see the [QwenCloud subtitle guide](docs/guides/qwencloud-subtitles.md).
 
 ## ✨ Why HLS Downloader
 
@@ -85,7 +85,7 @@ Online subtitles can be enabled from the player button or extension popup. Globa
 
 ## 🌐 How browser handoff works
 
-The extension does not perform the transfer itself. It discovers resources, gathers the request information needed to reproduce the task, and sends the handoff to the local Core through Native Messaging.
+The extension does not perform the transfer itself. It discovers resources, gathers the request information needed to reproduce the task, and sends the handoff to the local Core through Native Messaging; POST forms and Blob/data-generated files are completed by the browser first and then imported into desktop tasks (deleting the browser copy on success, or keeping the browser result on failure or rejection), while holding `Alt`, disabling takeover, or matching an exclusion rule keeps the download in the browser.
 
 That keeps the browser as an entry point rather than the owner of the download lifecycle. Once a task has entered the Core, its persistent state is managed independently of the browser connection.
 

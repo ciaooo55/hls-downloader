@@ -214,7 +214,7 @@ def main():
     args = parser.parse_args()
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     root = Path(r'C:\QAWork')/('resources-'+uuid.uuid4().hex)
-    result = {'passed': False, 'scope': 'r12 released engine versus local candidate; same VM/fixture',
+    result = {'passed': False, 'scope': 'provided baseline and candidate binaries; same VM/fixture; identities recorded below',
               'sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest()
                          for name, path in [('baseline',args.baseline),('candidate',args.candidate)]}}
     try:

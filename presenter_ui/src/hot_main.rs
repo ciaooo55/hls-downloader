@@ -517,6 +517,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let completed_notified = Rc::clone(&completed_notified);
         let client = Rc::clone(&client);
         let runtime_settings = Rc::clone(&runtime_settings);
+        let presenter_settings = Arc::clone(&presenter_settings);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
@@ -527,6 +528,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         CoreEvent::HandoffOffered { .. } | CoreEvent::HandoffResolved { .. } => {}
                         CoreEvent::SettingsChanged { .. } => {
                             if let Ok(response) = client.borrow_mut().load_settings() {
+                                if let Ok(mut settings) = presenter_settings.lock() {
+                                    *settings = PresenterSettings::from_response(Some(&response));
+                                }
                                 let next = PresenterRuntimeSettings::from_response(Some(&response));
                                 *runtime_settings.borrow_mut() = next;
                                 if let (Some(confirm), Some(progress), Some(complete)) =
@@ -605,6 +609,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .into(),
                                 );
                                 if item.show().is_ok() {
+                                    round_native_window(item.window());
                                     let _ = hide_window_from_taskbar_by_title(COMPLETE);
                                     let _ = center_window_by_title(COMPLETE);
                                     let _ = activate_window_by_title(COMPLETE);
@@ -884,12 +889,13 @@ fn event_loop(
                 event: CoreEvent::TaskUpdated { snapshot },
             })
             .collect();
-        if !active.is_empty() {
-            if tx.send(active).is_err()
-                || confirm.upgrade_in_event_loop(|item| item.invoke_core_events_ready()).is_err()
-            {
-                return;
-            }
+        if !active.is_empty()
+            && (tx.send(active).is_err()
+                || confirm
+                    .upgrade_in_event_loop(|item| item.invoke_core_events_ready())
+                    .is_err())
+        {
+            return;
         }
         let restored = load_pending_offers(&mut client);
         let resync_pending = Arc::clone(&pending);
@@ -921,115 +927,31 @@ fn event_loop(
         }
         trace(&format!("event client connected after={after}"));
         let mut last_lease_renewal = std::time::Instant::now();
-        loop {
-            match client.wait_events(after, 5_000) {
-                Ok(events) => {
-                    if let Some(last) = events.last() {
-                        after = last.sequence;
-                    }
-                    if !events.is_empty() {
-                        trace(&format!("received {} events through {after}", events.len()));
-                    }
-                    let mut batched = Vec::new();
-                    for envelope in events {
-                        match envelope.event {
-                            CoreEvent::HandoffOffered { offer } => {
-                                let pending = Arc::clone(&pending);
-                                let active_handoff = Arc::clone(&active_handoff);
-                                let presenter_settings = Arc::clone(&presenter_settings);
-                                let known_tasks = Arc::clone(&known_tasks);
-                                if confirm
-                                    .upgrade_in_event_loop(move |item| {
-                                        if let Ok(mut items) = pending.lock() {
-                                            if !items
-                                                .iter()
-                                                .any(|entry| entry.handoff_id == offer.handoff_id)
-                                            {
-                                                items.push_back(offer);
-                                            }
-                                        }
-                                        show_next_offer(
-                                            &item.as_weak(),
-                                            &pending,
-                                            &active_handoff,
-                                            &presenter_settings,
-                                            &known_tasks,
-                                        );
-                                    })
-                                    .is_err()
-                                {
-                                    return;
+        while let Ok(events) = client.wait_events(after, 5_000) {
+            if let Some(last) = events.last() {
+                after = last.sequence;
+            }
+            if !events.is_empty() {
+                trace(&format!("received {} events through {after}", events.len()));
+            }
+            let mut batched = Vec::new();
+            for envelope in events {
+                match envelope.event {
+                    CoreEvent::HandoffOffered { offer } => {
+                        let pending = Arc::clone(&pending);
+                        let active_handoff = Arc::clone(&active_handoff);
+                        let presenter_settings = Arc::clone(&presenter_settings);
+                        let known_tasks = Arc::clone(&known_tasks);
+                        if confirm
+                            .upgrade_in_event_loop(move |item| {
+                                if let Ok(mut items) = pending.lock() {
+                                    if !items
+                                        .iter()
+                                        .any(|entry| entry.handoff_id == offer.handoff_id)
+                                    {
+                                        items.push_back(offer);
+                                    }
                                 }
-                            }
-                            CoreEvent::HandoffResolved { handoff_id, .. } => {
-                                let pending = Arc::clone(&pending);
-                                let active_handoff = Arc::clone(&active_handoff);
-                                let presenter_settings = Arc::clone(&presenter_settings);
-                                let known_tasks = Arc::clone(&known_tasks);
-                                if confirm
-                                    .upgrade_in_event_loop(move |item| {
-                                        if let Ok(mut items) = pending.lock() {
-                                            items.retain(|entry| entry.handoff_id != handoff_id);
-                                        }
-                                        show_next_offer(
-                                            &item.as_weak(),
-                                            &pending,
-                                            &active_handoff,
-                                            &presenter_settings,
-                                            &known_tasks,
-                                        );
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                            event => {
-                                update_known_tasks(&known_tasks, &event);
-                                batched.push(EventEnvelope {
-                                    sequence: envelope.sequence,
-                                    event,
-                                });
-                            }
-                        }
-                    }
-                    if !batched.is_empty() {
-                        if tx.send(batched).is_err() {
-                            return;
-                        }
-                        if confirm.upgrade_in_event_loop(|item| item.invoke_core_events_ready()).is_err() {
-                            return;
-                        }
-                    }
-                    if last_lease_renewal.elapsed() >= Duration::from_secs(5) {
-                        let active = active_handoff.lock().ok().and_then(|value| value.clone());
-                        if let Some(handoff_id) = active {
-                            if client
-                                .command(CoreCommand::PresentHandoff {
-                                    handoff_id,
-                                    ok: true,
-                                    presenter_id: presenter_id().into(),
-                                })
-                                .is_err()
-                            {
-                                if let Ok(mut value) = active_handoff.lock() {
-                                    *value = None;
-                                }
-                                let _ = confirm.upgrade_in_event_loop(|item| {
-                                    let _ = item.hide();
-                                });
-                                break;
-                            }
-                        } else if pending
-                            .lock()
-                            .map(|items| !items.is_empty())
-                            .unwrap_or(false)
-                        {
-                            let pending = Arc::clone(&pending);
-                            let active_handoff = Arc::clone(&active_handoff);
-                            let presenter_settings = Arc::clone(&presenter_settings);
-                            let known_tasks = Arc::clone(&known_tasks);
-                            let _ = confirm.upgrade_in_event_loop(move |item| {
                                 show_next_offer(
                                     &item.as_weak(),
                                     &pending,
@@ -1037,12 +959,94 @@ fn event_loop(
                                     &presenter_settings,
                                     &known_tasks,
                                 );
-                            });
+                            })
+                            .is_err()
+                        {
+                            return;
                         }
-                        last_lease_renewal = std::time::Instant::now();
+                    }
+                    CoreEvent::HandoffResolved { handoff_id, .. } => {
+                        let pending = Arc::clone(&pending);
+                        let active_handoff = Arc::clone(&active_handoff);
+                        let presenter_settings = Arc::clone(&presenter_settings);
+                        let known_tasks = Arc::clone(&known_tasks);
+                        if confirm
+                            .upgrade_in_event_loop(move |item| {
+                                if let Ok(mut items) = pending.lock() {
+                                    items.retain(|entry| entry.handoff_id != handoff_id);
+                                }
+                                show_next_offer(
+                                    &item.as_weak(),
+                                    &pending,
+                                    &active_handoff,
+                                    &presenter_settings,
+                                    &known_tasks,
+                                );
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    event => {
+                        update_known_tasks(&known_tasks, &event);
+                        batched.push(EventEnvelope {
+                            sequence: envelope.sequence,
+                            event,
+                        });
                     }
                 }
-                Err(_) => break,
+            }
+            if !batched.is_empty() {
+                if tx.send(batched).is_err() {
+                    return;
+                }
+                if confirm
+                    .upgrade_in_event_loop(|item| item.invoke_core_events_ready())
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            if last_lease_renewal.elapsed() >= Duration::from_secs(5) {
+                let active = active_handoff.lock().ok().and_then(|value| value.clone());
+                if let Some(handoff_id) = active {
+                    if client
+                        .command(CoreCommand::PresentHandoff {
+                            handoff_id,
+                            ok: true,
+                            presenter_id: presenter_id().into(),
+                        })
+                        .is_err()
+                    {
+                        if let Ok(mut value) = active_handoff.lock() {
+                            *value = None;
+                        }
+                        let _ = confirm.upgrade_in_event_loop(|item| {
+                            let _ = item.hide();
+                        });
+                        break;
+                    }
+                } else if pending
+                    .lock()
+                    .map(|items| !items.is_empty())
+                    .unwrap_or(false)
+                {
+                    let pending = Arc::clone(&pending);
+                    let active_handoff = Arc::clone(&active_handoff);
+                    let presenter_settings = Arc::clone(&presenter_settings);
+                    let known_tasks = Arc::clone(&known_tasks);
+                    let _ = confirm.upgrade_in_event_loop(move |item| {
+                        show_next_offer(
+                            &item.as_weak(),
+                            &pending,
+                            &active_handoff,
+                            &presenter_settings,
+                            &known_tasks,
+                        );
+                    });
+                }
+                last_lease_renewal = std::time::Instant::now();
             }
         }
     }

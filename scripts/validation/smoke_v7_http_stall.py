@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import traceback
+import uuid
 
 from msi_checkpoint_fixture import connect, send
 
@@ -82,6 +83,7 @@ def main() -> int:
         port = sock.getsockname()[1]
     env = {**os.environ, "HLS_V7_DATA_DIR": str(args.root / "data"),
            "HLS_V7_DOWNLOAD_DIR": str(downloads), "HLS_V7_CORE_TCP": "1",
+           "HLS_V7_PIPE": rf"\\.\pipe\HLSDownloader.stall-{uuid.uuid4().hex}",
            "HLS_V7_CORE_BIND": f"127.0.0.1:{port}", "HLS_V6_SKIP_MIGRATE": "1"}
     log = args.report.with_suffix(".engine.log").open("wb")
     engine = subprocess.Popen([str(args.engine)], env=env, stdout=log, stderr=log,

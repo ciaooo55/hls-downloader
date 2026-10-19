@@ -924,7 +924,7 @@ private fun escapeJson(value: String): String = buildString(value.length + 8) {
             '\n' -> append("\\n")
             '\r' -> append("\\r")
             '\t' -> append("\\t")
-            else -> if (char.code < 0x20) append("\\u%04x".format(char.code)) else append(char)
+            else -> if (char.code < 0x20) append("\\u%04x".format(java.util.Locale.ROOT, char.code)) else append(char)
         }
     }
 }

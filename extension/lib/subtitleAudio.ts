@@ -8,10 +8,15 @@ export async function waitForSubtitleAudio(start: Promise<void>): Promise<void> 
   } finally { clearTimeout(timer) }
 }
 export async function captureSubtitleAudio(stream: MediaStream, audible: boolean, send: (audio: string, capturedAt: number, finalFlush: boolean) => void | Promise<unknown>): Promise<() => Promise<void>> {
-  const context = new AudioContext()
+  let context: AudioContext
+  try { context = new AudioContext() }
+  catch (error) {
+    stream.getTracks().forEach(track => track.stop())
+    throw error
+  }
   try {
     if (!context.audioWorklet) throw new Error('当前页面无法处理音频，请使用 HTTPS 页面或 Chrome / Edge 标签页采集')
-    await context.audioWorklet.addModule(browser.runtime.getURL('/subtitle-pcm.js'))
+    await waitForSubtitleAudio(context.audioWorklet.addModule(browser.runtime.getURL('/subtitle-pcm.js')))
     const source = context.createMediaStreamSource(stream)
     const worklet = new AudioWorkletNode(context, 'hls-subtitle-pcm')
     source.connect(worklet)
@@ -27,7 +32,9 @@ export async function captureSubtitleAudio(stream: MediaStream, audible: boolean
       const bytes = new Uint8Array(event.data as ArrayBuffer)
       let text = ''
       for (const byte of bytes) text += String.fromCharCode(byte)
-      const pending = Promise.resolve(send(btoa(text), Date.now(), flushComplete !== undefined)).catch(reason => { sendError = reason })
+      const capturedAt = Date.now()
+      const finalFlush = flushComplete !== undefined
+      const pending = Promise.resolve().then(() => send(btoa(text), capturedAt, finalFlush)).catch(reason => { sendError = reason })
       pendingSends.add(pending)
       void pending.finally(() => pendingSends.delete(pending))
     }

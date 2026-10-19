@@ -48,13 +48,30 @@ private fun extractChromiumExtension(): Path {
     val target = root.resolve("Chromium-${Product.version}-$stamp")
     if (isCurrentChromiumExtension(target)) return target
     val stage = Files.createTempDirectory(root, ".chromium-")
-    unpackChromiumExtension(archive, stage)
-    check(isCurrentChromiumExtension(stage)) { "Chromium 插件包缺少有效的 ${Product.version} manifest.json" }
-    return runCatching {
-        Files.move(stage, target, StandardCopyOption.ATOMIC_MOVE)
-    }.recoverCatching {
-        Files.move(stage, target)
-    }.getOrThrow()
+    try {
+        unpackChromiumExtension(archive, stage)
+        check(isCurrentChromiumExtension(stage)) { "Chromium 插件包缺少有效的 ${Product.version} manifest.json" }
+        if (Files.exists(target)) deleteRecursively(target)
+        return runCatching {
+            Files.move(stage, target, StandardCopyOption.ATOMIC_MOVE)
+        }.recoverCatching {
+            Files.move(stage, target, StandardCopyOption.REPLACE_EXISTING)
+        }.getOrThrow()
+    } catch (error: Throwable) {
+        deleteRecursively(stage)
+        throw error
+    }
+}
+
+private fun deleteRecursively(root: Path) {
+    if (!Files.exists(root)) return
+    runCatching {
+        Files.walk(root).use { stream ->
+            stream.sorted(Comparator.reverseOrder()).forEach { path ->
+                runCatching { Files.deleteIfExists(path) }
+            }
+        }
+    }
 }
 
 private fun chromiumArchives(): List<Path> {

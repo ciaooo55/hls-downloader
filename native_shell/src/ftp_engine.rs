@@ -9,7 +9,7 @@ enum Conn {
     Plain(TcpStream),
     #[cfg(windows)]
     Tls(
-        schannel::tls_stream::TlsStream<TcpStream>,
+        Box<schannel::tls_stream::TlsStream<TcpStream>>,
         schannel::schannel_cred::SchannelCred,
     ),
 }
@@ -44,7 +44,7 @@ impl Conn {
                 .domain(host)
                 .connect(credentials.clone(), stream)
                 .map_err(|error| error.to_string())?;
-            return Ok(Self::Tls(tls, credentials.clone()));
+            return Ok(Self::Tls(Box::new(tls), credentials.clone()));
         }
         let _ = (stream, host);
         Err("FTPS control connection is not TLS".into())
@@ -203,13 +203,22 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     } else {
         0
     };
-    let resume_from = if resume && output.exists() {
+    let mut resume_from = if resume && output.exists() {
         std::fs::metadata(output)
             .map(|meta| meta.len())
             .unwrap_or(0)
     } else {
         0
     };
+    if size > 0 {
+        if resume_from == size {
+            crate::http_engine::write_progress(&progress, size, size, 0.0, "completed");
+            return Ok(size);
+        }
+        if resume_from > size {
+            resume_from = 0;
+        }
+    }
     let pasv = command(&mut ctrl, "PASV")?;
     require_reply_code(&pasv, &[227], "PASV")?;
     let data_port = parse_pasv_port(&pasv)?;
@@ -349,7 +358,7 @@ fn wrap_tls(stream: TcpStream, host: &str) -> Result<Conn, String> {
             .domain(host)
             .connect(cred.clone(), stream)
             .map_err(|error| error.to_string())?;
-        Ok(Conn::Tls(tls, cred))
+        Ok(Conn::Tls(Box::new(tls), cred))
     }
     #[cfg(not(windows))]
     {

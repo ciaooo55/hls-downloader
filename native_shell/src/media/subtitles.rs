@@ -181,7 +181,10 @@ fn is_timing_line(line: &str) -> bool {
 fn parse_timestamp(value: &str) -> Option<f64> {
     let text = value.trim();
     let (hms, millis) = text.split_once('.')?;
-    let millis: f64 = millis.parse().ok()?;
+    if millis.is_empty() || !millis.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let fraction: f64 = format!("0.{millis}").parse().ok()?;
     let parts: Vec<&str> = hms.split(':').collect();
     let (hours, minutes, seconds) = match parts.as_slice() {
         [minutes, seconds] => (
@@ -196,7 +199,7 @@ fn parse_timestamp(value: &str) -> Option<f64> {
         ),
         _ => return None,
     };
-    Some(hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64 + millis / 1000.0)
+    Some(hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64 + fraction)
 }
 
 fn format_timestamp(value: f64, decimal: char) -> String {

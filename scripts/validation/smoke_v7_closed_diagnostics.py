@@ -19,6 +19,7 @@ from smoke_v7_transfer_performance import free_port
 def run(args):
     report = {'passed': False, 'engine_sha256': hashlib.sha256(args.engine.read_bytes()).hexdigest()}
     args.report.parent.mkdir(parents=True, exist_ok=True)
+    (Path.cwd() / '.tool-cache/test-tmp').mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='closed-diagnostics-', dir=Path.cwd() / '.tool-cache/test-tmp') as temporary:
         root = Path(temporary)
         port = free_port()

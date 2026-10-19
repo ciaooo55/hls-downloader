@@ -918,7 +918,7 @@ fn download_hls_with_offset(
     let can_concat = timeline.entries.iter().all(|entry| {
         entry.init_map_path.is_none()
             && !entry.discontinuity
-            && extension(entry.path.to_string_lossy().as_ref()) == "ts"
+            && extension(entry.path.to_string_lossy().as_ref()).eq_ignore_ascii_case("ts")
     });
     if can_concat {
         concat_files(&files, &output)?;
@@ -1281,19 +1281,21 @@ pub(super) fn replace_file_atomic(from: &Path, to: &Path) -> std::io::Result<()>
     use std::os::windows::ffi::OsStrExt;
     let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    let result = unsafe {
-        windows_sys::Win32::Storage::FileSystem::MoveFileExW(
-            from.as_ptr(),
-            to.as_ptr(),
-            windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
-                | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    crate::atomic_replace::replace_with_retry(|| {
+        let result = unsafe {
+            windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+                from.as_ptr(),
+                to.as_ptr(),
+                windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
+                    | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if result == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
 }
 
 #[cfg(not(windows))]
@@ -1704,8 +1706,9 @@ impl LiveAudioRecorder {
 
 impl Drop for LiveAudioRecorder {
     fn drop(&mut self) {
-        if self.handle.is_some() {
-            let _ = self.finish();
+        if let Some(handle) = self.handle.take() {
+            let _ = fs::write(&self.control, "cancel");
+            let _ = handle.join();
         }
     }
 }
@@ -2004,6 +2007,7 @@ fn load_playlist(
 const MAX_SEGMENT_ATTEMPTS: u32 = 3;
 const SEGMENT_RETRY_DELAY_MS: u64 = 250;
 
+#[allow(clippy::too_many_arguments)]
 fn download_segment(
     segment: &Segment,
     headers: &HashMap<String, String>,
@@ -2041,6 +2045,7 @@ fn download_segment(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn download_segment_once(
     segment: &Segment,
     headers: &HashMap<String, String>,

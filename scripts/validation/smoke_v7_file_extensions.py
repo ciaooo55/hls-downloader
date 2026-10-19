@@ -9,14 +9,29 @@ def run(runtime,report_path):
     report_path.parent.mkdir(parents=True,exist_ok=True)
     fixture=report_path.parent/(report_path.stem+'-media');fixture.mkdir(exist_ok=True)
     report={'passed':False,'checks':[],'engine_sha256':hashlib.sha256((runtime/'app/resources/HLSDownloaderEngine.exe').read_bytes()).hexdigest()}
-    created=[];server=None
+    created=[];server=None;engine_process=None;engine_log=None
+    pipe_name=rf'\\.\pipe\HLSSuffix-{uuid.uuid4().hex}'
     def request(value):
-        pipe=Pipe()
+        pipe=Pipe(pipe_name)
         try:return pipe.request(value)
         finally:pipe.close()
     def command(value):return request({'type':'command','request_id':1,'command':value})
     def task(tid):return next(t for t in request({'type':'snapshot','request_id':2})['tasks'] if t['task_id']==tid)
     try:
+        root=Path(r'C:\QAWork')/('suffix-'+uuid.uuid4().hex)
+        root.mkdir(parents=True)
+        environment={**os.environ,'HLS_V7_PIPE':pipe_name,'HLS_V7_DATA_DIR':str(root/'data'),
+                     'HLS_V7_DOWNLOAD_DIR':str(root/'downloads')}
+        engine_log=report_path.with_suffix('.engine.log').open('wb')
+        engine_process=subprocess.Popen([str(runtime/'app/resources/HLSDownloaderEngine.exe')],
+            env=environment,stdout=engine_log,stderr=engine_log,creationflags=subprocess.CREATE_NO_WINDOW)
+        def ready():
+            try:return request({'type':'hello','protocol':'hls-downloader-v7-core','version':1}).get('type')=='hello'
+            except OSError:return None
+        wait(ready,'Suffix acceptance Core did not start',15)
+        settings=request({'type':'store_settings','request_id':0,'values':{
+            'download_progress_window_enabled':False,'download_complete_popup_enabled':False,'av_scan_enabled':False}})
+        assert settings.get('type')!='error',settings
         ffmpeg=runtime/'app/resources/ffmpeg.exe'
         for ext,args in [('mp4',['-c:v','libx264']),('webm',['-c:v','libvpx-vp9']),('mkv',['-c:v','libx264']),('mov',['-c:v','libx264'])]:
             subprocess.run([str(ffmpeg),'-y','-v','error','-f','lavfi','-i','testsrc2=size=160x90:rate=10','-t','1',*args,str(fixture/('video.'+ext))],check=True,timeout=45)
@@ -85,6 +100,10 @@ def run(runtime,report_path):
             try:command({'kind':'task_action','task_id':tid,'action':'delete_files'})
             except Exception:pass
         if server:server.shutdown();server.server_close()
+        if engine_process:
+            engine_process.terminate()
+            engine_process.wait(timeout=10)
+        if engine_log:engine_log.close()
         report_path.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return 0 if report['passed'] else 1
 

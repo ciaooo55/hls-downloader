@@ -18,7 +18,7 @@ pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
 pub fn locate_ffmpeg() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("HLS_FFMPEG") {
         let path = PathBuf::from(path);
-        if path.exists() {
+        if path.is_file() {
             return Some(path);
         }
     }
@@ -26,7 +26,7 @@ pub fn locate_ffmpeg() -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             for name in ["ffmpeg.exe", "ffmpeg", "bin/ffmpeg.exe", "bin/ffmpeg"] {
                 let candidate = dir.join(name);
-                if candidate.exists() {
+                if candidate.is_file() {
                     return Some(candidate);
                 }
             }
@@ -175,13 +175,13 @@ fn mux_map_args(has_external_audio: bool, subtitle_count: usize) -> Vec<String> 
 fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
         let exe = dir.join(format!("{name}.exe"));
-        if exe.exists() {
+        if exe.is_file() {
             return Some(exe);
+        }
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     None

@@ -59,6 +59,7 @@ pub fn tcp_loopback_enabled() -> bool {
     std::env::var_os("HLS_V7_CORE_TCP").is_some() || std::env::var_os("HLS_V7_CORE_BIND").is_some()
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeRequest {
@@ -143,6 +144,7 @@ pub enum CorePipeRequest {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeResponse {
@@ -615,7 +617,7 @@ impl NamedPipeServer {
         let active = Arc::new(AtomicUsize::new(0));
         while !stop.load(Ordering::SeqCst) {
             match self.accept() {
-                Ok(mut stream) => {
+                Ok(stream) => {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
@@ -625,21 +627,7 @@ impl NamedPipeServer {
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
                         let _slot = slot;
-                        loop {
-                            match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
-                                Ok(Some(request)) => {
-                                    let response = handler(request);
-                                    if write_message(&mut stream, &response).is_err() {
-                                        break;
-                                    }
-                                }
-                                Ok(None) => break,
-                                Err(error) => {
-                                    report_protocol_violation(&mut stream, &error);
-                                    break;
-                                }
-                            }
-                        }
+                        handle_pipe_stream(stream, handler.as_ref());
                     });
                 }
                 Err(error) => {
@@ -667,6 +655,9 @@ impl NamedPipeServer {
         }
         wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
         let first = self.serve_once_inner(Some(&ready))?;
+        if stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let active = Arc::new(AtomicUsize::new(0));
         let Some(first_slot) = ConnectionSlot::claim(&active) else {
             // 槽位耗尽时丢弃首连接：ready 已通知，客户端会重连重试
@@ -675,17 +666,11 @@ impl NamedPipeServer {
         let handler_for_first = Arc::clone(&handler);
         thread::spawn(move || {
             let _slot = first_slot;
-            let mut stream = first;
-            while let Ok(Some(request)) = read_server_pipe_message::<CorePipeRequest>(&mut stream) {
-                let response = handler_for_first(request);
-                if write_message(&mut stream, &response).is_err() {
-                    break;
-                }
-            }
+            handle_pipe_stream(first, handler_for_first.as_ref());
         });
         while !stop.load(Ordering::SeqCst) {
             match self.accept() {
-                Ok(mut stream) => {
+                Ok(stream) => {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
@@ -695,14 +680,7 @@ impl NamedPipeServer {
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
                         let _slot = slot;
-                        while let Ok(Some(request)) =
-                            read_server_pipe_message::<CorePipeRequest>(&mut stream)
-                        {
-                            let response = handler(request);
-                            if write_message(&mut stream, &response).is_err() {
-                                break;
-                            }
-                        }
+                        handle_pipe_stream(stream, handler.as_ref());
                     });
                 }
                 Err(error) => {
@@ -786,6 +764,28 @@ impl NamedPipeServer {
             }
         }
         Ok(unsafe { File::from_raw_handle(handle as HANDLE) })
+    }
+}
+
+#[cfg(windows)]
+fn handle_pipe_stream(
+    mut stream: std::fs::File,
+    handler: &(dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync),
+) {
+    loop {
+        match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
+            Ok(Some(request)) => {
+                let response = handler(request);
+                if write_message(&mut stream, &response).is_err() {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                report_protocol_violation(&mut stream, &error);
+                break;
+            }
+        }
     }
 }
 
@@ -1659,6 +1659,73 @@ mod tests {
                 );
             }
             other => panic!("expected a protocol violation frame, got {other:?}"),
+        }
+
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn serve_loop_with_ready_answers_framing_violations_with_protocol_violation_frame() {
+        let name = format!(
+            r"\\.\pipe\HLSDownloader.v7.r{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|_request: CorePipeRequest| CorePipeResponse::Hello {
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
+                pid: 0,
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let serve_name = name.clone();
+        let serve_stop = Arc::clone(&stop);
+        let serve_handler = Arc::clone(&handler);
+        thread::spawn(move || {
+            let _ = NamedPipeServer::new(serve_name).serve_loop_with_ready(
+                serve_stop,
+                serve_handler,
+                ready_tx,
+            );
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready signal timed out")
+            .expect("ready signal failed");
+
+        for round in 0..2 {
+            let mut client = None;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if let Ok(pipe) = NamedPipeClient::connect(&name, 100) {
+                    client = Some(pipe.into_file());
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let mut client = client
+                .unwrap_or_else(|| panic!("serve_loop_with_ready connection {round} never appeared"));
+            let payload = b"1234";
+            let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
+            frame.extend_from_slice(payload);
+            client.write_all(&frame).unwrap();
+            match read_message::<CorePipeResponse>(&mut client)
+                .unwrap()
+                .unwrap()
+            {
+                CorePipeResponse::Error { code, message, .. } => {
+                    assert_eq!(code, "protocol_violation");
+                    assert!(
+                        message.contains("JSON invalid"),
+                        "unexpected message on round {round}: {message}"
+                    );
+                }
+                other => panic!("expected protocol violation on round {round}, got {other:?}"),
+            }
         }
 
         stop.store(true, Ordering::SeqCst);

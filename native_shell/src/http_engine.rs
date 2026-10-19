@@ -1508,6 +1508,7 @@ impl RangeScheduler {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn range_worker(
     worker_index: usize,
     job: &Job,
@@ -2815,23 +2816,22 @@ fn has_absolute_scheme(reference: &str) -> bool {
     bytes.get(index) == Some(&b':')
 }
 
+type HttpGetResponse = (
+    u16,
+    Option<String>,
+    Option<String>,
+    Option<u64>,
+    String,
+    String,
+    bool,
+    Body,
+);
+
 fn http_get(
     job: &Job,
     parsed: &ParsedUrl,
     range: Option<&str>,
-) -> Result<
-    (
-        u16,
-        Option<String>,
-        Option<String>,
-        Option<u64>,
-        String,
-        String,
-        bool,
-        Body,
-    ),
-    EngineError,
-> {
+) -> Result<HttpGetResponse, EngineError> {
     let mut stream = match proxy_route(&job.proxy) {
         ProxyRoute::Direct => TcpStream::connect((parsed.host.as_str(), parsed.port))
             .map_err(|err| EngineError::Failed(err.to_string()))?,

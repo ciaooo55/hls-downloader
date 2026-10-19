@@ -78,8 +78,8 @@ private data class VideoArea(val main: Boolean, val x: Int, val y: Int, val widt
 
 internal fun playerTime(seconds: Double): String {
     val total = seconds.takeIf { it.isFinite() && it > 0 }?.toLong() ?: 0
-    return if (total >= 3600) "%d:%02d:%02d".format(total / 3600, total / 60 % 60, total % 60)
-    else "%d:%02d".format(total / 60, total % 60)
+    return if (total >= 3600) "%d:%02d:%02d".format(java.util.Locale.ROOT, total / 3600, total / 60 % 60, total % 60)
+    else "%d:%02d".format(java.util.Locale.ROOT, total / 60, total % 60)
 }
 
 @Composable
@@ -198,8 +198,8 @@ internal fun LocalVideoPlayer(taskId: String, task: TaskDto?, onClose: () -> Uni
     val title = task?.let { it.title.ifBlank { it.filename } }?.takeIf { it.isNotBlank() }
         ?: snapshot.title.ifBlank { "视频" }
     val speed = task?.takeIf { it.status in setOf("running", "downloading", "recording") }?.let {
-        val value = it.speedBytesPerSecond / 1024.0
-        if (value >= 1024) "%.1f MiB/s".format(value / 1024) else "%.0f KiB/s".format(value)
+        val value = it.speedBytesPerSecond.coerceAtLeast(0) / 1024.0
+        if (value >= 1024) "%.1f MiB/s".format(java.util.Locale.ROOT, value / 1024) else "%.0f KiB/s".format(java.util.Locale.ROOT, value)
     }
     val panel: @Composable (((Offset) -> Unit)?) -> Unit = { onDrag ->
         PlaybackPanel(taskId, title, snapshot, speed, pip, fullscreen, started, closing, error,

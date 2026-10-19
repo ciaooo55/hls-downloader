@@ -54,7 +54,7 @@ export default defineContentScript({
         void localDownloadIntentUrl(localHref).then(href => browser.runtime.sendMessage({
           type: 'click-intent', href, pageUrl: location.href,
           altBypass: modifiers.alt, ctrlForce: modifiers.ctrl, generic: false, controlHint: true,
-        }))
+        })).catch(() => undefined)
         return
       }
       if (!event.isTrusted) return
@@ -142,7 +142,7 @@ export default defineContentScript({
         opensNewTab: linkOpensNewTab(targetValue),
         controlHint: downloadHint,
         downloadAttribute: Boolean(htmlLink?.hasAttribute('download')),
-      })
+      }).catch(() => undefined)
     }
     // Many download controls start navigation from pointerdown or tear down the
     // document before their click handler returns. Record strong intent at the

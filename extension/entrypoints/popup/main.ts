@@ -33,7 +33,10 @@ function updatePopupMaxHeight(main: HTMLElement) {
   const workAreaTop = screen.availTop ?? 0
   const remainingHeight = workAreaTop + screen.availHeight - viewportTop
   // 原生扩展弹窗最高 600 CSS px；超过时浏览器裁切底部，而不会扩大窗口。
-  const maxHeight = Math.max(1, Math.min(600, Math.floor(remainingHeight)))
+  // 多显示器或屏幕底边向上弹出的窗口可能算出负值或极小值，保留合理下限避免压成 1px。
+  const maxHeight = Number.isFinite(remainingHeight) && remainingHeight >= 240
+    ? Math.min(600, Math.floor(remainingHeight))
+    : 600
   main.style.setProperty('--popup-max-height', `${maxHeight}px`)
 }
 
@@ -134,6 +137,7 @@ async function main() {
   let themeChangeGeneration = 0
   let removeThemeListener = applyTheme(document.documentElement, themePreference)
   const themeBtn = el('button', 'hlsd-button subtle')
+  themeBtn.type = 'button'
   themeBtn.append(icon(themePreference, THEME_LABELS[themePreference]))
   themeBtn.title = THEME_LABELS[themePreference]
   themeBtn.setAttribute('aria-label', themeBtn.title)
@@ -152,6 +156,7 @@ async function main() {
     }
   })
   const openBtn = el('button', 'hlsd-button desktop-open')
+  openBtn.type = 'button'
   openBtn.append(icon('open'), el('span', '', '主程序'))
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
   openBtn.addEventListener('click', async () => {
@@ -169,6 +174,7 @@ async function main() {
     }
   })
   const closeBtn = el('button', 'hlsd-button subtle')
+  closeBtn.type = 'button'
   closeBtn.append(icon('close', '\u5173\u95ed'))
   closeBtn.title = '\u5173\u95ed'
   closeBtn.setAttribute('aria-label', '关闭插件弹窗')
@@ -178,8 +184,11 @@ async function main() {
 
   const controls = el('div', 'controls')
   const enableBtn = el('button', 'hlsd-button', '\u81ea\u52a8\u63a5\u7ba1')
+  enableBtn.type = 'button'
   const cookieBtn = el('button', 'hlsd-button', '\u672c\u7ad9 Cookie')
+  cookieBtn.type = 'button'
   const excludeBtn = el('button', 'hlsd-button', '\u672c\u7ad9\u63d0\u793a')
+  excludeBtn.type = 'button'
   // The popup DOM becomes visible before its asynchronous storage/bootstrap
   // work finishes. Do not present controls as clickable until their handlers
   // and local source of truth are ready; a very fast click was otherwise lost.
@@ -454,6 +463,7 @@ async function main() {
       article.dataset.state = sendState || ''
       const label = sendState ? SEND_LABELS[sendState] : '下载'
       const button = el('button', 'hlsd-button primary')
+      button.type = 'button'
       button.dataset.state = sendState || ''
       const sendPending = sendState === 'sending' || sendState === 'confirming'
       button.dataset.action = 'download'
@@ -472,6 +482,7 @@ async function main() {
       const pushState = pushing[pushKey]
       const pushLabel = pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox'
       const pushButton = el('button', 'hlsd-button push-button')
+      pushButton.type = 'button'
       pushButton.dataset.state = pushState || ''
       const pushPending = pushState === 'working' || pushState === 'awaiting'
       pushButton.dataset.action = 'tvbox'
@@ -485,6 +496,7 @@ async function main() {
       const castState = pushing[castKey]
       const castLabel = castState ? CAST_PUSH_LABELS[castState] : '投屏'
       const castButton = el('button', 'hlsd-button cast-button')
+      castButton.type = 'button'
       castButton.dataset.state = castState || ''
       const castPending = castState === 'working' || castState === 'awaiting'
       castButton.dataset.action = 'cast'

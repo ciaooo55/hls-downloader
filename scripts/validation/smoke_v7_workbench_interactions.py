@@ -31,9 +31,10 @@ def run(args):
     evidence.mkdir(parents=True, exist_ok=True)
     report = {"passed": False, "runtime": str(runtime), "checks": [], "controls": {}, "feedback": [],
               "test_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    desktop_jars = list((runtime / 'app').glob('HLSDownloaderDesktop-*.jar'))
+    assert len(desktop_jars) == 1, desktop_jars
     report["components"] = {str(p.relative_to(runtime)): hashlib.sha256(p.read_bytes()).hexdigest()
-                            for p in [runtime/"app/HLSDownloaderDesktop-7.0.3.jar",
-                                      runtime/"app/resources/HLSDownloaderEngine.exe"]}
+                            for p in [desktop_jars[0], runtime/"app/resources/HLSDownloaderEngine.exe"]}
     normal_env = {k: v for k, v in os.environ.items() if not k.startswith("HLS_UI_")}
     port, token = free_port(), uuid.uuid4().hex
     client = JabClient(runtime / "runtime/bin/windowsaccessbridge-64.dll")

@@ -329,4 +329,32 @@ class ProtocolTest {
         assertTrue(queueProfilesValid(listOf(QueueProfileDto(completionAction = "hibernate"))))
         assertFalse(queueProfilesValid(listOf(QueueProfileDto(speedLimitKib = 1_048_577))))
     }
+
+    @Test fun applyEngineEventTreatsJsonNullOptionalFieldsAsEmptyInsteadOfLiteralNull() {
+        val tasks = mutableListOf<DownloadTask>()
+        val positions = mutableMapOf<String, Int>()
+        val castEnvelope = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":60,"event":{"kind":"cast_session","active":true,"title":"客厅影片","device":"客厅电视","status":"PLAYING","task_id":null,"media_url":null,"device_kind":"lan","supported_actions":["stop"],"playing":true,"paused":false,"position_seconds":12,"duration_seconds":120,"position_available":true}}""",
+        )
+        val castSignal = applyEngineEvent(tasks, positions, castEnvelope.event, {}, {}, {}, {}) as UiSignal.Cast
+        assertEquals("", castSignal.taskId)
+        assertEquals("", castSignal.mediaUrl)
+
+        val updateEnvelope = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":61,"event":{"kind":"update_available","current":"7.0.0","latest":"7.1.0","notes":"fixes","release_url":null,"installer_name":null,"installer_size":null,"sha256_verified":false}}""",
+        )
+        val updateSignal = applyEngineEvent(tasks, positions, updateEnvelope.event, {}, {}, {}, {}) as UiSignal.Update
+        assertEquals("", updateSignal.releaseUrl)
+        assertEquals("", updateSignal.installerName)
+        assertEquals(0L, updateSignal.installerSize)
+
+        val nullErrorEnvelope = protocolJson.decodeFromString<EventEnvelopeDto>(
+            """{"sequence":62,"event":{"kind":"error","code":null,"message":null}}""",
+        )
+        val error = assertFailsWith<EngineProtocolException> {
+            requireNoCoreError(CommandResult(15, listOf(nullErrorEnvelope)), "回退错误提示")
+        }
+        assertEquals("engine_error", error.code)
+        assertEquals("回退错误提示", error.message)
+    }
 }

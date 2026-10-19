@@ -43,6 +43,11 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
     let mut representations = Vec::new();
     let mut rest = xml;
     while let Some(start) = rest.find("<Representation") {
+        let after_tag = rest.as_bytes().get(start + "<Representation".len()).copied();
+        if !matches!(after_tag, Some(b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/')) {
+            rest = &rest[start + "<Representation".len()..];
+            continue;
+        }
         let absolute = xml.len() - rest.len() + start;
         let period_duration = (!dynamic)
             .then(|| period_duration_seconds(xml, absolute))
@@ -252,6 +257,7 @@ fn select_video(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn download_dash_selected(
     url: &str,
     headers: &HashMap<String, String>,
@@ -500,13 +506,19 @@ pub fn download_dash_selected(
                 save_dash_subtitles(task_dir, &recorded_subs, headers, proxy, control, &mut vod);
             }
         }
-        if read_control(control) != "run" {
-            break;
+        match read_control(control).as_str() {
+            "run" => {}
+            "pause" => return Err("paused".into()),
+            "cancel" => return Err("canceled".into()),
+            _ => break,
         }
         let wait = minimum_update_period(&xml).unwrap_or(3.0).clamp(0.4, 8.0);
         std::thread::sleep(std::time::Duration::from_secs_f64(wait));
-        if read_control(control) != "run" {
-            break;
+        match read_control(control).as_str() {
+            "run" => {}
+            "pause" => return Err("paused".into()),
+            "cancel" => return Err("canceled".into()),
+            _ => break,
         }
         let (status, body) = fetch_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
@@ -623,6 +635,7 @@ fn download_dash_primary(
     Ok(all)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_dash(
     task_dir: &Path,
     video_files: &[PathBuf],
@@ -695,6 +708,7 @@ fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) 
     tracks.push(incoming.clone());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pull_dash_audio_segments(
     audio: &Representation,
     task_dir: &Path,
@@ -763,6 +777,7 @@ fn pull_dash_audio_segments(
     Ok(audio_files)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_dash_audio(
     audio: &Representation,
     task_dir: &Path,
@@ -934,6 +949,7 @@ impl DashCheckpoint {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resume_or_fetch(
     url: &str,
     headers: &HashMap<String, String>,
@@ -1002,24 +1018,33 @@ fn minimum_update_period(xml: &str) -> Option<f64> {
 
 fn parse_duration_seconds(value: &str) -> Option<f64> {
     let text = value.trim();
-    if let Some(rest) = text.strip_prefix("PT") {
+    if let Some(rest) = text.strip_prefix('P') {
         let mut total = 0.0;
         let mut number = String::new();
+        let mut in_time = false;
         for ch in rest.chars() {
+            if ch == 'T' {
+                in_time = true;
+                continue;
+            }
             if ch.is_ascii_digit() || ch == '.' {
                 number.push(ch);
                 continue;
             }
             let parsed = number.parse::<f64>().ok()?;
             number.clear();
-            total += match ch {
-                'H' => parsed * 3600.0,
-                'M' => parsed * 60.0,
-                'S' => parsed,
-                _ => 0.0,
+            total += match (in_time, ch) {
+                (false, 'Y') => parsed * 31_536_000.0,
+                (false, 'M') => parsed * 2_592_000.0,
+                (false, 'W') => parsed * 604_800.0,
+                (false, 'D') => parsed * 86_400.0,
+                (true, 'H') => parsed * 3600.0,
+                (true, 'M') => parsed * 60.0,
+                (true, 'S') => parsed,
+                _ => return None,
             };
         }
-        return (total > 0.0).then_some(total);
+        return (number.is_empty() && total > 0.0).then_some(total);
     }
     text.parse().ok()
 }
@@ -1328,6 +1353,7 @@ fn save_dash_subtitles(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn download_dash_subtitle_track(
     track: &Representation,
     subs_dir: &Path,
@@ -1537,9 +1563,12 @@ fn expand_timeline(
         let repeat = attr_unquoted_or_quoted(tag, "r")
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(0)
-            .max(0) as u64;
+            .clamp(0, 1_000_000) as u64;
         clock = time;
         for _ in 0..=repeat {
+            if media.len() >= 1_000_000 {
+                break;
+            }
             durations.push(duration as f64 / timescale as f64);
             media.push(resolve(
                 base_url,

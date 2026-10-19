@@ -31,6 +31,7 @@ pub trait TorrentSession: Send + Sync {
         options: TorrentOptions,
     ) -> Result<u64, String>;
 
+    #[allow(clippy::too_many_arguments)]
     fn download_with_telemetry(
         &self,
         source: &str,
@@ -875,12 +876,8 @@ const DEFAULT_TRACKERS: &[&str] = &[
 fn resolve_hint_peers(hints: &[String]) -> Vec<std::net::SocketAddr> {
     let mut peers = Vec::new();
     for hint in hints {
-        if let Ok(addr) = hint.parse() {
+        if let Ok(addr) = hint.parse::<std::net::SocketAddr>() {
             peers.push(addr);
-            continue;
-        }
-        if let Ok(resolved) = hint.parse::<std::net::SocketAddr>() {
-            peers.push(resolved);
         }
     }
     peers
@@ -1282,7 +1279,7 @@ fn take_extended(
         }
         return;
     }
-    if *pex_id != 0 && body[0] != *pex_id {
+    if body[0] != *pex_id && body[0] != 2 {
         return;
     }
     extra_peers.extend(parse_ut_pex(&body[1..]));
@@ -1331,11 +1328,11 @@ fn be32(bytes: &[u8]) -> u32 {
 }
 
 fn decode_info_hash(value: &str) -> Result<Vec<u8>, String> {
-    if value.len() == 40 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if let Some(canonical) = canonical_info_hash(value) {
         let mut out = Vec::with_capacity(20);
         for index in (0..40).step_by(2) {
             out.push(
-                u8::from_str_radix(&value[index..index + 2], 16)
+                u8::from_str_radix(&canonical[index..index + 2], 16)
                     .map_err(|error| error.to_string())?,
             );
         }
@@ -1348,6 +1345,7 @@ fn percent_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("%{byte:02X}")).collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn download_from_peer_ex_with_telemetry(
     addr: std::net::SocketAddr,
     meta: &TorrentMeta,
@@ -1700,8 +1698,10 @@ fn check_torrent_control(control: &Path) -> Result<(), String> {
     }
 }
 
+type PeerMessageReceiver = std::sync::mpsc::Receiver<Result<(u8, Vec<u8>), String>>;
+
 struct PeerMessageReader {
-    receiver: Option<std::sync::mpsc::Receiver<Result<(u8, Vec<u8>), String>>>,
+    receiver: Option<PeerMessageReceiver>,
     shutdown: std::net::TcpStream,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -1780,13 +1780,13 @@ fn read_message(stream: &mut std::net::TcpStream) -> Result<(u8, Vec<u8>), Strin
 }
 
 fn url_decode(value: &str) -> String {
-    let mut out = String::new();
     let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
             b'+' => {
-                out.push(' ');
+                out.push(b' ');
                 index += 1;
             }
             b'%' if index + 2 < bytes.len() => {
@@ -1794,20 +1794,20 @@ fn url_decode(value: &str) -> String {
                     std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
                     16,
                 ) {
-                    out.push(byte as char);
+                    out.push(byte);
                     index += 3;
                 } else {
-                    out.push('%');
+                    out.push(b'%');
                     index += 1;
                 }
             }
             byte => {
-                out.push(byte as char);
+                out.push(byte);
                 index += 1;
             }
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 mod bencode {
@@ -2227,6 +2227,13 @@ mod tests {
         );
         let decoded = decode_base32("MFRGGZDFMZTWQ2LK").unwrap();
         assert!(!decoded.is_empty());
+        let base32_ih = "AEDCRPJRJ5P233W7AEYTKT3MNYYS4U5H";
+        assert_eq!(decode_info_hash(base32_ih).unwrap().len(), 20);
+        let magnet = parse_magnet(&format!(
+            "magnet:?xt=urn:btih:{base32_ih}&dn=%E4%B8%AD%E6%96%87+%E6%B5%8B%E8%AF%95.mp4"
+        ))
+        .unwrap();
+        assert_eq!(magnet.name, "中文 测试.mp4");
     }
 
     #[test]

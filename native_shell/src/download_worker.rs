@@ -1852,10 +1852,18 @@ impl CoreCoordinator {
             if action == "delete_files" {
                 self.cancel_and_wait(task_id)?;
                 self.delete_task_files(task_id)?;
+                crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
+                if let Ok(mut map) = self.retries.lock() {
+                    map.remove(task_id);
+                }
             }
             if action == "delete" {
                 self.cancel_and_wait(task_id)?;
                 self.cleanup_task_cache(task_id)?;
+                crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
+                if let Ok(mut map) = self.retries.lock() {
+                    map.remove(task_id);
+                }
             }
             if action == "delete_files" {
                 return self.lock()?.handle(CoreCommand::TaskAction {
@@ -2001,7 +2009,7 @@ impl CoreCoordinator {
                             })?;
                         }
                     }
-                    if matches!(action.as_str(), "delete" | "delete_file") {
+                    if matches!(action.as_str(), "delete" | "delete_file" | "delete_files") {
                         crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
                     }
                 }
@@ -2812,7 +2820,8 @@ impl CoreCoordinator {
                         })
                         .unwrap_or(0);
                     if u64::from(attempt) <= max && max > 0 {
-                        let _ = mark_progress(&core, &task_id, 0, None, "waiting", "queued");
+                        let (downloaded, total) = current_progress(&core, &task_id);
+                        let _ = mark_progress(&core, &task_id, downloaded, total, "waiting", "queued");
                     }
                 } else if status != "paused" {
                     if let Ok(mut map) = retries.lock() {

@@ -144,7 +144,7 @@ component CheckRow inherits Rectangle {
     in-out property <bool> checked: false;
     callback toggled(bool);
     height: 30px;
-    background: touch.has-hover ? Tokens.surface-2 : transparent;
+    background: touch.has-hover && enabled ? Tokens.surface-2 : transparent;
     border-radius: 6px;
     HorizontalLayout {
         padding-left: 4px;
@@ -304,6 +304,7 @@ export component ConfirmWindow inherits Window {
                                 Text { text: "↓"; color: Tokens.accent; font-size: 22px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                             }
                             VerticalLayout {
+                                horizontal-stretch: 1;
                                 spacing: 4px;
                                 FieldLabel { label: "文件名"; font-size: 10px; }
                                 HotLineEdit { text <=> root.filename; enabled: !root.busy; }

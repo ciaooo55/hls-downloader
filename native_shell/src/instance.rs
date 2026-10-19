@@ -164,6 +164,7 @@ fn claim_presenter_session_mutex() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "full-core")]
 pub(crate) fn presenter_is_running() -> bool {
     #[cfg(windows)]
     {

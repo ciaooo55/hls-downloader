@@ -667,6 +667,7 @@ impl Decoder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     endpoint: &str,
     key: &str,

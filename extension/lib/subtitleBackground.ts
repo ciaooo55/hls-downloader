@@ -13,7 +13,9 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
   const prefetching = new Map<string, PrefetchAudio>()
   const players = new Map<number, Map<number, Player[]>>()
   const currentPlayers = (tabId: number) => [...(players.get(tabId)?.values() || [])].flat().filter(p => Date.now() - p.seenAt < 6000)
-  const ready = browser.storage.session.get(SUBTITLE_SESSIONS_KEY).then(value => { sessions = (value[SUBTITLE_SESSIONS_KEY] || {}) as Record<string, Session> })
+  const ready = browser.storage.session.get(SUBTITLE_SESSIONS_KEY)
+    .then(value => { sessions = (value[SUBTITLE_SESSIONS_KEY] || {}) as Record<string, Session> })
+    .catch(() => undefined)
   const persist = () => browser.storage.session.set({ [SUBTITLE_SESSIONS_KEY]: sessions })
   let operations: Promise<unknown> = Promise.resolve()
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -36,6 +38,7 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     if (pending) return pending
     const operation = (async () => {
       prefetching.get(session.id)?.stop(); prefetching.delete(session.id)
+      session.status = 'stopping'
       session.error = error
       await persist()
       const captureStop = await Promise.allSettled([
@@ -46,7 +49,6 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
         error = '音频尾部未能提交给字幕服务'
         session.error = error
       }
-      session.status = 'stopping'
       await persist()
       await Promise.allSettled([call('stop', session)])
       if (!error) {
@@ -114,7 +116,7 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
   }
   const start = async (tabId: number, pageUrl: string, frameId?: number, mediaId?: string) => {
     await readConfiguration(true)
-    const { settings, allowed } = await policy(pageUrl)
+    const { settings, allowed } = await policy(pageUrl, false)
     if (!allowed) throw new Error('字幕翻译已关闭，请检查主程序字幕设置及当前网页开关')
     const candidates = currentPlayers(tabId)
     const chosen = candidates.filter(p => frameId == null || p.frameId === frameId).filter(p => !mediaId || p.mediaId === mediaId)
@@ -210,11 +212,11 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     polling = true
     try {
       for (const session of Object.values(sessions)) {
-        if (!session.started || ['stopped', 'failed'].includes(session.status)) continue
+        if (!session.started || stopping.has(session) || ['stopped', 'failed'].includes(session.status)) continue
         try {
           const response = await call('poll', session, { after_sequence: session.sequence })
           // 停止/换播放器期间到达的旧轮询不能复活会话。
-          if (sessions[String(session.tabId)] !== session || ['stopped', 'failed'].includes(session.status)) continue
+          if (sessions[String(session.tabId)] !== session || stopping.has(session) || ['stopped', 'failed'].includes(session.status)) continue
           session.status = response.status
           session.error = response.error || ''
           session.sequence = response.latest_sequence
@@ -228,11 +230,13 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
           }
           await notify(session, response.events || [])
           if (session.status === 'failed' || session.status === 'stopped') await stop(session, session.error)
-        } catch (reason) { await stop(session, reason instanceof Error ? reason.message : String(reason)) }
+        } catch (reason) {
+          if (!stopping.has(session)) await stop(session, reason instanceof Error ? reason.message : String(reason))
+        }
       }
     } finally {
       polling = false
-      if (Object.values(sessions).some(s => !['stopped', 'failed'].includes(s.status))) schedulePoll()
+      if (Object.values(sessions).some(s => !stopping.has(s) && !['stopped', 'failed'].includes(s.status))) schedulePoll()
     }
   }
   const inFlight = new Map<string, number>()
@@ -270,7 +274,7 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     const task = async () => {
       await ready
       const tabId = Number(trustedUI ? message.tabId : sender.tab?.id)
-      const tab = Number.isInteger(tabId) && tabId >= 0 ? await browser.tabs.get(tabId) : undefined
+      const tab = Number.isInteger(tabId) && tabId >= 0 ? await browser.tabs.get(tabId).catch(() => undefined) : undefined
       const pageUrl = tab?.url || ''
       const session = sessions[String(tabId)]
       if (message.type === 'subtitle-players' && sender.tab) {
@@ -311,14 +315,19 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
       })
       if (message.type === 'subtitle-start' && (trustedUI || sender.tab)) return serialize(() => start(tabId, pageUrl,
         sender.tab && !trustedUI ? sender.frameId || 0 : message.frameId, String(message.mediaId || '') || undefined))
-      if (message.type === 'subtitle-stop' && session && (trustedUI || sender.frameId === session.frameId)) return serialize(async () => {
-        await stop(session); return { ok: true }
+      if (message.type === 'subtitle-stop') return serialize(async () => {
+        const current = sessions[String(tabId)]
+        if (!current || message.sessionId !== current.id || (!trustedUI && sender.frameId !== current.frameId)) {
+          return { ok: false, error: '字幕会话已结束或切换，请刷新状态后重试' }
+        }
+        await stop(current); return { ok: true }
       })
       const offscreen = sender.url === browser.runtime.getURL('/subtitle-offscreen.html')
       const live = message.sessionId ? Object.values(sessions).find(s => s.id === message.sessionId) : session
       if (!live || ['stopped', 'failed'].includes(live.status)) return { ok: false }
       if (!offscreen && (sender.tab?.id !== live.tabId || sender.frameId !== live.frameId)) return { ok: false }
       if (message.type === 'subtitle-clock') {
+        if (stopping.has(live)) return { ok: true }
         const next: Clock = { position: Number(message.position), rate: Number(message.rate), playing: message.playing === true,
           epoch: Number(message.epoch), at: Date.now() }
         if (!Number.isFinite(next.position) || !Number.isFinite(next.rate) || next.rate <= 0 || !Number.isSafeInteger(next.epoch)) return { ok: false }
@@ -360,14 +369,14 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     void ready.then(() => serialize(async () => {
       if (sessions[String(tabId)]) await stop(sessions[String(tabId)])
       delete sessions[String(tabId)]; await persist()
-    }))
+    })).catch(() => undefined)
   })
   browser.tabs.onUpdated.addListener((tabId, change) => {
     if (change.status === 'loading' || change.url && subtitlePage(change.url) !== subtitlePage(sessions[String(tabId)]?.pageUrl || '')) {
       players.delete(tabId)
       void ready.then(() => serialize(async () => {
         if (sessions[String(tabId)] && !['stopped', 'failed'].includes(sessions[String(tabId)].status)) await stop(sessions[String(tabId)])
-      }))
+      })).catch(() => undefined)
     }
   })
   void ready.then(async () => {
@@ -377,5 +386,5 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
       }
     }
     schedulePoll()
-  })
+  }).catch(() => undefined)
 }

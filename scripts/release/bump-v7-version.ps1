@@ -63,13 +63,14 @@ Write-Utf8 $featurePath (($feature | ConvertTo-Json -Depth 20) + "`n")
 
 $readmePath = 'README.md'
 $readme = Read-Utf8 $readmePath
-$readme = [regex]::Replace($readme, '(?m)^# HLS Downloader \d+\.\d+\.\d+$', "# HLS Downloader $Version", 1)
-$marker = "The product version is ``$Version``."
-$readme = [regex]::Replace($readme, 'The product version is `\d+\.\d+\.\d+`\.', $marker, 1)
-$readme = [regex]::Replace($readme, ' `\d+\.\d+\.\d+` is the active development iteration; formal release readiness remains gated by fresh release evidence\.', '', 1)
-if (-not $ReleaseReady) {
-    $readme = $readme.Replace($marker, "$marker ``$Version`` is the active development iteration; formal release readiness remains gated by fresh release evidence.")
-}
+$readme = [regex]::Replace($readme, '(?m)^(>\s*\u5F53\u524D `main` \u662F \*\*)\d+\.\d+\.\d+(\*\* \u6E90\u7801\u5F00\u53D1\u7EBF\u3002)', "`${1}$Version`${2}", 1)
 Write-Utf8 $readmePath $readme
+
+$readmeEnPath = 'README_EN.md'
+if (Test-Path -LiteralPath (Join-Path $repo $readmeEnPath) -PathType Leaf) {
+    $readmeEn = Read-Utf8 $readmeEnPath
+    $readmeEn = [regex]::Replace($readmeEn, '(?m)^(>\s*`main` currently tracks the \*\*)\d+\.\d+\.\d+(\*\* source line\.)', "`${1}$Version`${2}", 1)
+    Write-Utf8 $readmeEnPath $readmeEn
+}
 
 Write-Host "Updated v7 product version and local Cargo lock entries to $Version (release_ready=$([bool]$ReleaseReady))."

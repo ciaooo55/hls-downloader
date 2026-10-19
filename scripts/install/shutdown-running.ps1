@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$TimeoutSeconds = 12,
     [string]$InstallDir = "",
     [switch]$IncludeNativeHost,

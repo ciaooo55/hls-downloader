@@ -20,6 +20,8 @@ use std::{
 };
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+/// Chrome/Firefox 对 Host → 浏览器的单条消息限制为 1 MiB，超限会直接断开端口。
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const RECOMMENDED_EXTENSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MINIMUM_EXTENSION_VERSION: &str = "2.0.11";
 const EXTENSION_RELEASE_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases/latest";
@@ -32,6 +34,7 @@ struct NativeHostSession {
     media_push_ui_request_id: Option<String>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum HostCore {
     #[cfg(test)]
     Local(crate::PersistentCore),
@@ -1171,9 +1174,17 @@ fn read_message(input: &mut impl Read) -> Result<Option<Value>, String> {
 }
 
 fn write_response(output: &mut impl Write, response: &Value) -> Result<(), String> {
-    let payload = serde_json::to_vec(response).map_err(|error| error.to_string())?;
-    if payload.len() > MAX_MESSAGE_BYTES {
-        return Err("Native Messaging 响应过大".into());
+    let mut payload = serde_json::to_vec(response).map_err(|error| error.to_string())?;
+    if payload.len() > MAX_RESPONSE_BYTES {
+        // 超限响应会让浏览器断开端口；改为回一条可关联的错误，保持会话存活。
+        let mut fallback = json!({"ok": false, "error": "Native Messaging 响应过大"});
+        if let Some(request_id) = response.get("__request_id") {
+            fallback["__request_id"] = request_id.clone();
+        }
+        payload = serde_json::to_vec(&fallback).map_err(|error| error.to_string())?;
+        if payload.len() > MAX_RESPONSE_BYTES {
+            return Err("Native Messaging 响应过大".into());
+        }
     }
     output
         .write_all(&(payload.len() as u32).to_le_bytes())
@@ -1853,5 +1864,23 @@ mod tests {
             .unwrap_err();
         assert!(relative_path.contains("绝对路径"));
         let _ = std::fs::remove_file(source);
+    }
+
+    #[test]
+    fn write_response_replaces_oversized_payload_with_correlatable_fallback_error() {
+        let mut output = Vec::new();
+        let oversized = json!({
+            "ok": true,
+            "__request_id": "req-oversized-42",
+            "blob": "x".repeat(MAX_RESPONSE_BYTES + 1024),
+        });
+        write_response(&mut output, &oversized).unwrap();
+        assert!(output.len() >= 4 && output.len() - 4 <= MAX_RESPONSE_BYTES);
+        let decoded = read_message(&mut Cursor::new(output))
+            .unwrap()
+            .expect("expected fallback response frame");
+        assert_eq!(decoded["ok"], false);
+        assert_eq!(decoded["error"], "Native Messaging 响应过大");
+        assert_eq!(decoded["__request_id"], "req-oversized-42");
     }
 }

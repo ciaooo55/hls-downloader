@@ -23,9 +23,9 @@ pub fn serve_files(files: HashMap<String, Vec<u8>>) -> FixtureOrigin {
     }))
 }
 
-pub fn serve_dynamic(
-    resolve: Arc<dyn Fn(&str, usize) -> Option<Vec<u8>> + Send + Sync>,
-) -> FixtureOrigin {
+pub type SegmentResolver = dyn Fn(&str, usize) -> Option<Vec<u8>> + Send + Sync;
+
+pub fn serve_dynamic(resolve: Arc<SegmentResolver>) -> FixtureOrigin {
     let listener = TcpListener::bind("127.0.0.1:0").expect("media fixture bind");
     let addr = listener.local_addr().expect("media fixture addr");
     let requests = Arc::new(Mutex::new(Vec::new()));

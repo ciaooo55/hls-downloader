@@ -225,7 +225,16 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     }
     Shell_NotifyIconW(NIM_DELETE, &data);
     let _ = (WM_COMMAND, WM_LBUTTONUP, WM_RBUTTONUP, ID_SHOW, ID_QUIT);
+    TRAY_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+    let user_data = windows_sys::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+        hwnd,
+        windows_sys::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
+        0,
+    ) as *mut Sender<TrayAction>;
     DestroyWindow(hwnd);
+    if !user_data.is_null() {
+        drop(Box::from_raw(user_data));
+    }
 }
 
 #[cfg(windows)]
@@ -248,7 +257,8 @@ unsafe extern "system" fn tray_wnd_proc(
     const ID_QUIT: usize = 4;
 
     let sender = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<TrayAction>;
-    if msg == TASKBAR_CREATED_MESSAGE.load(std::sync::atomic::Ordering::Acquire) {
+    let taskbar_created = TASKBAR_CREATED_MESSAGE.load(std::sync::atomic::Ordering::Acquire);
+    if taskbar_created != 0 && msg == taskbar_created {
         use windows_sys::Win32::UI::Shell::{
             Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NOTIFYICONDATAW,
         };

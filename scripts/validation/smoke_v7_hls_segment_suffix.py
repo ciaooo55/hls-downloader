@@ -6,6 +6,7 @@ import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -125,14 +126,13 @@ def run(args):
             def verify(task, keep_temp=False):
                 assert task['status'] == 'completed', task.get('error_message')
                 output = Path(task['output_path'])
-                meta = json.loads(subprocess.check_output([
-                    str(args.tools / 'ffprobe.exe'), '-v', 'error', '-show_streams',
-                    '-show_format', '-of', 'json', str(output)], timeout=30))
-                assert 'mp4' in meta['format']['format_name'], meta['format']
-                assert {'video', 'audio'} <= {s['codec_type'] for s in meta['streams']}
-                assert float(meta['format']['duration']) >= 2.9
-                decoded = ff('-xerror', '-i', output, '-f', 'null', 'NUL')
+                # 生产包已移除 ffprobe；用已有 ffmpeg 检查真实容器并完整解码两种轨道。
+                decoded = ff('-loglevel', 'info', '-xerror', '-i', output,
+                             '-map', '0:v:0', '-map', '0:a:0', '-progress', 'pipe:1', '-f', 'null', 'NUL')
                 assert decoded.returncode == 0, decoded.stderr.decode(errors='replace')
+                assert re.search(r'Input #0, [^\r\n]*\bmp4\b', decoded.stderr.decode(errors='replace'))
+                times = re.findall(rb'(?m)^out_time_us=(\d+)', decoded.stdout)
+                assert times and max(map(int, times)) >= 2_900_000, decoded.stdout.decode(errors='replace')
                 work = work_root / '.hls-tasks' / task['task_id']
                 if keep_temp:
                     assert (work / 'segments').is_dir(), 'Opted-in segments were deleted'

@@ -231,8 +231,14 @@ pub fn acquire(url: &str) -> Result<ConnectionGuard, String> {
 fn release(host: &str) {
     if let Ok(mut state) = budget().lock() {
         state.global = state.global.saturating_sub(1);
-        if let Some(used) = state.hosts.get_mut(host) {
+        let remove = if let Some(used) = state.hosts.get_mut(host) {
             *used = used.saturating_sub(1);
+            *used == 0
+        } else {
+            false
+        };
+        if remove {
+            state.hosts.remove(host);
         }
         BUDGET_PULSE.notify_all();
     }
@@ -778,7 +784,7 @@ fn parse_hhmm(value: &str) -> Option<u32> {
     let mut parts = value.trim().split(':');
     let hour = parts.next()?.parse::<u32>().ok()?;
     let minute = parts.next()?.parse::<u32>().ok()?;
-    if hour > 23 || minute > 59 {
+    if parts.next().is_some() || hour > 23 || minute > 59 {
         return None;
     }
     Some(hour * 60 + minute)

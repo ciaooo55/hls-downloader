@@ -54,7 +54,7 @@ def compose_components() -> list[dict]:
     # React/Tauri dependency graph.
     return [
         component("framework", "maven", "org.jetbrains.compose.desktop/desktop", "1.12.0"),
-        component("library", "maven", "org.jetbrains.compose.material/material-icons-extended", "1.7.3"),
+        component("library", "maven", "org.jetbrains.compose.material/material-icons-core", "1.7.3"),
         component("library", "maven", "org.jetbrains.kotlinx/kotlinx-coroutines-swing", "1.11.0"),
         component("library", "maven", "org.jetbrains.kotlinx/kotlinx-serialization-json", "1.11.0"),
         component("framework", "generic", "Eclipse Temurin JRE", "21"),
@@ -67,7 +67,7 @@ def build_sbom(version: str) -> dict:
         *cargo_components(ROOT / "presenter_ui" / "Cargo.lock"),
         *compose_components(),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
-        component("application", "generic", "ffmpeg", "8.1.2"),
+        component("application", "generic", "ffmpeg", "9.0.2"),
         component("library", "generic", "libmpv", "20260814-git-7b8915bc1d"),
     ]
     unique = {item["bom-ref"]: item for item in values}

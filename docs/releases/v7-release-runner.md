@@ -54,7 +54,7 @@ A fresh release requires no existing canonical-version tag; a retry may reuse on
 1. checks that the dispatch is the current `main`, reads/validates the canonical product version, and validates existing tag/draft retry state; this early step does **not** change or bypass `release_ready`;
 2. validates all four exact-SHA prerequisite workflow identities before building release inputs;
 3. verifies the dedicated Windows release runner and bootstraps the pinned toolchains;
-4. builds a fresh candidate from that exact commit;
+4. receives the frozen `v7-candidate` artifact and isolated MSI lifecycle evidence from `package-v7-candidate.yml` for that exact commit (`scripts/release/receive-v7-candidate.ps1`);
 5. records five candidate-bound release gates against that same candidate manifest: packaged-browser behavior, installed-browser-to-real-LAN media push, performance, installer upgrade, and failure rollback;
 6. rechecks that `main` has not moved;
 7. builds the formal package using that evidence; `build-v7.ps1 -Task package` is where canonical completeness, current release evidence, clean-worktree and `release_ready=true` are enforced;

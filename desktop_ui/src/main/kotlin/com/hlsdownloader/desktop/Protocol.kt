@@ -3,7 +3,9 @@ package com.hlsdownloader.desktop
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -150,9 +152,9 @@ data class AvScanStatusDto(
 data class EngineSnapshot(val tasks: List<TaskDto>, val latestSequence: Long, val browserConnected: Boolean = false)
 data class CommandResult(val requestId: Long, val events: List<EventEnvelopeDto>) {
     fun taskLogLines(): List<String> {
-        val event = events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "task_log" }?.event
-        return event?.get("lines")?.jsonArray.orEmpty()
-            .mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() }
+        val event = events.firstOrNull { it.event.stringOrNull("kind") == "task_log" }?.event
+        return event?.arrayOrNull("lines").orEmpty()
+            .mapNotNull { it.stringOrNull() }
             .takeLast(MAX_TASK_LOG_LINES)
     }
 }
@@ -178,7 +180,7 @@ internal data class PlayerSnapshot(
 )
 
 internal fun CommandResult.playerSnapshot(): PlayerSnapshot? = events.lastOrNull {
-    it.event["kind"]?.jsonPrimitive?.content == "player_session"
+    it.event.stringOrNull("kind") == "player_session"
 }?.let { protocolJson.decodeFromJsonElement(PlayerSnapshot.serializer(), it.event) }
 data class TaskExportResult(val format: String, val data: String, val taskCount: Int)
 
@@ -386,9 +388,9 @@ object EnginePipeClient {
         val response = connection.request(request("snapshot"))
         response.requireType("snapshot", "读取任务失败")
         EngineSnapshot(
-            response["tasks"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(TaskDto.serializer(), it) },
-            response["latest_sequence"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
-            response["browser_connected"]?.jsonPrimitive?.content == "true",
+            response.arrayOrNull("tasks").orEmpty().map { protocolJson.decodeFromJsonElement(TaskDto.serializer(), it) },
+            response.longOrNull("latest_sequence") ?: 0,
+            response.stringOrNull("browser_connected") == "true",
         )
     }
 
@@ -538,7 +540,7 @@ object EnginePipeClient {
             val files = List(16) { i ->
                 TorrentFileDto(
                     index = i,
-                    path = "镜像/纪录片合集-${'$'}{(65 + 'A' + i % 26).toChar()}-${i.toString().padStart(2, '0')}.mkv",
+                    path = "镜像/纪录片合集-${'A' + (i % 26)}-${i.toString().padStart(2, '0')}.mkv",
                     size = 320L * 1024 * 1024 + i * 71L * 1024 * 1024,
                     offset = i * 320L * 1024 * 1024,
                     selected = i % 3 != 0,
@@ -557,19 +559,19 @@ object EnginePipeClient {
                 }) }
             })
         })
-        val event = result.events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "task_torrent_files" }?.event
+        val event = result.events.firstOrNull { it.event.stringOrNull("kind") == "task_torrent_files" }?.event
             ?: error("下载引擎未返回 BT 文件清单")
-        val selected = event["selections"]?.jsonArray.orEmpty().mapNotNull { item ->
+        val selected = event.arrayOrNull("selections").orEmpty().mapNotNull { item ->
             runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull()
         }.associateBy { it.index to it.path }
-        val files = event["files"]?.jsonArray.orEmpty().mapNotNull { item ->
+        val files = event.arrayOrNull("files").orEmpty().mapNotNull { item ->
             runCatching { protocolJson.decodeFromJsonElement(TorrentFileDto.serializer(), item) }.getOrNull()
         }.map { file -> file.copy(selected = selected[file.index to file.path]?.selected ?: true) }
         return TaskTorrentFilesDto(
-            taskId = event["task_id"]?.jsonPrimitive?.content.orEmpty(),
-            source = event["source"]?.jsonPrimitive?.content.orEmpty(),
+            taskId = event.string("task_id"),
+            source = event.string("source"),
             files = files,
-            totalSize = event["total_size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+            totalSize = event.longOrNull("total_size") ?: 0,
         )
     }
     fun getTaskLog(taskId: String): CommandResult = command(commandOf("get_task_log", "task_id" to taskId))
@@ -592,12 +594,12 @@ object EnginePipeClient {
             put("task_ids", buildJsonArray { taskIds.map(String::trim).filter(String::isNotBlank).distinct().forEach { add(JsonPrimitive(it)) } })
             put("format", format.trim().lowercase())
         })
-        val event = result.events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "task_export" }?.event
+        val event = result.events.firstOrNull { it.event.stringOrNull("kind") == "task_export" }?.event
             ?: error("下载引擎未返回导出数据")
         return TaskExportResult(
-            format = event["format"]?.jsonPrimitive?.content ?: format,
-            data = event["data"]?.jsonPrimitive?.content.orEmpty(),
-            taskCount = event["task_count"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+            format = event.stringOrNull("format") ?: format,
+            data = event.string("data"),
+            taskCount = event.stringOrNull("task_count")?.toIntOrNull() ?: 0,
         )
     }
 
@@ -624,12 +626,12 @@ object EnginePipeClient {
     fun probeHarvestSizes(url: String, referer: String, probeUrls: List<String>): Map<String, Long> {
         val result = harvestPage(url, referer, probeUrls)
         val event = result.events.firstOrNull {
-            it.event["kind"]?.jsonPrimitive?.content == "harvest_probe_result"
+            it.event.stringOrNull("kind") == "harvest_probe_result"
         }?.event ?: error("下载引擎未返回文件大小")
-        return event["links"]?.jsonArray.orEmpty().mapNotNull { item ->
-            val value = item.jsonObject
-            val candidate = value["url"]?.jsonPrimitive?.content.orEmpty()
-            val size = value["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0
+        return event.arrayOrNull("links").orEmpty().mapNotNull { item ->
+            val value = item as? JsonObject ?: return@mapNotNull null
+            val candidate = value.string("url")
+            val size = value.longOrNull("size") ?: 0
             (candidate to size).takeIf { candidate.isNotBlank() && size > 0 }
         }.toMap()
     }
@@ -669,9 +671,9 @@ object EnginePipeClient {
             put("type", "subtitle"); put("request_id", nextRequestId()); put("request", value)
         })
         response.requireType("subtitle", "字幕设置操作失败")
-        val result = response["result"]?.jsonObject ?: error("下载引擎未返回字幕设置")
-        check(result["ok"]?.jsonPrimitive?.content == "true") {
-            result["error"]?.jsonPrimitive?.content ?: "字幕设置操作失败"
+        val result = response.objectOrNull("result") ?: error("下载引擎未返回字幕设置")
+        check(result.stringOrNull("ok") == "true") {
+            result.stringOrNull("error")?.takeIf(String::isNotBlank) ?: "字幕设置操作失败"
         }
         protocolJson.decodeFromJsonElement(SubtitleConfigurationDto.serializer(), result)
     }
@@ -722,36 +724,36 @@ object EnginePipeClient {
             put("type", "wait_events"); put("request_id", nextRequestId()); put("after_sequence", afterSequence); put("timeout_ms", timeoutMs.coerceIn(1, 30_000))
         })
         response.requireType("events", "事件订阅失败")
-        response["events"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) }
+        response.arrayOrNull("events").orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) }
     }
 
     fun loadHandoffStatuses(): List<HandoffStatusDto> = session { connection ->
         val response = connection.request(request("load_handoffs"))
         response.requireType("handoffs", "读取浏览器接管状态失败")
-        response["items"]?.jsonArray.orEmpty().mapNotNull { item ->
-            runCatching { protocolJson.decodeFromString(HandoffStatusDto.serializer(), item.jsonPrimitive.content) }.getOrNull()
+        response.arrayOrNull("items").orEmpty().mapNotNull { item ->
+            runCatching { protocolJson.decodeFromString(HandoffStatusDto.serializer(), item.stringOrNull() ?: return@mapNotNull null) }.getOrNull()
         }
     }
 
     fun loadHandoffs(): List<HandoffOfferDto> = session { connection ->
         val response = connection.request(request("load_handoffs"))
         response.requireType("handoffs", "读取浏览器接管请求失败")
-        response["items"]?.jsonArray.orEmpty().mapNotNull { item ->
+        response.arrayOrNull("items").orEmpty().mapNotNull { item ->
             runCatching {
-                val handoff = protocolJson.parseToJsonElement(item.jsonPrimitive.content).jsonObject
-                if (handoff["status"]?.jsonPrimitive?.content != "pending") return@runCatching null
+                val handoff = protocolJson.parseToJsonElement(item.stringOrNull() ?: return@runCatching null).jsonObject
+                if (handoff.stringOrNull("status") != "pending") return@runCatching null
                 val offer = protocolJson.decodeFromJsonElement(
                     HandoffOfferDto.serializer(),
-                    handoff["offer"]?.jsonObject ?: return@runCatching null,
+                    handoff.objectOrNull("offer") ?: return@runCatching null,
                 )
                 offer.copy(
-                    handoffId = handoff["id"]?.jsonPrimitive?.content ?: offer.handoffId,
-                    filename = handoff["filename"]?.jsonPrimitive?.content ?: offer.filename,
-                    title = handoff["title"]?.jsonPrimitive?.content ?: offer.title,
-                    mimeType = handoff["mime_type"]?.jsonPrimitive?.content ?: offer.mimeType,
-                    size = handoff["size"]?.jsonPrimitive?.content?.toLongOrNull() ?: offer.size,
+                    handoffId = handoff.stringOrNull("id") ?: offer.handoffId,
+                    filename = handoff.stringOrNull("filename") ?: offer.filename,
+                    title = handoff.stringOrNull("title") ?: offer.title,
+                    mimeType = handoff.stringOrNull("mime_type") ?: offer.mimeType,
+                    size = handoff.longOrNull("size") ?: offer.size,
                     status = "pending",
-                    presentation = handoff["presentation"]?.jsonPrimitive?.content ?: offer.presentation,
+                    presentation = handoff.stringOrNull("presentation") ?: offer.presentation,
                 )
             }.getOrNull()
         }
@@ -760,8 +762,8 @@ object EnginePipeClient {
     fun loadMediaPushRequests(): List<MediaPushRequestDto> = session { connection ->
         val response = connection.request(request("load_handoffs"))
         response.requireType("handoffs", "读取媒体推送状态失败")
-        response["items"]?.jsonArray.orEmpty().mapNotNull { item ->
-            runCatching { protocolJson.decodeFromString(MediaPushRequestDto.serializer(), item.jsonPrimitive.content) }.getOrNull()
+        response.arrayOrNull("items").orEmpty().mapNotNull { item ->
+            runCatching { protocolJson.decodeFromString(MediaPushRequestDto.serializer(), item.stringOrNull() ?: return@mapNotNull null) }.getOrNull()
         }.filter { it.id.startsWith("media-push-") && it.status == "pending" }
     }
 
@@ -772,7 +774,7 @@ object EnginePipeClient {
                 put("type", "command"); put("request_id", requestId); put("command", payload)
             })
             response.requireType("events", fallback)
-            CommandResult(requestId, response["events"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) })
+            CommandResult(requestId, response.arrayOrNull("events").orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) })
         }
         // 完整读取后再检查业务错误，既不误报成功，也不丢弃仍然同步的连接。
         return requireNoCoreError(result, fallback)
@@ -929,10 +931,10 @@ object EnginePipeClient {
             channel.writeFrame(payload)
             val body = channel.readFrame()
             val response = protocolJson.parseToJsonElement(body.decodeToString()).jsonObject
-            if (response["type"]?.jsonPrimitive?.content == "error") {
+            if (response.stringOrNull("type") == "error") {
                 throw EngineProtocolException(
-                    response["code"]?.jsonPrimitive?.content ?: "engine_error",
-                    response["message"]?.jsonPrimitive?.content ?: "下载引擎返回错误",
+                    response.stringOrNull("code")?.takeIf(String::isNotBlank) ?: "engine_error",
+                    response.stringOrNull("message")?.takeIf(String::isNotBlank) ?: "下载引擎返回错误",
                 )
             }
             return response
@@ -1036,16 +1038,35 @@ object EnginePipeClient {
 
 class EngineProtocolException(val code: String, message: String) : IllegalStateException(message)
 
+// JsonNull 在 kotlinx.serialization.json 中是 JsonPrimitive 的子类，直接访问 .jsonPrimitive.content 会得到字面量 "null"
+internal fun JsonElement?.stringOrNull(): String? =
+    (this as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content
+
+internal fun JsonObject.stringOrNull(key: String): String? =
+    this[key].stringOrNull()
+
+internal fun JsonObject.string(key: String, default: String = ""): String =
+    stringOrNull(key) ?: default
+
+internal fun JsonObject.longOrNull(key: String): Long? =
+    stringOrNull(key)?.toLongOrNull()
+
+internal fun JsonObject.objectOrNull(key: String): JsonObject? =
+    this[key] as? JsonObject
+
+internal fun JsonObject.arrayOrNull(key: String): JsonArray? =
+    this[key] as? JsonArray
+
 internal fun requireNoCoreError(result: CommandResult, fallback: String): CommandResult {
-    val event = result.events.firstOrNull { it.event["kind"]?.jsonPrimitive?.content == "error" }?.event
+    val event = result.events.firstOrNull { it.event.stringOrNull("kind") == "error" }?.event
         ?: return result
-    val code = event["code"]?.jsonPrimitive?.content?.takeIf(String::isNotBlank) ?: "engine_error"
-    val message = event["message"]?.jsonPrimitive?.content?.takeIf(String::isNotBlank) ?: fallback
+    val code = event.stringOrNull("code")?.takeIf(String::isNotBlank) ?: "engine_error"
+    val message = event.stringOrNull("message")?.takeIf(String::isNotBlank) ?: fallback
     throw EngineProtocolException(code, message)
 }
 
 private fun JsonObject.requireType(expected: String, fallback: String) {
-    require(this["type"]?.jsonPrimitive?.content == expected) { this["message"]?.jsonPrimitive?.content ?: fallback }
+    require(stringOrNull("type") == expected) { stringOrNull("message")?.takeIf(String::isNotBlank) ?: fallback }
 }
 
 private fun requireId(value: String): String = value.trim().also { require(it.isNotEmpty()) { "请求缺少编号" } }

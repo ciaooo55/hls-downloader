@@ -25,7 +25,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   const configuration = node('small')
   const settingsHint = node('small', '字幕服务、API Key、语言和字幕模式请在主程序“设置 → 字幕翻译”中配置。')
   const player = node('select'); player.setAttribute('aria-label', '字幕播放器'); player.className = 'subtitle-player'
-  const start = node('button', '开始翻译'); start.className = 'hlsd-button primary'; start.dataset.subtitleStart = 'true'
+  const start = node('button', '开始翻译'); start.type = 'button'; start.className = 'hlsd-button primary'; start.dataset.subtitleStart = 'true'
   const actionRow = node('div'); actionRow.className = 'subtitle-row'; actionRow.append(player, start)
   const tracks = node('small')
   advanced.append(scopeRow, tracks)
@@ -66,6 +66,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     resourceGeneration++
     const value = changes[resourceKey].newValue
     resources = Array.isArray(value) ? value : []
+    renderTracks()
   }
   const loadResources = async (pageUrl: string) => {
     const nextKey = pageResourceKey(tabId!, pageUrl)
@@ -118,6 +119,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       await loadResources(state.pageUrl)
       renderTracks()
       if (state.session?.status === 'failed') report(state.session.error || '字幕连接失败，请重试')
+      else if (live) report('')
     } catch (reason) {
       status.textContent = '状态读取失败'
       report(reason instanceof Error ? reason.message : String(reason))
@@ -138,7 +140,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     if (busy) return
     busy = true; updateControls(); report('')
     const [frame, ...media] = player.value.split(':')
-    void send(live ? { type: 'subtitle-stop' } : { type: 'subtitle-start', frameId: Number(frame), mediaId: media.join(':') })
+    void send(live ? { type: 'subtitle-stop', sessionId: state.session.id } : { type: 'subtitle-start', frameId: Number(frame), mediaId: media.join(':') })
       .catch(reason => report(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => { busy = false; updateControls(); void refresh() })
   }

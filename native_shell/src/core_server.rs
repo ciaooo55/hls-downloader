@@ -370,12 +370,17 @@ fn dispatch(
                 "export_tasks",
                 "place_queue",
                 "harvest_page",
+                "get_task",
                 "get_task_log",
+                "refresh_task_request",
+                "get_task_torrent_files",
+                "set_task_torrent_files",
                 "browser_hello",
                 "control_cast",
                 "set_default_cookie",
                 "set_site_rule_credential",
                 "subtitle",
+                "player_thumbnail",
             ]
             .into_iter()
             .map(str::to_string)
@@ -1279,5 +1284,29 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].filename, "pipe.bin");
         server.shutdown();
+    }
+
+    #[test]
+    fn capabilities_lists_task_inspection_and_thumbnail_commands() {
+        let server = CoreServer::in_memory().unwrap();
+        let handler = server.handler();
+        match handler(CorePipeRequest::Capabilities { request_id: 7 }) {
+            CorePipeResponse::Capabilities { commands, .. } => {
+                for expected in [
+                    "get_task",
+                    "get_task_log",
+                    "refresh_task_request",
+                    "get_task_torrent_files",
+                    "set_task_torrent_files",
+                    "player_thumbnail",
+                ] {
+                    assert!(
+                        commands.iter().any(|cmd| cmd == expected),
+                        "Capabilities missing command {expected}: {commands:?}"
+                    );
+                }
+            }
+            other => panic!("expected Capabilities response, got {other:?}"),
+        }
     }
 }

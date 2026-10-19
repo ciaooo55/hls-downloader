@@ -96,6 +96,7 @@ pub fn spawn_desktop_ui(root: &Path) -> bool {
     command.spawn().is_ok()
 }
 
+#[cfg(feature = "full-core")]
 pub(crate) fn ensure_presenter(root: &Path) -> Result<(), String> {
     if crate::instance::presenter_is_running() {
         return Ok(());

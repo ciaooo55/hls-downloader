@@ -71,7 +71,13 @@ fn find_file_open(lower: &str) -> Option<usize> {
     while let Some(rel) = lower[search..].find("<file") {
         let start = search + rel;
         let next = *lower.as_bytes().get(start + 5)?;
-        if matches!(next, b' ' | b'>' | b'\n' | b'\t' | b'/' | b'\r') {
+        if matches!(next, b' ' | b'>' | b'\n' | b'\t' | b'\r') {
+            if let Some(gt) = lower[start..].find('>') {
+                if lower[start..start + gt].trim_end().ends_with('/') {
+                    search = start + gt + 1;
+                    continue;
+                }
+            }
             return Some(start);
         }
         search = start + 5;
@@ -80,7 +86,8 @@ fn find_file_open(lower: &str) -> Option<usize> {
 }
 
 fn parse_file_block(block: &str, metalink3: bool) -> Option<MetalinkFile> {
-    let name = attr(block, "name")
+    let open_header = block.find('>').map(|gt| &block[..gt]).unwrap_or(block);
+    let name = attr(open_header, "name")
         .or_else(|| tag_text(block, "name"))
         .map(|value| sanitize(&value))
         .filter(|value| !value.is_empty())
@@ -167,13 +174,13 @@ fn first_checksum(block: &str) -> String {
         };
         let digest = after[gt + 1..close].trim().to_ascii_lowercase();
         rest = &after[close + 7..];
-        let algo = match kind.as_str() {
-            "sha-256" | "sha256" => "sha256",
-            "sha-1" | "sha1" => "sha1",
-            "md5" => "md5",
+        let (algo, expected_len) = match kind.as_str() {
+            "sha-256" | "sha256" => ("sha256", 64),
+            "sha-1" | "sha1" => ("sha1", 40),
+            "md5" => ("md5", 32),
             _ => continue,
         };
-        if digest.chars().all(|ch| ch.is_ascii_hexdigit()) && !digest.is_empty() {
+        if digest.len() == expected_len && digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
             return format!("{algo}:{digest}");
         }
     }
@@ -237,10 +244,18 @@ fn safe_url(raw: &str) -> Option<String> {
 
 fn attr(block: &str, key: &str) -> Option<String> {
     let pattern = format!("{key}=\"");
-    let start = block.find(&pattern)?;
-    let rest = &block[start + pattern.len()..];
-    let end = rest.find('"')?;
-    Some(decode_xml_text(&rest[..end]))
+    let mut offset = 0;
+    while let Some(rel) = block[offset..].find(&pattern) {
+        let start = offset + rel;
+        let boundary_ok = start == 0 || block.as_bytes()[start - 1].is_ascii_whitespace();
+        let rest = &block[start + pattern.len()..];
+        if boundary_ok {
+            let end = rest.find('"')?;
+            return Some(decode_xml_text(&rest[..end]));
+        }
+        offset = start + pattern.len();
+    }
+    None
 }
 
 fn tag_text(block: &str, tag: &str) -> Option<String> {
