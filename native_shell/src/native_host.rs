@@ -250,6 +250,9 @@ impl NativeHostSession {
                 if !request.is_object() {
                     return Err("字幕请求必须是对象".into());
                 }
+                if request.get("action").and_then(Value::as_str) == Some("configure") {
+                    return Err("请在主程序“设置 → 字幕翻译”中修改字幕配置".into());
+                }
                 request["owner"] = json!(message
                     .get("client_id")
                     .and_then(Value::as_str)
@@ -1191,6 +1194,15 @@ mod tests {
             .dispatch(&json!({"op": "delete_everything"}))
             .unwrap_err();
         assert!(error.contains("不支持"));
+    }
+
+    #[test]
+    fn browser_cannot_write_subtitle_configuration() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let error = session.dispatch(&json!({"op": "subtitle", "request": {
+            "action": "configure", "provider": "qwencloud", "clear_key": true
+        }})).unwrap_err();
+        assert!(error.contains("主程序"));
     }
 
     #[test]

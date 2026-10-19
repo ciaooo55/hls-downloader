@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { SUBTITLE_PAGES_KEY, SUBTITLE_SESSIONS_KEY, SUBTITLE_SETTINGS_KEY, subtitleAllowed, subtitlePage, subtitleReadyEnd, subtitleSettings, subtitleSite } from './subtitleSettings'
+import { SUBTITLE_OFFSETS_KEY, SUBTITLE_PAGES_KEY, SUBTITLE_SESSIONS_KEY, SUBTITLE_SETTINGS_KEY, subtitleAllowed, subtitleOffset, subtitlePage, subtitleReadyEnd, subtitleSettings, subtitleSite } from './subtitleSettings'
 import { prefetchSubtitleAudio, type PrefetchAudio } from './subtitlePrefetch'
 
 interface Player { mediaId: string; label: string; playing: boolean; area: number; frameId: number; tracks: string[]; seenAt: number }
@@ -80,11 +80,30 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     void operation.catch(() => undefined)
     return operation
   }
-  const policy = async (pageUrl: string) => {
-    const [local, temporary] = await Promise.all([browser.storage.local.get(SUBTITLE_SETTINGS_KEY), browser.storage.session.get(SUBTITLE_PAGES_KEY)])
-    const settings = subtitleSettings(local[SUBTITLE_SETTINGS_KEY])
+  let desktopConfiguration: any
+  let configurationRead: Promise<void> | undefined
+  let configurationRefreshAt = 0
+  const readConfiguration = (force = false): Promise<void> => {
+    if (configurationRead) return configurationRead
+    if (!force && Date.now() < configurationRefreshAt) return Promise.resolve()
+    configurationRead = call('configuration').then(config => { desktopConfiguration = config })
+      .finally(() => { configurationRefreshAt = Date.now() + 5000; configurationRead = undefined })
+    return configurationRead
+  }
+  const policy = async (pageUrl: string, refreshConfiguration = true) => {
+    const [local, temporary] = await Promise.all([
+      browser.storage.local.get(SUBTITLE_SETTINGS_KEY), browser.storage.session.get([SUBTITLE_PAGES_KEY, SUBTITLE_OFFSETS_KEY]),
+      refreshConfiguration ? readConfiguration().catch(() => undefined) : Promise.resolve(),
+    ])
+    const saved = subtitleSettings(local[SUBTITLE_SETTINGS_KEY])
+    // 尚未在主程序保存过全局选项时，沿用用户已有的浏览器设置。
+    const settings = subtitleSettings({ ...saved, ...desktopConfiguration?.preferences, sites: saved.sites })
+    const offsets = (temporary[SUBTITLE_OFFSETS_KEY] || {}) as Record<string, number>
+    const offset = offsets[subtitlePage(pageUrl)]
+    if (typeof offset === 'number') settings.offset = subtitleOffset(offset)
     const pages = (temporary[SUBTITLE_PAGES_KEY] || {}) as Record<string, boolean>
-    return { settings, pages, allowed: subtitleAllowed(settings, pages, pageUrl) }
+    const configured = Boolean(desktopConfiguration?.has_key && (desktopConfiguration.provider === 'qwencloud' || desktopConfiguration.workspace))
+    return { settings, pages, configured, allowed: subtitleAllowed(settings, pages, pageUrl) }
   }
   const ensureOffscreen = async () => {
     const offscreen = (browser as any).offscreen
@@ -94,8 +113,9 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     })
   }
   const start = async (tabId: number, pageUrl: string, frameId?: number, mediaId?: string) => {
+    await readConfiguration(true)
     const { settings, allowed } = await policy(pageUrl)
-    if (!allowed) throw new Error('字幕翻译已关闭，请检查全局、本站和本页开关')
+    if (!allowed) throw new Error('字幕翻译已关闭，请检查主程序字幕设置及当前网页开关')
     const candidates = currentPlayers(tabId)
     const chosen = candidates.filter(p => frameId == null || p.frameId === frameId).filter(p => !mediaId || p.mediaId === mediaId)
       .sort((a, b) => Number(b.playing) - Number(a.playing) || b.area - a.area)[0]
@@ -109,12 +129,12 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     await persist()
     try {
       const selected = await browser.tabs.sendMessage(tabId, { type: 'subtitle-select', sessionId: session.id, mediaId: session.mediaId,
-        prefetch: settings.prefetch }, { frameId: session.frameId })
+        prefetch: settings.prefetch, settings }, { frameId: session.frameId })
       if (!selected?.ok) throw new Error(selected?.error || '播放器已离开当前页面')
       let audioSource: Record<string, unknown> | undefined
       if (settings.prefetch) {
         if (selected.drm || !Number.isFinite(selected.duration) || selected.duration <= 0) {
-          throw new Error('直播或受保护的音轨不能提前翻译，请关闭提前翻译后使用实时采集')
+          throw new Error('直播或受保护的音轨不能提前翻译，请在主程序关闭“同步字幕”后使用实时采集')
         }
         audioSource = await resolveSource(tabId, session.frameId, selected)
         session.duration = selected.duration
@@ -259,13 +279,14 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
         players.set(tabId, frames)
         if (session && session.frameId === (sender.frameId || 0) && !['stopped', 'failed'].includes(session.status)
           && !frames.get(session.frameId)?.some(p => p.mediaId === session.mediaId)) await stop(session)
-        return { ok: true, ...(await policy(pageUrl)), pageUrl }
+        return { ok: true, ...(await policy(pageUrl, currentPlayers(tabId).length > 0)), pageUrl }
       }
       if (message.type === 'subtitle-policy-get' && sender.tab) return { ok: true, ...(await policy(pageUrl)), pageUrl }
       if (message.type === 'subtitle-offset' && sender.tab) return serialize(async () => {
-        const { settings } = await policy(pageUrl)
-        const next = subtitleSettings({ ...settings, offset: message.offset })
-        await browser.storage.local.set({ [SUBTITLE_SETTINGS_KEY]: next })
+        const stored = await browser.storage.session.get(SUBTITLE_OFFSETS_KEY)
+        const offsets = (stored[SUBTITLE_OFFSETS_KEY] || {}) as Record<string, number>
+        offsets[subtitlePage(pageUrl)] = subtitleOffset(message.offset)
+        await browser.storage.session.set({ [SUBTITLE_OFFSETS_KEY]: offsets })
         await broadcastPolicy(); return { ok: true }
       })
       if (message.type === 'subtitle-state-get' && trustedUI) {
@@ -284,23 +305,9 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
           if (message.value == null) delete settings.sites[subtitleSite(pageUrl)]
           else settings.sites[subtitleSite(pageUrl)] = Boolean(message.value)
           await browser.storage.local.set({ [SUBTITLE_SETTINGS_KEY]: settings })
-        } else {
-          const next = subtitleSettings({ ...settings, ...message.settings, sites: settings.sites })
-          if (next.source !== settings.source || next.target !== settings.target || next.prefetch !== settings.prefetch) {
-            for (const live of Object.values(sessions)) if (!['stopped', 'failed'].includes(live.status)) await stop(live)
-          }
-          await browser.storage.local.set({ [SUBTITLE_SETTINGS_KEY]: next })
-        }
+        } else throw new Error('请在主程序“设置 → 字幕翻译”中修改全局字幕配置')
         await broadcastPolicy()
         return { ok: true, ...(await policy(pageUrl)) }
-      })
-      if (message.type === 'subtitle-provider' && trustedUI) return serialize(async () => {
-        if (message.request?.action === 'configure') {
-          for (const live of Object.values(sessions)) {
-            if (!['stopped', 'failed'].includes(live.status)) await stop(live)
-          }
-        }
-        return call(message.request?.action === 'configure' ? 'configure' : 'configuration', undefined, message.request || {})
       })
       if (message.type === 'subtitle-start' && (trustedUI || sender.tab)) return serialize(() => start(tabId, pageUrl,
         sender.tab && !trustedUI ? sender.frameId || 0 : message.frameId, String(message.mediaId || '') || undefined))

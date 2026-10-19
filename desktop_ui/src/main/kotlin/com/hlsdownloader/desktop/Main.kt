@@ -1682,7 +1682,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         },
         initialTab = auditSettingsTab(visualFixture) ?: "通用",
         saving = settingsSaveBusy,
-    ) { updated, defaultCookie, siteRuleCredentialEdits ->
+    ) { updated, defaultCookie, siteRuleCredentialEdits, subtitleEdit ->
         settingsSaveBusy = true
         scope.launch {
             runCatching { withContext(Dispatchers.IO) {
@@ -1690,6 +1690,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 var saved = client.saveSettings(updated)
                 if (defaultCookie != null) saved = client.saveDefaultCookie(defaultCookie)
                 siteRuleCredentialEdits.forEach { edit -> saved = client.saveSiteRuleCredential(edit) }
+                if (subtitleEdit != null) client.saveSubtitleConfiguration(subtitleEdit)
                 saved
             } }
                 .onSuccess { saved ->

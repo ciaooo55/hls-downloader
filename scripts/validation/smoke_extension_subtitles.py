@@ -52,6 +52,15 @@ class FixtureCore(socketserver.ThreadingTCPServer):
         self.prefetch_positions = []
         self.hold_ready = False
         self.idle_timeout = 30
+        self.preferences = dict(enabled=False, source='auto', target='zh', offset=0,
+                                showSource=True, prefetch=False)
+
+    def configure_preferences(self, **values):
+        # 模拟主程序保存全局选项；真实 Core 的配置持久化另行验收。
+        with self.lock:
+            self.preferences.update(values)
+            for session in self.sessions.values():
+                session['status'] = 'stopped'
 
     def respond(self, request):
         kind = request["type"]
@@ -68,7 +77,7 @@ class FixtureCore(socketserver.ThreadingTCPServer):
         sid = request.get("session_id", "")
         result = {"ok":True}
         with self.lock:
-            if action == "configuration": result.update(workspace="fixture-only", region="cn-beijing", has_key=True)
+            if action == "configuration": result.update(provider="dashscope", workspace="fixture-only", region="cn-beijing", has_key=True, preferences=dict(self.preferences))
             elif action == "start":
                 assert request["source"] == "auto" and request["target"] == "zh"
                 self.fail_poll = False
@@ -283,7 +292,7 @@ def run(args):
                     uuids = json.loads(driver.execute_script("return Services.prefs.getStringPref('extensions.webextensions.uuids','{}')"))
                     driver.set_context('content')
                     driver.get(page_url); page = driver.current_window_handle
-                    wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.textContent === '字幕翻译已关闭'"),'subtitle entry missing')
+                    wait(lambda:evaluate(page,"(()=>{const host=document.querySelector('[data-hls-subtitle]');return host && getComputedStyle(host).display === 'none'})()"),'disabled subtitle overlay should be hidden')
                     driver.execute_async_script("const done=arguments[arguments.length-1]; window.testMedia.play().then(()=>done(true),e=>done(String(e)))")
                     driver.switch_to.new_window('tab'); inspector = driver.current_window_handle
                     popup_url = f"moz-extension://{uuids[eid]}/popup.html?inspector=1"
@@ -300,7 +309,7 @@ def run(args):
                     _open_debug_target(port,page_url)
                     page_target = wait(lambda:next((t for t in _read_debug_targets(port) if t.get('url')==page_url),None),"web page missing")
                     page = page_target["webSocketDebuggerUrl"]
-                    wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.textContent === '字幕翻译已关闭'"),"subtitle entry missing")
+                    wait(lambda:evaluate(page,"(()=>{const host=document.querySelector('[data-hls-subtitle]');return host && getComputedStyle(host).display === 'none'})()"),"disabled subtitle overlay should be hidden")
                     popup_url = f"chrome-extension://{eid}/popup.html"
                     if args.capture == 'tab': trigger_action(port, eid, page_url)
                     # 工具栏弹窗会因焦点变化销毁；仍实际调用工具栏授予采集权限，再用持久标签测试同一 UI。
@@ -311,20 +320,21 @@ def run(args):
                 evaluate(popup,"document.getElementById('tab-1').click()")
                 wait(lambda:evaluate(popup,"Boolean(document.querySelector('[data-subtitle-panel] select option'))"),"subtitle popup missing")
                 if args.idle_reconnect:
-                    provider_request = "browser.runtime.sendMessage({type:'subtitle-provider',request:{action:'configuration'}})"
+                    provider_request = "browser.runtime.sendMessage({type:'subtitle-state-get'})"
                     initial_provider = evaluate(popup,provider_request)
                     assert initial_provider.get('ok'), f'initial subtitle connection failed: {initial_provider}'
                     # 真实闲置超过 Core 的 120 秒，验证下一次调用无需用户先遇到管道错误。
                     time.sleep(125)
                     resumed_provider = evaluate(popup,provider_request)
                     assert resumed_provider.get('ok'), f'subtitle connection failed after Core idle expiry: {resumed_provider}'
-                evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
-                wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === false"),"global enable not broadcast")
+                assert evaluate(popup, "document.querySelector('[data-subtitle-panel]').querySelectorAll('input,form').length === 0"), 'popup still exposes subtitle configuration'
+                core.configure_preferences(enabled=True)
+                wait(lambda:evaluate(page,"getComputedStyle(document.querySelector('[data-hls-subtitle]')).display !== 'none'"),"desktop enable not received")
                 evaluate(popup,"document.querySelector('[data-subtitle-panel] > details summary').click()")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"本站字幕翻译\"]');c.value='off';c.dispatchEvent(new Event('change'));return true})()")
-                wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === true"),"site disable not applied")
+                wait(lambda:evaluate(page,"getComputedStyle(document.querySelector('[data-hls-subtitle]')).display === 'none'"),"site disable not applied")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"本页字幕翻译\"]');c.value='on';c.dispatchEvent(new Event('change'));return true})()")
-                wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === false"),"page override not applied")
+                wait(lambda:evaluate(page,"getComputedStyle(document.querySelector('[data-hls-subtitle]')).display !== 'none'"),"page override not applied")
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"player not selected")
                 # 只改本轮独立浏览器配置中的夹具缓存，验证音轨变化无需再次拉取整页资源。
                 evaluate(popup, """(async()=>{
@@ -357,8 +367,8 @@ def run(args):
                   await browser.storage.session.set({[s.key]:s.previous});delete window.trackSmoke;return true})()""")
                 prefetch_checks = []
                 if args.capture == 'prefetch':
-                    evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-prefetch]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
-                    wait(lambda:evaluate(popup,"chrome.storage.local.get('subtitle-settings').then(v=>v['subtitle-settings']?.prefetch === true)"),"prefetch setting not saved")
+                    core.configure_preferences(prefetch=True)
+                    wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-panel]').textContent.includes('同步字幕')"),"desktop prefetch setting not received")
                     if args.capture == 'prefetch':
                         evaluate(page,"(()=>{const v=window.testMedia;v.pause();v.currentTime=0;return true})()")
                     wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"settings update did not reenable start")
@@ -429,8 +439,9 @@ def run(args):
                     # 实时路径的变速只更新播放器时钟，不重建采集连接。
                     time.sleep(.5)
                     assert core.resets == reset_count, 'rate change unexpectedly reset provider'
-                evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"字幕时间偏移秒\"]');c.value='1.2';c.dispatchEvent(new Event('change'));return true})()")
+                evaluate(page,"(()=>{const root=document.querySelector('[data-hls-subtitle]').shadowRoot;root.querySelector('details').open=true;const later=[...root.querySelectorAll('button')].find(b=>b.textContent==='延后 0.2s');for(let i=0;i<6;i++)later.click();return true})()")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.status')?.textContent.includes('+1.2s')"),"subtitle offset not applied")
+                assert core.preferences['offset'] == 0, 'page adjustment overwrote desktop default offset'
                 core.fail_poll = True
                 wait(lambda:evaluate(popup,"document.querySelector('.subtitle-error')?.textContent.includes('测试服务断开')"),"provider failure not shown")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.status')?.textContent.includes('测试服务断开')"),"provider failure not shown on player")
@@ -449,27 +460,29 @@ def run(args):
                 if args.capture != 'prefetch': evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"retry after reset rejection did not capture audio")
-                evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=false;c.dispatchEvent(new Event('change'));return true})()")
+                core.configure_preferences(enabled=False)
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"disable with cached captions did not stop translation")
-                wait(lambda:evaluate(page,"(()=>{const s=document.querySelector('[data-hls-subtitle]').shadowRoot;return s.querySelector('.translation').textContent === '' && [...s.querySelectorAll('.tools button')].slice(1,3).every(b=>b.hidden && b.disabled)})()"),"disable left cached subtitle navigation active")
+                wait(lambda:evaluate(page,"getComputedStyle(document.querySelector('[data-hls-subtitle]')).display === 'none'"),"disable left cached subtitle controls visible")
                 previous_sessions = len(core.sessions)
-                evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
+                core.configure_preferences(enabled=True)
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"global enable did not restore start")
                 if args.capture != 'prefetch': evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"reenable did not restore audio")
-                evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"目标语言\"]');c.value='en';c.dispatchEvent(new Event('change'));return true})()")
+                core.configure_preferences(target='en')
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"language change did not stop existing translation")
                 wait(lambda:evaluate(page,"(()=>{const s=document.querySelector('[data-hls-subtitle]').shadowRoot;return s.querySelector('.translation').textContent === '' && s.querySelector('button[title=\"跳到已翻译的下一句\"]').disabled})()"),"language change retained old translated cues")
-                evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=false;c.dispatchEvent(new Event('change'));return true})()")
+                core.configure_preferences(enabled=False)
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"global disable did not stop native session")
-                wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.translation')?.textContent === ''"),"global disable left subtitles visible")
+                wait(lambda:evaluate(page,"getComputedStyle(document.querySelector('[data-hls-subtitle]')).display === 'none'"),"global disable left subtitles visible")
                 screenshot(popup,args.report.with_suffix('.png'))
                 evaluate(page,"window.testMedia.remove()")
                 wait(lambda:evaluate(page,"document.querySelectorAll('[data-hls-subtitle]').length === 0"),"removed player retained subtitle UI")
                 result = {"passed":True,"browser":family,"headed":args.headed,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "idle_reconnect_verified":args.idle_reconnect,"audio_frames":core.audio_frames,
                     "nonzero_samples":core.nonzero_samples,"seek_resets":core.resets,"checks":["production popup","global switch broadcast","site disable and page override","fixture PCM prefetch in real browser" if args.capture == 'prefetch' else "real browser audio + AudioWorklet","real Native Host PCM forwarding","subtitle render","seek reset","rate change preserves original-speed audio timeline","time offset","provider failure and retry","reset rejection and retry","disable hides cached navigation and reenable restores audio","language change clears old cues","stop capture","removed player clears subtitle UI",*prefetch_checks]}
                 result['resource_updates_verified'] = True
+                result['desktop_preferences_sync_verified'] = True
+                result['popup_configuration_inputs_absent'] = True
                 args.report.parent.mkdir(parents=True,exist_ok=True); args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
                 return result
         except Exception:

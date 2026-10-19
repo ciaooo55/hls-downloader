@@ -1,5 +1,6 @@
 export const SUBTITLE_SETTINGS_KEY = 'subtitle-settings'
 export const SUBTITLE_PAGES_KEY = 'subtitle-pages'
+export const SUBTITLE_OFFSETS_KEY = 'subtitle-offsets'
 export const SUBTITLE_SESSIONS_KEY = 'subtitle-sessions'
 export const SUBTITLE_LANGUAGES = [
   ['zh', '中文'], ['en', '英语'], ['ja', '日语'], ['ko', '韩语'], ['fr', '法语'],

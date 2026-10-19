@@ -2,6 +2,7 @@
 use crate::{CoreCoordinator, CredentialVault};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,30 @@ const QWENCLOUD_ENDPOINT: &str = "wss://maas.qwencloudapi.com/api-ws/v1/realtime
 const LANGUAGES: &[&str] = &[
     "zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th",
 ];
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct SubtitlePreferences {
+    enabled: bool,
+    source: String,
+    target: String,
+    offset: f64,
+    show_source: bool,
+    prefetch: bool,
+}
+
+impl Default for SubtitlePreferences {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            source: "auto".into(),
+            target: "zh".into(),
+            offset: 0.0,
+            show_source: true,
+            prefetch: false,
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct SubtitleService {
@@ -103,6 +128,19 @@ impl SubtitleService {
                 if key.len() > 4096 || key.contains(['\r', '\n']) {
                     return Err("API Key 格式无效".into());
                 }
+                let preferences = request.get("preferences").map(|value| {
+                    let preferences: SubtitlePreferences = serde_json::from_value(value.clone())
+                        .map_err(|_| "字幕选项格式无效")?;
+                    if (preferences.source != "auto" && !LANGUAGES.contains(&preferences.source.as_str()))
+                        || !LANGUAGES.contains(&preferences.target.as_str())
+                    {
+                        return Err("字幕语种不受支持");
+                    }
+                    if !preferences.offset.is_finite() || preferences.offset.abs() > 30.0 {
+                        return Err("字幕偏移必须在 -30 到 30 秒之间");
+                    }
+                    serde_json::to_value(preferences).map_err(|_| "字幕选项格式无效")
+                }).transpose()?;
                 let protected = if key.is_empty() {
                     None
                 } else {
@@ -124,6 +162,12 @@ impl SubtitleService {
                         })
                 };
                 let mut settings = json!({"provider": provider});
+                let previous: Value = serde_json::from_str(
+                    &locked.store().setting_string(PROVIDER_SETTING, "{}")?
+                ).map_err(|_| "字幕配置损坏")?;
+                if let Some(preferences) = preferences.or_else(|| previous.get("preferences").cloned()) {
+                    settings["preferences"] = preferences;
+                }
                 if provider == DASHSCOPE {
                     settings["workspace"] = json!(workspace);
                     settings["region"] = json!(region);
@@ -166,14 +210,14 @@ impl SubtitleService {
             let provider = string(&config, "provider");
             let workspace = string(&config, "workspace");
             if provider == DASHSCOPE && workspace.is_empty() {
-                return Err("请先在插件字幕设置中配置百炼业务空间和 API Key".into());
+                return Err("请先在主程序“设置 → 字幕翻译”中配置百炼业务空间和 API Key".into());
             }
             let key = core
                 .load_credential(KEY_REF)?
-                .ok_or("请先配置字幕服务 API Key")?;
+                .ok_or("请先在主程序“设置 → 字幕翻译”中配置 API Key")?;
             let key = CredentialVault.unprotect(&key)?;
             if key.is_empty() {
-                return Err("请先配置字幕服务 API Key".into());
+                return Err("请先在主程序“设置 → 字幕翻译”中配置 API Key".into());
             }
             let endpoint = realtime_endpoint(provider, workspace, string(&config, "region"))?;
             let epoch = request.get("epoch").and_then(Value::as_u64).unwrap_or(0);
@@ -402,6 +446,7 @@ fn configuration(core: &CoreCoordinator) -> Result<Value, String> {
     Ok(
         json!({"ok": true, "provider": provider, "workspace": string(&value, "workspace"),
         "region": value.get("region").and_then(Value::as_str).unwrap_or("cn-beijing"),
+        "preferences": value.get("preferences"),
         "has_key": locked.store().load_credential(KEY_REF)?.is_some() }),
     )
 }
@@ -1119,6 +1164,26 @@ mod tests {
             .dispatch(&core, &json!({"action":"configure","provider":"dashscope","workspace":"","region":"cn-beijing"}))
             .is_err());
         assert_eq!(configuration(&core).unwrap()["provider"], QWENCLOUD);
+    }
+
+    #[test]
+    fn desktop_subtitle_preferences_persist_and_invalid_edits_do_not_replace_them() {
+        let service = SubtitleService::default();
+        let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        let preferences = json!({"enabled": true, "source": "ja", "target": "zh",
+            "offset": -0.4, "showSource": false, "prefetch": true});
+        let saved = service.dispatch(&core, &json!({"action": "configure",
+            "provider": "qwencloud", "preferences": preferences})).unwrap();
+        assert_eq!(saved["preferences"], preferences);
+        assert!(saved.get("api_key").is_none());
+        for invalid in [json!({"target": "unsupported"}), json!({"offset": 31}),
+            json!({"enabled": "true"}), json!({"api_key": "must-not-be-stored-here"})] {
+            assert!(service.dispatch(&core, &json!({"action": "configure", "provider": "qwencloud",
+                "preferences": invalid})).is_err());
+            assert_eq!(configuration(&core).unwrap()["preferences"], preferences);
+        }
+        service.dispatch(&core, &json!({"action": "configure", "provider": "qwencloud"})).unwrap();
+        assert_eq!(configuration(&core).unwrap()["preferences"], preferences);
     }
 
     #[test]

@@ -27,6 +27,31 @@ import java.util.concurrent.atomic.AtomicLong
 
 val protocolJson: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+@Serializable
+internal data class SubtitlePreferencesDto(
+    val enabled: Boolean = false,
+    val source: String = "auto",
+    val target: String = "zh",
+    val offset: Double = 0.0,
+    val showSource: Boolean = true,
+    val prefetch: Boolean = false,
+)
+
+@Serializable
+internal data class SubtitleConfigurationDto(
+    val provider: String = "dashscope",
+    val workspace: String = "",
+    val region: String = "cn-beijing",
+    @SerialName("has_key") val hasKey: Boolean = false,
+    val preferences: SubtitlePreferencesDto? = null,
+)
+
+internal data class SubtitleConfigurationEdit(
+    val configuration: SubtitleConfigurationDto,
+    val apiKey: String = "",
+    val clearKey: Boolean = false,
+)
+
 private const val CORE_PROTOCOL = "hls-downloader-v7-core"
 private const val CORE_PIPE = "\\\\.\\pipe\\HLSDownloader.v7"
 private const val CORE_TCP_HOST = "127.0.0.1"
@@ -622,6 +647,33 @@ object EnginePipeClient {
         val response = connection.request(request("load_settings"))
         response.requireType("settings", "读取设置失败")
         decodeEngineSettings(response)
+    }
+
+    internal fun loadSubtitleConfiguration(): SubtitleConfigurationDto = subtitleConfiguration(buildJsonObject {
+        put("action", "configuration")
+    })
+
+    internal fun saveSubtitleConfiguration(edit: SubtitleConfigurationEdit): SubtitleConfigurationDto = subtitleConfiguration(buildJsonObject {
+        val config = edit.configuration
+        put("action", "configure")
+        put("provider", config.provider)
+        put("workspace", config.workspace.trim())
+        put("region", config.region)
+        put("preferences", protocolJson.encodeToJsonElement(SubtitlePreferencesDto.serializer(), config.preferences ?: SubtitlePreferencesDto()))
+        put("api_key", edit.apiKey)
+        put("clear_key", edit.clearKey)
+    })
+
+    private fun subtitleConfiguration(value: JsonObject): SubtitleConfigurationDto = session { connection ->
+        val response = connection.request(buildJsonObject {
+            put("type", "subtitle"); put("request_id", nextRequestId()); put("request", value)
+        })
+        response.requireType("subtitle", "字幕设置操作失败")
+        val result = response["result"]?.jsonObject ?: error("下载引擎未返回字幕设置")
+        check(result["ok"]?.jsonPrimitive?.content == "true") {
+            result["error"]?.jsonPrimitive?.content ?: "字幕设置操作失败"
+        }
+        protocolJson.decodeFromJsonElement(SubtitleConfigurationDto.serializer(), result)
     }
 
     fun saveSettings(settings: EngineSettingsDto): EngineSettingsDto {

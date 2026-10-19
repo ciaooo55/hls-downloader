@@ -26,6 +26,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private data class SettingsTab(val label: String, val icon: ImageVector)
 
@@ -108,13 +110,14 @@ internal fun FullSettingsDialog(
     onDiscoverDevices: (String) -> Unit = {},
     initialTab: String = "通用",
     saving: Boolean = false,
-    onSave: (EngineSettingsDto, String?, List<SiteRuleCredentialEdit>) -> Unit,
+    onSave: (EngineSettingsDto, String?, List<SiteRuleCredentialEdit>, SubtitleConfigurationEdit?) -> Unit,
 ) {
     val dismiss = { if (!saving) onDismiss() }
     val tabs = remember { listOf(
         SettingsTab("通用", Icons.Outlined.Tune), SettingsTab("下载", Icons.Outlined.Downloading),
         SettingsTab("计划", Icons.Outlined.Schedule), SettingsTab("网络", Icons.Outlined.Language),
         SettingsTab("媒体", Icons.Outlined.Movie), SettingsTab("BT", Icons.Outlined.Hub),
+        SettingsTab("字幕翻译", Icons.Outlined.Language),
         SettingsTab("投屏与推送", Icons.Outlined.Cast), SettingsTab("安全", Icons.Outlined.Security),
         SettingsTab("浏览器", Icons.Outlined.Extension), SettingsTab("外观", Icons.Outlined.Palette),
     ) }
@@ -134,6 +137,25 @@ internal fun FullSettingsDialog(
     var btConnections by remember(current) { mutableStateOf(current.btMaxConnections.toString()) }
     var defaultCookie by remember(current.defaultCookieConfigured) { mutableStateOf("") }
     var clearDefaultCookie by remember(current.defaultCookieConfigured) { mutableStateOf(false) }
+    var subtitleEdit by remember { mutableStateOf<SubtitleConfigurationEdit?>(null) }
+    var subtitleDirty by remember { mutableStateOf(false) }
+    var subtitleInitialProvider by remember { mutableStateOf("") }
+    var subtitleLoadError by remember { mutableStateOf<String?>(null) }
+    var subtitleReload by remember { mutableStateOf(0) }
+    var subtitleOffset by remember { mutableStateOf("0") }
+    val subtitleError = if (subtitleDirty) {
+        val config = subtitleEdit?.configuration
+        when {
+            config?.provider == "dashscope" && !config.workspace.trim().matches(Regex("[A-Za-z0-9-]{1,128}")) -> "请填写有效的百炼业务空间 ID"
+            config?.hasKey == true && config.provider != subtitleInitialProvider && subtitleEdit?.apiKey.isNullOrBlank() && subtitleEdit?.clearKey != true -> "切换字幕服务时，请输入对应服务的 API Key 或清除旧密钥"
+            subtitleOffset.toDoubleOrNull()?.let { it.isFinite() && it in -30.0..30.0 } != true -> "字幕偏移必须在 -30 到 30 秒之间"
+            else -> null
+        }
+    } else null
+    fun updateSubtitle(edit: SubtitleConfigurationEdit) {
+        subtitleEdit = edit
+        subtitleDirty = true
+    }
     var deviceMode by remember(initialTab) { mutableStateOf("cast") }
     var siteRules by remember(current.siteRules) {
         mutableStateOf(parseSiteRulesForEditor(current.siteRules).map { EditableSiteRule(it) })
@@ -143,6 +165,18 @@ internal fun FullSettingsDialog(
     val contentScroll = rememberScrollState()
 
     LaunchedEffect(selected) { contentScroll.scrollTo(0) }
+    LaunchedEffect(selected, subtitleReload) {
+        if (selected == "字幕翻译" && subtitleEdit == null) {
+            subtitleLoadError = null
+            runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadSubtitleConfiguration() } }
+                .onSuccess { config ->
+                    subtitleEdit = SubtitleConfigurationEdit(config)
+                    subtitleInitialProvider = config.provider
+                    subtitleOffset = (config.preferences ?: SubtitlePreferencesDto()).offset.toString()
+                }
+                .onFailure { subtitleLoadError = describeFailure(it, "读取字幕配置失败") }
+        }
+    }
 
     WorkbenchDialog(dismiss, "设置", "HLS Downloader ${Product.version}", 880.dp, scrollable = false, content = {
         Row(Modifier.fillMaxWidth().fillMaxHeight(), verticalAlignment = Alignment.Top) {
@@ -282,6 +316,48 @@ internal fun FullSettingsDialog(
                         SettingRow("下载外挂字幕", "保存 HLS/DASH 字幕轨道", draft.downloadSubtitles) { draft = draft.copy(downloadSubtitles = it) }
                         SettingRow("跳过广告片段", "跳过清单明确标记的广告段", draft.skipAdSegments) { draft = draft.copy(skipAdSegments = it) }
                     }
+                    "字幕翻译" -> SettingsSection("网页在线字幕翻译") {
+                        val edit = subtitleEdit
+                        if (edit == null) {
+                            Text(subtitleLoadError ?: "正在读取字幕配置…", color = if (subtitleLoadError == null) muted else errorStrong, fontSize = TypeScale.body)
+                            if (subtitleLoadError != null) DialogSecondary("重新读取") { subtitleReload++ }
+                        } else {
+                            val config = edit.configuration
+                            val preferences = config.preferences ?: SubtitlePreferencesDto()
+                            fun updatePreferences(value: SubtitlePreferencesDto) {
+                                updateSubtitle(edit.copy(configuration = config.copy(preferences = value)))
+                            }
+                            SettingRow("启用网页字幕翻译", "插件提供当前网页的开始、停止和播放器选择", preferences.enabled) { updatePreferences(preferences.copy(enabled = it)) }
+                            V7Choice("翻译服务", listOf("dashscope" to "阿里云百炼", "qwencloud" to "QwenCloud"), config.provider) {
+                                updateSubtitle(edit.copy(configuration = config.copy(provider = it)))
+                            }
+                            if (config.provider == "dashscope") {
+                                V7Field("百炼业务空间 ID", config.workspace) { updateSubtitle(edit.copy(configuration = config.copy(workspace = it))) }
+                                V7Choice("服务地域", listOf("cn-beijing" to "北京", "ap-southeast-1" to "新加坡"), config.region) {
+                                    updateSubtitle(edit.copy(configuration = config.copy(region = it)))
+                                }
+                            }
+                            DialogLabel("API Key")
+                            OutlinedTextField(edit.apiKey, { updateSubtitle(edit.copy(apiKey = it, clearKey = false)) }, Modifier.fillMaxWidth(),
+                                singleLine = true, shape = RoundedCornerShape(Radius.md), visualTransformation = PasswordVisualTransformation(),
+                                placeholder = { Text(if (config.hasKey && !edit.clearKey) "已加密保存；留空保留原 Key" else "请输入当前服务的 API Key") })
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (edit.clearKey) "保存后清除密钥" else if (config.hasKey) "密钥已加密保存，不回显原值" else "尚未配置密钥", color = muted, fontSize = TypeScale.micro)
+                                if (config.hasKey || edit.apiKey.isNotEmpty()) DialogSecondary(if (edit.clearKey) "撤销清除" else "清除密钥") {
+                                    updateSubtitle(edit.copy(apiKey = "", clearKey = !edit.clearKey))
+                                }
+                            }
+                            Spacer(Modifier.height(9.dp))
+                            V7SubtitleLanguage("来源语言", preferences.source, allowAuto = true) { updatePreferences(preferences.copy(source = it)) }
+                            V7SubtitleLanguage("目标语言", preferences.target) { updatePreferences(preferences.copy(target = it)) }
+                            SettingRow("显示原文", "在译文旁同时显示识别原文", preferences.showSource) { updatePreferences(preferences.copy(showSource = it)) }
+                            SettingRow("同步字幕", "提前读取音轨；字幕不足时暂停视频等待，仅支持可确认音源的点播", preferences.prefetch) { updatePreferences(preferences.copy(prefetch = it)) }
+                            V7Field("默认字幕偏移（秒，-30 到 30）", subtitleOffset) { subtitleOffset = it; subtitleDirty = true }
+                            Text("实时模式会有识别和翻译延迟。点击网页“开始翻译”后才上传音频，可能产生服务费用。保存字幕配置会停止正在进行的翻译，请在网页重新开始。", color = muted, fontSize = TypeScale.micro, lineHeight = TypeScale.lineMicro)
+                            Text("使用 qwen3.5-livetranslate-flash-realtime 模型；服务地址由程序按提供方选择。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 5.dp))
+                            if (subtitleError != null) Text(subtitleError, color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 7.dp))
+                        }
+                    }
                     "BT" -> SettingsSection("BT 与种子") {
                         V7DirectoryField("种子监视目录", draft.torrentWatch, "选择种子监视目录") { draft = draft.copy(torrentWatch = it) }
                         SettingRow("监视新种子", "自动导入监视目录中新出现的种子、磁力或 URL 文件", draft.torrentWatchEnabled) { draft = draft.copy(torrentWatchEnabled = it) }
@@ -395,7 +471,7 @@ internal fun FullSettingsDialog(
         }
     }, actions = {
         DialogSecondary("取消", onClick = dismiss)
-        DialogPrimary("保存设置", enabled = siteRuleError == null && !saving) {
+        DialogPrimary("保存设置", enabled = siteRuleError == null && subtitleError == null && !saving) {
             val encodedSiteRules = encodeSiteRules(siteRules.map { item ->
                 item.rule.copy(
                     host = item.rule.host.trim().lowercase(),
@@ -425,9 +501,26 @@ internal fun FullSettingsDialog(
                 clearDefaultCookie -> ""
                 defaultCookie.isNotEmpty() -> defaultCookie
                 else -> null
-            }, credentialEdits)
+            }, credentialEdits, subtitleEdit?.takeIf { subtitleDirty }?.let { edit ->
+                edit.copy(configuration = edit.configuration.copy(preferences = (edit.configuration.preferences ?: SubtitlePreferencesDto()).copy(offset = subtitleOffset.toDouble())))
+            })
         }
     })
+}
+
+@Composable
+private fun V7SubtitleLanguage(label: String, selected: String, allowAuto: Boolean = false, onSelect: (String) -> Unit) {
+    val languages = listOf("zh" to "中文", "en" to "英语", "ja" to "日语", "ko" to "韩语", "fr" to "法语", "de" to "德语", "es" to "西班牙语", "ru" to "俄语", "pt" to "葡萄牙语", "it" to "意大利语", "ar" to "阿拉伯语", "id" to "印尼语", "vi" to "越南语", "th" to "泰语")
+    val options = if (allowAuto) listOf("auto" to "自动识别") + languages else languages
+    var expanded by remember { mutableStateOf(false) }
+    DialogLabel(label)
+    Box {
+        DialogSecondary(options.firstOrNull { it.first == selected }?.second ?: selected) { expanded = true }
+        DropdownMenu(expanded, { expanded = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) {
+            options.forEach { (code, text) -> DropdownMenuItem(text = { Text(text, fontSize = TypeScale.body) }, onClick = { expanded = false; onSelect(code) }) }
+        }
+    }
+    Spacer(Modifier.height(9.dp))
 }
 
 @Composable

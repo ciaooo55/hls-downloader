@@ -116,7 +116,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const next = button('下一句', () => seekCue(media, 1)); next.title = '跳到已翻译的下一句'
     const offset = (amount: number) => {
       settings.offset = Math.max(-30, Math.min(30, Math.round((settings.offset + amount) * 10) / 10))
-      // 页面按钮只修改字幕时间；全局/站点/语言设置由插件弹窗管理。
+      // 页面按钮只临时微调当前页，不修改主程序的默认偏移。
       void send({ type: 'subtitle-offset', offset: settings.offset }).then(updatePolicy).catch(() => undefined)
       render()
     }
@@ -155,6 +155,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       const response = await send({ type: 'subtitle-players', players: values })
       if (response?.ok) {
         settings = subtitleSettings(response.settings); allowed = response.allowed === true
+        if (cueLanguages && cueLanguages !== `${settings.source}:${settings.target}`) { cues.clear(); live = undefined }
         const nextPage = subtitlePage(response.pageUrl)
         if (pageUrl && nextPage !== pageUrl) { cues.clear(); live = undefined }
         pageUrl = nextPage
@@ -222,7 +223,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       ui.status.hidden = selected !== media || (!active && !error)
       ui.button.disabled = !allowed
       ui.button.textContent = !allowed ? '字幕翻译已关闭' : active ? '停止翻译' : '翻译字幕'
-      ui.button.title = !allowed ? '在 HLS 插件弹窗中开启字幕翻译，检查全局、本站和本页开关' : '在线翻译当前播放器音频'
+      ui.button.title = !allowed ? '在主程序启用字幕翻译，并检查插件的网页开关' : '在线翻译当前播放器音频'
       ui.status.textContent = selected !== media ? '' : error || (active ? status === 'running'
         ? `${capture === 'prefetch' ? `${preparing ? '等待字幕' : '同步字幕'} · 已备好 ${Math.max(0, readyEnd - media.currentTime).toFixed(1)} 秒` : media.paused || media.ended ? '等待播放' : '实时翻译'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
       ui.status.title = ui.status.textContent || ''
@@ -247,6 +248,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     if (message?.type === 'subtitle-select') {
       const media = [...players].find(([, ui]) => ui.id === message.mediaId)?.[0]
       if (!media?.isConnected) { respond({ ok: false, error: '播放器已移除，请重新选择' }); return }
+      if (message.settings) settings = subtitleSettings(message.settings)
       pick(media, String(message.sessionId))
       if (message.prefetch) {
         preparing = true; resumeAfterPrepare = !media.paused; media.pause()
