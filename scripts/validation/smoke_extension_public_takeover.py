@@ -73,12 +73,20 @@ def run(args):
             raise RuntimeError(f"Default real Host takeover unavailable: {ping}")
         report["extension_id"] = extension_id
         record("default-takeover-enabled-for-all-sizes")
+        if args.browser == 'firefox':
+            driver.execute_script('window.takeoverDownloadEvents=[]; chrome.downloads.onCreated.addListener('
+                                  'item=>window.takeoverDownloadEvents.push({id:item.id,url:item.url}));')
         driver.switch_to.window(page)
         link.click()
         wait(lambda: presenter_window(runtime=args.runtime), "Public browser download did not reach desktop confirmation", 25)
         if {task["task_id"] for task in tasks()} != initial:
             raise AssertionError("Core task started before actual confirmation")
         record("original-website-link-reaches-confirmation-before-task")
+        if args.browser == 'firefox':
+            items = _download_items(driver, inspector)
+            events = driver.execute_script('return window.takeoverDownloadEvents')
+            assert not items and not events, {'items': items, 'created_events': events}
+            record('Firefox-never-created-a-browser-download-before-confirmation', True)
         click_download_confirmation(runtime=args.runtime, evidence_path=args.report.with_name("accept.json"))
 
         def completed():
@@ -99,6 +107,10 @@ def run(args):
         def no_browser_copy():
             items = [item for item in _download_items(driver, inspector)
                      if filename in str(item.get("url", "")) or Path(item.get("filename", "")).name == filename]
+            if args.browser == 'firefox':
+                events = driver.execute_script('return window.takeoverDownloadEvents')
+                assert not events, {'created_events': events}
+                return {"items": items, 'created_events': events} if not items else None
             return {"items": items} if not any(item.get("exists") for item in items) else None
 
         record("browser-keeps-no-second-file", wait(no_browser_copy, "Browser kept a duplicate downloaded file", 20))

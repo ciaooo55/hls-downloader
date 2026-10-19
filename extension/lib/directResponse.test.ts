@@ -8,7 +8,7 @@ const resource = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 
-describe('early Chromium direct-download response detection', () => {
+describe('early direct-download response detection', () => {
   it('accepts an attachment navigation before downloads.onCreated', () => {
     expect(isEarlyDirectDownloadResponse(
       { type: 'main_frame', method: 'GET', statusCode: 200 },
@@ -36,6 +36,16 @@ describe('early Chromium direct-download response detection', () => {
       { type: 'sub_frame', method: 'GET', statusCode: 206 },
       { disposition: '', resource: resource() },
     )).toBe(true)
+  })
+
+  it('allows an inline file only when a same-origin download action was confirmed', () => {
+    const response = { disposition: 'inline; filename="manual.pdf"', resource: resource({
+      url: 'https://docs.test/manual', kind: 'file', mimeType: 'application/pdf', filename: 'manual.pdf',
+    }) }
+    const details = { type: 'main_frame', method: 'GET', statusCode: 200 }
+    expect(isEarlyDirectDownloadResponse(details, response)).toBe(false)
+    expect(isEarlyDirectDownloadResponse(details, response, true)).toBe(true)
+    expect(isEarlyDirectDownloadResponse({ ...details, type: 'xmlhttprequest' }, response, true)).toBe(false)
   })
 
   it('rejects successful statuses that cannot carry downloadable content', () => {

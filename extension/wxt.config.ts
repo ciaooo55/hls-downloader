@@ -25,6 +25,7 @@ export default defineConfig({
     key: browser === 'chrome' ? CHROMIUM_PUBLIC_KEY : undefined,
     permissions: [
       'downloads', 'contextMenus', 'nativeMessaging', 'storage', 'cookies', 'webRequest', 'alarms',
+      ...(browser === 'firefox' ? ['webRequestBlocking'] : []),
       ...(browser === 'chrome' ? ['downloads.ui', 'downloads.shelf', 'tabCapture', 'offscreen', 'activeTab'] : []),
     ],
     host_permissions: ['<all_urls>'],

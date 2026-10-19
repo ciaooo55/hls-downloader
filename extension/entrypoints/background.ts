@@ -164,7 +164,7 @@ export interface EarlyBrowserTakeover {
   urls: string[]
   tabId: number
   frameId: number
-  promise: Promise<{ resource: MediaResource, beforeResponse?: boolean, bypass?: boolean } | null>
+  promise: Promise<{ resource: MediaResource, bypass?: boolean } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const activeDownloadOffers = new Map<string, Promise<any>>()
@@ -1243,7 +1243,9 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
   }
   // Handoff creation is the acknowledgement. Presentation happens in the
   // desktop queue and must never hold the browser button at “发送中”.
+  // 桌面已确认接收后，跟踪缓存写入失败不能把下载重新交还浏览器。
   await trackHandoff(String(handoff.id), resource.id, resource.tabId, downloadSelectionKey(resource))
+    .catch(error => console.warn('HLS Downloader handoff tracking unavailable', error))
   return response
 }
 
@@ -1431,10 +1433,13 @@ function observedResponse(details: any, chain?: RequestChain) {
   const length = rangeTotal || Number(header('content-length') || 0)
   const disposition = header('content-disposition')
   const filename = responseFilename(disposition)
+  // 附件导航和二进制导航已确定会进入下载器，不能套用被动嗅探对图片、JSON、无扩展名端点的排除规则。
+  const downloadNavigation = ['main_frame', 'sub_frame'].includes(String(details.type || ''))
+    && (/^\s*attachment\b/i.test(disposition) || mimeType.toLowerCase().includes('octet-stream'))
   const kind = disposition
     || mimeType.toLowerCase().includes('octet-stream')
     || isConcreteDownloadMime(mimeType)
-    ? classifyDownload(details.url, mimeType, filename, disposition)
+    ? classifyDownload(details.url, mimeType, filename, disposition, downloadNavigation)
     : classifyResource(details.url, mimeType)
   if (!kind) return { disposition, resource: null }
   const resource = {
@@ -1482,73 +1487,83 @@ function trackedSize(chain: RequestChain | undefined): number {
   return rangeTotal || Number(responseHeader(chain, 'content-length') || 0)
 }
 
-function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }, beforeResponse = false): void {
-  if (!chain || !observed.resource || (!beforeResponse && !isEarlyDirectDownloadResponse(details, observed))) return
+async function prepareEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }) {
+  if (!chain || !observed.resource) return null
+  const requiresDownloadAttribute = !isEarlyDirectDownloadResponse(details, observed)
+  if (requiresDownloadAttribute && (!import.meta.env.FIREFOX || !isEarlyDirectDownloadResponse(details, observed, true))) return null
+  const observedResource = observed.resource
+  try {
+    const config = await settings()
+    const resource = {
+      ...observedResource,
+      id: resourceId(observedResource.url),
+      pageUrl: await topLevelPageUrl(Number(details.tabId), observedResource.pageUrl || chain.pageUrl),
+      tabId: Number(details.tabId),
+      frameId: Number(details.frameId),
+      method: chain.method,
+      requestHeaders: chain.requestHeaders,
+      seenAt: Date.now(),
+    } as MediaResource
+    if (String(chain.method || '').toUpperCase() === 'POST') return null
+    // Response headers are strong evidence that a navigation is a file, but
+    // they are not evidence that the user asked for a download: autoplay,
+    // hidden iframe preloads and direct MP4 navigations produce the same
+    // headers. Bind the early offer to the same trusted click intent used by
+    // the DownloadItem path so the browser is never pre-empted on a normal
+    // page visit.
+    const intent = await waitForClickIntent(
+      resource.url,
+      resource.url,
+      resource.pageUrl || chain.pageUrl || '',
+      chain,
+      clickIntentPollsForKind(resource.kind),
+      requiresDownloadAttribute,
+    )
+    // 同源 download 属性即使响应标记 inline 也会触发下载，普通预览导航仍交给浏览器。
+    if (requiresDownloadAttribute && !intent) return null
+    if (intent?.altBypass) return { resource, bypass: true }
+    if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
+    if (!shouldTakeover({
+      url: resource.url,
+      sourcePageUrl: resource.pageUrl,
+      size: resource.size,
+      mimeType: resource.mimeType,
+      filename: resource.filename,
+      ...config,
+      ...(intent || {}),
+      explicitClick: Boolean(intent),
+      strongEvidence: true,
+    }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
+    return { resource }
+  } catch (error) {
+    console.debug('HLS Downloader early browser takeover unavailable', error)
+    return null
+  }
+}
+
+function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }): EarlyBrowserTakeover | undefined {
+  if (!chain || !observed.resource || !isEarlyDirectDownloadResponse(details, observed, import.meta.env.FIREFOX)) return
   const observedResource = observed.resource
   const requestId = String(chain.requestId || details.requestId || '')
-  if (!requestId || earlyBrowserTakeovers.has(requestId)) return
-  const promise = (async () => {
-    try {
-      const config = await settings()
-      const resource = {
-        ...observedResource,
-        id: resourceId(observedResource.url),
-        pageUrl: await topLevelPageUrl(Number(details.tabId), observedResource.pageUrl || chain.pageUrl),
-        tabId: Number(details.tabId),
-        frameId: Number(details.frameId),
-        method: chain.method,
-        requestHeaders: chain.requestHeaders,
-        seenAt: Date.now(),
-      } as MediaResource
-      if (String(chain.method || '').toUpperCase() === 'POST') return null
-      // Response headers are strong evidence that a navigation is a file, but
-      // they are not evidence that the user asked for a download: autoplay,
-      // hidden iframe preloads and direct MP4 navigations produce the same
-      // headers. Bind the early offer to the same trusted click intent used by
-      // the DownloadItem path so the browser is never pre-empted on a normal
-      // page visit.
-      const intent = await waitForClickIntent(
-        resource.url,
-        resource.url,
-        resource.pageUrl || chain.pageUrl || '',
-        chain,
-        clickIntentPollsForKind(resource.kind),
-        beforeResponse,
-      )
-      if (beforeResponse && !intent) return null
-      if (intent?.altBypass) return { resource, bypass: true }
-      if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
-      if (!shouldTakeover({
-        url: resource.url,
-        sourcePageUrl: resource.pageUrl,
-        size: resource.size,
-        mimeType: resource.mimeType,
-        filename: resource.filename,
-        ...config,
-        ...(intent || {}),
-        explicitClick: Boolean(intent),
-        strongEvidence: true,
-      }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
-      return { resource, beforeResponse }
-    } catch (error) {
-      console.debug('HLS Downloader early browser takeover unavailable', error)
-      return null
-    }
-  })()
+  if (!requestId) return
+  const existing = earlyBrowserTakeovers.get(requestId)
+  if (existing) return existing
+  const promise = prepareEarlyBrowserTakeover(details, chain, observed)
   const urls = [...new Set([observedResource.url, String(details.url || '')].filter(Boolean))]
-  earlyBrowserTakeovers.set(requestId, {
+  const entry = {
     requestId,
     startedAt: Date.now(),
     urls,
     tabId: Number(details.tabId),
     frameId: Number(details.frameId),
     promise,
-  })
+  }
+  earlyBrowserTakeovers.set(requestId, entry)
   void promise.finally(() => {
     setTimeout(() => {
       const current = earlyBrowserTakeovers.get(requestId)
-      if (current?.promise === promise) earlyBrowserTakeovers.delete(requestId)
-    }, beforeResponse ? 300_000 : 30_000)
+      if (current === entry) earlyBrowserTakeovers.delete(requestId)
+    }, 30_000)
   })
   // Keep the map bounded on pages that repeatedly navigate through downloads.
   if (earlyBrowserTakeovers.size > 128) {
@@ -1556,6 +1571,28 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
       .sort((left, right) => left.startedAt - right.startedAt)[0]
     if (oldest) earlyBrowserTakeovers.delete(oldest.requestId)
   }
+  return entry
+}
+
+async function interceptFirefoxDownload(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }) {
+  const early = rememberEarlyBrowserTakeover(details, chain, observed)
+  if (!early) return undefined
+  const prepared = await early.promise
+  if (!prepared || prepared.bypass) return undefined
+  try {
+    const response = await offer(prepared.resource, chain, { explicit: true })
+    // 阻塞原响应直到桌面确认接收，随后在 Firefox 建立 DownloadItem 之前取消。
+    // 用户在桌面取消就是取消本次下载，不再启动一个浏览器副本。
+    if (desktopAcceptedHandoff(response)) {
+      earlyBrowserTakeovers.delete(early.requestId)
+      return { cancel: true }
+    }
+  } catch (error) {
+    console.warn('HLS Downloader response takeover unavailable', error)
+  }
+  // 本次已经选择浏览器回退，onCreated 不能再暂停并重复发送同一份请求。
+  early.promise = Promise.resolve({ resource: prepared.resource, bypass: true })
+  return undefined
 }
 
 export default defineBackground(() => {
@@ -1673,15 +1710,7 @@ export default defineBackground(() => {
   })
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
-    const chain = requestChains.observeRequest(details)
-    if (import.meta.env.FIREFOX && details.method === 'GET' && ['main_frame', 'sub_frame'].includes(details.type)) {
-      // Firefox 有时等首字节后才发响应头事件，先保存同源 download 链接的真实请求上下文。
-      rememberEarlyBrowserTakeover(details, chain, { disposition: '', resource: {
-        url: details.url, kind: classifyDownload(details.url, '', '', '', true) || 'file',
-        pageUrl: chain.pageUrl, tabId: details.tabId, frameId: details.frameId,
-        method: chain.method, requestHeaders: chain.requestHeaders,
-      } }, true)
-    }
+    requestChains.observeRequest(details)
   }, TRACKED_REQUEST_FILTER, requestHeaderExtraInfo(import.meta.env.CHROME))
   ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
@@ -1690,15 +1719,19 @@ export default defineBackground(() => {
     requestChains.observeRedirect(details as any)
   }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
 
-  browser.webRequest.onHeadersReceived.addListener(details => {
+  // WXT 的共享类型沿用 Chromium 同步签名；Firefox 允许异步 BlockingResponse。
+  ;(browser.webRequest.onHeadersReceived.addListener as any)((details: any) => {
     const chain = requestChains.observeResponse(details as any)
     const observed = observedResponse(details, chain)
-    // 响应阶段只准备上下文，onCreated 暂停原下载之后才允许显示桌面确认。
+    if (import.meta.env.FIREFOX && isEarlyDirectDownloadResponse(details, observed, true)) {
+      return interceptFirefoxDownload(details, chain, observed)
+    }
+    // Chromium MV3 没有异步阻塞权限，仍须在 onCreated 暂停后交接。
     if (import.meta.env.CHROME) {
       rememberEarlyBrowserTakeover(details, chain, observed)
     }
     return undefined
-  }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
+  }, TRACKED_REQUEST_FILTER, import.meta.env.FIREFOX ? ['responseHeaders', 'blocking'] : ['responseHeaders'])
   browser.webRequest.onCompleted.addListener(details => {
     requestChains.finish(details.requestId, details.timeStamp || Date.now())
   }, TRACKED_REQUEST_FILTER)
@@ -1777,7 +1810,7 @@ export default defineBackground(() => {
           concealBrowserDownload()
           downloadUiConcealed = true
           const response = earlyResult
-            ? await offer(earlyResult.resource, provisionalChain, { allowUnverified: earlyResult.beforeResponse }) : undefined
+            ? await offer(earlyResult.resource, provisionalChain) : undefined
           if (!restored && !desktopAcceptedHandoff(response)) return
           const handoffId = String(response?.handoff?.id || restored?.id || '')
           if (earlyTakeover && earlyResult && response?.handoff?.id) {

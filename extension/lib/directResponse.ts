@@ -27,14 +27,15 @@ function explicitlyInline(disposition: string): boolean {
 }
 
 /**
- * Decide whether response headers are strong enough to offer a browser
- * navigation before Chrome creates its DownloadItem.  XHR/fetch responses
+ * Decide whether response headers identify a downloadable navigation.
+ * Firefox can block it here; Chromium prepares its later handoff. XHR/fetch responses
  * deliberately return false and continue through downloads.onCreated, where
  * click intent and the final browser item are available.
  */
 export function isEarlyDirectDownloadResponse(
   details: DirectResponseDetails,
   observed: ObservedDirectResponse,
+  explicitDownload = false,
 ): boolean {
   if (!['main_frame', 'sub_frame'].includes(String(details.type || ''))) return false
   if (String(details.method || 'GET').toUpperCase() !== 'GET') return false
@@ -48,7 +49,7 @@ export function isEarlyDirectDownloadResponse(
   // or concrete PDF/media MIME on that response is not evidence that the user
   // started a download. If the browser later creates a DownloadItem anyway,
   // the normal takeover path can still handle it with the real browser item.
-  if (explicitlyInline(observed.disposition)) return false
+  if (!explicitDownload && explicitlyInline(observed.disposition)) return false
   if (hasDownloadHeaders(observed.disposition, observed.resource)) return true
   const resource = observed.resource
   if (!resource) return false

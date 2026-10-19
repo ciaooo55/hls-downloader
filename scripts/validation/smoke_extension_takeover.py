@@ -914,6 +914,11 @@ def run_real(args) -> dict[str, Any]:
         result['checks'].append({'name':name,'actual':actual})
         args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         print(json.dumps({'check':name}),flush=True)
+    def assert_no_firefox_download(suffix):
+        items = [item for item in _download_items(driver, inspector) if suffix in item.get('url', '')]
+        events = driver.execute_script('return (window.takeoverDownloadEvents || []).filter(item=>item.url.includes(arguments[0]))', suffix)
+        assert not items and not events, {'items': items, 'created_events': events}
+        return {'items': items, 'created_events': events}
     # 真实浏览器配置放本地临时目录，隔离沙盒映射盘对 Native Messaging 启动的影响。
     temp_root = Path(tempfile.gettempdir())
     with tempfile.TemporaryDirectory(prefix='real-takeover-',dir=temp_root) as temporary:
@@ -1001,6 +1006,9 @@ def run_real(args) -> dict[str, Any]:
                 popup_url = f'moz-extension://{uuids[addon_id]}/popup.html'
             driver.switch_to.new_window('tab'); inspector=driver.current_window_handle
             driver.get(popup_url)
+            if args.browser == 'firefox':
+                driver.execute_script('window.takeoverDownloadEvents=[]; chrome.downloads.onCreated.addListener('
+                                      'item=>window.takeoverDownloadEvents.push({id:item.id,url:item.url}));')
             def message(value):
                 driver.switch_to.window(inspector)
                 return _extension_call(driver,'chrome.runtime.sendMessage(arguments[0]).then(done,e=>done({ok:false,error:String(e)}))',value)
@@ -1276,7 +1284,10 @@ def run_real(args) -> dict[str, Any]:
                         created.update(t['task_id'] for t in found)
                         return found[-1] if found and found[-1]['status']=='failed' else None
                     record('targeted-desktop-http-failure', wait(targeted_failure,'Targeted failure task missing',20))
-                record('targeted-browser-recovery-sha256',_assert_browser_completed(driver,inspector,name+'.bin'))
+                if args.browser == 'firefox':
+                    record('targeted-Firefox-decision-keeps-browser-idle', assert_no_firefox_download(name+'.bin'))
+                else:
+                    record('targeted-browser-recovery-sha256',_assert_browser_completed(driver,inspector,name+'.bin'))
                 single_resolved_handoff(name)
                 result['passed']=True
                 return result
@@ -1295,7 +1306,7 @@ def run_real(args) -> dict[str, Any]:
             wait(lambda:presenter_window(runtime=runtime),'Takeover confirmation missing',20)
             paused=_item_for(driver,inspector,'accept.bin')
             if args.browser == 'firefox':
-                assert paused is None or paused['state'] == 'interrupted', paused
+                assert_no_firefox_download('accept.bin')
             else:
                 assert paused and paused['paused'], paused
             assert before=={t['task_id'] for t in tasks()}, 'Task began before confirmation'
@@ -1319,7 +1330,10 @@ def run_real(args) -> dict[str, Any]:
             result['reject_before_confirmation'] = _download_items(driver, inspector)
             args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf8')
             click_download_confirmation(accept=False, evidence_path=args.report.with_name('reject-click.json'), runtime=runtime)
-            record('real-desktop-rejection-browser-resumes-sha256',_assert_browser_completed(driver,inspector,'reject.bin'))
+            if args.browser == 'firefox':
+                record('real-desktop-rejection-cancels-without-Firefox-download', assert_no_firefox_download('reject.bin'))
+            else:
+                record('real-desktop-rejection-browser-resumes-sha256',_assert_browser_completed(driver,inspector,'reject.bin'))
             single_resolved_handoff('reject')
             assert len(created)==len([t for t in tasks() if t['task_id'] not in initial]), 'Rejected takeover created another task'
             _click_download(driver,page,'fallback')
@@ -1333,7 +1347,10 @@ def run_real(args) -> dict[str, Any]:
                 return found[-1] if found and found[-1]['status']=='failed' else None
             failure=wait(failed,'Accepted desktop HTTP failure was not reported',60)
             assert failure.get('error_message'),failure
-            record('real-accepted-desktop-failure-browser-fallback-sha256',_assert_browser_completed(driver,inspector,'fallback.bin'))
+            if args.browser == 'firefox':
+                record('real-accepted-desktop-failure-keeps-Firefox-idle', assert_no_firefox_download('fallback.bin'))
+            else:
+                record('real-accepted-desktop-failure-browser-fallback-sha256',_assert_browser_completed(driver,inspector,'fallback.bin'))
             single_resolved_handoff('fallback')
             _click_download(driver,page,'disconnect')
             wait(lambda:presenter_window(runtime=runtime),'Disconnect confirmation missing',20)
@@ -1359,7 +1376,10 @@ def run_real(args) -> dict[str, Any]:
             click_download_confirmation(accept=False, runtime=runtime)
             result['disconnect_after_reject'] = _download_items(driver, inspector)
             args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
-            record('actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256',_assert_browser_completed(driver,inspector,'disconnect.bin'))
+            if args.browser == 'firefox':
+                record('actual-native-host-disconnect-keeps-Firefox-idle', assert_no_firefox_download('disconnect.bin'))
+            else:
+                record('actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256',_assert_browser_completed(driver,inspector,'disconnect.bin'))
             assert message({'type':'ping'}).get('ok'),'Native Host did not reconnect'
             result['passed']=True
         except Exception as error:
