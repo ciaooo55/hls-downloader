@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\firefox-response\\candidate.msi",
+  "original_product_code": "{F22FAEA1-74BF-4AA0-BB5D-C4B7B3353984}",
+  "verified_product_code": "{9E013521-042C-429C-9FC7-7F09F6C964B9}",
+  "original_package_code": "{5FD8EFB2-3126-4DE1-8DB8-0F3F810210A3}",
+  "verified_package_code": "{C6A29C47-16D6-4E0A-A965-37DD30D96E76}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "5606FBFFF5A24D4BA72C9E7E4C1A47DE19A42369889E6AC022BF6719DD68E139",
+  "sha256_after": "E6C5678F079CC222DFB04B276D16F5CFD9F27FE1ADEB28D53A24E87BDE87E899"
+}
