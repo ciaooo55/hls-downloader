@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "package_tier": "candidate",
+  "source_commit": "7c42c864fe5d3d04a5fc0106f0441bec4fd61fa5",
+  "source_tree": "d1a09053954465f117c2914be9cbef4555365347",
+  "feature_parity_path": "FEATURE-PARITY.json",
+  "feature_parity_sha256": "a9f0a5bd29bf4efb11435dfe18dd50f5d43471ff22745f4331967b2029d02956",
+  "artifacts": {
+    "exe": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-candidate.exe",
+      "sha256": "a66416f2c9f15a7eaa4f61247c50628d390ac44ffd4aa130db293d249d82afc4"
+    },
+    "msi": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-candidate.msi",
+      "sha256": "1b931ce1516cfbbd171d041c1bcf68a9e71265baad38c605a5741c5bdf48d6d5"
+    },
+    "portable": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-Portable-candidate.zip",
+      "sha256": "0cf05de3ce2a9d35746060ef5372a8dfba7033588cd56a612d8cddde33221460"
+    }
+  },
+  "extensions": {
+    "Chromium": {
+      "version": "7.0.3",
+      "path": "extensions/HLSDownloader-7.0.3-Chromium.zip",
+      "sha256": "95a93ecbd5e6587c847dbd8752e5eebd4ef5bf233d14333c871663045055c723"
+    },
+    "Firefox": {
+      "version": "7.0.3",
+      "path": "extensions/HLSDownloader-7.0.3-Firefox.zip",
+      "sha256": "6723dde3ec66b9ce818d8594958942104079fcc70cde1d389e83d5b63269334e"
+    }
+  },
+  "generated_at_utc": "2026-10-19T06:55:35.3072973Z"
+}

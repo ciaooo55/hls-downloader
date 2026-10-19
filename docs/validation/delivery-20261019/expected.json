@@ -1,0 +1,18 @@
+{
+  "source_commit": "7c42c864fe5d3d04a5fc0106f0441bec4fd61fa5",
+  "product_code": "{7C42C864-FE5D-3D04-A5FC-0106F0441BEC}",
+  "components_sha256": {
+    "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "14943d5286075cb602770dd1b7acede01bd165bde3eda8d8e82cac129f34c525",
+    "app/resources/HLSDownloaderEngine.exe": "4884d94c21f09ea3e180a8943f33cd767e848daf65106aa13fbcb622f5c39977",
+    "app/resources/HLSDownloaderNativeHost.exe": "b91278d722c743f361204aa954d81772c6c3177e5dcecf408f8764009871605a",
+    "app/resources/HLSDownloaderUpdater.exe": "0c0a8c5a0f0f1b4a017e0d8d01d58b92caa3392d7f11a48d02127c9d5b066be4",
+    "app/resources/HLSDownloaderPresenter.exe": "2ada5ceeec7e3a038104006f900e5dbc9c42c7d68b00e7ee6906d0b1ec23d942",
+    "app/resources/ffmpeg.exe": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98",
+    "app/resources/libmpv-2.dll": "f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea",
+    "app/resources/vulkan-1.dll": "e1fcfc9489beefa6a6d9d11d6c7517f6a2b7f16e0d3fb8f4103bee0210f314a3",
+    "app/resources/BUILD-PROVENANCE.json": "53129e22665ac436d9301ff109505259eb03f3936751072996f44fb88f353f73",
+    "app/resources/FEATURE-PARITY.json": "a9f0a5bd29bf4efb11435dfe18dd50f5d43471ff22745f4331967b2029d02956",
+    "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "95a93ecbd5e6587c847dbd8752e5eebd4ef5bf233d14333c871663045055c723",
+    "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "6723dde3ec66b9ce818d8594958942104079fcc70cde1d389e83d5b63269334e"
+  }
+}

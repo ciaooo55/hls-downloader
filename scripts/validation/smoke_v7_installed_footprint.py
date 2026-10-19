@@ -102,6 +102,7 @@ def run(args):
                                   for p in sorted(paths, key=lambda p: p.stat().st_size, reverse=True)[:12]]
         report['installed_components_sha256'] = {name: hashlib.sha256((resources/name).read_bytes()).hexdigest()
             for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe', 'HLSDownloaderUpdater.exe')}
+        version = json.loads((resources/'BUILD-PROVENANCE.json').read_text(encoding='utf-8-sig'))['product_version']
         extensions = {}
         for family in ('Chromium', 'Firefox'):
             root = install/'extensions'/family
@@ -110,12 +111,20 @@ def run(args):
             for archive in archives:
                 with zipfile.ZipFile(archive) as zipped:
                     files = {name for name in zipped.namelist() if not name.endswith('/')}
-                    assert files == {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()}
-                    for name in files:
-                        assert (root/name).read_bytes() == zipped.read(name), f'Installed extension mismatch: {family}/{name}'
-            extensions[family] = {'background_sha256': hashlib.sha256((root/'background.js').read_bytes()).hexdigest(),
+                    assert zipped.testzip() is None, f'Corrupt installed extension: {family}'
+                    manifest = json.loads(zipped.read('manifest.json'))
+                    assert manifest['version'] == version and manifest['action']['default_popup'] == 'popup.html'
+                    assert {'background.js', 'popup.html'} <= files
+                    # 当前安装包按需解压插件；旧安装映像若附带解压目录，仍核对两份内容。
+                    if root.exists():
+                        assert files == {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()}
+                        for name in files:
+                            assert (root/name).read_bytes() == zipped.read(name), f'Installed extension mismatch: {family}/{name}'
+                    background_sha256 = hashlib.sha256(zipped.read('background.js')).hexdigest()
+            extensions[family] = {'background_sha256': background_sha256,
+                'unpacked_directory_present': root.exists(),
                 'archives_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in archives}}
-        record('installed extension ZIPs and unpacked files are identical', extensions)
+        record('installed extension ZIPs are valid; unpacked copies match when present', extensions)
         port, ui_port = free_port(), free_port()
         token = uuid.uuid4().hex
         env = {**os.environ, 'HLS_V7_CORE_TCP': '1', 'HLS_V7_CORE_BIND': f'127.0.0.1:{port}',

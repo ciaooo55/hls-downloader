@@ -1,0 +1,417 @@
+{
+  "all_match": true,
+  "source_commit": "b62da029a75c88fee16ae44825f1a4d865a4a658",
+  "checked_files": 82,
+  "checks": [
+    {
+      "path": "native_shell/src/atomic_replace.rs",
+      "sha256": "9503b0a110ce7149963289fbc99489ec4208f433fc3f66f121d578bb65407148",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/av_scan.rs",
+      "sha256": "cb8d890a7ff9a38a472408a68d987119897f1b340ecd810f5eef45e300ca01fb",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/cast.rs",
+      "sha256": "e50beb16b255a05e10369ee37ecd200b4b47c87acacccc7f91ec8f45a3086b5c",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/category.rs",
+      "sha256": "f03d20a74ccb78bf36e2ac00e885af7d9031c40eb1e1fd125abe1825e64b62ff",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/checksum.rs",
+      "sha256": "86fe8640cbf90a442f602e096a02013362d2c1c846e665f7de2d1cdf35bcd650",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/client_event.rs",
+      "sha256": "302e8faa996fe098d4324ebe05d79d3a1d3775a90e6e57bb8768a7bb21d73dc7",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/clipboard.rs",
+      "sha256": "971d235f7f431228e9d884ab9a56c077d97827a4dbf32983c8d6a04484a811b3",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/connection_parts.rs",
+      "sha256": "cc974f91c5f8ddc80b2beddee115faf8d3b2ebb83a61769fa6333149c0dd8c1e",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/contract.rs",
+      "sha256": "c0515d7ee74b373d5986be21fa068a89af5971b43b49445096af71282e2ac536",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/core_ipc.rs",
+      "sha256": "5e219a06220fbfd12a23147239c907ae458581cb499405f08f875cb4ac7ab14f",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/core_runtime.rs",
+      "sha256": "e630c8c824ca76a093badd7c9a93a97e278168db6893da0042382cf5f1e49f75",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/core_server.rs",
+      "sha256": "1054ac4087be47c35a41190202bebaaf697cae92a6477b7a7f147b8bfa6414a6",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/core_service.rs",
+      "sha256": "beaf784cd6298ad7222a2d5de511e0040e86b43b96ba12f1d2ee99f3231aa97d",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/core_spawn.rs",
+      "sha256": "e1abfd16a7293e98d239fa6c0e0d01b1e8cb4525706ae74ddf8b68e567337645",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/credentials.rs",
+      "sha256": "b8ab2f3a1b3e5ac23b8d02867effbd6166998070d9d7f5df0f2ace9e4e1958e6",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/crypto_lite.rs",
+      "sha256": "e014fcefbdecab3f2eb499d3afbea11f72489a681fa718f44bff34a180320561",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/curl_import.rs",
+      "sha256": "0b3b8f4f78f2715e86fec642264fc78b823fd3e1925056b84d5ef6f60d1216a0",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/download_worker.rs",
+      "sha256": "b874151b93de749eb1cd4faad6f7d9a3e43634f4ed166a12086652520aa79236",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/duplicate.rs",
+      "sha256": "289b7fd5597f121b0e8479961d01feace5910342077cf49a8c26375ca9515be4",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/ftp_engine.rs",
+      "sha256": "5af95bc7ae83783a5e53eb193f6fa0980ad9c4364c1ef04ec1b9cddf76641100",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/harvest.rs",
+      "sha256": "f2920e57df883c3d53b75ee425f82fe96b8c7fec244e90de45f3f66863c69983",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/instance.rs",
+      "sha256": "563bacb4bc361e59da464c27caa269739614b8eb29d9b60ed9a7c301e8d36a3c",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/lib.rs",
+      "sha256": "fda0be2b12fd9c3c0d2a3e18fb5e5f5b52441dc0653c2fa82638e01738416643",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/link_file.rs",
+      "sha256": "c7799634d06ed8b098055d3c12905f7a14c0f03e094f91cf3a7cd35898eb1fe2",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/local_time.rs",
+      "sha256": "35f96aa9bc32a54032a17f16156bfd01b06a931419facdcaa78b700bb52062f8",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media_ext.rs",
+      "sha256": "778e1820b985b8713c3c5985b1e85e216cf7c136b02eac2478a2eb66a6ed8e68",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/metalink.rs",
+      "sha256": "c1ce4162176bcb0b79066d7fdd161080e27baa1d244d635853b69d29c4d78ee5",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/migrate.rs",
+      "sha256": "fb5af979e7b7ea750fa81f8eb428a39bfba5448e40f3d9c32f53a4dc5d1830df",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/mirrors.rs",
+      "sha256": "1116f9695884ead4826e765d938260daf1fddae3e16f98616809b676e7eac430",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/motw.rs",
+      "sha256": "08ec85c493b41a4dff24a691f7ccd091113f868423aa07adb0f645583e60538d",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/native_host_registration.rs",
+      "sha256": "8c0a420c717fd59ae46315e88c9abe1c013d7e2c8c155f7a6966f27a3e3ee9a9",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/native_host.rs",
+      "sha256": "bce997f1cc108e032e7a67e24655ebcbfd2c7825e4ebfd7df39154b511209aaf",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/net_policy.rs",
+      "sha256": "3958ba9ef21f12423555507ce220daa217566b1a8aa3d67051c9c59c14c22e58",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/ole_drag.rs",
+      "sha256": "1478c68a3ea7357cc0bdbfb8df66249b04150fa6eaeb90e3137fd6bbe7a3d263",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/output_path.rs",
+      "sha256": "5772701ed87e6f6cc4b26a3d1c683442252eea298aa0ba4006134eabfe4cb41f",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/playback.rs",
+      "sha256": "48f5e3f06e9c0f067f377321185d510c65a289198872dea698d7811f66c37b47",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/player_thumbnail.rs",
+      "sha256": "cc13affe51275b284abf90fb4bba9185dafbefc873e6f7d3c2990b3d0ceba051",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/player.rs",
+      "sha256": "0ba3005e868fe47d78942a85a9f6ec50310cca74182e1a250c5502325147bfb6",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/power_action.rs",
+      "sha256": "6c6ebf18803b2da9fc2561421682aa422aaddd99a0d6549c24ac8e1708b768a7",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/profile_paths.rs",
+      "sha256": "8d57e6e0370d6cd0163b54c27f53d5ec0ae6db840ed9c97e8cec0486de332de8",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/recognize.rs",
+      "sha256": "a5c1faf0fc96f7ab02513b55a7c7bb838b5746f9a8f33de6b441cd8f643ee0e9",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/sftp_engine.rs",
+      "sha256": "202b03211c3b83c0c0827d5f65f78401edd74f982c47f060e06e50acc5c7e013",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/sftp_live.rs",
+      "sha256": "936c97e258c8e42fe03c5783c78481f4f8a9b3846ea757c6a68c0793f3a449ea",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/sftp_loopback.rs",
+      "sha256": "c46f88c6ffcf97b3aa157e644a7b3dce611e398e2b1bb7249cc339e959b77a1d",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/site_rules.rs",
+      "sha256": "2b0a97b2db3c68748f3ecb8fb703258e0310f32d2c0f6b25ed096649fba7f463",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/sleep_inhibit.rs",
+      "sha256": "dc52aed773aaba6c321bdbe1bb4a155f2b297744d348bee228d5829c9706ff0d",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/startup.rs",
+      "sha256": "7e548d3bd1f374737412c70f22d098cf3d3398058cd3e1dc436ea17f007cd551",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/store.rs",
+      "sha256": "acbacd5f3d2afff194a6c5247c694167e03c15cdcf4aae613c1ac13c05e3f465",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/subtitle_audio_source.rs",
+      "sha256": "61a5b20f84d270ef67a69f103b2961a9711ba2e62a8acecd140590cbbb9a2020",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/subtitle_translate.rs",
+      "sha256": "14bc2e685d2d2f7d027381af9adc5af97eec8c704bcaf69db68250dd8e5163d2",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/task_export.rs",
+      "sha256": "80cfbb56882bddbe49c2335cb7e37cf98ab184d385d21a867842c9e783397d8e",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/torrent_engine.rs",
+      "sha256": "2064776463b1319db7c18e4b07f6b86107587c56c1e06b6c5ca7ed1ab6faa73a",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/tray.rs",
+      "sha256": "0b980a920a6665507fb93d0c9ee161ec61f3164a663a1ea1737e93370b19b20f",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/updater.rs",
+      "sha256": "bcd2b3586711a85b820f88c71fe0e4c425d2741c8100c8f67dbb5189bf66fa1d",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/v6_migrate.rs",
+      "sha256": "b2d4eab18a46137672927d31569a3d554783d74ea8c7fdb6d6997fd719d5a08d",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/win_reg.rs",
+      "sha256": "f55fd939e770bf9ea5c9c3cc24cff76892cceefbe1e41588c9f8197fcb62c2cb",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/window_util.rs",
+      "sha256": "fc7db5d54f97af2f9175a16b563c49ec9a4e73f8d58c2f6958b7e563de62afc2",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/bin/hls_downloader_engine.rs",
+      "sha256": "1cfa9e6876e2261c65ef5d9b00560353e91a0542d0c2c9fc8e7f452d67160ca2",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/bin/hls_downloader_native_host.rs",
+      "sha256": "07edbbab92b0e7c7ae6046239aae802ea819cc3b020ba1113235ee7b10007a53",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/bin/hls_downloader_updater.rs",
+      "sha256": "224ab591378c5dc476b05d2895ba15e0bf9b9449c073b73bfacc8b1ae85f1abb",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/dash.rs",
+      "sha256": "2586af5ffdc5a0577722b48e8c2f68fa81450b2dc080342be52041ad793888f8",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/harness.rs",
+      "sha256": "9dbb3552b96691e37784e69c54250aca5b0fa3f3ff816909c2f3066f6371aa49",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/hls.rs",
+      "sha256": "42a9bbd41df7d38e3e90f005fa7411bb25b5ed873902526872cf5aa6e79bd63b",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/merge.rs",
+      "sha256": "02d34191a298d75af23d3ce4be5e22558560b6f4565930f7571bbff59942d8c2",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/mod.rs",
+      "sha256": "c89f1ced373ce3bfdc84d502d12c510c5503918209ebdbbd0672ad48b68ca14f",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/preview.rs",
+      "sha256": "30b9735613189e095d8ff22e9346062d026deffbda73e22c64d95dbf24aecd71",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/media/subtitles.rs",
+      "sha256": "9914715693acb6d3d184954f143f9fe8138fcf96f941a44e4a856a2d256013c5",
+      "matches": true
+    },
+    {
+      "path": "native_shell/Cargo.toml",
+      "sha256": "046fdc379fdb82805c87ac62ed313a90f57cf35f6ec7472fc224648580683147",
+      "matches": true
+    },
+    {
+      "path": "native_shell/Cargo.lock",
+      "sha256": "0db4f774063763d850dfb78d83a388e5a1dc2a19b13c92852f10536d9df49b57",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/smoke_v7_resource_boundaries.py",
+      "sha256": "9c46f171e12b3c3fd58da93a215728fe5e2a9e9ec0d7f29021ca91812868f341",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/compare_v7_progress_logs.py",
+      "sha256": "f6336a99587e83c39eba49252f2559e1966f20478083b30164486e01dc36c63f",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/smoke_v7_download_playback.py",
+      "sha256": "273aa2ac22d93cc52943a86563e47e2408cc4c07b0b9cbd5fd8dd7ee463e2782",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/smoke_v7_http_boundaries.py",
+      "sha256": "56f483274ac82bad091806576eae386fb68312b4a7d8bcb63507d6fd5c3c0b15",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/smoke_v7_http_stall.py",
+      "sha256": "d3019b23a830114f004409e17fe5ece14cf99a2851feb86902dd9169ffae9ad7",
+      "matches": true
+    },
+    {
+      "path": "native_shell/src/http_engine.rs",
+      "sha256": "3aaef8b66f2035dc34c4df7ce35eca3c927b28e639e24767bc8d68a0c3f36e6a",
+      "matches": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+      "sha256": "657922630BFE96FD5610F2061940E60FF9C7E3F3133A3C7BA1E912E80B6EB5F6",
+      "matches": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt",
+      "sha256": "791DB892BA4BC3EECF03804A975E89D730563BF7DBC172FF44F067806770100A",
+      "matches": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt",
+      "sha256": "420088635E8F1CE532247536293794A6912BF02E8EFC4CA35F434319AE7E8868",
+      "matches": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/UiTestApi.kt",
+      "sha256": "C8A29DD50B55EC1216E2779402F0AD1807F0D5ED195F460B3A4A308579B214C2",
+      "matches": true
+    },
+    {
+      "path": "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/UiTestApiTest.kt",
+      "sha256": "5F772D868567DAE240C6348E6B0E4064FD800D493B9C22DC3CFE436ADC07C93F",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/smoke_v7_player_overlay.py",
+      "sha256": "CBCF2E37E3D604F7E6C6B2EBE591F5341308ADE3C656F86F6AFE9EF094600456",
+      "matches": true
+    },
+    {
+      "path": "scripts/validation/smoke_v7_workbench_interactions.py",
+      "sha256": "8F5591BEAC2F9D77C10EA89FC0FFF433B2E0302B3E4C5F05940B4533AAEC5B15",
+      "matches": true
+    }
+  ]
+}

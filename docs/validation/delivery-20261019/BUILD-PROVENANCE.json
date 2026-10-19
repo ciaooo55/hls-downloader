@@ -1,0 +1,20 @@
+{
+    "schema":  1,
+    "product_version":  "7.0.3",
+    "source_commit":  "7c42c864fe5d3d04a5fc0106f0441bec4fd61fa5",
+    "source_tree":  "d1a09053954465f117c2914be9cbef4555365347",
+    "source_branch":  "main",
+    "source_tag":  "",
+    "git_worktree_clean":  true,
+    "package_tier":  "candidate",
+    "release_ready":  true,
+    "feature_parity_path":  "config/release/feature-parity.json",
+    "feature_parity_sha256":  "a9f0a5bd29bf4efb11435dfe18dd50f5d43471ff22745f4331967b2029d02956",
+    "feature_summary":  {
+                            "verified":  27,
+                            "partial":  2,
+                            "blocked":  0,
+                            "total":  29
+                        },
+    "generated_at_utc":  "2026-10-19T06:39:47.4181120Z"
+}
