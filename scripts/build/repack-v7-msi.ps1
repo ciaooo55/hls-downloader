@@ -34,26 +34,53 @@ try {
     [IO.File]::WriteAllText($wxs, $text, (New-Object Text.UTF8Encoding($false)))
     # 修复单个 Core 时复用已验收安装包的其他文件，不再构建整套应用镜像。
     [xml]$model = $text
+    $namespace = $model.DocumentElement.NamespaceURI
+    $product = $model.Wix.Product
+    # jpackage 的包可能已有向导，但缺少间接目录控件依赖的属性；不能只在新增向导时补。
+    if ($model.SelectNodes("//*[local-name()='Directory' and @Id='INSTALLDIR']").Count -ne 1) {
+        throw 'Installer INSTALLDIR directory is not unique.'
+    }
+    $property = $model.SelectSingleNode("//*[local-name()='Property' and @Id='WIXUI_INSTALLDIR']")
+    if ($null -eq $property) {
+        $property = $model.CreateElement('Property', $namespace)
+        $property.SetAttribute('Id', 'WIXUI_INSTALLDIR')
+        $product.AppendChild($property) | Out-Null
+    }
+    $property.SetAttribute('Value', 'INSTALLDIR')
+    $license = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../LICENSE'))
+    $license = $license.Replace('\', '\\').Replace('{', '\{').Replace('}', '\}')
+    $license = [regex]::Replace($license, '\r?\n', '\par ')
+    $licensePath = Join-Path $work 'License.rtf'
+    [IO.File]::WriteAllText($licensePath, '{\rtf1\ansi\deff0 {\fonttbl {\f0 Segoe UI;}}\f0\fs20 ' + $license + '}', [Text.Encoding]::ASCII)
     # 部分旧基础包没有安装向导；补上目录选择，不能只支持命令行 INSTALLDIR。
-    if ($model.SelectNodes("//*[local-name()='Dialog']").Count -eq 0) {
-        $namespace = $model.DocumentElement.NamespaceURI
-        $product = $model.Wix.Product
+    if ($model.SelectNodes("//*[local-name()='Dialog']").Count -eq 0 -and
+        $null -eq $model.SelectSingleNode("//*[local-name()='UIRef' and @Id='WixUI_InstallDir']")) {
         $ui = $model.CreateElement('UIRef', $namespace)
         $ui.SetAttribute('Id', 'WixUI_InstallDir')
         $product.AppendChild($ui) | Out-Null
-        $property = $model.CreateElement('Property', $namespace)
-        $property.SetAttribute('Id', 'WIXUI_INSTALLDIR')
-        $property.SetAttribute('Value', 'INSTALLDIR')
-        $product.AppendChild($property) | Out-Null
-        $license = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../../LICENSE'))
-        $license = $license.Replace('\', '\\').Replace('{', '\{').Replace('}', '\}')
-        $license = [regex]::Replace($license, '\r?\n', '\par ')
-        $licensePath = Join-Path $work 'License.rtf'
-        [IO.File]::WriteAllText($licensePath, '{\rtf1\ansi\deff0 {\fonttbl {\f0 Segoe UI;}}\f0\fs20 ' + $license + '}', [Text.Encoding]::ASCII)
-        $variable = $model.CreateElement('WixVariable', $namespace)
-        $variable.SetAttribute('Id', 'WixUILicenseRtf')
+    }
+    $control = $model.SelectSingleNode("//*[local-name()='Dialog' and @Id='LicenseAgreementDlg']/*[local-name()='Control' and @Id='LicenseText']")
+    if ($null -ne $control) {
+        # 许可正文已展开到 Control 时，WixUILicenseRtf 不能覆盖这份文本。
+        $control.RemoveAttribute('Text')
+        foreach ($node in @($control.SelectNodes("./*[local-name()='Text']"))) {
+            $control.RemoveChild($node) | Out-Null
+        }
+        $licenseText = $model.CreateElement('Text', $namespace)
+        $licenseText.SetAttribute('SourceFile', $licensePath)
+        $control.PrependChild($licenseText) | Out-Null
+    } else {
+        # dark 会将标准向导还原为 UIRef，但保留 jpackage 自定义对话框。
+        if ($null -eq $model.SelectSingleNode("//*[local-name()='UIRef' and @Id='WixUI_InstallDir']")) {
+            throw 'Installer license dialog or WixUI_InstallDir reference is missing.'
+        }
+        $variable = $model.SelectSingleNode("//*[local-name()='WixVariable' and @Id='WixUILicenseRtf']")
+        if ($null -eq $variable) {
+            $variable = $model.CreateElement('WixVariable', $namespace)
+            $variable.SetAttribute('Id', 'WixUILicenseRtf')
+            $product.AppendChild($variable) | Out-Null
+        }
         $variable.SetAttribute('Value', $licensePath)
-        $product.AppendChild($variable) | Out-Null
     }
     # 标准 FindRelatedProducts 已支持三段版本；jpackage 自定义检测会错误清空已找到的旧产品。
     foreach ($node in @($model.SelectNodes("//*[local-name()='Custom' and @Action='JpFindRelatedProducts'] | //*[local-name()='CustomAction' and @Id='JpFindRelatedProducts']"))) {
@@ -256,6 +283,33 @@ try {
     # script verifies the persisted sequence after repacking.
     & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -sice:ICE27 -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX light failed: $LASTEXITCODE" }
+    # 静默安装不会初始化向导控件；在交付前检查最终 MSI 中的目录绑定及完整许可正文。
+    $installer = $null
+    $database = $null
+    try {
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @([string]$built, 0))
+        foreach ($check in @(
+            @("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='WIXUI_INSTALLDIR'", 'INSTALLDIR'),
+            @("SELECT ``Text`` FROM ``Control`` WHERE ``Dialog_``='LicenseAgreementDlg' AND ``Control``='LicenseText'", [IO.File]::ReadAllText($licensePath))
+        )) {
+            $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @([string]$check[0]))
+            $record = $null
+            try {
+                $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
+                $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+                if ($null -eq $record) { throw "Installer UI assertion has no row: $($check[0])" }
+                $actual = $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
+                if ($actual -cne $check[1]) { throw "Installer UI assertion failed: $($check[0])" }
+            } finally {
+                if ($null -ne $record) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) | Out-Null }
+                [Runtime.InteropServices.Marshal]::FinalReleaseComObject($view) | Out-Null
+            }
+        }
+    } finally {
+        if ($null -ne $database) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) | Out-Null }
+        if ($null -ne $installer) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null }
+    }
     Copy-Item -LiteralPath $built -Destination $out -Force
     [ordered]@{ input = $msi; output = $out; size = (Get-Item -LiteralPath $out).Length; repacked = $true } | ConvertTo-Json
 } finally {

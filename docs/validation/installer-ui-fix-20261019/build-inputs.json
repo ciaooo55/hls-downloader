@@ -1,0 +1,7 @@
+{
+  "Source": "scripts/build/repack-v7-msi.ps1",
+  "SHA256": "c078ec0c0654698e0d2e3eb6c519f39ca7f3680dffaf900b70b08b6e7eb0e383",
+  "WixVersion": "3.11.2.4516",
+  "WixArchiveSHA256": "2c1888d5d1dba377fc7fa14444cf556963747ff9a0a289a3599cf09da03b9e2e",
+  "FixedMsiSHA256": "8da9e4073075afaa7a176d75736262f01c6bf22681908ccea5a9050a21db8e8d"
+}

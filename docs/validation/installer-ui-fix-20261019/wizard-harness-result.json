@@ -1,0 +1,9 @@
+﻿{
+    "passed":  false,
+    "checks":  [
+
+               ],
+    "msi_sha256":  "8da9e4073075afaa7a176d75736262f01c6bf22681908ccea5a9050a21db8e8d",
+    "wizard_exit":  0,
+    "error":  "Expected cancellation after checking wizard pages, got 0\r\nAt C:\\HLSInstallerQA\\guest.ps1:17 char:38\r\n+ ... -ne 1602) { throw \"Expected cancellation after checking wizard pages, ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n    + CategoryInfo          : OperationStopped: (Expected cancel...rd pages, g \r\n   ot 0:String) [], RuntimeException\r\n    + FullyQualifiedErrorId : Expected cancellation after checking wizard page \r\n   s, got 0\r\n \r\n"
+}

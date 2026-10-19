@@ -1,0 +1,9 @@
+<Configuration>
+<MemoryInMB>4096</MemoryInMB>
+<Networking>Disable</Networking>
+<MappedFolders>
+<MappedFolder><HostFolder>A:\Ubuntu\测试\hls-downloader</HostFolder><SandboxFolder>C:\HLSSource</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+<MappedFolder><HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\installer-ui-fix</HostFolder><SandboxFolder>C:\HLSInstallerQA</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
+</MappedFolders>
+<LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\HLSInstallerQA\guest.ps1</Command></LogonCommand>
+</Configuration>

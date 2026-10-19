@@ -4,6 +4,8 @@
 
 ## 桌面交付
 
+后续图形向导发现 2819，原包已补做安装修复；见[独立修复与图形验收记录](../installer-ui-fix-20261019/README.md)。下述原构建清单保留历史哈希；桌面文件的当前哈希在 `desktop-artifacts.json`，应用和插件二进制不变。
+
 `桌面/HLSDownloader` 只放三份文件，具体绝对路径、字节数和 SHA256 见 [desktop-artifacts.json](desktop-artifacts.json)：
 
 - `HLSDownloader-7.0.3-main-7c42c86-未签名.msi`：约 193.6 MiB，安装时可选择目录；默认下载目录由 Windows Known Folder 获取，不是固定盘符。
