@@ -27,7 +27,7 @@ export default defineContentScript({
   matchAboutBlank: true,
   matchOriginAsFallback: true,
   runAt: 'document_start',
-  main() {
+  main(ctx) {
     let lastIntent = { key: '', at: 0 }
     let lastTrustedClick = { at: 0, alt: false, ctrl: false }
     const recordIntent = (event: MouseEvent) => {
@@ -147,7 +147,7 @@ export default defineContentScript({
     // Many download controls start navigation from pointerdown or tear down the
     // document before their click handler returns. Record strong intent at the
     // earliest trusted phase so onHeadersReceived can present immediately.
-    window.addEventListener('pointerdown', recordIntent, true)
-    window.addEventListener('click', recordIntent, true)
+    ctx.addEventListener(window, 'pointerdown', recordIntent, { capture: true })
+    ctx.addEventListener(window, 'click', recordIntent, { capture: true })
   },
 })

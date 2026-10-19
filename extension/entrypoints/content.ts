@@ -58,7 +58,7 @@ export default defineContentScript({
     let activationRequested = false
     const activation = new Promise<void>(resolve => { activateContent = resolve })
     const requestActivation = () => {
-      if (activationRequested) return
+      if (activationRequested || ctx.isInvalid) return
       activationRequested = true
       activateContent?.()
     }
@@ -76,8 +76,8 @@ export default defineContentScript({
         requestActivation()
       }
     }
-    document.addEventListener('play', rememberPendingPlayback, true)
-    document.addEventListener('playing', rememberPendingPlayback, true)
+    ctx.addEventListener(document, 'play', rememberPendingPlayback, { capture: true })
+    ctx.addEventListener(document, 'playing', rememberPendingPlayback, { capture: true })
     const resources = new Map<string, MediaResource>()
     let playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
     const discoverSubtitlePlayers = installSubtitleContent(ctx, media => {
@@ -143,11 +143,12 @@ export default defineContentScript({
         ancestorOrigins: Array.from(frameLocation.ancestorOrigins || []),
       })
     }
-    window.addEventListener('__hls_downloader_resource__', earlyResourceListener)
-    window.addEventListener('__hls_downloader_mse__', earlyMseListener)
+    ctx.addEventListener(window, '__hls_downloader_resource__', earlyResourceListener)
+    ctx.addEventListener(window, '__hls_downloader_mse__', earlyMseListener)
     browser.runtime.onMessage.addListener(earlyRuntimeListener)
     browser.runtime.onMessage.addListener(srcdocPartitionContextListener)
     ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(srcdocPartitionContextListener))
+    ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(earlyRuntimeListener))
     const activationRoots = new WeakSet<Document | ShadowRoot>()
     const activationMediaRoots: Array<Document | ShadowRoot> = []
     const activationObservers: MutationObserver[] = []
@@ -173,8 +174,8 @@ export default defineContentScript({
       activationRoots.add(root)
       activationMediaRoots.push(root)
       discoverSubtitlePlayers(root)
-      root.addEventListener('play', rememberPendingPlayback, true)
-      root.addEventListener('playing', rememberPendingPlayback, true)
+      ctx.addEventListener(root, 'play', rememberPendingPlayback, { capture: true })
+      ctx.addEventListener(root, 'playing', rememberPendingPlayback, { capture: true })
       const observer = new MutationObserver(mutations => {
         for (const mutation of mutations) {
           if (mutation.type === 'attributes') {
@@ -196,6 +197,7 @@ export default defineContentScript({
       })
       observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
       activationObservers.push(observer)
+      ctx.onInvalidated(() => observer.disconnect())
       if (root.querySelector('video,audio,source[src]')) {
         requestActivation()
       }
@@ -206,7 +208,7 @@ export default defineContentScript({
       const host = event.composedPath().find(value => value instanceof Element) as Element | undefined
       if (host?.shadowRoot) observeActivationRoot(host.shadowRoot)
     }
-    window.addEventListener('__hls_downloader_shadow__', earlyShadowListener, true)
+    ctx.addEventListener(window, '__hls_downloader_shadow__', earlyShadowListener, { capture: true })
     observeActivationRoot(document)
     // The page may create an open ShadowRoot from an inline document-start
     // script before this isolated-world bootstrap is scheduled. One bounded
@@ -216,6 +218,7 @@ export default defineContentScript({
     // though the expensive media UI remains dormant until concrete evidence.
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
     await activation
+    if (ctx.isInvalid) return
     activationObservers.forEach(observer => observer.disconnect())
     activationObservers.length = 0
     // Rendering is intentionally frequent on live pages. Keep handoff state
@@ -234,6 +237,8 @@ export default defineContentScript({
     const discoveryStarted = new WeakMap<HTMLVideoElement, number>()
     const discoveryWaitMs = 12_000
     const knownVideos = new Set<HTMLVideoElement>()
+    const observedVideoSizes = new WeakSet<HTMLVideoElement>()
+    let videoResizeObserver: ResizeObserver | null = null
     const mediaOwnerIds = new WeakMap<HTMLMediaElement, string>()
     let nextMediaOwnerId = 1
     const mediaOwner = (media: HTMLMediaElement) => {
@@ -245,7 +250,11 @@ export default defineContentScript({
     }
     const currentVideos = () => {
       for (const video of knownVideos) {
-        if (!video.isConnected) knownVideos.delete(video)
+        if (!video.isConnected) {
+          videoResizeObserver?.unobserve(video)
+          observedVideoSizes.delete(video)
+          knownVideos.delete(video)
+        }
       }
       return [...knownVideos]
     }
@@ -513,18 +522,28 @@ export default defineContentScript({
       }
       const finish = (next: PointerEvent) => {
         if (next.pointerId !== event.pointerId) return
-        handle.releasePointerCapture?.(event.pointerId)
-        window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish)
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', finish)
+        window.removeEventListener('pointercancel', finish)
+        handle.removeEventListener('lostpointercapture', finish)
+        if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture?.(event.pointerId)
         panelPosition = { x: wrap.offsetLeft, y: wrap.offsetTop }
-        setTimeout(() => { dragged = false }, 0)
+        ctx.setTimeout(() => { dragged = false }, 0)
       }
-      window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish, { once: true })
+      ctx.addEventListener(window, 'pointermove', move)
+      ctx.addEventListener(window, 'pointerup', finish)
+      ctx.addEventListener(window, 'pointercancel', finish)
+      handle.addEventListener('lostpointercapture', finish, { signal: ctx.signal })
     }))
-    window.addEventListener('resize', fitPanel)
-    if (wrap) new ResizeObserver(() => {
-      // 桌面确认结果会改变提示区高度，不能等下一次鼠标进入才把面板移回视口。
-      if (wrap.classList.contains('open')) fitPanel()
-    }).observe(wrap)
+    ctx.addEventListener(window, 'resize', fitPanel)
+    if (wrap) {
+      const panelResizeObserver = new ResizeObserver(() => {
+        // 桌面确认结果会改变提示区高度，不能等下一次鼠标进入才把面板移回视口。
+        if (wrap.classList.contains('open')) fitPanel()
+      })
+      panelResizeObserver.observe(wrap)
+      ctx.onInvalidated(() => panelResizeObserver.disconnect())
+    }
 
     const applySendState = (resource: MediaResource, button: HTMLButtonElement, fallbackLabel: string, action: OverlayAction = 'download') => {
       const key = overlaySendKey(resourceFingerprint(resource), action)
@@ -661,6 +680,7 @@ export default defineContentScript({
     }
 
     const updateVideoButtons = () => {
+      if (ctx.isInvalid) return
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
       if (!layer) return
       // Players emit timeupdate while the pointer is down. Replacing the
@@ -778,9 +798,9 @@ export default defineContentScript({
           // dispatching pointer events from their overlay while the pointer is
           // moved outside the button. Pointer capture alone is not reliable in
           // every iframe/player combination.
-          window.addEventListener('pointermove', move, true)
-          window.addEventListener('pointerup', finish, true)
-          window.addEventListener('pointercancel', finish, true)
+          ctx.addEventListener(window, 'pointermove', move, { capture: true })
+          ctx.addEventListener(window, 'pointerup', finish, { capture: true })
+          ctx.addEventListener(window, 'pointercancel', finish, { capture: true })
           // iframe 切换或浏览器撤销捕获时，pointerup 可能不再送达当前页面。
           button.addEventListener('lostpointercapture', finish)
         })
@@ -887,7 +907,7 @@ export default defineContentScript({
           hover.style.width = `${hoverWidth}px`
           const relativeLeft = Math.max(8 - groupRect.left, Math.min(0, innerWidth - 8 - hoverWidth - groupRect.left))
           hover.style.left = `${relativeLeft}px`
-          requestAnimationFrame(() => {
+          ctx.requestAnimationFrame(() => {
             const hoverHeight = hover.offsetHeight || 150
             hover.classList.toggle('above', groupRect.bottom + 6 + hoverHeight > innerHeight - 8 && groupRect.top >= hoverHeight + 8)
           })
@@ -924,14 +944,17 @@ export default defineContentScript({
     }
 
     const render = () => {
+      if (ctx.isInvalid) return
       const list = ui.shadow.querySelector('.list')
       if (!list) return
       const selectionResources = selectionResourceIds
         ? [...resources.values()].filter(resource => selectionResourceIds?.has(resourceFingerprint(resource)))
         : [...resources.values()]
+      // 已有播放器归属证据时，展开面板必须沿用同一资源，不能重新按全页码率挑选。
+      const matched = playerPlaybackResources([...resources.values()], activePlayback, 8)
       const entries = selectionMode && !activePlayback
         ? compactResources(selectionResources, 40).slice(0, 20)
-        : visiblePlaybackResources([...resources.values()], activePlayback, 8)
+        : matched.length ? matched : visiblePlaybackResources([...resources.values()], activePlayback, 8)
       const signature = JSON.stringify([selectionMode, selectionResourceIds?.size, entries.map(resource => [
         resource.id, resource.url, resource.title, resource.filename, resource.kind,
         resource.size, resource.estimatedSize, resource.width, resource.height, resource.bandwidth,
@@ -1019,36 +1042,36 @@ export default defineContentScript({
     }
     let renderFrame = 0
     const scheduleRender = () => {
-      if (renderFrame) return
-      renderFrame = requestAnimationFrame(() => {
+      if (renderFrame || ctx.isInvalid) return
+      renderFrame = ctx.requestAnimationFrame(() => {
         renderFrame = 0
         render()
       })
     }
     let positionFrame = 0
     const scheduleVideoButtons = () => {
-      if (positionFrame) return
-      positionFrame = requestAnimationFrame(() => { positionFrame = 0; updateVideoButtons() })
+      if (positionFrame || ctx.isInvalid) return
+      positionFrame = ctx.requestAnimationFrame(() => { positionFrame = 0; updateVideoButtons() })
     }
-    window.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
-    window.addEventListener('resize', scheduleVideoButtons)
+    ctx.addEventListener(window, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
+    ctx.addEventListener(window, 'resize', scheduleVideoButtons)
     try {
       const parentDocument = window.frameElement?.ownerDocument
       const parentWindow = parentDocument?.defaultView
       if (parentDocument && parentWindow) {
-        parentWindow.addEventListener('resize', scheduleVideoButtons)
-        parentWindow.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
-        parentDocument.addEventListener('scroll', scheduleVideoButtons, { capture: true, passive: true })
+        ctx.addEventListener(parentWindow, 'resize', scheduleVideoButtons)
+        ctx.addEventListener(parentWindow, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
+        ctx.addEventListener(parentDocument, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
       }
     } catch {
       // Cross-origin parent frames keep the child viewport bounds.
     }
-    document.addEventListener('fullscreenchange', scheduleVideoButtons)
+    ctx.addEventListener(document, 'fullscreenchange', scheduleVideoButtons)
 
-    const observedVideoSizes = new WeakSet<HTMLVideoElement>()
-    const videoResizeObserver = typeof ResizeObserver === 'undefined'
+    videoResizeObserver = typeof ResizeObserver === 'undefined'
       ? null
       : new ResizeObserver(() => scheduleVideoButtons())
+    ctx.onInvalidated(() => videoResizeObserver?.disconnect())
     const trackVideo = (video: HTMLVideoElement) => {
       knownVideos.add(video)
       if (observedVideoSizes.has(video)) return
@@ -1125,6 +1148,7 @@ export default defineContentScript({
     }
 
     const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
+      if (ctx.isInvalid) return
       const rect = video.getBoundingClientRect()
       if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
       const previousActiveVideo = activeVideo
@@ -1133,9 +1157,12 @@ export default defineContentScript({
       // It may refresh source evidence, but must not continuously steal the
       // active-player identity or rebuild the complete overlay DOM.
       if (explicitActivation || !activeVideo || !activeVideo.isConnected || activeVideo.paused || activeVideo.ended) {
+        const changedPlayer = activeVideo !== video
         activeVideo = video
-        selectionMode = false
-        selectionResourceIds = null
+        if (changedPlayer) {
+          selectionMode = false
+          selectionResourceIds = null
+        }
       }
       const directSources = mediaElementSources(video)
       const sourceUrls = [...new Set(directSources.map(source => source.url).filter(Boolean))]
@@ -1209,9 +1236,11 @@ export default defineContentScript({
         }
       }
       discover(root)
-      mediaEvents.forEach(type => root.addEventListener(type, markPlayback, true))
-      new MutationObserver(mutations => {
-        let playbackChanged = false
+      mediaEvents.forEach(type => ctx.addEventListener(root, type, markPlayback, { capture: true }))
+      const mediaObserver = new MutationObserver(mutations => {
+        // 播放器被移除时也要撤掉旧入口，并释放 ResizeObserver 对元素的引用。
+        let playbackChanged = mutations.some(mutation => mutation.removedNodes.length > 0)
+          && [...knownVideos].some(video => !video.isConnected)
         mutations.forEach(mutation => {
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
@@ -1234,15 +1263,17 @@ export default defineContentScript({
           scheduleVideoButtons()
           queueMicrotask(syncPlayingVideos)
         }
-      }).observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
+      })
+      mediaObserver.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] })
+      ctx.onInvalidated(() => mediaObserver.disconnect())
     }
-    window.addEventListener('__hls_downloader_shadow__', event => {
+    ctx.addEventListener(window, '__hls_downloader_shadow__', event => {
       const host = event.composedPath().find(value => value instanceof Element) as Element | undefined
       if (host?.shadowRoot) {
         registerMediaRoot(host.shadowRoot)
         queueMicrotask(syncPlayingVideos)
       }
-    }, true)
+    }, { capture: true })
     registerMediaRoot(document)
     window.removeEventListener('__hls_downloader_shadow__', earlyShadowListener, true)
     activationMediaRoots.forEach(root => {
@@ -1320,8 +1351,8 @@ export default defineContentScript({
     }
     window.removeEventListener('__hls_downloader_resource__', earlyResourceListener)
     window.removeEventListener('__hls_downloader_mse__', earlyMseListener)
-    window.addEventListener('__hls_downloader_resource__', handleResourceEvent)
-    window.addEventListener('__hls_downloader_mse__', handleMseEvent)
+    ctx.addEventListener(window, '__hls_downloader_resource__', handleResourceEvent)
+    ctx.addEventListener(window, '__hls_downloader_mse__', handleMseEvent)
     // Ask the MAIN-world hook to replay events emitted before this content
     // script/UI finished mounting (especially fast MSE and preloaded HLS).
     window.dispatchEvent(new Event('__hls_downloader_replay__'))
@@ -1334,7 +1365,9 @@ export default defineContentScript({
       const url = explicitElementSource(source)
       if (url) add(url, source.type || '', true)
     })
-    new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name))).observe({ type: 'resource', buffered: true })
+    const resourceObserver = new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name)))
+    resourceObserver.observe({ type: 'resource', buffered: true })
+    ctx.onInvalidated(() => resourceObserver.disconnect())
     const handleRuntimeMessage = (message: any) => {
       if (message?.type === 'download-error') {
         selectionMode = true
@@ -1425,13 +1458,14 @@ export default defineContentScript({
       }
     }
     browser.runtime.onMessage.addListener(handleRuntimeMessage)
+    ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(handleRuntimeMessage))
     contentReady = true
     browser.runtime.onMessage.removeListener(earlyRuntimeListener)
     earlyRuntimeMessages.splice(0).forEach(handleRuntimeMessage)
     let currentPageUrl = pageKey(location.href)
     function loadPageResources(pageUrl: string, scope?: 'tab') {
       void runtimeMessage({ type: 'list', pageUrl, ...(scope ? { scope } : {}) }).then((stored: MediaResource[]) => {
-        if (!Array.isArray(stored) || pageKey(location.href) !== pageKey(pageUrl)) return
+        if (ctx.isInvalid || !Array.isArray(stored) || pageKey(location.href) !== pageKey(pageUrl)) return
         stored.forEach(resource => {
           if (resource?.url) addResource({
             ...resource,
@@ -1465,11 +1499,11 @@ export default defineContentScript({
       syncPlayingVideos()
     }
     loadPageResources(location.href)
-    window.addEventListener('popstate', syncPage)
-    window.addEventListener('hashchange', syncPage)
-    window.addEventListener('__hls_downloader_navigation__', syncPage)
-    window.addEventListener('pageshow', () => { syncPage(); syncPlayingVideos() })
-    document.addEventListener('visibilitychange', () => {
+    ctx.addEventListener(window, 'popstate', syncPage)
+    ctx.addEventListener(window, 'hashchange', syncPage)
+    ctx.addEventListener(window, '__hls_downloader_navigation__', syncPage)
+    ctx.addEventListener(window, 'pageshow', () => { syncPage(); syncPlayingVideos() })
+    ctx.addEventListener(document, 'visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         syncPage()
         syncPlayingVideos()

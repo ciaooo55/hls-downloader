@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 import zipfile
 
 from selenium import webdriver
@@ -627,6 +628,39 @@ def run(
                         time.sleep(0.1)
                     if not {"投屏", "TVBox"}.issubset(set(state.get("panelActions", []))):
                         raise AssertionError(f"{mode}: 投屏/推送链接操作没有出现在资源面板: {state}")
+                    driver.execute_script("window.detachedTestVideo=document.querySelector('video'); window.detachedTestVideo.remove();")
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline and _overlay_state(driver).get('labels'):
+                        time.sleep(0.1)
+                    if _overlay_state(driver).get('labels'):
+                        raise AssertionError(f"{mode}: 播放器移除后旧悬浮按钮仍显示")
+                    driver.execute_async_script("""
+                        const done=arguments[arguments.length-1];
+                        document.querySelector('#mount').append(window.detachedTestVideo);
+                        window.detachedTestVideo.play().then(()=>done(true), error=>done(String(error)));
+                    """)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        restored = _overlay_state(driver)
+                        if restored.get('labels') == ['下载视频']:
+                            break
+                        time.sleep(0.1)
+                    if restored.get('labels') != ['下载视频']:
+                        raise AssertionError(f"{mode}: 同一播放器重新挂载后未恢复唯一入口: {restored}")
+                    state['removeAndReattach'] = True
+                    if browser_name == 'firefox':
+                        driver.install_addon(str(resolved_addon), temporary=True)
+                        driver.refresh()
+                        deadline = time.monotonic() + 10
+                        while time.monotonic() < deadline:
+                            reloaded = _overlay_state(driver)
+                            if reloaded.get('labels') == ['下载视频']:
+                                break
+                            time.sleep(0.1)
+                        hosts = driver.execute_script("return document.querySelectorAll('hls-downloader-media-panel').length")
+                        if reloaded.get('labels') != ['下载视频'] or hosts != 1:
+                            raise AssertionError(f"{mode}: 插件替换并刷新后出现重复或缺失入口: hosts={hosts}, state={reloaded}")
+                        state['addonReplacementWithPageReload'] = True
                 if mode == "ad-direct":
                     main_url = next((item["src"] for item in state["videos"] if "player=main" in item.get("src", "")), "")
                     if state.get("resourceIds") != [_resource_id(main_url)]:
@@ -643,6 +677,35 @@ def run(
                     expected_ids = [_resource_id(item['manifest']) for item in state['videos']]
                     if sorted(state.get('resourceIds', [])) != sorted(expected_ids):
                         raise AssertionError(f"{mode}: 低画质播放或同目录双播放器匹配了错误清单: {state}")
+                if mode == "multi-dash-mse":
+                    panels = []
+                    for video in state['videos']:
+                        resource_id = _resource_id(video['manifest'])
+                        opened = driver.execute_script("""
+                            const root=document.querySelector('hls-downloader-media-panel')?.shadowRoot;
+                            const button=[...root.querySelectorAll('.video-download')]
+                                .find(item=>item.dataset.resourceId===arguments[0]);
+                            const more=button?.closest('.video-action-group')?.querySelector('.video-more');
+                            if (!more) return false;
+                            more.click(); return true;
+                        """, resource_id)
+                        if not opened:
+                            raise AssertionError(f"{mode}: 无法打开指定播放器的资源面板: {resource_id}")
+                        deadline = time.monotonic() + 5
+                        locations = []
+                        expected_leaf = urlsplit(video['manifest']).path.rsplit('/', 1)[-1]
+                        while time.monotonic() < deadline:
+                            locations = driver.execute_script("""
+                                const root=document.querySelector('hls-downloader-media-panel')?.shadowRoot;
+                                return [...root.querySelectorAll('.list .resource-url')].map(item=>item.textContent);
+                            """)
+                            if len(locations) == 1 and locations[0].endswith('/' + expected_leaf):
+                                break
+                            time.sleep(0.1)
+                        if len(locations) != 1 or not locations[0].endswith('/' + expected_leaf):
+                            raise AssertionError(f"{mode}: 展开面板未沿用指定播放器的清单: {locations}, expected {expected_leaf}")
+                        panels.append({'resourceId': resource_id, 'locations': locations})
+                    state['playerPanels'] = panels
         finally:
             if driver is not None:
                 with contextlib.suppress(Exception):

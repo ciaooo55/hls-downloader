@@ -40,6 +40,7 @@ def run(args):
     server = None
     created = set()
     offered = set()
+    offline_host_backup = None
 
     def record(name, actual):
         report['checks'].append({'name': name, 'actual': actual})
@@ -258,11 +259,17 @@ def run(args):
                                 continue
                             if Path(process.info['exe']).resolve() != (args.runtime / 'app/resources/HLSDownloaderNativeHost.exe').resolve():
                                 continue
-                            if any(parent.pid == driver.service.process.pid for parent in process.parents()):
-                                process.terminate()
-                                process.wait(5)
-                                stopped.append(process.pid)
+                            # 本脚本仅在独立沙盒运行；按本轮 runtime 的精确路径关闭所有连接，
+                            # 不能假定浏览器派生的每个 Host 都仍在 WebDriver 的父进程链上。
+                            process.terminate()
+                            process.wait(5)
+                            stopped.append(process.pid)
                         assert stopped, 'No isolated Firefox Native Host to disconnect'
+                        host_path = args.runtime / 'app/resources/HLSDownloaderNativeHost.exe'
+                        offline_host_backup = host_path.with_suffix('.offline')
+                        host_path.rename(offline_host_backup)
+                        assert not message({'type': 'ping'}).get('ok'), 'Offline fault did not make Native Host unavailable'
+                        record('offline-fault-confirmed', {'stopped': stopped, 'host_executable_absent': not host_path.exists()})
                     previous = {row['id'] for row in handoffs()}
                     click(name, alt=name == 'alt')
                     if name == 'alt':
@@ -285,6 +292,8 @@ def run(args):
                     if name == 'excluded':
                         extension('chrome.storage.local.set({excludedHosts:[]}).then(()=>done(true))')
                     if name == 'offline':
+                        offline_host_backup.rename(args.runtime / 'app/resources/HLSDownloaderNativeHost.exe')
+                        offline_host_backup = None
                         registration['path'] = str(args.runtime / 'app/resources/HLSDownloaderNativeHost.exe')
                         manifest.write_text(json.dumps(registration), encoding='utf-8')
                         assert message({'type': 'ping'}).get('ok'), 'Native Host did not reconnect'
@@ -299,6 +308,8 @@ def run(args):
                 with contextlib.suppress(Exception):
                     report['handoffs'] = handoffs()
         finally:
+            if offline_host_backup and offline_host_backup.exists():
+                offline_host_backup.rename(args.runtime / 'app/resources/HLSDownloaderNativeHost.exe')
             if driver:
                 with contextlib.suppress(Exception):
                     driver.quit()
