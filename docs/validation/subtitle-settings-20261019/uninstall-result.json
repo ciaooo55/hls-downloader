@@ -1,0 +1,7 @@
+{
+  "passed": true,
+  "exit_code": 0,
+  "msi_registration_removed": true,
+  "launcher_removed": true,
+  "host_install_changed": false
+}

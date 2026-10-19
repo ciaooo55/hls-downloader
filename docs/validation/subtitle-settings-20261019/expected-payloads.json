@@ -1,0 +1,26 @@
+[
+  {
+    "sha256": "f14cf10a64b95f55601e1fd9877a0eb792cbd01c4b607d8a5bfc61a8c2ee338f",
+    "pattern": "app/resources/HLSDownloaderEngine.exe"
+  },
+  {
+    "sha256": "0cf761a49ef7f6cb6d69ccd39b1e092a9c0e1c258eb05b7f4209be56afeab52c",
+    "pattern": "app/resources/HLSDownloaderNativeHost.exe"
+  },
+  {
+    "sha256": "1ae0ea03b31f89db024f0dbf8d1dfcf5dcc3b1b3f104f8fb57807d21495a3a19",
+    "pattern": "app/HLSDownloaderDesktop-7.0.3*.jar"
+  },
+  {
+    "sha256": "b3fd6193c17aa32ce92f21b05ebf481c2b9756795aa57b0dbf9e8b44f47cd05d",
+    "pattern": "app/resources/BUILD-PROVENANCE.json"
+  },
+  {
+    "sha256": "118133f87c3e5598b21cc51c3478f4b6a30c00c3f49d65626e1c02cfd34e1c18",
+    "pattern": "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip"
+  },
+  {
+    "sha256": "16c52987bd70507cc009319a88127684337d3efcfc0dd9772b8dd09535f72d38",
+    "pattern": "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip"
+  }
+]

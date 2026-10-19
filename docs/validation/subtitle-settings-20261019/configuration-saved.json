@@ -1,0 +1,15 @@
+{
+  "has_key": true,
+  "ok": true,
+  "preferences": {
+    "enabled": true,
+    "offset": 1.0,
+    "prefetch": true,
+    "showSource": true,
+    "source": "en",
+    "target": "zh"
+  },
+  "provider": "qwencloud",
+  "region": "cn-beijing",
+  "workspace": ""
+}

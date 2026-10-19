@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "source_commit": "3d3de7bf7fb003c1af8e4434c15ea8ccdf35e11a",
+  "source_tree": "de47e760a89085facca5db8407458256ddf9f72c",
+  "source_branch": "main",
+  "source_tag": "",
+  "git_worktree_clean": true,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "feature_parity_path": "config/release/feature-parity.json",
+  "feature_parity_sha256": "a9f0a5bd29bf4efb11435dfe18dd50f5d43471ff22745f4331967b2029d02956",
+  "feature_summary": {
+    "verified": 27,
+    "partial": 2,
+    "blocked": 0,
+    "total": 29
+  },
+  "generated_at_utc": "2026-10-19T11:12:59.0547070Z",
+  "base_msi_sha256": "bbbae37fc0878b74363f57bfbd4bcfb2c0480101e23115f3b6d06ec00a5df542",
+  "validation_scope": "Desktop subtitle configuration and browser controls; targeted regressions and sandbox verification; no cloud calls."
+}

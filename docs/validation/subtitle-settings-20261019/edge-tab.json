@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "headed": true,
+  "capture": "tab",
+  "player_dom": "document",
+  "cross_origin": true,
+  "provider": "fixture Core, cloud accuracy not tested",
+  "idle_reconnect_verified": false,
+  "audio_frames": 24,
+  "nonzero_samples": 95510,
+  "seek_resets": 3,
+  "checks": [
+    "production popup",
+    "global switch broadcast",
+    "site disable and page override",
+    "real browser audio + AudioWorklet",
+    "real Native Host PCM forwarding",
+    "subtitle render",
+    "seek reset",
+    "rate change preserves original-speed audio timeline",
+    "time offset",
+    "provider failure and retry",
+    "reset rejection and retry",
+    "disable hides cached navigation and reenable restores audio",
+    "language change clears old cues",
+    "stop capture",
+    "removed player clears subtitle UI"
+  ],
+  "resource_updates_verified": true,
+  "desktop_preferences_sync_verified": true,
+  "popup_configuration_inputs_absent": true
+}

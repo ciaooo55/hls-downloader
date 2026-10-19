@@ -1,0 +1,17 @@
+{
+  "pending_generated_directories": [
+    ".tool-cache",
+    "desktop_ui/.gradle",
+    "desktop_ui/.kotlin",
+    "extension/.output",
+    "extension/.wxt",
+    "extension/node_modules"
+  ],
+  "host_install_modified": false,
+  "cleanup_executed": false,
+  "sandbox_uninstall_passed": true,
+  "retained_old_delivery": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-46d09b5",
+  "new_delivery_hashes_verified": true,
+  "cleanup_blocker": "Automatic approval rejected the cleanup command: blocked by policy; no specific reason supplied.",
+  "sandbox_closed": true
+}

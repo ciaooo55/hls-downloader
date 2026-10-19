@@ -1,0 +1,37 @@
+{
+  "passed": true,
+  "cloud_called": false,
+  "desktop_preferences": {
+    "has_key": true,
+    "ok": true,
+    "preferences": {
+      "enabled": true,
+      "offset": 1.0,
+      "prefetch": true,
+      "showSource": true,
+      "source": "en",
+      "target": "zh"
+    },
+    "provider": "qwencloud",
+    "region": "cn-beijing",
+    "workspace": ""
+  },
+  "extension_settings": {
+    "enabled": true,
+    "source": "en",
+    "target": "zh",
+    "offset": 1,
+    "showSource": true,
+    "prefetch": true,
+    "sites": {}
+  },
+  "configuration_inputs": 0,
+  "plugin_global_write_denied": {
+    "ok": false,
+    "error": "请在主程序“设置 → 字幕翻译”中修改全局字幕配置"
+  },
+  "native_configure_response": {
+    "error": "请在主程序“设置 → 字幕翻译”中修改字幕配置",
+    "ok": false
+  }
+}

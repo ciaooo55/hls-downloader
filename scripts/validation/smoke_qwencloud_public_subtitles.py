@@ -56,7 +56,19 @@ def _require_ok(response: Any, operation: str) -> Any:
 
 
 def _set_settings(driver, settings: dict[str, Any]) -> None:
-    _require_ok(_message(driver, {"type": "subtitle-settings", "settings": settings}), "subtitle settings")
+    pipe = Pipe()
+    try:
+        response = pipe.request({"type": "subtitle", "request_id": 1, "request": {
+            "action": "configure", "provider": "qwencloud", "preferences": {"enabled": True, "source": "auto",
+                "target": "zh", "offset": 0.0, "showSource": True, "prefetch": False, **settings},
+        }})
+        result = response.get("result", {}) if isinstance(response, dict) else {}
+        if not isinstance(result, dict) or result.get("preferences", {}).get("enabled") is not True:
+            raise RuntimeError(f"Core subtitle preferences failed: {response}")
+    finally:
+        pipe.close()
+    _wait(lambda: all(_extension_state(driver).get("settings", {}).get(key) == value
+                     for key, value in settings.items()), "desktop preferences did not reach extension")
 
 
 def _extension_state(driver) -> dict[str, Any]:
