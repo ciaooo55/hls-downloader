@@ -690,23 +690,23 @@ internal fun LinearProgressIndicator(
 ) {
     val reduceMotion by MotionPreferences.reduceMotion
     if (progress == null) {
-        val offset = if (reduceMotion) 0.35f else rememberInfiniteTransition(label = "unknown-progress").animateFloat(
-            initialValue = -0.3f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1_800, easing = LinearEasing)),
-            label = "unknown-progress-offset",
-        ).value
+        val offset = remember { mutableFloatStateOf(-0.3f) }
+        LaunchedEffect(reduceMotion) {
+            if (!reduceMotion) while (true) {
+                // 不订阅逐帧动画时钟；离散 easing 仍会使软件渲染器持续请求帧。
+                delay(100)
+                offset.floatValue = if (offset.floatValue >= 1f) -0.3f else offset.floatValue + 1.3f / 18f
+            }
+        }
         androidx.compose.foundation.Canvas(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate }.clip(RoundedCornerShape(4.dp)).background(trackColor)) {
-            drawRoundRect(color, topLeft = Offset(size.width * offset, 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.3f, size.height), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f))
+            // 动画值在绘制阶段读取，避免每一帧重新组合整个进度控件。
+            drawRoundRect(color, topLeft = Offset(size.width * (if (reduceMotion) 0.35f else offset.floatValue), 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.3f, size.height), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f))
         }
         return
     }
-    val value by animateFloatAsState(
-        progress().coerceIn(0f, 1f),
-        animationSpec = tween(motionDurationMillis(reduceMotion, 180)),
-        label = "progress-value",
-    )
-    Box(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo(value, 0f..1f) }.clip(RoundedCornerShape(4.dp)).background(trackColor)) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(value).clip(RoundedCornerShape(4.dp)).background(color))
+    androidx.compose.foundation.Canvas(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo(progress().coerceIn(0f, 1f), 0f..1f) }.clip(RoundedCornerShape(4.dp)).background(trackColor)) {
+        // Core 已持续推送真实进度，不再为每次推送启动 60 FPS 补间。
+        drawRoundRect(color, size = androidx.compose.ui.geometry.Size(size.width * progress().coerceIn(0f, 1f), size.height), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f))
     }
 }
 

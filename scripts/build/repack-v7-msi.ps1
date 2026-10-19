@@ -137,7 +137,12 @@ try {
         @('BUILD-PROVENANCE.json', $ProvenanceReplacement)
     )) {
         if ([string]::IsNullOrWhiteSpace($replacement[1])) { continue }
-        $files = $model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']")
+        $files = if ($replacement[0] -eq 'HLSDownloaderDesktop-7.0.3.jar') {
+            # jpackage 可能为桌面 JAR 添加内容哈希；仍须唯一匹配当前启动器的桌面模块。
+            $model.SelectNodes("//*[local-name()='File' and starts-with(@Name, 'HLSDownloaderDesktop-7.0.3') and substring(@Name, string-length(@Name) - 3)='.jar']")
+        } else {
+            $model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']")
+        }
         if ($files.Count -ne 1) { throw "Installer replacement file is not unique: $($replacement[0])" }
         $destination = [IO.Path]::GetFullPath((Join-Path $work $files[0].GetAttribute('Source')))
         if (-not $destination.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Replacement target escaped the extracted installer.' }

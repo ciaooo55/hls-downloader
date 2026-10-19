@@ -154,10 +154,9 @@ async function continueLocalDownloadHandoffs(): Promise<void> {
 }
 /**
  * Chromium delivers a browser DownloadItem after the response has already
- * been accepted. Keep a short-lived promise for direct responses offered from
- * onHeadersReceived so onCreated can reuse that handoff instead of issuing a
- * second offer. Firefox also uses this for same-origin download links observed
- * at onSendHeaders, before a slow first byte can delay its response events.
+ * been accepted. Prepare request identity and policy at response time, but
+ * only offer it after onCreated has paused the browser transfer. Opening the
+ * desktop prompt earlier permits acceptance while the browser is still downloading.
  */
 export interface EarlyBrowserTakeover {
   requestId: string
@@ -165,7 +164,7 @@ export interface EarlyBrowserTakeover {
   urls: string[]
   tabId: number
   frameId: number
-  promise: Promise<{ resource: MediaResource, response: any, bypass?: boolean } | null>
+  promise: Promise<{ resource: MediaResource, beforeResponse?: boolean, bypass?: boolean } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const activeDownloadOffers = new Map<string, Promise<any>>()
@@ -633,7 +632,6 @@ async function continuePausedHandoffFollowups(): Promise<void> {
           const resumed = await resumeFollowUpDownload(record.downloadId)
           if (resumed) await pausedFollowUpStore.drop(record.handoffId)
           else await retryPausedFollowUp(record)
-          revealBrowserDownload()
           continue
         }
         concealBrowserDownload()
@@ -699,7 +697,6 @@ async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem
         phase: 'readiness',
         deadline: Date.now(),
       })
-      revealBrowserDownload()
     }
   } finally {
     pausedFollowUpsInFlight.delete(handoffId)
@@ -1324,24 +1321,28 @@ function downloadRequestItem(
   }
 }
 
-async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean | null> {
-  if (item.state !== 'in_progress') return false
+export async function pauseBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean | null> {
+  if (item.state === 'complete' || item.paused) return false
+  if (item.state !== 'in_progress') return null
   try {
     if (import.meta.env.FIREFOX) {
       // Firefox 在网络通道尚未收到数据时暂停，会偶发变成无法恢复的 USER_CANCELED。
       // 先等原下载初始化；小文件已完成时保留它，待桌面成功后再清理。
+      const deadline = Date.now() + 5_000
       while (true) {
         const [current] = await browser.downloads.search({ id: item.id })
         if (!current || current.state === 'interrupted') return null
         if (current.state === 'complete' || current.paused) return false
         if (current.bytesReceived > 0) break
+        if (Date.now() >= deadline) return null
         await new Promise(resolve => setTimeout(resolve, 100))
       }
     }
     await browser.downloads.pause(item.id)
     return true
   } catch {
-    return false
+    // 暂停失败不能继续建立桌面任务，否则两个下载器会同时传输。
+    return null
   }
 }
 
@@ -1515,7 +1516,7 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         beforeResponse,
       )
       if (beforeResponse && !intent) return null
-      if (intent?.altBypass) return { resource, response: null, bypass: true }
+      if (intent?.altBypass) return { resource, bypass: true }
       if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
       if (!shouldTakeover({
         url: resource.url,
@@ -1528,17 +1529,7 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         explicitClick: Boolean(intent),
         strongEvidence: true,
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
-      const response = await offer(resource, chain, { allowUnverified: beforeResponse })
-      if (beforeResponse && desktopAcceptedHandoff(response)) {
-        const tracked = await trackHandoff(String(response.handoff.id), resource.id, resource.tabId)
-        tracked.browserRequestId = requestId
-        await persistHandoffTracker()
-      }
-      // Keep a response with a handoff id even when its presentation was
-      // rejected; onCreated must not issue a duplicate desktop task in that
-      // case.  A missing id means the early attempt never reached the app and
-      // the normal DownloadItem path may retry safely.
-      return response?.handoff?.id ? { resource, response } : null
+      return { resource, beforeResponse }
     } catch (error) {
       console.debug('HLS Downloader early browser takeover unavailable', error)
       return null
@@ -1684,8 +1675,7 @@ export default defineBackground(() => {
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
     const chain = requestChains.observeRequest(details)
     if (import.meta.env.FIREFOX && details.method === 'GET' && ['main_frame', 'sub_frame'].includes(details.type)) {
-      // Firefox 有时等首字节后才发响应头事件。仅同源 download 链接可依据已记录的
-      // 可信点击提前提交；请求头来自当前真实请求，拒绝和失败仍由原浏览器下载回退。
+      // Firefox 有时等首字节后才发响应头事件，先保存同源 download 链接的真实请求上下文。
       rememberEarlyBrowserTakeover(details, chain, { disposition: '', resource: {
         url: details.url, kind: classifyDownload(details.url, '', '', '', true) || 'file',
         pageUrl: chain.pageUrl, tabId: details.tabId, frameId: details.frameId,
@@ -1703,12 +1693,7 @@ export default defineBackground(() => {
   browser.webRequest.onHeadersReceived.addListener(details => {
     const chain = requestChains.observeResponse(details as any)
     const observed = observedResponse(details, chain)
-    // Offer as soon as response headers prove a download, but never cancel
-    // the navigation here. Firefox used to {cancel:true} once the desktop
-    // window opened; rejecting that window then left no DownloadItem to
-    // resume. onCreated pauses the browser item and either removes it after
-    // a successful desktop transfer or resumes it on reject/expire.
-    // Firefox 的普通下载由 onCreated 提交；同源 download 链接可复用发请求时的接管。
+    // 响应阶段只准备上下文，onCreated 暂停原下载之后才允许显示桌面确认。
     if (import.meta.env.CHROME) {
       rememberEarlyBrowserTakeover(details, chain, observed)
     }
@@ -1752,6 +1737,7 @@ export default defineBackground(() => {
     }
     console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
+    let downloadUiConcealed = false
     // Once a handoff may own the transfer, finally must leave the durable
     // paused browser fallback alone. This also covers transient status loss;
     // it does not mean Core acceptance was observed.
@@ -1784,18 +1770,21 @@ export default defineBackground(() => {
         const earlyResult = await earlyTakeover?.promise
         if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
         if (earlyResult?.bypass) return
-        const handoffId = String(earlyResult?.response?.handoff?.id || restored?.id || '')
-        if (handoffId) {
-          // The early response already created the desktop handoff.  If the
-          // desktop rejected presentation, leave the original browser item
-          // untouched; otherwise wait for the user's final decision and clean
-          // up the browser item only after acceptance. The follow-up deadline
-          // is persisted before waiting so a suspended worker continues this
-          // flow from the shared alarm.
-          if (!restored && !desktopAcceptedHandoff(earlyResult?.response)) return
+        if (earlyResult || restored) {
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
+          concealBrowserDownload()
+          downloadUiConcealed = true
+          const response = earlyResult
+            ? await offer(earlyResult.resource, provisionalChain, { allowUnverified: earlyResult.beforeResponse }) : undefined
+          if (!restored && !desktopAcceptedHandoff(response)) return
+          const handoffId = String(response?.handoff?.id || restored?.id || '')
+          if (earlyTakeover && earlyResult && response?.handoff?.id) {
+            const tracked = await trackHandoff(handoffId, earlyResult.resource.id, earlyResult.resource.tabId)
+            tracked.browserRequestId = earlyTakeover.requestId
+            await persistHandoffTracker()
+          }
           followUpHandoffId = handoffId
           followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
           const handoff = await waitForHandoffResolution(handoffId)
@@ -1810,7 +1799,6 @@ export default defineBackground(() => {
             void followUpPausedHandoffCleanup(item, handoffId)
             return
           }
-          concealBrowserDownload()
           const removed = await removeBrowserDownload(item)
           browserOwnedByHandoff = true
           if (removed) await pausedFollowUpStore.drop(handoffId)
@@ -1913,6 +1901,8 @@ export default defineBackground(() => {
       const pauseResult = await pauseBrowserDownload(actualBrowser)
       if (pauseResult === null) return
       paused = pauseResult
+      concealBrowserDownload()
+      downloadUiConcealed = true
       console.debug('HLS Downloader offering a verified browser download')
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
@@ -1936,9 +1926,7 @@ export default defineBackground(() => {
         void followUpPausedHandoffCleanup(actualBrowser, handoffId)
         return
       }
-      // Do not hide Chrome's downloads UI merely because a browser download was
-      // observed. Suppress it only after the desktop accepted the handoff.
-      concealBrowserDownload()
+      // Core 已有实际传输后，取消并移除原下载项；确认框关闭或接管失败则恢复原下载。
       const removed = await removeBrowserDownload(actualBrowser)
       browserOwnedByHandoff = true
       if (removed) await pausedFollowUpStore.drop(handoffId)
@@ -1961,7 +1949,7 @@ export default defineBackground(() => {
       } else {
         await resumeBrowserDownload(item, paused && !browserOwnedByHandoff)
       }
-      revealBrowserDownload()
+      if (downloadUiConcealed) revealBrowserDownload()
     }
   })
 

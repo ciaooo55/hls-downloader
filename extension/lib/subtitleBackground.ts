@@ -237,11 +237,12 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     } finally { inFlight.set(session.id, (inFlight.get(session.id) || 1) - 1) }
   }
   const broadcastPolicy = async () => {
+    // 关闭开关先通知页面隐藏控件，不能等待云端尾音处理结束才更新界面。
+    const tabs = await browser.tabs.query({})
+    await Promise.allSettled(tabs.filter(tab => tab.id != null).map(tab => browser.tabs.sendMessage(tab.id!, { type: 'subtitle-policy' })))
     for (const session of Object.values(sessions)) {
       if (!['stopped', 'failed'].includes(session.status) && !(await policy(session.pageUrl)).allowed) await stop(session)
     }
-    const tabs = await browser.tabs.query({})
-    await Promise.allSettled(tabs.filter(tab => tab.id != null).map(tab => browser.tabs.sendMessage(tab.id!, { type: 'subtitle-policy' })))
   }
   browser.runtime.onMessage.addListener((message, sender, respond) => {
     if (!message || (!String(message.type || '').startsWith('subtitle-') && message.target !== 'subtitle-background')) return

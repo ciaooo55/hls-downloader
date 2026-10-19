@@ -644,8 +644,12 @@ export default defineContentScript({
       })
     }
 
-    const openVideoPanel = (rect: DOMRect) => {
+    const openVideoPanel = (video: HTMLVideoElement, rect: DOMRect) => {
       if (!wrap) return
+      activeVideo = video
+      activePlayback = playbackByVideo.get(video) || null
+      selectionMode = false
+      selectionResourceIds = null
       render()
       const preferred = panelPosition || { x: rect.right - 344, y: rect.top + 44 }
       const position = clampOverlayPosition(preferred, { width: 344, height: Math.min(520, innerHeight - 20) }, { width: innerWidth, height: innerHeight })
@@ -673,17 +677,22 @@ export default defineContentScript({
         .map(item => {
           const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
           const exact = candidates.filter(resource => item.playback?.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
-          const choices = (exact.length ? exact : candidates)
+          const matched = candidates.length > 0
+          const expired = Date.now() - (discoveryStarted.get(item.video) || item.playback?.startedAt || Date.now()) >= discoveryWaitMs
+          // 无法截获分片字节的 MSE 播放器仍可手选页面已发现的清单，但不能假称已匹配并一键下载。
+          const fallback = !matched && expired && item.playback?.sourceUrls.some(source => source.startsWith('blob:'))
+            ? visiblePlaybackResources([...resources.values()], item.playback, 8) : []
+          const choices = (exact.length ? exact : matched ? candidates : fallback)
             .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
-          return { ...item, choices }
+          return { ...item, choices, matched }
         })
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
         innerWidth, innerHeight, buttonBounds, selectionMode, [...resourceSendStates],
-        videos.map(({ video, rect, playback, choices }) => [
+        videos.map(({ video, rect, playback, choices, matched }) => [
           mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback?.sourceUrls, playback?.startedAt,
-          resourcePresentationSignature(choices, false), videoButtonPositions.get(video),
+          resourcePresentationSignature(choices, false), matched, videoButtonPositions.get(video),
           Date.now() - (discoveryStarted.get(video) || playback?.startedAt || Date.now()) >= discoveryWaitMs,
         ]),
       ])
@@ -692,7 +701,7 @@ export default defineContentScript({
       renderedVideoSignature = signature
       layer.replaceChildren()
       // 每个播放器独立匹配自己的 currentSrc 或 SourceBuffer 响应，避免串到广告或其他视频。
-      videos.forEach(({ video, rect, playback, choices }) => {
+      videos.forEach(({ video, rect, playback, choices, matched }) => {
         if (!playback) return
         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
         const identifying = choices.length === 0
@@ -701,7 +710,7 @@ export default defineContentScript({
         // blob/MSE (per-SourceBuffer evidence).
         // Requiring a literal currentSrc match again made a uniquely resolved
         // MSE video open a pointless one-item picker.
-        const oneClickChoice = choices.length === 1
+        const oneClickChoice = matched && choices.length === 1
         visible += 1
         const buttonWidth = 156
         const buttonHeight = 34
@@ -799,9 +808,9 @@ export default defineContentScript({
              return
            }
           // Ambiguous MSE resources still require an evidence selection panel.
-          openVideoPanel(rect)
+          openVideoPanel(video, rect)
         })
-        if (choices[0]) applySendState(choices[0], button, fallbackLabel)
+        if (oneClickChoice) applySendState(choices[0], button, fallbackLabel)
         group.append(button)
         if (oneClickChoice) {
           const more = document.createElement('button')
@@ -811,7 +820,7 @@ export default defineContentScript({
           more.addEventListener('pointerdown', event => event.stopPropagation())
           more.addEventListener('click', event => {
             event.preventDefault(); event.stopPropagation()
-            openVideoPanel(rect)
+            openVideoPanel(video, rect)
           })
           group.append(more)
         }
@@ -863,12 +872,13 @@ export default defineContentScript({
           const head = document.createElement('div'); head.className = 'hover-head'
           const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = `${choices.length} 个可用资源`
           const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = '需要选择'
-          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = `优先候选：${details.title}`
+          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = matched
+            ? `优先候选：${details.title}` : '已发现页面媒体，但尚未确认播放器归属。请核对标题、清晰度和来源后选择。'
           const facts = document.createElement('div'); facts.className = 'hover-facts'
           details.facts.slice(0, 4).forEach(value => { const fact = document.createElement('span'); fact.className = 'hover-fact'; fact.textContent = value; facts.append(fact) })
           const actions = document.createElement('div'); actions.className = 'hover-actions'
           const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'hover-action primary'; choose.textContent = '查看并选择'
-          choose.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openVideoPanel(rect) })
+          choose.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openVideoPanel(video, rect) })
           actions.append(choose); head.append(hoverTitle, state); hover.append(head, copy, facts, actions)
         }
         const positionHover = () => {
@@ -1283,7 +1293,7 @@ export default defineContentScript({
         if (!playback?.sourceUrls.includes(blobUrl)) continue
         const updated = {
           ...playback,
-          mseResourceUrls: [...new Set([...(playback.mseResourceUrls || []), mediaUrl])],
+          mseResourceUrls: [...evidence.urls],
         }
         playbackByVideo.set(video, updated)
         if (video === activeVideo) activePlayback = updated

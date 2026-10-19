@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser'
 import { compactResources, pageResourceKey, pruneExpiredResources, type MediaResource } from './resources'
 import { SUBTITLE_LANGUAGES, subtitlePage, subtitleSite } from './subtitleSettings'
+import { withDeadline } from './asyncDeadline'
 
 export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined): void {
   root.className = 'subtitle-panel'
@@ -76,7 +77,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   let hasKey = false
   let loadingProvider = true
   const updateControls = () => {
-    for (const control of [enabled, site, page, source, target, offset, originals, prefetch, player]) control.disabled = busy
+    for (const control of [enabled, site, page, source, target, offset, originals, prefetch, player]) control.disabled = busy || !state
     for (const control of [service, workspace, region, key, save]) control.disabled = busy || loadingProvider
     clear.disabled = busy || loadingProvider || !hasKey
     start.disabled = busy || !state || (!live && (!state.allowed || !player.options.length))
@@ -126,7 +127,7 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     if (disposed || root.hidden || busy || refreshing || tabId == null) return
     refreshing = true
     try {
-      state = await send({ type: 'subtitle-state-get' })
+      state = await withDeadline(send({ type: 'subtitle-state-get' }), 8_000, '字幕状态读取超时，请重试')
       if (disposed || busy) return
       const settings = state.settings
       enabled.checked = settings.enabled
@@ -161,7 +162,10 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       await loadResources(state.pageUrl)
       renderTracks()
       if (state.session?.status === 'failed') report(state.session.error || '字幕连接失败，请重试')
-    } catch (reason) { report(reason instanceof Error ? reason.message : String(reason)) }
+    } catch (reason) {
+      status.textContent = '状态读取失败'
+      report(reason instanceof Error ? reason.message : String(reason))
+    }
     finally { refreshing = false }
   }
   const change = async (message: Record<string, unknown>) => {

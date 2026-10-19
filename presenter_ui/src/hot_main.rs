@@ -1,4 +1,4 @@
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 slint::include_modules!();
 
@@ -508,8 +508,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let rx = Rc::new(RefCell::new(rx));
-    let event_timer = Timer::default();
-    event_timer.start(TimerMode::Repeated, Duration::from_millis(4), {
+    // IPC 线程只在收到事件后唤醒界面；空闲时不再每秒轮询 250 次。
+    confirm.on_core_events_ready({
         let rx = Rc::clone(&rx);
         let active_hud = Rc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
@@ -659,7 +659,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &known_tasks,
     );
     slint::run_event_loop_until_quit()?;
-    event_timer.stop();
     prewarm_timer.stop();
     Ok(())
 }
@@ -885,8 +884,12 @@ fn event_loop(
                 event: CoreEvent::TaskUpdated { snapshot },
             })
             .collect();
-        if !active.is_empty() && tx.send(active).is_err() {
-            return;
+        if !active.is_empty() {
+            if tx.send(active).is_err()
+                || confirm.upgrade_in_event_loop(|item| item.invoke_core_events_ready()).is_err()
+            {
+                return;
+            }
         }
         let restored = load_pending_offers(&mut client);
         let resync_pending = Arc::clone(&pending);
@@ -994,7 +997,9 @@ fn event_loop(
                         if tx.send(batched).is_err() {
                             return;
                         }
-                        let _ = slint::invoke_from_event_loop(|| {});
+                        if confirm.upgrade_in_event_loop(|item| item.invoke_core_events_ready()).is_err() {
+                            return;
+                        }
                     }
                     if last_lease_renewal.elapsed() >= Duration::from_secs(5) {
                         let active = active_handoff.lock().ok().and_then(|value| value.clone());
@@ -1538,7 +1543,6 @@ fn correct_native_click_position(window: &slint::Window) {
                 }
                 left_pressed.set(false);
                 cursor_position.set(None);
-                let _ = window.take_snapshot();
                 window.request_redraw();
             }
             EventResult::PreventDefault

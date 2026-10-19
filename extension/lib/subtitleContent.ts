@@ -88,6 +88,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     if (players.has(media)) return
     const id = `media-${documentId}-${++nextId}`
     const host = document.createElement('div'); host.dataset.hlsSubtitle = id
+    host.style.display = 'none'
     const shadow = host.attachShadow({ mode: 'open' })
     const style = document.createElement('style')
     // 播放器顶行留给下载和更多操作；窄播放器也不能让字幕工具栏遮住它们。
@@ -172,7 +173,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   }
   function render() {
     if (invalidated) return
-    if (selected && capture === 'prefetch' && status === 'running') {
+    if (allowed && selected && capture === 'prefetch' && status === 'running') {
       const currentSource = resolveSource(selected)
       if (currentSource && currentSource.id !== sourceId || trackIdentity(selected) !== audioTrackId || selected.mediaKeys) {
         void send({ type: 'subtitle-capture-error', sessionId, error: '播放器音源已切换，请重新开始翻译' })
@@ -199,6 +200,8 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       if (canPrevious && canNext) break
     }
     for (const [media, ui] of players) {
+      // 关闭字幕即移除整层显示，不能留下禁用按钮遮挡播放器。
+      if (!allowed) { ui.host.style.display = 'none'; ui.options.open = false; continue }
       const rect = media.getBoundingClientRect()
       // Firefox 的原生音频文档以 40px VIDEO 呈现，紧凑控件也需要字幕显示空间。
       const visible = rect.width >= 180 && rect.height >= 24 && rect.bottom > 0 && rect.top < innerHeight

@@ -229,6 +229,7 @@ export component ConfirmWindow inherits Window {
     in-out property <string> duplicate_text;
     in-out property <string> remaining;
     in-out property <bool> details_expanded: false;
+    callback core-events-ready();
     callback command(string);
     callback move-window(float, float);
     FocusScope {
@@ -272,13 +273,20 @@ export component ConfirmWindow inherits Window {
                 }
             }
 
-            // 只收缩视口；正文布局的自然最小高度由 ScrollView 内部 Flickable 保留。
-            ScrollView {
+            // 显式绑定正文高度，展开详情时不能沿用折叠状态的滚动范围。
+            detail_scroll := ScrollView {
                 min-height: 0px;
                 vertical-stretch: 1;
-                horizontal-scrollbar-policy: as-needed;
+                viewport-height: detail_content.min-height;
+                horizontal-scrollbar-policy: always-off;
                 vertical-scrollbar-policy: as-needed;
-                VerticalLayout {
+                changed viewport-height => {
+                    if (root.details_expanded) {
+                        self.viewport-y = min(0px, self.visible-height - self.viewport-height);
+                    }
+                }
+                detail_content := VerticalLayout {
+                    height: self.min-height;
                     padding: 0px;
                     spacing: 10px;
                     Rectangle {
@@ -355,7 +363,10 @@ export component ConfirmWindow inherits Window {
                             mouse-cursor: pointer;
                             accessible-role: button;
                             accessible-label: root.details_expanded ? "收起下载详情" : "展开下载详情";
-                            clicked => { root.details_expanded = !root.details_expanded; }
+                            clicked => {
+                                root.details_expanded = !root.details_expanded;
+                                detail_scroll.viewport-y = root.details_expanded ? min(0px, detail_scroll.height - detail_scroll.viewport-height) : 0px;
+                            }
                         }
                     }
 

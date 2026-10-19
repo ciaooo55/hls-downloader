@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { findEarlyBrowserTakeoverByUrl, type EarlyBrowserTakeover } from '../entrypoints/background'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { findEarlyBrowserTakeoverByUrl, pauseBrowserDownload, type EarlyBrowserTakeover } from '../entrypoints/background'
 
 vi.hoisted(() => {
   ;(globalThis as Record<string, unknown>).defineBackground = (main: unknown) => ({ main })
@@ -8,9 +8,11 @@ vi.hoisted(() => {
 vi.mock('wxt/browser', () => ({
   browser: {
     contextMenus: {},
+    downloads: { pause: vi.fn(), search: vi.fn() },
     storage: { session: { get: vi.fn().mockResolvedValue({}), set: vi.fn().mockResolvedValue(undefined) } },
   },
 }))
+import { browser } from 'wxt/browser'
 import {
   browserCleanupAction,
   canContinueTakeover,
@@ -20,6 +22,48 @@ import {
   desktopAcceptedHandoff,
   handoffTerminalStatus,
 } from './takeover'
+
+describe('browser transfer parking before desktop takeover', () => {
+  const item = (overrides: Record<string, unknown> = {}) => ({
+    id: 42, state: 'in_progress', paused: false, bytesReceived: 0, ...overrides,
+  }) as Parameters<typeof pauseBrowserDownload>[0]
+
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetAllMocks() })
+
+  it('does not authorize a desktop transfer when Chromium refuses to pause', async () => {
+    vi.stubEnv('FIREFOX', '')
+    vi.mocked(browser.downloads.pause).mockRejectedValue(new Error('not pausable'))
+    expect(await pauseBrowserDownload(item())).toBeNull()
+  })
+
+  it('waits for the pause operation before authorizing takeover', async () => {
+    vi.stubEnv('FIREFOX', '')
+    let release!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    vi.mocked(browser.downloads.pause).mockImplementation(() => paused)
+    let settled = false
+    const parking = pauseBrowserDownload(item()).then(result => { settled = true; return result })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    release()
+    expect(await parking).toBe(true)
+  })
+
+  it('does not take resume ownership of a completed or already paused browser item', async () => {
+    expect(await pauseBrowserDownload(item({ state: 'complete' }))).toBe(false)
+    expect(await pauseBrowserDownload(item({ paused: true }))).toBe(false)
+  })
+
+  it('leaves a Firefox connection that never receives its first byte with the browser', async () => {
+    vi.stubEnv('FIREFOX', 'true')
+    vi.useFakeTimers()
+    vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([item()]))
+    const parking = pauseBrowserDownload(item())
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await parking).toBeNull()
+    expect(browser.downloads.pause).not.toHaveBeenCalled()
+  })
+})
 
 describe('browser download takeover helpers', () => {
   it('retains the local source through partial copying, verification and failure', () => {
