@@ -18,7 +18,7 @@
 - 关闭接管、排除站点、实际中断本次浏览器 NativeHost 并让注册指向不存在的可执行文件：浏览器按预期完成下载且没有桌面 offer，内容哈希一致；恢复注册后 NativeHost 重连成功。仅修改沙盒临时登记。
 - Alt 点击核对的是没有桌面 offer；Firefox 自身的 Alt 点击/另存为行为受偏好影响，本轮没有将它描述为浏览器完整下载验收。
 
-测试通过 Core 协议确认/拒绝下载，未将其冒充桌面按钮 GUI 点击测试。宿主没有安装或启动产品，也没有修改宿主 NativeHost 注册。完整包、插件及审核源码的交付哈希另记于 `desktop-artifacts.json`。
+测试通过 Core 协议确认/拒绝下载，未将其冒充桌面按钮 GUI 点击测试。本轮未在宿主安装、启动产品或修改宿主 NativeHost 注册。完整包、插件及审核源码的交付哈希另记于 `desktop-artifacts.json`。
 
 ## 尚未达到的完整替代目标
 
@@ -38,6 +38,6 @@ MSI 为 203,436,032 字节，比本轮基线增加 45,056 字节（44 KiB）；�
 
 ## 清理状态
 
-本轮专用沙盒均已关闭，宿主产品未安装。最终源码仍仅有 main 和一个 worktree。
+本轮专用沙盒均已关闭，本轮没有在宿主安装产品。最终源码仍仅有 main 和一个 worktree。
 
 自动审批拒绝执行四个本轮生成目录的递归删除，返回 `blocked by policy`，没有提供具体原因；因此 `extension/node_modules`、`extension/.output`、`extension/.wxt` 和 `.tool-cache/firefox-response` 仍待清理。没有换工具绕过拒绝。可人工执行 [finish-cleanup.ps1](finish-cleanup.ps1)，脚本先核对四个桌面成品哈希，只处理列出的目录和空缓存父目录，不操作源码、Git、用户下载或其他项目。脚本尚未执行，仅完成 PowerShell 静态语法检查。
