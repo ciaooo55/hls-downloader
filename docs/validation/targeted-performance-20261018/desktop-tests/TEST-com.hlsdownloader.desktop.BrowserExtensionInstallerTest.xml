@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.BrowserExtensionInstallerTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:47:36.149Z" hostname="DESKTOP-FTE6QH2" time="1.293">
+  <properties/>
+  <testcase name="unpack_rejects_paths_outside_the_extension_directory()" classname="com.hlsdownloader.desktop.BrowserExtensionInstallerTest" time="1.261"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

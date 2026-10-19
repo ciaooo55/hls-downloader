@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.SiteRuleEditorTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:19.903Z" hostname="DESKTOP-FTE6QH2" time="0.376">
+  <properties/>
+  <testcase name="request_header_lines_are_bounded_by_structure()" classname="com.hlsdownloader.desktop.SiteRuleEditorTest" time="0.008"/>
+  <testcase name="legacy_rules_are_upgraded_and_invalid_drafts_are_rejected()" classname="com.hlsdownloader.desktop.SiteRuleEditorTest" time="0.358"/>
+  <testcase name="json_rules_roundtrip_without_exposing_credentials()" classname="com.hlsdownloader.desktop.SiteRuleEditorTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

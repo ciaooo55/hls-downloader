@@ -923,11 +923,17 @@ fn download_hls_with_offset(
     if can_concat {
         concat_files(&files, &output)?;
     } else {
-        merge_with_ffmpeg(task_dir, &output)?;
+        merge_with_ffmpeg(task_dir, &output, control)?;
     }
     if audio_merged.is_some() || !subtitles.is_empty() {
         let muxed = task_dir.join("muxed.mp4");
-        mux_av(&output, audio_merged.as_deref(), &subtitles, &muxed)?;
+        mux_av(
+            &output,
+            audio_merged.as_deref(),
+            &subtitles,
+            &muxed,
+            control,
+        )?;
         return Ok(muxed);
     }
     Ok(output)
@@ -2874,6 +2880,8 @@ mod tests {
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                // Windows 接受的连接可能继承非阻塞模式，不能把尚未到达的请求当作断线。
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -3052,6 +3060,7 @@ mod tests {
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();

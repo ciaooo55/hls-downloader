@@ -243,6 +243,15 @@ def run(args):
                 tid = create(path, kind, name+'.mp4')
                 task = wait_task(ipc, tid, lambda t: t['playback_ready'] or t['status'] == 'failed', 90)
                 assert task['status'] not in ('failed', 'completed'), task
+                work = root/'downloads/.hls-tasks'/tid
+                command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
+                paused = wait_task(ipc, tid, lambda t: t['status'] == 'paused', 30)
+                assert work.is_dir() and paused['downloaded_bytes'] > 0, paused
+                command({'kind': 'task_action', 'task_id': tid, 'action': 'resume'})
+                task = wait_task(ipc, tid, lambda t: (t['status'] == 'downloading'
+                    and t['playback_ready']) or t['status'] in ('failed', 'completed'), 60)
+                assert task['status'] == 'downloading', task
+                record(name+': pause preserves cache and resume restores playable download')
                 if name == 'ts':
                     measure('downloading')
                 command({'kind': 'play_task', 'task_id': tid})

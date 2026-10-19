@@ -1139,7 +1139,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     // 只有"从零开始"的下载才能把 200 解释成服务器不支持 Range：此时没有任何已保留片段，
     // 续传偏移也为 0，整包 body 可以安全地作为完整资源重新下载。
     let fresh_start = !output_existed && loaded.is_empty() && job.resume_from == 0;
-    let scheduler = Arc::new(RangeScheduler::new(pending.to_vec(), workers));
+    let workers = workers.min(pending.len());
+    let scheduler = Arc::new(RangeScheduler::new(pending, workers));
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(RangeCheckpoints::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
@@ -1366,7 +1367,14 @@ struct RangeScheduler {
 }
 
 impl RangeScheduler {
-    fn new(pending: Vec<WorkRange>, maximum_connections: usize) -> Self {
+    fn new(mut pending: Vec<WorkRange>, maximum_connections: usize) -> Self {
+        // 普通领取从队尾取最长、起点最早的一段，避免每个请求都扫描整个队列。
+        pending.sort_unstable_by_key(|item| {
+            (
+                item.end.saturating_sub(item.start),
+                std::cmp::Reverse(item.start),
+            )
+        });
         Self {
             pending: Mutex::new(pending),
             active: Mutex::new(Vec::new()),
@@ -1386,28 +1394,31 @@ impl RangeScheduler {
         if !self.connections.permits(worker_index) {
             return None;
         }
-        let priority = self.playback_priority.load(Ordering::Relaxed);
-        let priority_index = pending
-            .iter()
-            .position(|item| item.start <= priority && priority <= item.end);
-        let index = priority_index.or_else(|| {
+        let priority = self.playback_priority.swap(u64::MAX, Ordering::Relaxed);
+        let priority_index = if priority == u64::MAX {
+            None
+        } else {
             pending
                 .iter()
-                .enumerate()
-                .max_by_key(|(_, item)| {
-                    (
-                        item.end.saturating_sub(item.start),
-                        std::cmp::Reverse(item.start),
-                    )
-                })
-                .map(|(index, _)| index)
-        })?;
-        let mut range = pending.swap_remove(index);
+                .position(|item| item.start <= priority && priority <= item.end)
+        };
+        let mut range = match priority_index {
+            Some(index) => pending.remove(index),
+            None => pending.pop()?,
+        };
         if priority_index.is_some() && priority > range.start {
-            pending.push(WorkRange {
+            let head = WorkRange {
                 start: range.start,
                 end: priority - 1,
+            };
+            let key = (head.end - head.start, std::cmp::Reverse(head.start));
+            let index = pending.partition_point(|item| {
+                (
+                    item.end.saturating_sub(item.start),
+                    std::cmp::Reverse(item.start),
+                ) < key
             });
+            pending.insert(index, head);
             range.start = priority;
         }
         drop(pending);
@@ -3480,7 +3491,6 @@ mod tests {
             ],
             4,
         );
-
         let first = scheduler.claim(0).expect("first worker should run");
         let second = scheduler.claim(1).expect("second worker should run");
         assert!(scheduler.claim(2).is_none());
@@ -3518,7 +3528,14 @@ mod tests {
 
     #[test]
     fn playback_seek_splits_pending_range_without_losing_or_overlapping_bytes() {
-        let scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 99 }], 2);
+        let scheduler = RangeScheduler::new(
+            vec![
+                WorkRange { start: 0, end: 99 },
+                WorkRange { start: 200, end: 299 },
+                WorkRange { start: 100, end: 199 },
+            ],
+            2,
+        );
         scheduler.playback_priority.store(25, Ordering::Relaxed);
         let target = scheduler.claim(0).unwrap();
         let target_range = {
@@ -3526,14 +3543,24 @@ mod tests {
             (state.cursor, state.stop)
         };
         assert_eq!(target_range, (25, 99));
-        let head = scheduler.claim(1).unwrap();
-        let head_range = {
-            let state = head.progress.lock().unwrap();
-            (state.cursor, state.stop)
-        };
-        assert_eq!(head_range, (0, 24));
         scheduler.complete(target.id);
-        scheduler.complete(head.id);
+
+        // 再次跳转后，两个前缀都必须回到普通调度；相同长度按起点先后领取。
+        scheduler.playback_priority.store(125, Ordering::Relaxed);
+        let mut ranges = vec![target_range];
+        for expected in [(125, 199), (200, 299), (0, 24), (100, 124)] {
+            let next = scheduler.claim(1).unwrap();
+            let state = next.progress.lock().unwrap();
+            let actual = (state.cursor, state.stop);
+            assert_eq!(actual, expected);
+            ranges.push(actual);
+            drop(state);
+            scheduler.complete(next.id);
+        }
+        ranges.sort_unstable();
+        assert_eq!(ranges.first().unwrap().0, 0);
+        assert_eq!(ranges.last().unwrap().1, 299);
+        assert!(ranges.windows(2).all(|pair| pair[0].1 + 1 == pair[1].0));
         assert!(scheduler.claim(0).is_none());
     }
 

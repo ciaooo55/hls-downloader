@@ -31,7 +31,7 @@ import websocket
 from smoke_extension_browsers import (
     _chromium_extension_id, _evaluate, _find_chromium_binary, _free_port,
     _open_debug_target, _read_debug_targets, _capture_screenshot, _stop_process_tree,
-    _zip_firefox_extension,
+    _zip_firefox_extension, _dispatch_key,
 )
 from smoke_extension_takeover import _registered_host
 
@@ -307,6 +307,8 @@ def run(args):
                     previous_targets = {t['id'] for t in _read_debug_targets(port)}
                     _open_debug_target(port,popup_url)
                     popup = wait(lambda:next((t for t in _read_debug_targets(port) if t.get('url')==popup_url and t['id'] not in previous_targets),None),"popup missing")["webSocketDebuggerUrl"]
+                wait(lambda:evaluate(popup,"document.documentElement.dataset.popupReady === 'ready'"),"popup bootstrap missing")
+                evaluate(popup,"document.getElementById('tab-1').click()")
                 wait(lambda:evaluate(popup,"Boolean(document.querySelector('[data-subtitle-panel] select option'))"),"subtitle popup missing")
                 if args.idle_reconnect:
                     provider_request = "browser.runtime.sendMessage({type:'subtitle-provider',request:{action:'configuration'}})"
@@ -318,11 +320,41 @@ def run(args):
                     assert resumed_provider.get('ok'), f'subtitle connection failed after Core idle expiry: {resumed_provider}'
                 evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === false"),"global enable not broadcast")
+                evaluate(popup,"document.querySelector('[data-subtitle-panel] > details summary').click()")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"本站字幕翻译\"]');c.value='off';c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === true"),"site disable not applied")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"本页字幕翻译\"]');c.value='on';c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('button')?.disabled === false"),"page override not applied")
                 wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"player not selected")
+                # 只改本轮独立浏览器配置中的夹具缓存，验证音轨变化无需再次拉取整页资源。
+                evaluate(popup, """(async()=>{
+                  const tab=(await browser.tabs.query({})).find(t=>t.url==="""+json.dumps(page_url)+""");
+                  await browser.runtime.sendMessage({type:'list',tabId:tab.id,pageUrl:tab.url});
+                  const stored=await browser.storage.session.get(null);
+                  const key=Object.keys(stored).find(k=>k.startsWith(`resources:tab:${tab.id}:page:`));
+                  if(!key) throw new Error('resource cache key missing');
+                  window.trackSmoke={key,previous:stored[key],resource:{id:'track-smoke',kind:'media',
+                    url:tab.url+'/track-smoke.mp4',pageUrl:tab.url,tabId:tab.id,seenAt:Date.now(),
+                    audioTracks:[{label:'Smoke audio A',language:'ja'}]}};
+                  const s=window.trackSmoke;
+                  await browser.storage.session.set({[key]:[s.resource,...s.previous]}); return true;
+                })()""")
+                wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-panel]').textContent.includes('Smoke audio A')"),"new resource audio track missing")
+                evaluate(popup,"""(async()=>{const s=window.trackSmoke;
+                  s.resource.audioTracks=[{label:'Smoke audio B',language:'en'}];
+                  await browser.storage.session.set({[s.key]:[s.resource,...s.previous]});return true})()""")
+                wait(lambda:evaluate(popup,"(()=>{const t=document.querySelector('[data-subtitle-panel]').textContent;return t.includes('Smoke audio B')&&!t.includes('Smoke audio A')})()"),"resource audio track update stale")
+                evaluate(popup,"""(async()=>{const s=window.trackSmoke;s.resource.seenAt=Date.now()-31*60_000;
+                  await browser.storage.session.set({[s.key]:[s.resource,...s.previous]});return true})()""")
+                wait(lambda:evaluate(popup,"!document.querySelector('[data-subtitle-panel]').textContent.includes('Smoke audio B')"),"expired resource audio track retained")
+                evaluate(popup,"""(async()=>{const s=window.trackSmoke;s.resource.seenAt=Date.now();
+                  await browser.storage.session.set({[s.key]:[s.resource,...s.previous]});return true})()""")
+                wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-panel]').textContent.includes('Smoke audio B')"),"resource audio track did not return")
+                evaluate(popup,"""(async()=>{const s=window.trackSmoke;
+                  await browser.storage.session.remove(s.key);return true})()""")
+                wait(lambda:evaluate(popup,"!document.querySelector('[data-subtitle-panel]').textContent.includes('Smoke audio B')"),"removed resource audio track retained")
+                evaluate(popup,"""(async()=>{const s=window.trackSmoke;
+                  await browser.storage.session.set({[s.key]:s.previous});delete window.trackSmoke;return true})()""")
                 prefetch_checks = []
                 if args.capture == 'prefetch':
                     evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-prefetch]');c.checked=true;c.dispatchEvent(new Event('change'));return true})()")
@@ -337,6 +369,11 @@ def run(args):
                 wait(lambda:core.audio_frames>=4,"tab audio was not uploaded: "+str(evaluate(popup,"document.querySelector('.subtitle-error')?.textContent")))
                 capture = evaluate(popup, "chrome.storage.session.get('subtitle-sessions').then(v=>Object.values(v['subtitle-sessions']||{})[0]?.capture)")
                 assert capture == args.capture, f"expected {args.capture} capture, got {capture}"
+                evaluate(page,"(()=>{const root=document.querySelector('[data-hls-subtitle]').shadowRoot;root.querySelector('summary').click();root.querySelector('summary').focus()})()")
+                assert evaluate(page,"document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('details').open"), 'subtitle options did not expand'
+                if not firefox:
+                    _dispatch_key(page, 'Escape', 'Escape', 27)
+                    assert evaluate(page,"(()=>{const root=document.querySelector('[data-hls-subtitle]').shadowRoot;return !root.querySelector('details').open && root.activeElement === root.querySelector('summary')})()"), 'Escape did not collapse subtitle options and restore focus'
                 wait(lambda:core.nonzero_samples > 1000, "captured audio remained silent")
                 if args.capture == 'prefetch':
                     wait(lambda:max(core.prefetch_positions,default=0)>3,"paused player did not prepare future audio")
@@ -361,7 +398,7 @@ def run(args):
                     frames = core.audio_frames
                     time.sleep(1)
                     assert core.audio_frames <= frames+1 and max(core.prefetch_positions)<=paused_position+30.01, 'prefetch continued past the bounded window'
-                    evaluate(page,"document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('.tools button:nth-child(3)').click()")
+                    evaluate(page,"(()=>{const root=document.querySelector('[data-hls-subtitle]').shadowRoot;root.querySelector('details').open=true;root.querySelector('button[title=\"跳到已翻译的下一句\"]').click()})()")
                     wait(lambda:evaluate(page,"window.testMedia.currentTime > 0.5"),"next cue did not seek into prepared subtitles")
                     prefetch_checks.extend(['manual commit waits for completed translation', 'originally paused player stays paused', 'PCM positions remain accurate during page thread stall', 'bounded pretranslation stops PCM', 'next cue seeks into prepared cache'])
                     core.hold_ready = True
@@ -369,7 +406,7 @@ def run(args):
                     wait(lambda:evaluate(page, 'window.testMedia.paused'), 'playback did not pause for missing subtitles')
                     wait(lambda:any(s['pending'] for s in core.sessions.values()), 'new seek window not committed', timeout=20)
                     assert evaluate(page, 'window.testMedia.currentTime < 40.5'), 'player ran ahead of untranslated seek window'
-                    evaluate(page, "document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('button[title*=保持暂停]').click()")
+                    evaluate(page, "(()=>{const root=document.querySelector('[data-hls-subtitle]').shadowRoot;root.querySelector('details').open=true;root.querySelector('button[title*=保持暂停]').click()})()")
                     core.hold_ready = False
                     wait(lambda:evaluate(page, "document.querySelector('[data-hls-subtitle]').shadowRoot.querySelector('.status').textContent.includes('已备好 8.0 秒')"), 'held window not prepared')
                     assert evaluate(page, 'window.testMedia.paused'), 'hold-pause resumed the player'
@@ -423,7 +460,7 @@ def run(args):
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"reenable did not restore audio")
                 evaluate(popup,"(()=>{const c=document.querySelector('[aria-label=\"目标语言\"]');c.value='en';c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"language change did not stop existing translation")
-                wait(lambda:evaluate(page,"(()=>{const s=document.querySelector('[data-hls-subtitle]').shadowRoot;return s.querySelector('.translation').textContent === '' && s.querySelector('.tools button:nth-child(3)').disabled})()"),"language change retained old translated cues")
+                wait(lambda:evaluate(page,"(()=>{const s=document.querySelector('[data-hls-subtitle]').shadowRoot;return s.querySelector('.translation').textContent === '' && s.querySelector('button[title=\"跳到已翻译的下一句\"]').disabled})()"),"language change retained old translated cues")
                 evaluate(popup,"(()=>{const c=document.querySelector('[data-subtitle-enabled]');c.checked=false;c.dispatchEvent(new Event('change'));return true})()")
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"global disable did not stop native session")
                 wait(lambda:evaluate(page,"document.querySelector('[data-hls-subtitle]')?.shadowRoot?.querySelector('.translation')?.textContent === ''"),"global disable left subtitles visible")
@@ -432,6 +469,7 @@ def run(args):
                 wait(lambda:evaluate(page,"document.querySelectorAll('[data-hls-subtitle]').length === 0"),"removed player retained subtitle UI")
                 result = {"passed":True,"browser":family,"headed":args.headed,"capture":capture,"player_dom":args.player_dom,"cross_origin":args.capture == 'tab',"provider":"fixture Core, cloud accuracy not tested", "idle_reconnect_verified":args.idle_reconnect,"audio_frames":core.audio_frames,
                     "nonzero_samples":core.nonzero_samples,"seek_resets":core.resets,"checks":["production popup","global switch broadcast","site disable and page override","fixture PCM prefetch in real browser" if args.capture == 'prefetch' else "real browser audio + AudioWorklet","real Native Host PCM forwarding","subtitle render","seek reset","rate change preserves original-speed audio timeline","time offset","provider failure and retry","reset rejection and retry","disable hides cached navigation and reenable restores audio","language change clears old cues","stop capture","removed player clears subtitle UI",*prefetch_checks]}
+                result['resource_updates_verified'] = True
                 args.report.parent.mkdir(parents=True,exist_ok=True); args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
                 return result
         except Exception:

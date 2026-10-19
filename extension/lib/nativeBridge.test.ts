@@ -16,6 +16,24 @@ class FakePort implements NativePortLike {
 }
 
 describe('persistent native bridge', () => {
+  it('rejects overload without losing queued downloads and accepts new work after draining', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const requests = Array.from({ length: 64 }, (_, index) => bridge.request({ op: 'download', index }))
+    const completed = Promise.all(requests)
+    try {
+      await expect(bridge.request({ op: 'download', index: 64 })).rejects.toThrow('插件请求过多')
+      for (let index = 0; index < 64; index++) {
+        expect(port.posted[index].index).toBe(index)
+        port.onMessage.emit({ ok: true, __request_id: port.posted[index].__request_id })
+      }
+      await completed
+      const next = bridge.request({ op: 'download', index: 65 })
+      port.onMessage.emit({ ok: true, __request_id: port.posted[64].__request_id })
+      await expect(next).resolves.toMatchObject({ ok: true })
+    } finally { bridge.close(); await completed.catch(() => undefined) }
+  })
+
   it('reopens an idle subtitle port before sending a new start request', async () => {
     vi.useFakeTimers()
     const first = new FakePort(), second = new FakePort()

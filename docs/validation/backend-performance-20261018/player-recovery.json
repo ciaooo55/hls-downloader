@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "scope": "r12 released engine versus local candidate; same VM/fixture",
+  "sha256": {
+    "baseline": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+    "candidate": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b"
+  },
+  "suspended_player": {
+    "timeout_seconds": 10.048,
+    "concurrent_snapshot_ms": 0.353,
+    "old_pid": 5920,
+    "replacement_pid": 1944,
+    "passed": true
+  }
+}

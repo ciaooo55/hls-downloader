@@ -1,0 +1,25 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261019001144
+Username: E71E17E4-A0DA-4\WDAGUtilityAccount
+RunAs User: E71E17E4-A0DA-4\WDAGUtilityAccount
+Configuration Name: 
+Machine: E71E17E4-A0DA-4 (Microsoft Windows NT 10.0.22621.0)
+Host Application: powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\HLSValidation\idm-ab-20261019\guest.ps1
+Process ID: 4800
+PSVersion: 5.1.22621.4249
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.22621.4249
+BuildVersion: 10.0.22621.4249
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is C:\HLSValidation\idm-ab-20261019\guest.log
+PS>TerminatingError(Invoke-WebRequest): "The operation has timed out."
+PS>TerminatingError(Invoke-WebRequest): "The operation has timed out."
+PS>TerminatingError(python.exe): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: ----------------------------------------"
+>> TerminatingError(python.exe): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: ----------------------------------------"
+PS>TerminatingError(): "Item has already been added. Key in dictionary: 'exit_code'  Key being added: 'exit_code'"
+>> TerminatingError(): "Item has already been added. Key in dictionary: 'exit_code'  Key being added: 'exit_code'"

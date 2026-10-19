@@ -1701,7 +1701,7 @@ fn check_torrent_control(control: &Path) -> Result<(), String> {
 }
 
 struct PeerMessageReader {
-    receiver: std::sync::mpsc::Receiver<Result<(u8, Vec<u8>), String>>,
+    receiver: Option<std::sync::mpsc::Receiver<Result<(u8, Vec<u8>), String>>>,
     shutdown: std::net::TcpStream,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -1713,7 +1713,8 @@ impl PeerMessageReader {
             .set_read_timeout(Some(Duration::from_secs(15)))
             .map_err(|error| error.to_string())?;
         let shutdown = read_stream.try_clone().map_err(|error| error.to_string())?;
-        let (sender, receiver) = std::sync::mpsc::channel();
+        // 下载写盘或限速时让 TCP 反压对端，不能把持续到来的 peer 消息无限堆进内存。
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let handle = std::thread::spawn(move || loop {
             let message = read_message(&mut read_stream)
                 .map_err(|error| format!("peer {peer} message read: {error}"));
@@ -1723,14 +1724,19 @@ impl PeerMessageReader {
             }
         });
         Ok(Self {
-            receiver,
+            receiver: Some(receiver),
             shutdown,
             handle: Some(handle),
         })
     }
 
     fn recv_timeout(&self, timeout: Duration) -> Result<Option<(u8, Vec<u8>)>, String> {
-        match self.receiver.recv_timeout(timeout) {
+        match self
+            .receiver
+            .as_ref()
+            .ok_or("peer reader stopped")?
+            .recv_timeout(timeout)
+        {
             Ok(message) => message.map(Some),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -1742,6 +1748,8 @@ impl PeerMessageReader {
 
 impl Drop for PeerMessageReader {
     fn drop(&mut self) {
+        // 满队列可能阻塞 send；只关闭 socket 无法唤醒它，必须先断开接收端。
+        self.receiver.take();
         let _ = self.shutdown.shutdown(std::net::Shutdown::Both);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -2443,6 +2451,31 @@ mod tests {
         payload.push(b'e');
         let peers = parse_ut_pex(&payload);
         assert_eq!(peers[0].to_string(), "10.0.0.2:6881");
+    }
+
+    #[test]
+    fn peer_reader_stops_with_an_unconsumed_message_burst() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let reader = PeerMessageReader::start(&client, listener.local_addr().unwrap()).unwrap();
+        for _ in 0..128 {
+            send_message(&mut peer, 1, &[]).unwrap();
+        }
+        assert_eq!(
+            reader.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Some((1, Vec::new()))
+        );
+        let (finished, done) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            drop(reader);
+            finished.send(()).unwrap();
+        });
+        done.recv_timeout(Duration::from_secs(5))
+            .expect("peer teardown blocked on its receive queue");
+        worker.join().unwrap();
     }
 
     #[test]

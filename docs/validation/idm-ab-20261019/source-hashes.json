@@ -1,0 +1,30 @@
+[
+  {
+    "sha256": "3aaef8b66f2035dc34c4df7ce35eca3c927b28e639e24767bc8d68a0c3f36e6a",
+    "path": "native_shell/src/http_engine.rs"
+  },
+  {
+    "sha256": "3c964af99ee0920a1088bc09ef73fadf89a0038e111962afb6e721b03512bc7f",
+    "path": "extension/entrypoints/background.ts"
+  },
+  {
+    "sha256": "7230ae607065a36b8996da67305eac9913aa28d6939a7f2510266bad53b90944",
+    "path": "extension/entrypoints/takeover.content.ts"
+  },
+  {
+    "sha256": "263f08933d846cf5e31a32637566605d4dc13cb67291359a26bc844e55a36aec",
+    "path": "extension/lib/resources.ts"
+  },
+  {
+    "sha256": "49b8250201bb6f3be98d3b07464613178bbbbbf6a567ec18bba968a57b8a7938",
+    "path": "extension/lib/clickIntentStore.ts"
+  },
+  {
+    "sha256": "cf259380b47fb0e24cbba934814b9002637202ce79adf1751340bfa555e3307f",
+    "path": "extension/lib/clickIntentStore.test.ts"
+  },
+  {
+    "sha256": "cd701742ecbe33c4da2a4e44fa84149a425377b318ad17258172e8e9746693b5",
+    "path": "extension/wxt.config.ts"
+  }
+]

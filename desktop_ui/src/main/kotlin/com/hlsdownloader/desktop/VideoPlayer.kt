@@ -8,6 +8,12 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import com.hlsdownloader.desktop.icons.Close
+import com.hlsdownloader.desktop.icons.Forward10
+import com.hlsdownloader.desktop.icons.Pause
+import com.hlsdownloader.desktop.icons.PlayArrow
+import com.hlsdownloader.desktop.icons.Replay10
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +26,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.boundsInWindow
@@ -223,8 +230,8 @@ internal fun LocalVideoPlayer(taskId: String, task: TaskDto?, onClose: () -> Uni
     }
     if (!pip) {
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .72f)).clickable(enabled = !closing) {}, contentAlignment = Alignment.Center) {
-            Box(if (fullscreen) Modifier.fillMaxSize() else Modifier.padding(20.dp).widthIn(max = 1100.dp)
-                .fillMaxWidth().fillMaxHeight(.90f)) { panel(null) }
+            Box(if (fullscreen) Modifier.fillMaxSize() else Modifier.padding(20.dp).widthIn(max = 960.dp)
+                .fillMaxWidth().fillMaxHeight(.82f)) { panel(null) }
         }
     }
 }
@@ -278,25 +285,25 @@ private fun PlaybackPanel(
             if (!pip && (requestedFocusDirection == FocusDirection.Next || requestedFocusDirection == FocusDirection.Previous)) {
                 focus.requestFocus()
             }
-        } }.focusRequester(focus).focusable().onPreviewKeyEvent {
+        } }.onKeyEvent {
             if (it.type != KeyEventType.KeyDown) false
-            else if (!started && it.key != Key.Escape) true else when (it.key) {
+            else when (it.key) {
                 Key.Escape -> { if (fullscreen) onFullscreen() else onClose(); true }
-                Key.Spacebar -> { onAction(if (state.paused) "resume" else "pause"); true }
-                Key.DirectionLeft -> { onAction("seek_back"); true }
-                Key.DirectionRight -> { onAction("seek_fwd"); true }
-                Key.F -> { onFullscreen(); true }
-                Key.M -> { onAction("mute"); true }
+                Key.Spacebar, Key.K -> if (started) { onAction(if (state.paused) "resume" else "pause"); true } else false
+                Key.DirectionLeft -> if (started) { onAction("seek_back"); true } else false
+                Key.DirectionRight -> if (started) { onAction("seek_fwd"); true } else false
+                Key.F -> if (started) { onFullscreen(); true } else false
+                Key.M -> if (started) { onAction("mute"); true } else false
                 else -> false
             }
-        }) {
+        }.focusRequester(focus).focusable()) {
         Row(Modifier.fillMaxWidth().height(48.dp).background(playerSurface).reportControlBounds("video.header")
             .then(if (onDrag != null) Modifier.pointerInput(onDrag) { detectDragGestures { change, amount -> change.consume(); onDrag(amount) } } else Modifier)
             .padding(start = 14.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, color = playerInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             downloadSpeed?.let { Text(it, color = Color(0xff78d6ad), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp)) }
-            PlayerButton("关闭播放器，下载继续", "×", !closing, onClose)
+            PlayerButton("关闭播放器，下载继续", enabled = !closing, icon = Icons.Outlined.Close, onClick = onClose)
         }
         Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black).reportControlBounds("video.surface").clickable(enabled = started) {
             focus.requestFocus()
@@ -344,22 +351,23 @@ private fun PlaybackPanel(
                 }
             }
             Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
-                PlayerButton(if (state.paused) "播放" else "暂停", if (state.paused) "▶" else "Ⅱ", started) { onAction(if (state.paused) "resume" else "pause") }
-                PlayerButton("后退 10 秒", "−10", started) { onAction("seek_back") }
-                PlayerButton("前进 10 秒", "+10", started) { onAction("seek_fwd") }
+                PlayerButton(if (state.paused) "播放" else "暂停", enabled = started,
+                    icon = if (state.paused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, emphasized = true) { onAction(if (state.paused) "resume" else "pause") }
+                PlayerButton("后退 10 秒", enabled = started, icon = Icons.Outlined.Replay10) { onAction("seek_back") }
+                PlayerButton("前进 10 秒", enabled = started, icon = Icons.Outlined.Forward10) { onAction("seek_fwd") }
                 Text("${playerTime((scrub ?: state.position.toFloat()).toDouble())} / ${playerTime(state.duration)}", color = playerMuted, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(start = 5.dp))
                 PlayerRate(state.speed, started) { onAction("speed:$it") }
             }
             Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
-                PlayerButton(if (state.muted) "取消静音" else "静音", if (state.muted) "静" else "音", started) { onAction("mute") }
+                PlayerButton(if (state.muted) "取消静音" else "静音", if (state.muted) "静音" else "音量", started) { onAction("mute") }
                 Slider(value = volume ?: state.volume.toFloat().coerceIn(0f, 100f), onValueChange = { volume = it },
                     onValueChangeFinished = { volume?.let { onAction("volume:$it") }; volume = null }, valueRange = 0f..100f, enabled = started,
                     colors = SliderDefaults.colors(thumbColor = playerAccent, activeTrackColor = playerAccent),
                     modifier = Modifier.weight(1f).height(30.dp).reportControlBounds("video.volume").semantics { contentDescription = "音量" })
                 PlayerTracks("音轨", state.tracks.filter { it.kind == "audio" }, false, started) { onAction("audio:$it") }
                 PlayerTracks("字幕", state.tracks.filter { it.kind == "sub" }, true, started) { onAction("subtitle:$it") }
-                PlayerButton(if (pip) "返回主界面播放器" else "画中画", if (pip) "返回" else "小窗", started, onPip)
-                PlayerButton(if (fullscreen) "退出全屏" else "全屏", if (fullscreen) "还原" else "全屏", started, onFullscreen)
+                PlayerButton(if (pip) "返回主界面播放器" else "画中画", if (pip) "返回" else "小窗", started, onClick = onPip)
+                PlayerButton(if (fullscreen) "退出全屏" else "全屏", if (fullscreen) "还原" else "全屏", started, onClick = onFullscreen)
             }
         }
     }
@@ -416,10 +424,22 @@ private fun PlayerThumbnailPreview(image: BufferedImage?, message: String, secon
 }
 
 @Composable
-private fun PlayerButton(label: String, text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    TextButton(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(0.dp),
-        modifier = Modifier.width(38.dp).height(36.dp).reportControlBounds("video.$label").semantics { contentDescription = label }) {
-        Text(text, color = if (enabled) playerInk else playerMuted.copy(alpha = .45f), fontSize = 12.sp)
+private fun PlayerButton(label: String, text: String = "", enabled: Boolean = true, icon: ImageVector? = null, emphasized: Boolean = false, onClick: () -> Unit) {
+    val contentColor = if (emphasized) playerAccent else playerInk
+    // 提示留在控件条内，避免被相邻的原生视频子窗口遮挡。
+    WorkbenchTooltip(label, besideControl = true) {
+        Button(onClick = onClick, enabled = enabled, contentPadding = PaddingValues(0.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (emphasized) playerAccent.copy(alpha = .12f) else Color.Transparent,
+                contentColor = contentColor,
+                disabledContainerColor = Color.Transparent,
+                disabledContentColor = playerMuted.copy(alpha = .45f),
+            ),
+            hoverColor = playerInk.copy(alpha = .10f), pressedColor = playerInk.copy(alpha = .18f),
+            modifier = Modifier.width(38.dp).height(36.dp).reportControlBounds("video.$label").semantics { contentDescription = label }) {
+            if (icon != null) Icon(icon, null, modifier = Modifier.size(20.dp))
+            else Text(text, fontSize = 12.sp)
+        }
     }
 }
 
@@ -427,7 +447,7 @@ private fun PlayerButton(label: String, text: String, enabled: Boolean = true, o
 private fun PlayerRate(rate: Double, enabled: Boolean, onSelect: (Double) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.reportControlBounds("video.rate").semantics { contentDescription = "播放倍速" }) { Text("${rate}×", color = playerAccent, fontSize = 12.sp) }
+        TextButton(onClick = { expanded = true }, enabled = enabled, hoverColor = playerInk.copy(alpha = .10f), pressedColor = playerInk.copy(alpha = .18f), modifier = Modifier.reportControlBounds("video.rate").semantics { contentDescription = "播放倍速" }) { Text("${rate}×", color = if (enabled) playerAccent else playerMuted.copy(alpha = .45f), fontSize = 12.sp) }
         DropdownMenu(expanded, { expanded = false }) {
             listOf(.5, .75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0).forEach { value ->
                 DropdownMenuItem(text = { Text("${value}×") }, modifier = Modifier.reportControlBounds("video.rate.$value"), onClick = { expanded = false; onSelect(value) })
@@ -440,7 +460,7 @@ private fun PlayerRate(rate: Double, enabled: Boolean, onSelect: (Double) -> Uni
 private fun PlayerTracks(label: String, tracks: List<PlayerTrackDto>, allowOff: Boolean, enabled: Boolean, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }, enabled = enabled && tracks.isNotEmpty(), modifier = Modifier.reportControlBounds("video.$label"), contentPadding = PaddingValues(horizontal = 5.dp)) { Text(label, color = if (tracks.isNotEmpty()) playerInk else playerMuted, fontSize = 11.sp) }
+        TextButton(onClick = { expanded = true }, enabled = enabled && tracks.isNotEmpty(), hoverColor = playerInk.copy(alpha = .10f), pressedColor = playerInk.copy(alpha = .18f), modifier = Modifier.reportControlBounds("video.$label"), contentPadding = PaddingValues(horizontal = 5.dp)) { Text(label, color = if (enabled && tracks.isNotEmpty()) playerInk else playerMuted.copy(alpha = .45f), fontSize = 11.sp) }
         DropdownMenu(expanded, { expanded = false }) {
             if (allowOff) DropdownMenuItem(text = { Text("关闭字幕") }, modifier = Modifier.reportControlBounds("video.$label.no"), onClick = { expanded = false; onSelect("no") })
             tracks.forEach { track ->

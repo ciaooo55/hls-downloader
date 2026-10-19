@@ -1,0 +1,34 @@
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: range 0-2047 failed after 5 attempts: WinHttpSendRequest 12007
+Core setting queue_profiles is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+v7 task task-1 was published but the Core mutex was poisoned
+v7 task task-1 was published but its completion power action failed: v7 Core mutex poisoned
+v7 task task-1 subtitle copy failed: copy subtitle C:\QAWork\hls-publish-media-preserve-5500-1792333234825475400\subs\zh.srt: 拒绝访问。 (os error 5)
+v7 task task-1 subtitle copy failed: copy subtitle C:\QAWork\hls-publish-media-preserve-5500-1792333234920954800\subs\zh.srt: 拒绝访问。 (os error 5)
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: av_scan_error: 系统找不到指定的文件。 (os error 2)
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-2 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: checksum mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, got 9c729c04a3ec90078b265e7b9bbfcb834f5b3f5ee3a6732e76f6a65f8910ad43
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-2 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: url path invalid
+v7 task task-1 failed: WinHttpSendRequest 12007
+Core setting queue_profiles is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting queue_profiles is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+v7 task task-1 failed: all peers failed
+v7 task task-1 failed: 请求上下文损坏: expected value at line 1 column 1
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0

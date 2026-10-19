@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.TransparentButtonFeedbackTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:20.370Z" hostname="DESKTOP-FTE6QH2" time="0.163">
+  <properties/>
+  <testcase name="text_button_itself_stays_transparent_by_default()" classname="com.hlsdownloader.desktop.TransparentButtonFeedbackTest" time="0.024"/>
+  <testcase name="segment_buttons_give_both_a_hover_step_and_a_visible_press_scale()" classname="com.hlsdownloader.desktop.TransparentButtonFeedbackTest" time="0.009"/>
+  <testcase name="every_button_with_a_transparent_container_has_a_visible_hover_step()" classname="com.hlsdownloader.desktop.TransparentButtonFeedbackTest" time="0.096"/>
+  <testcase name="text_button_passes_its_hover_and_press_step()" classname="com.hlsdownloader.desktop.TransparentButtonFeedbackTest" time="0.021"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

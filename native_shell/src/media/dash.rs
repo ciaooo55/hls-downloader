@@ -330,7 +330,7 @@ pub fn download_dash_selected(
                     true,
                 )?;
                 let output = audio_dir.join("merged.m4a");
-                merge_with_ffmpeg(&audio_dir, &output)?;
+                merge_with_ffmpeg(&audio_dir, &output, control)?;
                 prefetched_audio = Some(output);
             }
         }
@@ -650,10 +650,10 @@ fn finish_dash(
     }
     crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
     let output = task_dir.join("merged.mp4");
-    merge_with_ffmpeg(task_dir, &output)?;
+    merge_with_ffmpeg(task_dir, &output, control)?;
     let published = if let Some(audio) = audio_merged {
         let muxed = task_dir.join("muxed.mp4");
-        crate::media::merge::mux_av(&output, Some(&audio), &[], &muxed)?;
+        crate::media::merge::mux_av(&output, Some(&audio), &[], &muxed, control)?;
         muxed
     } else {
         output
@@ -793,7 +793,7 @@ fn fetch_dash_audio(
     write_dash_playlist(&audio_dir, &audio_files)?;
     let audio_out = audio_dir.join("merged.m4a");
     crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
-    merge_with_ffmpeg(&audio_dir, &audio_out)?;
+    merge_with_ffmpeg(&audio_dir, &audio_out, control)?;
     Ok(audio_out)
 }
 

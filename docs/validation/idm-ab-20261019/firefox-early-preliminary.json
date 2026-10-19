@@ -1,0 +1,203 @@
+{
+  "passed": false,
+  "scope": "real Firefox + production extension + Native Host/Core; accept/reject via Core API, not rendered button input",
+  "checks": [
+    {
+      "name": "slow-handoff-latency",
+      "milliseconds": 8537.096200000178,
+      "click_command_ms": 358.76180000013846,
+      "handoff": "handoff-1a14fedd6e2-2"
+    },
+    {
+      "name": "slow-decision",
+      "response": {
+        "type": "events",
+        "request_id": 4,
+        "events": [
+          {
+            "sequence": 11,
+            "event": {
+              "kind": "task_created",
+              "snapshot": {
+                "task_id": "task-1",
+                "resource_kind": "file",
+                "status": "queued",
+                "stage": "waiting",
+                "title": "slow.bin",
+                "filename": "slow.bin",
+                "downloaded_bytes": 0,
+                "total_bytes": 1048576,
+                "speed_bytes_per_sec": 0,
+                "peer_count": 0,
+                "seed_count": 0,
+                "uploaded_bytes": 0,
+                "upload_speed_bytes_per_sec": 0,
+                "eta_seconds": null,
+                "active_workers": 0,
+                "completed_ranges": 0,
+                "total_ranges": 1,
+                "playback_ready": false,
+                "is_live": false,
+                "available_actions": [
+                  "start",
+                  "delete",
+                  "queue_up",
+                  "queue_top",
+                  "queue_down",
+                  "queue_bottom"
+                ],
+                "url": "http://127.0.0.1:53043/slow.bin",
+                "error_code": null,
+                "error_message": null,
+                "error_stage": "",
+                "error_url": "",
+                "error_hint": "",
+                "http_status": null,
+                "error_attempt": 0,
+                "queue_index": 1,
+                "queue_id": "default",
+                "output_missing": false,
+                "output_path": "C:\\QAWork\\firefox-output-final\\slow.bin",
+                "connection_hint": "",
+                "connection_parts": [],
+                "log_tail": [],
+                "speed_history": [],
+                "mirror_status": [],
+                "request_method": "GET",
+                "download_dir": "C:\\QAWork\\firefox-output-final",
+                "speed_limit_kib": 0,
+                "expected_checksum": "",
+                "checksum_algorithm": "",
+                "checksum_actual": "",
+                "checksum_verified": null,
+                "av_scan": null,
+                "max_workers": 12,
+                "mirrors": [],
+                "scheduled_start_at": "",
+                "scheduled_stop_at": ""
+              }
+            }
+          },
+          {
+            "sequence": 12,
+            "event": {
+              "kind": "handoff_resolved",
+              "handoff_id": "handoff-1a14fedd6e2-2",
+              "task_id": "task-1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "slow-browser-fallback-or-cleanup",
+      "item": null
+    },
+    {
+      "name": "reject-handoff-latency",
+      "milliseconds": 8565.0198000003,
+      "click_command_ms": 373.65520000003016,
+      "handoff": "handoff-1a14fedf9a4-4"
+    },
+    {
+      "name": "reject-decision",
+      "response": {
+        "type": "events",
+        "request_id": 4,
+        "events": [
+          {
+            "sequence": 17,
+            "event": {
+              "kind": "handoff_resolved",
+              "handoff_id": "handoff-1a14fedf9a4-4",
+              "task_id": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "reject-browser-fallback-or-cleanup",
+      "item": {
+        "bytesReceived": 0,
+        "canResume": false,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\QAWork\\firefox-slow-start\\downloads\\reject(1).bin",
+        "finalUrl": null,
+        "id": 1,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "state": "complete",
+        "totalBytes": 0,
+        "url": "http://127.0.0.1:53043/reject.bin"
+      }
+    },
+    {
+      "name": "reload-handoff-latency",
+      "milliseconds": 8495.941799999855,
+      "click_command_ms": 326.2807999999495,
+      "handoff": "handoff-1a14fee1cf1-6"
+    }
+  ],
+  "background_sha256": "d1eca4abc376e6d29e369b654a0e584157ccb577ccf4d441da807ad50042c3c7",
+  "ping": {
+    "__request_id": "mve2cpd8-2",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "browser_events": {
+    "probeEvents": [
+      {
+        "event": "headers",
+        "requestId": "8",
+        "tabId": 1,
+        "time": 1792342348758,
+        "type": "image",
+        "url": "http://127.0.0.1:53043/favicon.ico"
+      },
+      {
+        "event": "headers",
+        "requestId": "9",
+        "tabId": 1,
+        "time": 1792342349423,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:53043/slow.bin"
+      },
+      {
+        "event": "headers",
+        "requestId": "10",
+        "tabId": 1,
+        "time": 1792342358334,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:53043/reject.bin"
+      },
+      {
+        "bytesReceived": 0,
+        "event": "created",
+        "referrer": "http://127.0.0.1:53043/",
+        "tabId": null,
+        "time": 1792342358936,
+        "url": "http://127.0.0.1:53043/reject.bin"
+      },
+      {
+        "event": "headers",
+        "requestId": "12",
+        "tabId": 1,
+        "time": 1792342367364,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:53043/reload.bin"
+      }
+    ]
+  },
+  "error": "AssertionError({'paused-handoff-followups-v1': []})",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\HLSValidation\\idm-ab-20261019\\firefox-slow-start.py\", line 133, in main\n    assert any(r['handoffId'] == handoff['id'] and r.get('phase') == 'resolution' for r in records.get('paused-handoff-followups-v1', [])), records\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'paused-handoff-followups-v1': []}\n"
+}

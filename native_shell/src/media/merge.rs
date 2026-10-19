@@ -9,8 +9,8 @@ pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
     }
     let mut dest = fs::File::create(output).map_err(|error| error.to_string())?;
     for input in inputs {
-        let bytes = fs::read(input).map_err(|error| error.to_string())?;
-        dest.write_all(&bytes).map_err(|error| error.to_string())?;
+        let mut source = fs::File::open(input).map_err(|error| error.to_string())?;
+        std::io::copy(&mut source, &mut dest).map_err(|error| error.to_string())?;
     }
     dest.flush().map_err(|error| error.to_string())
 }
@@ -35,7 +35,7 @@ pub fn locate_ffmpeg() -> Option<PathBuf> {
     which("ffmpeg")
 }
 
-pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path) -> Result<(), String> {
+pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Result<(), String> {
     let playlist = task_dir.join("local.m3u8");
     let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
     let input = if playlist.exists() {
@@ -62,7 +62,7 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path) -> Result<(), String> {
         .arg(&input)
         .args(["-c", "copy", "-movflags", "+faststart"])
         .arg(output);
-    run_ffmpeg(&mut command, &task_dir.join("ffmpeg-merge.log"))
+    run_ffmpeg(&mut command, &task_dir.join("ffmpeg-merge.log"), control)
 }
 
 pub fn mux_av(
@@ -70,6 +70,7 @@ pub fn mux_av(
     audio: Option<&Path>,
     subtitles: &[PathBuf],
     output: &Path,
+    control: &Path,
 ) -> Result<(), String> {
     if audio.is_none() && subtitles.is_empty() {
         if video != output {
@@ -104,18 +105,40 @@ pub fn mux_av(
         command.args(["-c:s", "mov_text"]);
     }
     command.args(["-movflags", "+faststart"]).arg(output);
-    run_ffmpeg(&mut command, &output.with_extension("ffmpeg.log"))
+    run_ffmpeg(&mut command, &output.with_extension("ffmpeg.log"), control)
 }
 
-fn run_ffmpeg(command: &mut Command, log_path: &Path) -> Result<(), String> {
+fn run_ffmpeg(command: &mut Command, log_path: &Path, control: &Path) -> Result<(), String> {
     // 写入文件避免后台 Core 的诊断管道关闭后丢失真正的合流错误。
     let log = fs::File::create(log_path).map_err(|error| error.to_string())?;
-    let status = command
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log))
-        .status()
+        .spawn()
         .map_err(|error| format!("ffmpeg 启动失败: {error}"))?;
+    let status = loop {
+        let action = fs::read_to_string(control).unwrap_or_default();
+        if matches!(action.trim(), "pause" | "cancel") {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(if action.trim() == "pause" {
+                "paused"
+            } else {
+                "canceled"
+            }
+            .into());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("ffmpeg 状态读取失败: {error}"));
+            }
+        }
+    };
     if status.success() {
         Ok(())
     } else {
@@ -168,6 +191,124 @@ fn which(name: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the packaged FFmpeg; run explicitly in Windows Sandbox"]
+    fn real_ffmpeg_pause_and_cancel_reap_the_child() {
+        let ffmpeg = locate_ffmpeg().expect("configure HLS_FFMPEG to the packaged binary");
+        for (action, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-real-merge-{}-{}-{action}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            let log = root.join("merge.log");
+            fs::write(&control, "run").unwrap();
+            let worker_control = control.clone();
+            let worker_log = log.clone();
+            let ffmpeg = ffmpeg.clone();
+            let worker = std::thread::spawn(move || {
+                use std::os::windows::process::CommandExt;
+                let mut command = Command::new(ffmpeg);
+                command.creation_flags(0x08000000).args([
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-re",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=8000",
+                    "-t",
+                    "30",
+                    "-progress",
+                    "pipe:2",
+                    "-stats_period",
+                    "0.1",
+                    "-f",
+                    "null",
+                    "NUL",
+                ]);
+                run_ffmpeg(&mut command, &worker_log, &worker_control)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let ready = loop {
+                if fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .contains("out_time_us=")
+                {
+                    break true;
+                }
+                if worker.is_finished() || std::time::Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            let started = std::time::Instant::now();
+            fs::write(&control, action).unwrap();
+            let result = worker.join().unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(ready, "FFmpeg did not begin processing");
+            assert_eq!(result.unwrap_err(), expected);
+            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn merging_pause_and_cancel_stop_the_running_child() {
+        for (action, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-merge-control-{}-{}-{action}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            let log = root.join("merge.log");
+            fs::write(&control, "run").unwrap();
+            let worker_control = control.clone();
+            let worker_log = log.clone();
+            let worker = std::thread::spawn(move || {
+                use std::os::windows::process::CommandExt;
+                let mut command = Command::new("powershell.exe");
+                command.creation_flags(0x08000000).args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "[Console]::Error.WriteLine('fixture-ready'); [Threading.Thread]::Sleep(30000)",
+                ]);
+                run_ffmpeg(&mut command, &worker_log, &worker_control)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let ready = loop {
+                if fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .contains("fixture-ready")
+                {
+                    break true;
+                }
+                if worker.is_finished() || std::time::Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            fs::write(&control, action).unwrap();
+            let result = worker.join().unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(ready, "merge fixture did not start");
+            assert_eq!(result.unwrap_err(), expected);
+        }
+    }
+
     #[test]
     fn concat_preserves_bytes() {
         let dir = std::env::temp_dir().join(format!("hls-concat-{}", std::process::id()));
@@ -189,7 +330,7 @@ mod tests {
         let video = dir.join("video.bin");
         let output = dir.join("out.bin");
         fs::write(&video, b"VIDEO").unwrap();
-        mux_av(&video, None, &[], &output).unwrap();
+        mux_av(&video, None, &[], &output, &dir.join("control")).unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"VIDEO");
         let _ = fs::remove_dir_all(dir);
     }

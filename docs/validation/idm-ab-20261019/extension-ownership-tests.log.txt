@@ -1,0 +1,8 @@
+$ wxt prepare && tsc --noEmit && vitest run
+
+WXT 0.21.4
+i Generating types...
+√ Finished in 2.089 s
+entrypoints/background.ts(1774,86): error TS18048: 'provisionalChain' is possibly 'undefined'.
+entrypoints/background.ts(1775,32): error TS18048: 'provisionalChain' is possibly 'undefined'.
+[ELIFECYCLE] Test failed. See above for more details.

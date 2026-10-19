@@ -22,7 +22,6 @@ import { fileURLToPath } from 'node:url'
 
 const extensionRoot = fileURLToPath(new URL('../', import.meta.url))
 const popupCss = readFileSync(`${extensionRoot}/entrypoints/popup/style.css`, 'utf8')
-const theme = readFileSync(`${extensionRoot}/lib/theme.ts`, 'utf8')
 
 /** Split a sheet into `selector -> declarations`, mirroring how the cascade merges them. */
 function rules(css: string): Map<string, string> {
@@ -71,13 +70,5 @@ describe('popup button cascade', () => {
     expect(popupCss).toContain('button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }')
     expect(rules(popupCss).get('.update-notice button:focus-visible')).toContain('outline-offset: 2px')
     expect(rules(popupCss).get('select:focus-visible')).toContain('outline: 2px solid var(--primary)')
-  })
-
-  it('lifts the shared button on hover like the in-page overlay and Compose workbench do', () => {
-    expect(theme).toContain('.hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3));transform:translateY(-1px)}')
-    // 按压反馈不能被悬吞掉：两条同特异性，active 必须声明在 hover 之后。
-    const hoverAt = theme.indexOf('.hlsd-button:hover:not(:disabled)')
-    const activeAt = theme.indexOf('.hlsd-button:active:not(:disabled)')
-    expect(activeAt).toBeGreaterThan(hoverAt)
   })
 })

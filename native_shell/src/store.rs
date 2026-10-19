@@ -747,7 +747,7 @@ fn append_task_log(
         .unwrap_or_default()
         .as_millis()
         .min(i64::MAX as u128) as i64;
-    transaction
+    let inserted = transaction
         .execute(
             "INSERT INTO logs(task_id, level, code, message, created_at_ms)\
              SELECT ?1, ?2, ?3, ?4, ?5\
@@ -755,6 +755,10 @@ fn append_task_log(
             params![snapshot.task_id, level, snapshot.stage, message, now],
         )
         .map_err(|error| format!("append Core task log {}: {error}", snapshot.task_id))?;
+    // 重复进度没有新增日志，500 条上限不变，无需再次扫描和裁剪。
+    if inserted == 0 {
+        return Ok(());
+    }
     transaction
         .execute(
             "DELETE FROM logs WHERE task_id = ?1 AND id NOT IN (SELECT id FROM logs WHERE task_id = ?1 ORDER BY id DESC LIMIT 500)",
@@ -801,6 +805,33 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].filename, "archive.zip");
         assert_eq!(restored[0].queue_id, "night-media");
+    }
+
+    #[test]
+    fn repeated_progress_logs_keep_the_latest_500_and_other_tasks() {
+        let mut store = CoreStore::in_memory().unwrap();
+        let mut runtime = CoreRuntime::new();
+        let created = runtime.handle(CoreCommand::CreateTask { spec: spec() });
+        store.apply_events(&created).unwrap();
+        let snapshot = store.load_tasks().unwrap().remove(0);
+        let mut other = snapshot.clone();
+        other.task_id = "unrelated-task".into();
+        let transaction = store.connection.transaction().unwrap();
+        append_task_log(&transaction, &other, "error", "keep this error").unwrap();
+        for index in 0..505 {
+            let message = format!("progress {index}");
+            append_task_log(&transaction, &snapshot, "progress", &message).unwrap();
+            append_task_log(&transaction, &snapshot, "progress", &message).unwrap();
+        }
+        transaction.commit().unwrap();
+        let logs = store.load_task_log(&snapshot.task_id, 500).unwrap();
+        assert_eq!(logs.len(), 500);
+        assert_eq!(logs.first().unwrap(), "progress 5");
+        assert_eq!(logs.last().unwrap(), "progress 504");
+        assert_eq!(
+            store.load_task_log(&other.task_id, 500).unwrap(),
+            vec!["keep this error"]
+        );
     }
 
     #[test]

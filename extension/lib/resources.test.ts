@@ -15,6 +15,7 @@ import {
   pageResourceKey,
   replayableRequestHeaders,
   resourceFingerprint,
+  downloadSelectionKey,
   selectMediaVariant,
   resourceId,
   playerPlaybackResources,
@@ -57,6 +58,9 @@ describe('resource rules', () => {
     const high = selectMediaVariant(dash, { url: dash.url, bandwidth: 6000000, height: 1080 })
     expect(resourceFingerprint(low)).not.toBe(resourceFingerprint(high))
     expect(resourceFingerprint(low)).not.toBe(resourceFingerprint(dash))
+    expect(downloadSelectionKey(low)).not.toBe(downloadSelectionKey(high))
+    expect(downloadSelectionKey(low)).not.toBe(downloadSelectionKey(dash))
+    expect(downloadSelectionKey(selected)).not.toBe(downloadSelectionKey({ ...selected, url: 'https://cdn.test/backup/720.m3u8' }))
   })
   it('bounds non-finite recognition confidence', () => {
     expect(boundedConfidence(Number.NaN, 0.58)).toBe(0.58)

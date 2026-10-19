@@ -702,6 +702,10 @@ impl CoreCoordinator {
         self.lock().map(|core| core.latest_sequence())
     }
 
+    pub(crate) fn event_notify(&self) -> Result<Arc<(Mutex<u64>, std::sync::Condvar)>, String> {
+        self.lock().map(|core| core.event_notify())
+    }
+
     pub fn events_after(&self, sequence: u64, limit: usize) -> Result<Vec<EventEnvelope>, String> {
         self.lock().map(|core| core.events_after(sequence, limit))
     }
@@ -1936,9 +1940,7 @@ impl CoreCoordinator {
         {
             let action_allowed = self
                 .lock()?
-                .tasks()
-                .iter()
-                .find(|task| task.task_id == task_id)
+                .snapshot(task_id)
                 .is_some_and(|task| task.available_actions.iter().any(|item| item == action));
             if action_allowed && matches!(action, "resume" | "retry") {
                 self.wait_for_worker_stop(task_id)?;
@@ -1948,9 +1950,7 @@ impl CoreCoordinator {
             let mut core = self.lock()?;
             let queue_profiles = load_queue_profiles(core.store())?;
             let deferred = core
-                .tasks()
-                .iter()
-                .find(|task| task.task_id == task_id)
+                .snapshot(task_id)
                 .filter(|task| task.available_actions.iter().any(|item| item == action))
                 .filter(|task| {
                     !task_schedule_allowed(task)
@@ -1979,13 +1979,9 @@ impl CoreCoordinator {
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?;
             if let Some(task_id) = task_id.as_deref() {
                 if let Some(action) = start_action.as_deref() {
-                    start_accepted = core
-                        .tasks()
-                        .iter()
-                        .find(|task| task.task_id == task_id)
-                        .is_some_and(|task| {
-                            task.available_actions.iter().any(|item| item == action)
-                        });
+                    start_accepted = core.snapshot(task_id).is_some_and(|task| {
+                        task.available_actions.iter().any(|item| item == action)
+                    });
                 }
                 if start_accepted {
                     if let Some(spec) = core.task_spec(task_id).cloned() {
@@ -2612,9 +2608,9 @@ impl CoreCoordinator {
                 .task_spec(task_id)
                 .cloned()
                 .ok_or_else(|| format!("unknown task {task_id}"))?;
-            let completed = core.tasks().iter().any(|task| {
-                task.task_id == task_id && matches!(task.status.as_str(), "completed" | "done")
-            });
+            let completed = core
+                .snapshot(task_id)
+                .is_some_and(|task| matches!(task.status.as_str(), "completed" | "done"));
             let paths = TaskPaths::for_task(task_id, &spec)?;
             validate_owned_task_directory(&paths)?;
             let published = if completed || paths.task_dir().join("published.path").is_file() {
@@ -2644,9 +2640,10 @@ impl CoreCoordinator {
                 .ok_or_else(|| format!("unknown task {task_id}"))?;
             let paths = TaskPaths::for_task(task_id, spec)?;
             let published = if paths.task_dir().join("published.path").is_file()
-                || core.tasks().iter().any(|task| {
-                    task.task_id == task_id && matches!(task.status.as_str(), "completed" | "done")
-                }) {
+                || core
+                    .snapshot(task_id)
+                    .is_some_and(|task| matches!(task.status.as_str(), "completed" | "done"))
+            {
                 Some(resolved_task_output(&core, task_id, &paths))
             } else {
                 None
@@ -2686,11 +2683,7 @@ impl CoreCoordinator {
         }
         {
             let mut core = self.lock()?;
-            let status = core
-                .tasks()
-                .iter()
-                .find(|task| task.task_id == task_id)
-                .map(|task| task.status.clone());
+            let status = core.snapshot(&task_id).map(|task| task.status.clone());
             if !matches!(status.as_deref(), Some("queued" | "downloading")) {
                 return Ok(());
             }
@@ -2728,9 +2721,7 @@ impl CoreCoordinator {
                 drop(active);
                 if let Ok(mut core) = self.lock() {
                     let progress = core
-                        .tasks()
-                        .iter()
-                        .find(|task| task.task_id == task_id)
+                        .snapshot(&task_id)
                         .filter(|task| task.status == "downloading")
                         .map(|task| (task.downloaded_bytes, task.total_bytes));
                     if let Some((downloaded_bytes, total_bytes)) = progress {
@@ -2774,12 +2765,7 @@ impl CoreCoordinator {
                     0
                 };
                 let _ = core.lock().map(|mut core| {
-                    let current = core
-                        .tasks()
-                        .iter()
-                        .find(|task| task.task_id == task_id)
-                        .cloned()
-                        .unwrap_or_default();
+                    let current = core.snapshot(&task_id).cloned().unwrap_or_default();
                     let downloaded = current.downloaded_bytes;
                     let total = current.total_bytes;
                     let stage = if status == "paused" {
@@ -2993,9 +2979,7 @@ fn current_progress(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> (u64, O
         .ok()
         .and_then(|locked| {
             locked
-                .tasks()
-                .into_iter()
-                .find(|task| task.task_id == task_id)
+                .snapshot(task_id)
                 .map(|task| (task.downloaded_bytes, task.total_bytes))
         })
         .unwrap_or((0, None))
@@ -4389,12 +4373,7 @@ where
     let initial_bytes = core
         .lock()
         .ok()
-        .and_then(|core| {
-            core.tasks()
-                .iter()
-                .find(|task| task.task_id == task_id)
-                .map(|task| task.downloaded_bytes)
-        })
+        .and_then(|core| core.snapshot(task_id).map(|task| task.downloaded_bytes))
         .unwrap_or(0);
     let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
     let mut last_downloaded = initial_bytes;
@@ -4834,9 +4813,9 @@ fn mount_task_url(
     let token = crate::playback::random_mount_token();
     let (completed, published) = {
         let core = coordinator.lock()?;
-        let completed = core.tasks().iter().any(|task| {
-            task.task_id == task_id && matches!(task.status.as_str(), "completed" | "done")
-        });
+        let completed = core
+            .snapshot(task_id)
+            .is_some_and(|task| matches!(task.status.as_str(), "completed" | "done"));
         (completed, resolved_task_output(&core, task_id, &paths))
     };
     let url = if completed {

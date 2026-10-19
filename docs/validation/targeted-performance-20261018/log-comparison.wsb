@@ -1,0 +1,13 @@
+<Configuration>
+  <MemoryInMB>6144</MemoryInMB>
+  <Networking>Disable</Networking>
+  <MappedFolders>
+    <MappedFolder><HostFolder>A:\Ubuntu\测试\hls-downloader</HostFolder><SandboxFolder>C:\HLSSource</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\targeted-validation</HostFolder><SandboxFolder>C:\HLSValidation</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\compact-ui-validation</HostFolder><SandboxFolder>C:\HLSPrevious</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>C:\Users\lee\.cache\codex-runtimes\codex-primary-runtime\dependencies\python</HostFolder><SandboxFolder>C:\HLSPython</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+  <MappedFolder><HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\backend-validation</HostFolder><SandboxFolder>C:\HLSBackend</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder></MappedFolders>
+  <LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\HLSValidation\log-comparison-guest.ps1</Command></LogonCommand>
+</Configuration>
+
+

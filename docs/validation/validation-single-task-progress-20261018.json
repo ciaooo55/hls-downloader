@@ -1,0 +1,361 @@
+{
+  "schema": 1,
+  "measured_at": "2026-10-18T14:24:19.0613535Z",
+  "source_base_commit": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "source_state": "uncommitted local candidate",
+  "validation_completed": true,
+  "functional_regressions_passed": true,
+  "measured_progress_scenarios_improved": true,
+  "overall_product_performance_verified": false,
+  "release_ready": false,
+  "environment": {
+    "sandbox_closed": true,
+    "new_branches": 0,
+    "new_worktrees": 0,
+    "cloud_calls": 0,
+    "host_product_execution_performed": false,
+    "networking": "disabled; loopback fixtures only",
+    "host_product_installation_performed": false,
+    "new_msi": false,
+    "product_execution": "Windows Sandbox only"
+  },
+  "implementation": {
+    "dependencies_added": 0,
+    "protocol_or_storage_contract_changes": false,
+    "progress": "prepare one task snapshot; commit SQLite before runtime/events/notification; no whole-runtime rollback clone for UpdateProgress",
+    "media_progress": "skip unused HTTP connection-map reads"
+  },
+  "candidate_components": [
+    {
+      "sha256": "838f6319353b26c7c1b9b6e184a5318697b180071e713243ba73b290d3021971",
+      "name": "HLSDownloaderEngine.exe",
+      "bytes": 14577152
+    },
+    {
+      "sha256": "17a9cd0d42434760e44ad3f136b244dc20419487aff2e8254bd6800edb637ba4",
+      "name": "HLSDownloaderNativeHost.exe",
+      "bytes": 3769856
+    },
+    {
+      "sha256": "8228eb96f5976258ed0083536b06d2fe714f5c64f5d0e6c946c6d2426a5ff0ca",
+      "name": "HLSDownloaderUpdater.exe",
+      "bytes": 2251264
+    }
+  ],
+  "source_hashes": {
+    "native_shell/src/atomic_replace.rs": "9503b0a110ce7149963289fbc99489ec4208f433fc3f66f121d578bb65407148",
+    "native_shell/src/av_scan.rs": "cb8d890a7ff9a38a472408a68d987119897f1b340ecd810f5eef45e300ca01fb",
+    "native_shell/src/cast.rs": "e50beb16b255a05e10369ee37ecd200b4b47c87acacccc7f91ec8f45a3086b5c",
+    "native_shell/src/category.rs": "f03d20a74ccb78bf36e2ac00e885af7d9031c40eb1e1fd125abe1825e64b62ff",
+    "native_shell/src/checksum.rs": "86fe8640cbf90a442f602e096a02013362d2c1c846e665f7de2d1cdf35bcd650",
+    "native_shell/src/client_event.rs": "302e8faa996fe098d4324ebe05d79d3a1d3775a90e6e57bb8768a7bb21d73dc7",
+    "native_shell/src/clipboard.rs": "971d235f7f431228e9d884ab9a56c077d97827a4dbf32983c8d6a04484a811b3",
+    "native_shell/src/connection_parts.rs": "cc974f91c5f8ddc80b2beddee115faf8d3b2ebb83a61769fa6333149c0dd8c1e",
+    "native_shell/src/contract.rs": "c0515d7ee74b373d5986be21fa068a89af5971b43b49445096af71282e2ac536",
+    "native_shell/src/core_ipc.rs": "5e219a06220fbfd12a23147239c907ae458581cb499405f08f875cb4ac7ab14f",
+    "native_shell/src/core_runtime.rs": "e630c8c824ca76a093badd7c9a93a97e278168db6893da0042382cf5f1e49f75",
+    "native_shell/src/core_server.rs": "1054ac4087be47c35a41190202bebaaf697cae92a6477b7a7f147b8bfa6414a6",
+    "native_shell/src/core_service.rs": "beaf784cd6298ad7222a2d5de511e0040e86b43b96ba12f1d2ee99f3231aa97d",
+    "native_shell/src/core_spawn.rs": "e1abfd16a7293e98d239fa6c0e0d01b1e8cb4525706ae74ddf8b68e567337645",
+    "native_shell/src/credentials.rs": "b8ab2f3a1b3e5ac23b8d02867effbd6166998070d9d7f5df0f2ace9e4e1958e6",
+    "native_shell/src/crypto_lite.rs": "e014fcefbdecab3f2eb499d3afbea11f72489a681fa718f44bff34a180320561",
+    "native_shell/src/curl_import.rs": "0b3b8f4f78f2715e86fec642264fc78b823fd3e1925056b84d5ef6f60d1216a0",
+    "native_shell/src/download_worker.rs": "b874151b93de749eb1cd4faad6f7d9a3e43634f4ed166a12086652520aa79236",
+    "native_shell/src/duplicate.rs": "289b7fd5597f121b0e8479961d01feace5910342077cf49a8c26375ca9515be4",
+    "native_shell/src/ftp_engine.rs": "5af95bc7ae83783a5e53eb193f6fa0980ad9c4364c1ef04ec1b9cddf76641100",
+    "native_shell/src/harvest.rs": "f2920e57df883c3d53b75ee425f82fe96b8c7fec244e90de45f3f66863c69983",
+    "native_shell/src/http_engine.rs": "30a29abdbde031215153ca25838558c77a3964e5e118cc9b3a0fb9632a488c91",
+    "native_shell/src/instance.rs": "563bacb4bc361e59da464c27caa269739614b8eb29d9b60ed9a7c301e8d36a3c",
+    "native_shell/src/lib.rs": "fda0be2b12fd9c3c0d2a3e18fb5e5f5b52441dc0653c2fa82638e01738416643",
+    "native_shell/src/link_file.rs": "c7799634d06ed8b098055d3c12905f7a14c0f03e094f91cf3a7cd35898eb1fe2",
+    "native_shell/src/local_time.rs": "35f96aa9bc32a54032a17f16156bfd01b06a931419facdcaa78b700bb52062f8",
+    "native_shell/src/media_ext.rs": "778e1820b985b8713c3c5985b1e85e216cf7c136b02eac2478a2eb66a6ed8e68",
+    "native_shell/src/metalink.rs": "c1ce4162176bcb0b79066d7fdd161080e27baa1d244d635853b69d29c4d78ee5",
+    "native_shell/src/migrate.rs": "fb5af979e7b7ea750fa81f8eb428a39bfba5448e40f3d9c32f53a4dc5d1830df",
+    "native_shell/src/mirrors.rs": "1116f9695884ead4826e765d938260daf1fddae3e16f98616809b676e7eac430",
+    "native_shell/src/motw.rs": "08ec85c493b41a4dff24a691f7ccd091113f868423aa07adb0f645583e60538d",
+    "native_shell/src/native_host_registration.rs": "8c0a420c717fd59ae46315e88c9abe1c013d7e2c8c155f7a6966f27a3e3ee9a9",
+    "native_shell/src/native_host.rs": "bce997f1cc108e032e7a67e24655ebcbfd2c7825e4ebfd7df39154b511209aaf",
+    "native_shell/src/net_policy.rs": "3958ba9ef21f12423555507ce220daa217566b1a8aa3d67051c9c59c14c22e58",
+    "native_shell/src/ole_drag.rs": "1478c68a3ea7357cc0bdbfb8df66249b04150fa6eaeb90e3137fd6bbe7a3d263",
+    "native_shell/src/output_path.rs": "5772701ed87e6f6cc4b26a3d1c683442252eea298aa0ba4006134eabfe4cb41f",
+    "native_shell/src/playback.rs": "48f5e3f06e9c0f067f377321185d510c65a289198872dea698d7811f66c37b47",
+    "native_shell/src/player_thumbnail.rs": "cc13affe51275b284abf90fb4bba9185dafbefc873e6f7d3c2990b3d0ceba051",
+    "native_shell/src/player.rs": "0ba3005e868fe47d78942a85a9f6ec50310cca74182e1a250c5502325147bfb6",
+    "native_shell/src/power_action.rs": "6c6ebf18803b2da9fc2561421682aa422aaddd99a0d6549c24ac8e1708b768a7",
+    "native_shell/src/profile_paths.rs": "8d57e6e0370d6cd0163b54c27f53d5ec0ae6db840ed9c97e8cec0486de332de8",
+    "native_shell/src/recognize.rs": "a5c1faf0fc96f7ab02513b55a7c7bb838b5746f9a8f33de6b441cd8f643ee0e9",
+    "native_shell/src/sftp_engine.rs": "202b03211c3b83c0c0827d5f65f78401edd74f982c47f060e06e50acc5c7e013",
+    "native_shell/src/sftp_live.rs": "936c97e258c8e42fe03c5783c78481f4f8a9b3846ea757c6a68c0793f3a449ea",
+    "native_shell/src/sftp_loopback.rs": "c46f88c6ffcf97b3aa157e644a7b3dce611e398e2b1bb7249cc339e959b77a1d",
+    "native_shell/src/site_rules.rs": "2b0a97b2db3c68748f3ecb8fb703258e0310f32d2c0f6b25ed096649fba7f463",
+    "native_shell/src/sleep_inhibit.rs": "dc52aed773aaba6c321bdbe1bb4a155f2b297744d348bee228d5829c9706ff0d",
+    "native_shell/src/startup.rs": "7e548d3bd1f374737412c70f22d098cf3d3398058cd3e1dc436ea17f007cd551",
+    "native_shell/src/store.rs": "acbacd5f3d2afff194a6c5247c694167e03c15cdcf4aae613c1ac13c05e3f465",
+    "native_shell/src/subtitle_audio_source.rs": "61a5b20f84d270ef67a69f103b2961a9711ba2e62a8acecd140590cbbb9a2020",
+    "native_shell/src/subtitle_translate.rs": "14bc2e685d2d2f7d027381af9adc5af97eec8c704bcaf69db68250dd8e5163d2",
+    "native_shell/src/task_export.rs": "80cfbb56882bddbe49c2335cb7e37cf98ab184d385d21a867842c9e783397d8e",
+    "native_shell/src/torrent_engine.rs": "2064776463b1319db7c18e4b07f6b86107587c56c1e06b6c5ca7ed1ab6faa73a",
+    "native_shell/src/tray.rs": "0b980a920a6665507fb93d0c9ee161ec61f3164a663a1ea1737e93370b19b20f",
+    "native_shell/src/updater.rs": "bcd2b3586711a85b820f88c71fe0e4c425d2741c8100c8f67dbb5189bf66fa1d",
+    "native_shell/src/v6_migrate.rs": "b2d4eab18a46137672927d31569a3d554783d74ea8c7fdb6d6997fd719d5a08d",
+    "native_shell/src/win_reg.rs": "f55fd939e770bf9ea5c9c3cc24cff76892cceefbe1e41588c9f8197fcb62c2cb",
+    "native_shell/src/window_util.rs": "fc7db5d54f97af2f9175a16b563c49ec9a4e73f8d58c2f6958b7e563de62afc2",
+    "native_shell/src/bin/hls_downloader_engine.rs": "1cfa9e6876e2261c65ef5d9b00560353e91a0542d0c2c9fc8e7f452d67160ca2",
+    "native_shell/src/bin/hls_downloader_native_host.rs": "07edbbab92b0e7c7ae6046239aae802ea819cc3b020ba1113235ee7b10007a53",
+    "native_shell/src/bin/hls_downloader_updater.rs": "224ab591378c5dc476b05d2895ba15e0bf9b9449c073b73bfacc8b1ae85f1abb",
+    "native_shell/src/media/dash.rs": "2586af5ffdc5a0577722b48e8c2f68fa81450b2dc080342be52041ad793888f8",
+    "native_shell/src/media/harness.rs": "9dbb3552b96691e37784e69c54250aca5b0fa3f3ff816909c2f3066f6371aa49",
+    "native_shell/src/media/hls.rs": "42a9bbd41df7d38e3e90f005fa7411bb25b5ed873902526872cf5aa6e79bd63b",
+    "native_shell/src/media/merge.rs": "02d34191a298d75af23d3ce4be5e22558560b6f4565930f7571bbff59942d8c2",
+    "native_shell/src/media/mod.rs": "c89f1ced373ce3bfdc84d502d12c510c5503918209ebdbbd0672ad48b68ca14f",
+    "native_shell/src/media/preview.rs": "30b9735613189e095d8ff22e9346062d026deffbda73e22c64d95dbf24aecd71",
+    "native_shell/src/media/subtitles.rs": "9914715693acb6d3d184954f143f9fe8138fcf96f941a44e4a856a2d256013c5",
+    "native_shell/Cargo.toml": "046fdc379fdb82805c87ac62ed313a90f57cf35f6ec7472fc224648580683147",
+    "native_shell/Cargo.lock": "0db4f774063763d850dfb78d83a388e5a1dc2a19b13c92852f10536d9df49b57",
+    "scripts/validation/smoke_v7_resource_boundaries.py": "9c46f171e12b3c3fd58da93a215728fe5e2a9e9ec0d7f29021ca91812868f341",
+    "scripts/validation/compare_v7_progress_logs.py": "f6336a99587e83c39eba49252f2559e1966f20478083b30164486e01dc36c63f",
+    "scripts/validation/smoke_v7_download_playback.py": "273aa2ac22d93cc52943a86563e47e2408cc4c07b0b9cbd5fd8dd7ee463e2782",
+    "scripts/validation/smoke_v7_http_boundaries.py": "56f483274ac82bad091806576eae386fb68312b4a7d8bcb63507d6fd5c3c0b15",
+    "scripts/validation/smoke_v7_http_stall.py": "d3019b23a830114f004409e17fe5ece14cf99a2851feb86902dd9169ffae9ad7"
+  },
+  "regressions": {
+    "real_ffmpeg_pause_cancel": "passed, explicitly ran one normally ignored test",
+    "download_playback": {
+      "media": [
+        "HLS TS",
+        "HLS fMP4",
+        "HLS AES-128",
+        "HLS external audio",
+        "DASH",
+        "HTTP MP4"
+      ],
+      "checks": 27,
+      "passed": true,
+      "scope": "pause/resume; seek into unfinished download; independent thumbnail; same-window completion; complete decode; cache cleanup; delete preserves unrelated files and finished output"
+    },
+    "http_boundaries": {
+      "checks": 13,
+      "passed": true
+    },
+    "core": {
+      "test_executable_sha256": "4907537a17d156b0a78575ce895624da5fb52387899f8ca85acd76efa78dd8f6",
+      "seconds": 42.31,
+      "failed": 0,
+      "passed": 613,
+      "ignored": 4
+    },
+    "merge_pause_cancel_repetitions": 3,
+    "http_stall": {
+      "checks": 6,
+      "passed": true
+    },
+    "hls_authenticated_resume_repetitions": 3,
+    "sqlite_failure": "snapshot write and post-log checkpoint failures; runtime/event-ring/notification/DB unchanged; recovery commit verified",
+    "builds": [
+      "Core lib test executable",
+      "Core/NativeHost/Updater release",
+      "final source release rebuild"
+    ]
+  },
+  "performance": {
+    "candidate_sha256": "838f6319353b26c7c1b9b6e184a5318697b180071e713243ba73b290d3021971",
+    "scope": "Core IPC progress commits only; generated local paused tasks, not end-to-end UI/public-network performance",
+    "baseline_a_b": "same previous candidate binary, rotation controls",
+    "rounds": 36,
+    "baseline_sha256": "d20b510a4a3e0f8bd18b67864361130b72860bb0d57e02290ef88aa5e69f1be4",
+    "task_counts": [
+      10,
+      1000
+    ],
+    "medians": {
+      "10": {
+        "changing": {
+          "baseline-a": {
+            "p50_ms": 0.994,
+            "p95_ms": 1.825,
+            "cpu_seconds": 0.438,
+            "rss_end_mib": 31.395
+          },
+          "baseline-b": {
+            "p50_ms": 0.983,
+            "p95_ms": 1.761,
+            "cpu_seconds": 0.562,
+            "rss_end_mib": 31.406
+          },
+          "candidate": {
+            "p50_ms": 0.846,
+            "p95_ms": 1.476,
+            "cpu_seconds": 0.25,
+            "rss_end_mib": 32.039
+          }
+        },
+        "repeated-full-log": {
+          "baseline-a": {
+            "p50_ms": 0.824,
+            "p95_ms": 1.666,
+            "cpu_seconds": 0.594,
+            "rss_end_mib": 28.883
+          },
+          "baseline-b": {
+            "p50_ms": 0.86,
+            "p95_ms": 1.617,
+            "cpu_seconds": 0.469,
+            "rss_end_mib": 29.02
+          },
+          "candidate": {
+            "p50_ms": 0.654,
+            "p95_ms": 1.165,
+            "cpu_seconds": 0.391,
+            "rss_end_mib": 28.652
+          }
+        }
+      },
+      "1000": {
+        "changing": {
+          "baseline-a": {
+            "p50_ms": 1.467,
+            "p95_ms": 2.791,
+            "cpu_seconds": 1.156,
+            "rss_end_mib": 34.754
+          },
+          "baseline-b": {
+            "p50_ms": 1.78,
+            "p95_ms": 3.46,
+            "cpu_seconds": 1.25,
+            "rss_end_mib": 35.262
+          },
+          "candidate": {
+            "p50_ms": 0.725,
+            "p95_ms": 1.286,
+            "cpu_seconds": 0.625,
+            "rss_end_mib": 34.277
+          }
+        },
+        "repeated-full-log": {
+          "baseline-a": {
+            "p50_ms": 1.35,
+            "p95_ms": 2.382,
+            "cpu_seconds": 1.281,
+            "rss_end_mib": 35.914
+          },
+          "baseline-b": {
+            "p50_ms": 1.264,
+            "p95_ms": 2.416,
+            "cpu_seconds": 1.109,
+            "rss_end_mib": 35.543
+          },
+          "candidate": {
+            "p50_ms": 0.677,
+            "p95_ms": 1.219,
+            "cpu_seconds": 0.469,
+            "rss_end_mib": 36.488
+          }
+        }
+      }
+    },
+    "event_ring_warmup": 4100,
+    "repetitions": 3,
+    "memory": "mixed changes; no broad RSS reduction established",
+    "commits_per_run": 1000
+  },
+  "binary_size": {
+    "candidate_engine_bytes": 14577152,
+    "delta_bytes": 8192,
+    "baseline_engine_bytes": 14568960,
+    "new_installer_measured": false
+  },
+  "initial_failures": {
+    "core": {
+      "test_executable_sha256": "839ef28c181b778ec32d1268e4b70de32ec8947fc01099c8349307ae448b639c",
+      "hls": "initial unauthenticated request reset; test sockets explicitly changed to blocking after accept",
+      "merge": "PowerShell fixture did not start within ten seconds; clean rerun and three repetitions passed; exact transient cause not established",
+      "passed": 611,
+      "failed": 2,
+      "ignored": 4
+    },
+    "rerun_harness": "first rerun startup had a PowerShell argument quoting error; corrected before tests; original error preserved"
+  },
+  "final_rebuild_equivalence": {
+    "tested_sha256": "838f6319353b26c7c1b9b6e184a5318697b180071e713243ba73b290d3021971",
+    "rebuilt_sha256": "2cdf04041894dd77eaaba0f2ab1b08691c4bffca7373915cc73c15f4d88c6063",
+    "bytes": 14577152,
+    "differing_bytes": 24,
+    "unclassified_difference_offsets": [],
+    "metadata_only": true,
+    "sections": [
+      {
+        "name": ".text",
+        "tested_sha256": "7fd53abb34b4a43d35cb493a119671cee61ea10b403f0a6a886257a359d5a536",
+        "rebuilt_sha256": "7fd53abb34b4a43d35cb493a119671cee61ea10b403f0a6a886257a359d5a536"
+      },
+      {
+        "name": ".rdata",
+        "tested_sha256": "5f3050368b6f5e4bfcc8382b67bff0ebb27cd2c708181dc2e5d9f2b45af126a5",
+        "rebuilt_sha256": "0d46eabcd55d7798b92346eaebe01702604fc9381e2d4acf2a24543a9514e137"
+      },
+      {
+        "name": ".data",
+        "tested_sha256": "e26319571e3e0948dc3c792382729b3f36d759486cac6a787c23bba856a8a27d",
+        "rebuilt_sha256": "e26319571e3e0948dc3c792382729b3f36d759486cac6a787c23bba856a8a27d"
+      },
+      {
+        "name": ".pdata",
+        "tested_sha256": "ea73e47c8c68587727fa92e189caf970f85e33d7771c91f04f1162a6c3f1102d",
+        "rebuilt_sha256": "ea73e47c8c68587727fa92e189caf970f85e33d7771c91f04f1162a6c3f1102d"
+      },
+      {
+        "name": ".reloc",
+        "tested_sha256": "b941483198cb5faec8e9676501a6a1eb9887dad2e243fb173754d0fabe222d6c",
+        "rebuilt_sha256": "b941483198cb5faec8e9676501a6a1eb9887dad2e243fb173754d0fabe222d6c"
+      }
+    ],
+    "changed_fields": [
+      {
+        "name": "COFF timestamp",
+        "differing_bytes": 2
+      },
+      {
+        "name": "debug timestamp",
+        "differing_bytes": 2
+      },
+      {
+        "name": "CodeView PDB identifier",
+        "differing_bytes": 16
+      },
+      {
+        "name": "debug timestamp",
+        "differing_bytes": 2
+      },
+      {
+        "name": "debug timestamp",
+        "differing_bytes": 2
+      }
+    ],
+    "debug_records": [
+      {
+        "type": 2,
+        "offset": 12475580,
+        "size": 50
+      },
+      {
+        "type": 12,
+        "offset": 12475632,
+        "size": 20
+      },
+      {
+        "type": 13,
+        "offset": 12475652,
+        "size": 796
+      }
+    ]
+  },
+  "evidence_directory": "single-task-progress-20261018/",
+  "limitations": [
+    "No current UI/extension rebuild or full product recertification; this batch changed Core and validation fixtures.",
+    "No public-site/cloud/device/new-MSI/cross-hardware/long-soak validation in this batch.",
+    "Initial failures retained; final regression pass does not erase initial results.",
+    "Earlier automatic approval review rejected deletion of build/test caches with blocked by policy and no reason; no retry, caches still present.",
+    "No commit, push, signing or release performed."
+  ]
+}

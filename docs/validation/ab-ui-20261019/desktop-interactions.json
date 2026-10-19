@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "checks": [
+    "Escape closes the right-click menu and preserves selection",
+    "Escape on the task table clears selection after the menu closes",
+    "Ctrl+A and Escape work on the focused task table",
+    "New dialog opens, accepts Tab navigation, and closes with Escape"
+  ],
+  "window": {
+    "x": 59,
+    "y": 0,
+    "width": 1400,
+    "height": 709,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.0,
+    "scaleY": 1.0,
+    "deviceX": 59,
+    "deviceY": 0,
+    "deviceWidth": 1400,
+    "deviceHeight": 709
+  }
+}

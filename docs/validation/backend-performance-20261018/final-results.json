@@ -1,0 +1,58 @@
+﻿[
+    {
+        "exit_code":  0,
+        "name":  "core-final"
+    },
+    {
+        "exit_code":  0,
+        "name":  "hls-resume-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "hls-resume-2"
+    },
+    {
+        "exit_code":  0,
+        "name":  "hls-resume-3"
+    },
+    {
+        "exit_code":  0,
+        "name":  "presenter-final"
+    },
+    {
+        "exit_code":  0,
+        "name":  "real-ffmpeg-control"
+    },
+    {
+        "exit_code":  1,
+        "name":  "resources-final"
+    },
+    {
+        "exit_code":  0,
+        "name":  "http-stall-final"
+    },
+    {
+        "exit_code":  0,
+        "name":  "transfer-baseline-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "transfer-candidate-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "transfer-candidate-2"
+    },
+    {
+        "exit_code":  0,
+        "name":  "transfer-baseline-2"
+    },
+    {
+        "exit_code":  0,
+        "name":  "transfer-baseline-3"
+    },
+    {
+        "exit_code":  0,
+        "name":  "transfer-candidate-3"
+    }
+]

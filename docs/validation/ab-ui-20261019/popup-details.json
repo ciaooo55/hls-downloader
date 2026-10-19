@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "checks": [
+    "Hover keeps the download button in place",
+    "Tab moves from rescan to download",
+    "Long title stays within two lines without horizontal overflow",
+    "Copy produces success feedback or the explicit manual-copy fallback",
+    "Arrow keys switch tabs; reduced-motion disables panel and button animation",
+    "Browser device scale 1.5 renders without horizontal overflow (not an OS scaling test)"
+  ],
+  "copy_feedback": {
+    "copied": true,
+    "manual": false
+  },
+  "browser_scale": {
+    "dpr": 1.5,
+    "width": 360,
+    "scrollWidth": 360
+  }
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.SettingsV7Test" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:19.856Z" hostname="DESKTOP-FTE6QH2" time="0.042">
+  <properties/>
+  <testcase name="settings_separates_cast_devices_from_tvbox_push_receivers()" classname="com.hlsdownloader.desktop.SettingsV7Test" time="0.035"/>
+  <testcase name="cast_device_description_keeps_protocol_and_address_visible()" classname="com.hlsdownloader.desktop.SettingsV7Test" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

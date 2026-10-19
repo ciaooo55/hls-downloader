@@ -86,6 +86,7 @@ export interface DownloadClickIntent {
   frameId?: number
   opensNewTab?: boolean
   controlHint?: boolean
+  downloadAttribute?: boolean
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
@@ -347,6 +348,11 @@ export function selectMediaVariant(resource: MediaResource, variant: MediaVarian
     preferredBandwidth: variant.bandwidth || 0,
     preferredHeight: variant.height || 0,
   }
+}
+
+/** 确认状态保留用户所选线路和清晰度，不受发给 Core 的主清单改写影响。 */
+export function downloadSelectionKey(resource: MediaResource): string {
+  return resourceId(resourceFingerprint(resource))
 }
 
 export function resourceFingerprint(resource: Pick<MediaResource, 'url' | 'kind'> & Partial<Pick<MediaResource, 'preferredBandwidth' | 'preferredHeight'>>): string {

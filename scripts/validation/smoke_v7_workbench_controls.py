@@ -51,6 +51,9 @@ def run(args):
         return wait(lambda: next((n for n in tree() if name in n["name"]), None), f"missing UI: {name}")
 
     def click(name):
+        if name in {"批量添加", "页面抓取", "浏览器插件"}:
+            click("工具")
+            require(name)
         vm, root = client.context_from_window(hwnd)
         owned = []
         try:
@@ -86,7 +89,7 @@ def run(args):
                                       ("批量添加", "链接列表", "取消"),
                                       ("页面抓取", "抓取本页链接", "取消"),
                                       ("管理队列", "保存队列", "取消"),
-                                      ("插件", "浏览器插件", "关闭")]:
+                                      ("浏览器插件", "浏览器插件", "完成")]:
             click(button)
             require(content)
             ImageGrab.grab().save(args.report.parent / ("controls-" + button + ".png"))

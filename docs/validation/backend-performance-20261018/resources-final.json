@@ -1,0 +1,34 @@
+{
+  "passed": false,
+  "scope": "r12 released engine versus local candidate; same VM/fixture",
+  "sha256": {
+    "baseline": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+    "candidate": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b"
+  },
+  "baseline": {
+    "tasks": 1000,
+    "event_ring_warmup": 4100,
+    "commits": 1000,
+    "p50_ms": 32.902,
+    "p95_ms": 47.55,
+    "max_ms": 158.055,
+    "elapsed_seconds": 36.771,
+    "cpu_seconds": 34.547,
+    "cpu_one_core_percent": 93.952,
+    "rss_start_mib": 52.602,
+    "rss_end_mib": 54.258
+  },
+  "candidate": {
+    "tasks": 1000,
+    "event_ring_warmup": 4100,
+    "commits": 1000,
+    "p50_ms": 1.261,
+    "p95_ms": 2.534,
+    "max_ms": 310.404,
+    "elapsed_seconds": 2.127,
+    "cpu_seconds": 0.938,
+    "cpu_one_core_percent": 44.084,
+    "rss_start_mib": 32.891,
+    "rss_end_mib": 35.148
+  }
+}

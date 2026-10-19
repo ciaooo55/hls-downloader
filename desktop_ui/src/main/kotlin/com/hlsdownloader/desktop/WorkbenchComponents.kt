@@ -12,10 +12,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -50,6 +52,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -65,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
@@ -494,7 +502,7 @@ internal fun IconButton(
 }
 
 @Composable
-internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null) {
+internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null, enabled: Boolean = true) {
     // 对勾画在 blue 填充上，必须用 onBlue：深色主题的 blue 是浅蓝，白勾只有 2.65:1，
     // 连 3:1 的图形底线都不到（勾是承担"已选中"信息的图形，不是装饰）。
     val checkColor = onBlue
@@ -504,8 +512,10 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
     val feedback = rememberPressFeedback(
         restColor = if (checked) blue else rail,
         hoverColor = if (checked) blue.blendToward(Color.White, .08f) else surface3,
+        enabled = enabled,
         pressScale = .9f,
     )
+    val focused by feedback.interaction.collectIsFocusedAsState()
     val animatedBorder by animateColorAsState(
         if (checked) blue else border,
         animationSpec = tween(motionDurationMillis(reduceMotion, 130)),
@@ -524,14 +534,16 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
             .clip(shape)
             .background(feedback.background)
-            .border(1.dp, animatedBorder, shape)
+            .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) ink else animatedBorder, shape)
+            .alpha(if (enabled) 1f else .42f)
             .semantics {
                 stateDescription = if (checked) "已选中" else "未选中"
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
             }
-            .hoverable(feedback.interaction)
+            .hoverable(feedback.interaction, enabled = enabled)
             .toggleable(
                 value = checked,
+                enabled = enabled,
                 interactionSource = feedback.interaction,
                 indication = null,
                 role = Role.Checkbox,
@@ -565,7 +577,7 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
  * 底色档位仍然由 `animatedFill` 承担选中语义，反馈只做混合，不新增档位。
  */
 @Composable
-internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null) {
+internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, accessibilityLabel: String? = null, enabled: Boolean = true) {
     val reduceMotion by MotionPreferences.reduceMotion
     val animatedFill by animateColorAsState(
         if (selected) selectedSurface else rail,
@@ -577,22 +589,26 @@ internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modif
     val feedback = rememberPressFeedback(
         restColor = animatedFill,
         hoverColor = animatedFill.blendToward(ink, .10f),
+        enabled = enabled,
         pressScale = .9f,
     )
+    val focused by feedback.interaction.collectIsFocusedAsState()
     Box(
         modifier
             .defaultMinSize(18.dp, 18.dp)
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
             .clip(CircleShape)
             .background(feedback.background)
-            .border(1.dp, if (selected) blue else border, CircleShape)
+            .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) ink else if (selected) blue else border, CircleShape)
+            .alpha(if (enabled) 1f else .42f)
             .semantics {
                 stateDescription = if (selected) "已选择" else "未选择"
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
             }
-            .hoverable(feedback.interaction)
+            .hoverable(feedback.interaction, enabled = enabled)
             .selectable(
                 selected = selected,
+                enabled = enabled,
                 interactionSource = feedback.interaction,
                 indication = null,
                 role = Role.RadioButton,
@@ -615,6 +631,7 @@ internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifi
         pressScale = .96f,
         hoverMillis = 160,
     )
+    val focused by feedback.interaction.collectIsFocusedAsState()
     val knobFraction by animateFloatAsState(
         if (checked) 1f else 0f,
         animationSpec = tween(motionDurationMillis(reduceMotion, 160)),
@@ -632,7 +649,7 @@ internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifi
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
             .clip(CircleShape)
             .background(feedback.background)
-            .border(1.dp, animatedBorder, CircleShape)
+            .border(if (focused) 2.dp else 1.dp, if (focused) ink else animatedBorder, CircleShape)
             .semantics {
                 stateDescription = if (checked) "已开启" else "已关闭"
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
@@ -678,8 +695,8 @@ internal fun LinearProgressIndicator(
             animationSpec = infiniteRepeatable(tween(1_800, easing = LinearEasing)),
             label = "unknown-progress-offset",
         ).value
-        androidx.compose.foundation.Canvas(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate }.background(trackColor).clip(RoundedCornerShape(4.dp))) {
-            drawRect(color, topLeft = Offset(size.width * offset, 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.3f, size.height))
+        androidx.compose.foundation.Canvas(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate }.clip(RoundedCornerShape(4.dp)).background(trackColor)) {
+            drawRoundRect(color, topLeft = Offset(size.width * offset, 0f), size = androidx.compose.ui.geometry.Size(size.width * 0.3f, size.height), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f))
         }
         return
     }
@@ -688,8 +705,8 @@ internal fun LinearProgressIndicator(
         animationSpec = tween(motionDurationMillis(reduceMotion, 180)),
         label = "progress-value",
     )
-    Box(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo(value, 0f..1f) }.background(trackColor)) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(value).background(color))
+    Box(modifier.semantics { progressBarRangeInfo = ProgressBarRangeInfo(value, 0f..1f) }.clip(RoundedCornerShape(4.dp)).background(trackColor)) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(value).clip(RoundedCornerShape(4.dp)).background(color))
     }
 }
 
@@ -747,14 +764,16 @@ internal fun Slider(
     val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val focused by interaction.collectIsFocusedAsState()
+    val focus = remember { FocusRequester() }
     var pressing by remember { mutableStateOf(false) }
     val reduceMotion by MotionPreferences.reduceMotion
     // 拇指的"按下放大"必须挂在按压状态上而不是 hover 上：拖拽时指针常常滑出滑块边界，
     // 用 hover 判定会让拇指在拖拽中途缩回去。
     val thumbScale by animateFloatAsState(
         when {
-            pressing -> 1.25f
-            hovered -> 1.12f
+            enabled && pressing -> 1.25f
+            enabled && (hovered || focused) -> 1.12f
             else -> 1f
         },
         animationSpec = tween(motionDurationMillis(reduceMotion, 110)),
@@ -762,13 +781,31 @@ internal fun Slider(
     )
     // 轨道加粗同样只改绘制高度：父级高度由 14dp 的拇指决定，所以不会引起布局跳动。
     val trackHeight by animateDpAsState(
-        if (hovered || pressing) 6.dp else 4.dp,
+        if (enabled && (hovered || focused || pressing)) 6.dp else 4.dp,
         animationSpec = tween(motionDurationMillis(reduceMotion, 110)),
         label = "slider-track",
     )
     BoxWithConstraints(
         modifier
-            .hoverable(interaction)
+            .hoverable(interaction, enabled = enabled)
+            .border(1.dp, if (focused && enabled) colors.thumb else Color.Transparent, RoundedCornerShape(Radius.sm))
+            .onKeyEvent { event ->
+                if (!enabled || event.type != KeyEventType.KeyDown) false
+                else {
+                    val next = when (event.key) {
+                        Key.DirectionLeft, Key.DirectionDown -> value - span / 100f
+                        Key.DirectionRight, Key.DirectionUp -> value + span / 100f
+                        Key.MoveHome -> valueRange.start
+                        Key.MoveEnd -> valueRange.endInclusive
+                        else -> return@onKeyEvent false
+                    }.coerceIn(valueRange)
+                    onValueChange(next)
+                    onValueChangeFinished()
+                    true
+                }
+            }
+            .focusRequester(focus)
+            .focusable(enabled, interaction)
             .semantics {
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
                 progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(valueRange), valueRange)
@@ -785,9 +822,9 @@ internal fun Slider(
                 if (!enabled) return@pointerInput
                 detectTapGestures(
                     onPress = {
+                        focus.requestFocus()
                         pressing = true
-                        tryAwaitRelease()
-                        pressing = false
+                        try { tryAwaitRelease() } finally { pressing = false }
                     },
                 ) {
                     onValueChange(valueRange.start + (it.x / size.width).coerceIn(0f, 1f) * span)
@@ -797,7 +834,7 @@ internal fun Slider(
             .pointerInput(valueRange, enabled) {
                 if (!enabled) return@pointerInput
                 detectDragGestures(
-                    onDragStart = { pressing = true },
+                    onDragStart = { focus.requestFocus(); pressing = true },
                     onDragEnd = { pressing = false; onValueChangeFinished() },
                     onDragCancel = { pressing = false; onValueChangeFinished() },
                 ) { change, _ ->
@@ -922,12 +959,12 @@ internal fun OutlinedTextField(
     // 边框色与粗细都过渡：聚焦时 1dp→2dp 如果瞬间跳变，会让整个输入框"抖一下"。
     // border 是绘制修饰符（画在布局边界内侧），改粗细不会触发重新测量，所以逐帧动画很便宜。
     val animatedBorderColor by animateColorAsState(
-        targetValue = if (isError) errorStrong else if (focused) blue else if (hovered) blue.copy(alpha = .75f) else border,
+        targetValue = if (isError) errorStrong else if (enabled && focused) blue else if (enabled && hovered) blue.copy(alpha = .75f) else border,
         animationSpec = tween(motionDurationMillis(reduceMotion, 140)),
         label = "field-border",
     )
     val animatedBorderWidth by animateDpAsState(
-        if (focused) 2.dp else 1.dp,
+        if (enabled && focused) 2.dp else 1.dp,
         animationSpec = tween(motionDurationMillis(reduceMotion, 140)),
         label = "field-border-width",
     )
@@ -956,7 +993,7 @@ internal fun OutlinedTextField(
                 .background(rail)
                 // 显式 hoverable：BasicTextField 的 interactionSource 主要发 Press/Focus，
                 // 悬停态不能指望它，否则 `hovered` 分支就是死代码。
-                .hoverable(interaction)
+                .hoverable(interaction, enabled = enabled)
                 .border(animatedBorderWidth, animatedBorderColor, shape)
                 .padding(horizontal = 10.dp, vertical = 9.dp),
             decorationBox = { inner ->
@@ -978,10 +1015,13 @@ internal fun OutlinedTextField(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun WorkbenchTooltip(text: String, content: @Composable () -> Unit) {
+internal fun WorkbenchTooltip(text: String, besideControl: Boolean = false, content: @Composable () -> Unit) {
     // 自绘 Popup 会把指针留在旧提示层，遮住相邻行的按钮；交给框架处理离开与关闭。
     TooltipArea(
         delayMillis = 450,
+        tooltipPlacement = if (besideControl) TooltipPlacement.ComponentRect(
+            anchor = Alignment.CenterStart, alignment = Alignment.CenterStart, offset = DpOffset((-6).dp, 0.dp),
+        ) else TooltipPlacement.CursorPoint(),
         tooltip = {
             Surface(shape = RoundedCornerShape(Radius.sm), color = tooltipSurface, shadowElevation = Elevation.e2) {
                 Text(text, Modifier.padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = TypeScale.micro)

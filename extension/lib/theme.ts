@@ -127,16 +127,14 @@ export const THEME_TOKENS_CSS = `
 /**
  * Base primitives shared by popup and in-page panels.
  *
- * `.hlsd-button:hover` 也抬 1px：页内浮层的 `.video-download/.video-more` 与 popup 的
- * `article:hover` 早就用 translateY(-1px) 表达"可交互/聚焦在这里"，按钮自己没有就会显得
- * 比它所在的卡片还迟钝。按压仍由 `.hlsd-button:active:not(:disabled)` 的 scale 承担——
- * 两条规则特异性相同，active 声明在后，按下时缩放胜出，不会互相抵消。
+ * 悬停只改变颜色，保持紧凑列表里的按钮位置稳定；按压给一次短缩放。
  */
 export const THEME_BASE_CSS = `
 .hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:7px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
-.hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3));transform:translateY(-1px)}
+.hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}
 .hlsd-button:active:not(:disabled){transform:scale(.975)}
 .hlsd-button:disabled{opacity:.45;cursor:default}
+.hlsd-button.busy:disabled{opacity:1;cursor:progress}
 .hlsd-button.primary{background:var(--primary);color:var(--on-primary)}
 .hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover)}
 .hlsd-button.subtle{background:transparent;color:var(--muted)}

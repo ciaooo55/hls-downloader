@@ -11,6 +11,7 @@ use crate::contract::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
@@ -20,11 +21,12 @@ pub struct EventEnvelope {
 
 #[derive(Debug, Default, Clone)]
 pub struct CoreRuntime {
-    tasks: BTreeMap<String, TaskSnapshot>,
-    specs: BTreeMap<String, TaskSpec>,
+    // 持久化失败需要完整回滚；检查点共享未修改负载，避免每次进度更新复制历史事件。
+    tasks: BTreeMap<String, Arc<TaskSnapshot>>,
+    specs: BTreeMap<String, Arc<TaskSpec>>,
     pending_handoffs: BTreeMap<String, ResourceOffer>,
     media_push_requests: BTreeMap<String, MediaPushRequest>,
-    events: VecDeque<EventEnvelope>,
+    events: VecDeque<Arc<EventEnvelope>>,
     next_task: u64,
     next_handoff: u64,
     sequence: u64,
@@ -63,14 +65,16 @@ impl CoreRuntime {
                     .collect();
             }
             snapshot.available_actions = legal_actions(&snapshot);
-            runtime.tasks.insert(snapshot.task_id.clone(), snapshot);
+            runtime
+                .tasks
+                .insert(snapshot.task_id.clone(), Arc::new(snapshot));
         }
         for (task_id, mut spec) in specs {
-            if let Some(snapshot) = runtime.tasks.get_mut(&task_id) {
+            if let Some(snapshot) = runtime.tasks.get_mut(&task_id).map(Arc::make_mut) {
                 spec.queue_id = snapshot.queue_id.clone();
                 snapshot.speed_limit_kib = spec.speed_limit_kib;
             }
-            runtime.specs.insert(task_id, spec);
+            runtime.specs.insert(task_id, Arc::new(spec));
         }
         runtime
     }
@@ -108,14 +112,17 @@ impl CoreRuntime {
                 speed_bytes_per_sec,
                 stage,
                 status,
-            } => self.progress(
-                &task_id,
-                downloaded_bytes,
-                total_bytes,
-                speed_bytes_per_sec,
-                &stage,
-                &status,
-            ),
+            } => {
+                let event = self.progress_event(
+                    &task_id,
+                    downloaded_bytes,
+                    total_bytes,
+                    speed_bytes_per_sec,
+                    &stage,
+                    &status,
+                );
+                self.commit_progress(event);
+            }
             CoreCommand::OfferResource { mut offer } => {
                 if offer.handoff_id.trim().is_empty() {
                     self.next_handoff += 1;
@@ -223,29 +230,29 @@ impl CoreRuntime {
             | CoreCommand::PresentHandoff { .. } => {}
             CoreCommand::ClearCompleted => self.clear_completed(),
         }
-        self.events
-            .iter()
-            .filter(|item| item.sequence > before)
-            .cloned()
-            .collect()
+        self.events_after(before, 4096)
     }
 
     pub fn snapshot(&self, task_id: &str) -> Option<&TaskSnapshot> {
-        self.tasks.get(task_id)
+        self.tasks.get(task_id).map(Arc::as_ref)
     }
 
     pub fn task_spec(&self, task_id: &str) -> Option<&TaskSpec> {
-        self.specs.get(task_id)
+        self.specs.get(task_id).map(Arc::as_ref)
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) {
-        let updated = self.tasks.get_mut(task_id).map(|snapshot| {
-            snapshot.url = spec.url.clone();
-            snapshot.speed_limit_kib = spec.speed_limit_kib;
-            snapshot.mirror_status = pending_mirror_status(&spec.mirrors);
-            snapshot.clone()
-        });
-        self.specs.insert(task_id.to_string(), spec);
+        let updated = self
+            .tasks
+            .get_mut(task_id)
+            .map(Arc::make_mut)
+            .map(|snapshot| {
+                snapshot.url = spec.url.clone();
+                snapshot.speed_limit_kib = spec.speed_limit_kib;
+                snapshot.mirror_status = pending_mirror_status(&spec.mirrors);
+                snapshot.clone()
+            });
+        self.specs.insert(task_id.to_string(), Arc::new(spec));
         if let Some(snapshot) = updated {
             self.publish(CoreEvent::TaskUpdated { snapshot });
         }
@@ -275,17 +282,23 @@ impl CoreRuntime {
     }
 
     pub fn list_tasks(&self) -> Vec<TaskSnapshot> {
-        let mut tasks: Vec<_> = self.tasks.values().cloned().collect();
+        let mut tasks: Vec<_> = self
+            .tasks
+            .values()
+            .map(|task| task.as_ref().clone())
+            .collect();
         tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
         tasks
     }
 
     pub fn events_after(&self, sequence: u64, limit: usize) -> Vec<EventEnvelope> {
+        let start = self
+            .events
+            .partition_point(|item| item.sequence <= sequence);
         self.events
-            .iter()
-            .filter(|item| item.sequence > sequence)
+            .range(start..)
             .take(limit.max(1))
-            .cloned()
+            .map(|item| item.as_ref().clone())
             .collect()
     }
 
@@ -302,11 +315,7 @@ impl CoreRuntime {
     pub(crate) fn emit(&mut self, event: CoreEvent) -> Vec<EventEnvelope> {
         let before = self.sequence;
         self.publish(event);
-        self.events
-            .iter()
-            .filter(|item| item.sequence > before)
-            .cloned()
-            .collect()
+        self.events_after(before, 4096)
     }
 
     fn create_task(&mut self, spec: TaskSpec) -> TaskSnapshot {
@@ -377,12 +386,11 @@ impl CoreRuntime {
             scheduled_start_at: spec.scheduled_start_at.clone(),
             scheduled_stop_at: spec.scheduled_stop_at.clone(),
         };
-        self.tasks.insert(task_id, snapshot.clone());
-        self.specs.insert(snapshot.task_id.clone(), spec);
+        self.specs.insert(snapshot.task_id.clone(), Arc::new(spec));
         let mut snapshot = snapshot;
         snapshot.available_actions = legal_actions(&snapshot);
         self.tasks
-            .insert(snapshot.task_id.clone(), snapshot.clone());
+            .insert(snapshot.task_id.clone(), Arc::new(snapshot.clone()));
         snapshot
     }
 
@@ -473,7 +481,7 @@ impl CoreRuntime {
             return;
         }
         let updated = {
-            let Some(snapshot) = self.tasks.get_mut(task_id) else {
+            let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) else {
                 self.publish(CoreEvent::Error {
                     code: "task_not_found".into(),
                     message: format!("unknown task {task_id}"),
@@ -538,7 +546,7 @@ impl CoreRuntime {
                 .cloned()
                 .collect();
             tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
-            tasks.into_iter().map(|item| item.task_id).collect()
+            tasks.into_iter().map(|item| item.task_id.clone()).collect()
         };
         let Some(index) = ordered.iter().position(|id| id == task_id) else {
             return;
@@ -556,7 +564,7 @@ impl CoreRuntime {
         };
         ordered.insert(dest.min(ordered.len()), task_id.to_string());
         for (position, id) in ordered.iter().enumerate() {
-            if let Some(snapshot) = self.tasks.get_mut(id) {
+            if let Some(snapshot) = self.tasks.get_mut(id).map(Arc::make_mut) {
                 snapshot.queue_index = (position as i64) + 1;
                 let updated = snapshot.clone();
                 self.publish(CoreEvent::TaskUpdated { snapshot: updated });
@@ -591,7 +599,7 @@ impl CoreRuntime {
                 .cloned()
                 .collect();
             tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
-            tasks.into_iter().map(|item| item.task_id).collect()
+            tasks.into_iter().map(|item| item.task_id.clone()).collect()
         };
         let Some(index) = ordered.iter().position(|id| id == task_id) else {
             return;
@@ -600,7 +608,7 @@ impl CoreRuntime {
         let dest = (index as i32 + delta).clamp(0, ordered.len() as i32) as usize;
         ordered.insert(dest, item);
         for (position, id) in ordered.iter().enumerate() {
-            if let Some(snapshot) = self.tasks.get_mut(id) {
+            if let Some(snapshot) = self.tasks.get_mut(id).map(Arc::make_mut) {
                 snapshot.queue_index = (position as i64) + 1;
                 let updated = snapshot.clone();
                 self.publish(CoreEvent::TaskUpdated { snapshot: updated });
@@ -626,13 +634,13 @@ impl CoreRuntime {
             .unwrap_or(0);
         let mut updates = Vec::new();
         for task_id in task_ids {
-            let Some(snapshot) = self.tasks.get_mut(task_id) else {
+            let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) else {
                 continue;
             };
             next_index += 1;
             snapshot.queue_id = queue_id.to_string();
             snapshot.queue_index = next_index;
-            if let Some(spec) = self.specs.get_mut(task_id) {
+            if let Some(spec) = self.specs.get_mut(task_id).map(Arc::make_mut) {
                 spec.queue_id = queue_id.to_string();
             }
             updates.push(snapshot.clone());
@@ -667,23 +675,23 @@ impl CoreRuntime {
         }
     }
 
-    fn progress(
-        &mut self,
+    // 先生成单任务快照，持久化边界可在提交成功后再应用，避免复制整个运行态作回滚。
+    pub(crate) fn progress_event(
+        &self,
         task_id: &str,
         downloaded_bytes: u64,
         total_bytes: Option<u64>,
         speed_bytes_per_sec: u64,
         stage: &str,
         status: &str,
-    ) {
+    ) -> CoreEvent {
         let spec = self.specs.get(task_id).cloned();
         let updated = {
-            let Some(snapshot) = self.tasks.get_mut(task_id) else {
-                self.publish(CoreEvent::Error {
+            let Some(mut snapshot) = self.snapshot(task_id).cloned() else {
+                return CoreEvent::Error {
                     code: "task_not_found".into(),
                     message: format!("unknown task {task_id}"),
-                });
-                return;
+                };
             };
             let stale_active_progress =
                 matches!(
@@ -767,30 +775,31 @@ impl CoreRuntime {
                     snapshot.completed_ranges = completed;
                     snapshot.total_ranges = total;
                 }
-                let downloading = matches!(effective_status.as_str(), "downloading" | "recording");
-                let parts = crate::paint_from_progress(
-                    &progress,
-                    snapshot.downloaded_bytes,
-                    snapshot.total_bytes.unwrap_or(0),
-                    downloading,
-                );
                 if media_counts.is_none()
                     && !matches!(
                         spec.resource_kind,
                         ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
                     )
-                    && !parts.is_empty()
                 {
-                    let (workers, completed, total, hint) = crate::summarize_parts(&parts);
-                    snapshot.active_workers = if downloading {
-                        crate::active_worker_count(&progress).max(workers)
-                    } else {
-                        workers
-                    };
-                    snapshot.completed_ranges = completed;
-                    snapshot.total_ranges = total.max(1);
-                    snapshot.connection_hint = hint;
-                    snapshot.connection_parts = parts;
+                    let downloading = matches!(effective_status.as_str(), "downloading" | "recording");
+                    let parts = crate::paint_from_progress(
+                        &progress,
+                        snapshot.downloaded_bytes,
+                        snapshot.total_bytes.unwrap_or(0),
+                        downloading,
+                    );
+                    if !parts.is_empty() {
+                        let (workers, completed, total, hint) = crate::summarize_parts(&parts);
+                        snapshot.active_workers = if downloading {
+                            crate::active_worker_count(&progress).max(workers)
+                        } else {
+                            workers
+                        };
+                        snapshot.completed_ranges = completed;
+                        snapshot.total_ranges = total.max(1);
+                        snapshot.connection_hint = hint;
+                        snapshot.connection_parts = parts;
+                    }
                 }
             }
             if matches!(effective_status.as_str(), "completed" | "done") {
@@ -816,21 +825,29 @@ impl CoreRuntime {
                 snapshot.downloaded_bytes,
                 snapshot.total_bytes.unwrap_or(0)
             );
-            append_snapshot_log(snapshot, line);
-            snapshot.available_actions = legal_actions(snapshot);
+            append_snapshot_log(&mut snapshot, line);
+            snapshot.available_actions = legal_actions(&snapshot);
             snapshot.eta_seconds = match (snapshot.total_bytes, effective_speed) {
                 (Some(total), speed) if speed > 0 && total > snapshot.downloaded_bytes => {
                     Some((total - snapshot.downloaded_bytes) / speed)
                 }
                 _ => None,
             };
-            snapshot.clone()
+            snapshot
         };
-        self.publish(CoreEvent::TaskProgress { snapshot: updated });
+        CoreEvent::TaskProgress { snapshot: updated }
+    }
+
+    pub(crate) fn commit_progress(&mut self, event: CoreEvent) {
+        if let CoreEvent::TaskProgress { snapshot } = &event {
+            self.tasks
+                .insert(snapshot.task_id.clone(), Arc::new(snapshot.clone()));
+        }
+        self.publish(event);
     }
 
     pub fn report_failure(&mut self, task_id: &str, failure: TaskFailure) {
-        let Some(snapshot) = self.tasks.get_mut(task_id) else {
+        let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) else {
             return;
         };
         let failure_line = format!(
@@ -868,7 +885,7 @@ impl CoreRuntime {
     }
 
     pub fn mark_output_missing(&mut self, task_id: &str, missing: bool) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             if snapshot.output_missing != missing {
                 snapshot.output_missing = missing;
                 snapshot.available_actions = legal_actions(snapshot);
@@ -879,7 +896,7 @@ impl CoreRuntime {
     }
 
     pub fn set_output_path(&mut self, task_id: &str, path: String) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             if snapshot.output_path != path {
                 if let Some(filename) = std::path::Path::new(&path)
                     .file_name()
@@ -904,7 +921,7 @@ impl CoreRuntime {
         actual: String,
         verified: bool,
     ) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             snapshot.checksum_algorithm = algorithm;
             snapshot.checksum_actual = actual;
             snapshot.checksum_verified = Some(verified);
@@ -914,7 +931,7 @@ impl CoreRuntime {
     }
 
     pub fn set_av_scan_result(&mut self, task_id: &str, result: AvScanStatus) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             snapshot.av_scan = Some(result);
             let updated = snapshot.clone();
             self.publish(CoreEvent::TaskUpdated { snapshot: updated });
@@ -922,7 +939,7 @@ impl CoreRuntime {
     }
 
     pub fn set_mirror_result(&mut self, task_id: &str, statuses: Vec<MirrorStatus>) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             snapshot.mirror_status = statuses;
             let updated = snapshot.clone();
             self.publish(CoreEvent::TaskUpdated { snapshot: updated });
@@ -937,7 +954,7 @@ impl CoreRuntime {
         uploaded_bytes: u64,
         upload_speed_bytes_per_sec: u64,
     ) {
-        if let Some(snapshot) = self.tasks.get_mut(task_id) {
+        if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             snapshot.peer_count = peer_count;
             snapshot.seed_count = seed_count;
             snapshot.uploaded_bytes = uploaded_bytes;
@@ -949,10 +966,10 @@ impl CoreRuntime {
 
     fn publish(&mut self, event: CoreEvent) {
         self.sequence += 1;
-        self.events.push_back(EventEnvelope {
+        self.events.push_back(Arc::new(EventEnvelope {
             sequence: self.sequence,
             event,
-        });
+        }));
         while self.events.len() > 4096 {
             self.events.pop_front();
         }
@@ -1095,6 +1112,44 @@ mod tests {
             last_modified: String::new(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn rollback_checkpoint_isolated_from_task_changes_and_event_ring_rollover() {
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec: task() });
+        for index in 0..4096 {
+            runtime.emit(CoreEvent::Toast {
+                level: "info".into(),
+                message: index.to_string(),
+            });
+        }
+        let checkpoint = runtime.clone();
+        let old_tasks = checkpoint.list_tasks();
+        let old_spec = checkpoint.task_spec("task-1").unwrap().clone();
+        let old_events = checkpoint.events_after(0, 4096);
+
+        runtime.assign_queue(&["task-1".into()], "night");
+        let mut spec = runtime.task_spec("task-1").unwrap().clone();
+        spec.url = "https://example.test/new.bin".into();
+        runtime.replace_spec("task-1", spec);
+        runtime.set_output_path("task-1", "updated.bin".into());
+
+        assert_eq!(checkpoint.list_tasks(), old_tasks);
+        assert_eq!(checkpoint.task_spec("task-1"), Some(&old_spec));
+        assert_eq!(checkpoint.events_after(0, 4096), old_events);
+        assert_eq!(runtime.task_spec("task-1").unwrap().queue_id, "night");
+        assert_eq!(
+            runtime.snapshot("task-1").unwrap().output_path,
+            "updated.bin"
+        );
+        let delta = runtime.events_after(checkpoint.latest_sequence(), 2);
+        assert_eq!(delta.len(), 2);
+        assert_eq!(delta[0].sequence, checkpoint.latest_sequence() + 1);
+        assert_eq!(delta[1].sequence, checkpoint.latest_sequence() + 2);
+        assert!(runtime
+            .events_after(runtime.latest_sequence(), 256)
+            .is_empty());
     }
 
     #[test]

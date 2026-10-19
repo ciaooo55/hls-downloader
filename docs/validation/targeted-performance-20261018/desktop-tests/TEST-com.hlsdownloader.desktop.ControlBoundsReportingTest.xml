@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.ControlBoundsReportingTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:47:38.155Z" hostname="DESKTOP-FTE6QH2" time="0.365">
+  <properties/>
+  <testcase name="the_test_state_has_a_bounds_map_and_the_snapshot_exposes_it()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.003"/>
+  <testcase name="a_control_can_opt_in_with_a_composable_modifier()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.002"/>
+  <testcase name="icon_buttons_and_checkboxes_must_carry_a_content_description()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.316"/>
+  <testcase name="full_width_rows_with_no_scale_must_supply_a_pressed_color()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.01"/>
+  <testcase name="narrow_targets_actually_report_their_bounds()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.006"/>
+  <testcase name="the_collapsed_rail_items_report_their_bounds()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.004"/>
+  <testcase name="shared_button_components_report_their_bounds()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.006"/>
+  <testcase name="custom_rows_report_their_bounds()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.005"/>
+  <testcase name="selection_deliberately_beats_hover()" classname="com.hlsdownloader.desktop.ControlBoundsReportingTest" time="0.007"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

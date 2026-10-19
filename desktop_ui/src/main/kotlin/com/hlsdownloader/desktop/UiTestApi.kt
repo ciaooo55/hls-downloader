@@ -265,6 +265,8 @@ internal object UiTestState {
 
     fun reportControlBounds(name: String, left: Int, top: Int, right: Int, bottom: Int, owner: Any) {
         if (name.isBlank()) return
+        // 注销同名控件时要恢复最近一次布局，而不是最晚创建的宿主。
+        controlRegistrations.remove(owner)
         controlRegistrations[owner] = name to listOf(left, top, right, bottom)
         val next = controlBounds.toMutableMap()
         next[name] = listOf(left, top, right, bottom)

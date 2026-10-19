@@ -1,0 +1,375 @@
+{
+  "passed": false,
+  "checks": [
+    "close tooltip paints beside the button in the header, away from native video",
+    "main-window overlay starts real playback and pause button pauses it",
+    "K and Space toggle the real playback session",
+    "resume and video-surface click update real pause state",
+    "forward/back buttons and timeline drag seek the actual decoder",
+    "focused volume keys change volume without triggering global seek",
+    "volume and mute controls change mpv volume/mute",
+    "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+    "hovering the preview preserves paused playback position",
+    "main fullscreen enters and Escape restores the overlay"
+  ],
+  "requested_java_ui_scale": 1.0,
+  "window": {
+    "x": 59,
+    "y": 0,
+    "width": 1400,
+    "height": 709,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.0,
+    "scaleY": 1.0,
+    "deviceX": 59,
+    "deviceY": 0,
+    "deviceWidth": 1400,
+    "deviceHeight": 709
+  },
+  "tooltip_header_changed_pixels": 3112,
+  "video_rectangles": {
+    "main": {
+      "expected": [
+        279,
+        128,
+        1239,
+        504
+      ],
+      "actual": [
+        [
+          279,
+          128,
+          1239,
+          504
+        ],
+        [
+          279,
+          128,
+          1239,
+          504
+        ]
+      ]
+    },
+    "fullscreen": {
+      "expected": [
+        0,
+        48,
+        1518,
+        644
+      ],
+      "actual": [
+        [
+          0,
+          48,
+          1518,
+          644
+        ],
+        [
+          0,
+          48,
+          1518,
+          644
+        ]
+      ]
+    },
+    "pip": {
+      "expected": [
+        998,
+        397,
+        1518,
+        584
+      ],
+      "actual": [
+        [
+          998,
+          397,
+          1518,
+          584
+        ],
+        [
+          998,
+          397,
+          1518,
+          584
+        ]
+      ]
+    },
+    "returned-main": {
+      "expected": [
+        59,
+        48,
+        579,
+        235
+      ],
+      "actual": [
+        [
+          279,
+          128,
+          1239,
+          504
+        ],
+        [
+          279,
+          128,
+          1239,
+          504
+        ]
+      ]
+    }
+  },
+  "thumbnail_pixel_mean_error": 2.6120227146042363,
+  "error": "Traceback (most recent call last):\n  File \"C:\\HLSTests\\scripts\\validation\\smoke_v7_player_overlay.py\", line 325, in run\n    check_video_rect('returned-main')\n  File \"C:\\HLSTests\\scripts\\validation\\smoke_v7_player_overlay.py\", line 144, in check_video_rect\n    wait(aligned, 'Video windows did not align: '+name, 10)\n  File \"C:\\HLSTests\\scripts\\validation\\smoke_v7_player_overlay.py\", line 36, in wait\n    raise AssertionError(message)\nAssertionError: Video windows did not align: returned-main\n",
+  "ui_state": {
+    "selectedCount": 0,
+    "selectedTaskIds": [],
+    "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+    "contextMenuPosition": [],
+    "contextMenuTaskIds": [],
+    "contextMenuActions": [],
+    "activeFilter": "全部",
+    "activeCategory": "",
+    "activeQueueId": "",
+    "controlBounds": {
+      "toolbar.新建": [
+        15,
+        42,
+        76,
+        78
+      ],
+      "toolbar.粘贴链接": [
+        84,
+        42,
+        169,
+        78
+      ],
+      "toolbar.全部开始": [
+        183,
+        42,
+        268,
+        78
+      ],
+      "toolbar.全部暂停": [
+        270,
+        42,
+        355,
+        78
+      ],
+      "toolbar.工具": [
+        357,
+        42,
+        418,
+        78
+      ],
+      "toolbar.设置": [
+        1288,
+        42,
+        1349,
+        78
+      ],
+      "toolbar.深色模式": [
+        1350,
+        42,
+        1386,
+        78
+      ],
+      "sidebar.status.全部": [
+        9,
+        123,
+        176,
+        159
+      ],
+      "sidebar.status.进行中": [
+        9,
+        159,
+        176,
+        195
+      ],
+      "sidebar.status.排队中": [
+        9,
+        195,
+        176,
+        231
+      ],
+      "sidebar.status.已暂停": [
+        9,
+        231,
+        176,
+        267
+      ],
+      "sidebar.status.已完成": [
+        9,
+        267,
+        176,
+        303
+      ],
+      "sidebar.status.失败": [
+        9,
+        303,
+        176,
+        339
+      ],
+      "sidebar.toggle_queues": [
+        9,
+        351,
+        150,
+        385
+      ],
+      "sidebar.toggle_categories": [
+        9,
+        397,
+        176,
+        431
+      ],
+      "sidebar.category.媒体": [
+        9,
+        431,
+        176,
+        467
+      ],
+      "sidebar.category.程序": [
+        9,
+        467,
+        176,
+        503
+      ],
+      "sidebar.category.压缩包": [
+        9,
+        503,
+        176,
+        539
+      ],
+      "sidebar.category.其他": [
+        9,
+        539,
+        176,
+        575
+      ],
+      "content_header.clear_completed": [
+        1196,
+        90,
+        1291,
+        124
+      ],
+      "content_header.refresh": [
+        1291,
+        90,
+        1350,
+        124
+      ],
+      "toolbar.更多操作": [
+        1350,
+        89,
+        1386,
+        125
+      ],
+      "taskrow.task-1": [
+        190,
+        164,
+        1393,
+        216
+      ],
+      "task.action.task-1.play": [
+        1315,
+        173,
+        1349,
+        207
+      ],
+      "video.header": [
+        0,
+        0,
+        520,
+        48
+      ],
+      "video.关闭播放器，下载继续": [
+        476,
+        6,
+        514,
+        42
+      ],
+      "video.surface": [
+        0,
+        48,
+        520,
+        235
+      ],
+      "video.timeline": [
+        10,
+        255,
+        510,
+        283
+      ],
+      "video.后退 10 秒": [
+        48,
+        283,
+        86,
+        319
+      ],
+      "video.前进 10 秒": [
+        86,
+        283,
+        124,
+        319
+      ],
+      "video.rate": [
+        466,
+        284,
+        510,
+        318
+      ],
+      "video.静音": [
+        10,
+        319,
+        48,
+        355
+      ],
+      "video.volume": [
+        48,
+        322,
+        370,
+        352
+      ],
+      "video.音轨": [
+        370,
+        320,
+        402,
+        354
+      ],
+      "video.字幕": [
+        402,
+        320,
+        434,
+        354
+      ],
+      "video.返回主界面播放器": [
+        434,
+        319,
+        472,
+        355
+      ],
+      "video.全屏": [
+        472,
+        319,
+        510,
+        355
+      ],
+      "video.播放": [
+        10,
+        283,
+        48,
+        319
+      ],
+      "video.画中画": [
+        1094,
+        588,
+        1132,
+        624
+      ]
+    },
+    "engineText": "下载引擎 · 已连接",
+    "noticeHistory": []
+  }
+}

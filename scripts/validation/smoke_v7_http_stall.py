@@ -89,10 +89,11 @@ def main() -> int:
     ipc = None
     try:
         ipc = connect(port)
-        send(ipc, {"type": "store_settings", "request_id": 1, "values": {
+        settings = send(ipc, {"type": "store_settings", "request_id": 1, "values": {
             "download_dir": str(downloads), "http_chunk_size_mb": 1, "keep_temp_files": False,
             "download_progress_window_enabled": False, "download_complete_popup_enabled": False,
-            "av_scan_enabled": False, "auto_retry_failed_max": 0, "update_check_enabled": False}})
+            "av_scan_enabled": False, "auto_retry_failed_max": 0}})
+        assert settings.get("type") != "error", settings
 
         def command(value):
             response = send(ipc, {"type": "command", "request_id": 2, "command": value})

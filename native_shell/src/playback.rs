@@ -4,13 +4,35 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
 const STREAM_CHUNK: usize = 64 * 1024;
 const REQUEST_HEADER_LIMIT: usize = 16 * 1024;
 const REQUEST_HEADER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const MAX_MEDIA_CONNECTIONS: usize = 32;
+
+// 播放、音轨、缩略图共享有限槽位；提前退出和线程异常也必须归还。
+struct MediaConnectionSlot(Arc<AtomicUsize>);
+
+impl MediaConnectionSlot {
+    fn claim(active: &Arc<AtomicUsize>) -> Option<Self> {
+        active
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                (count < MAX_MEDIA_CONNECTIONS).then_some(count + 1)
+            })
+            .ok()
+            .map(|_| Self(Arc::clone(active)))
+    }
+}
+
+impl Drop for MediaConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 #[derive(Clone)]
 pub struct MediaServer {
@@ -67,22 +89,37 @@ impl MediaServer {
             lan: Arc::new(AtomicBool::new(false)),
             port: addr.port(),
         };
-        let state = Arc::clone(&server.inner);
+        let state = Arc::downgrade(&server.inner);
         let lan = Arc::clone(&server.lan);
+        let active = Arc::new(AtomicUsize::new(0));
         let listen_port = addr.port();
         thread::spawn(move || loop {
+            if state.strong_count() == 0 {
+                break;
+            }
             match listener.accept() {
                 Ok((stream, peer)) => {
                     if !peer_allowed(peer.ip(), lan.load(Ordering::SeqCst)) {
                         continue;
                     }
-                    let mounts = state
+                    let Some(slot) = MediaConnectionSlot::claim(&active) else {
+                        continue;
+                    };
+                    let Some(owner) = state.upgrade() else {
+                        break;
+                    };
+                    let mounts = owner
                         .lock()
                         .map(|guard| guard.mounts.clone())
                         .unwrap_or_default();
-                    thread::spawn(move || {
-                        let _ = handle_client(stream, &mounts, listen_port);
-                    });
+                    drop(owner);
+                    let lifetime = Weak::clone(&state);
+                    let _ = thread::Builder::new()
+                        .name("media-client".into())
+                        .spawn(move || {
+                            let _slot = slot;
+                            let _ = handle_client(stream, &mounts, listen_port, &lifetime);
+                        });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(std::time::Duration::from_millis(20));
@@ -235,12 +272,17 @@ fn read_request_headers(stream: &mut TcpStream) -> Result<String, String> {
     stream
         .set_nonblocking(false)
         .map_err(|error| error.to_string())?;
-    stream
-        .set_read_timeout(Some(REQUEST_HEADER_TIMEOUT))
-        .map_err(|error| error.to_string())?;
+    let deadline = std::time::Instant::now() + REQUEST_HEADER_TIMEOUT;
     let mut request = Vec::with_capacity(1024);
     let mut buf = [0u8; 1024];
     while request.len() < REQUEST_HEADER_LIMIT {
+        let remaining_time = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining_time.is_zero() {
+            return Err("media request headers timed out".into());
+        }
+        stream
+            .set_read_timeout(Some(remaining_time))
+            .map_err(|error| error.to_string())?;
         let remaining = REQUEST_HEADER_LIMIT - request.len();
         let read_len = buf.len().min(remaining);
         let count = match stream.read(&mut buf[..read_len]) {
@@ -272,7 +314,11 @@ fn handle_client(
     mut stream: TcpStream,
     mounts: &[(String, Mount)],
     port: u16,
+    lifetime: &Weak<Mutex<MediaState>>,
 ) -> Result<(), String> {
+    stream
+        .set_write_timeout(Some(WRITE_TIMEOUT))
+        .map_err(|error| error.to_string())?;
     let peer = stream.peer_addr().ok().map(|addr| addr.ip());
     let request = read_request_headers(&mut stream)?;
     let path = request
@@ -325,7 +371,7 @@ fn handle_client(
             if !sub.is_empty() {
                 return write_status(&mut stream, 404, b"not found");
             }
-            return serve_growing_file(&mut stream, &request, root, file, *total);
+            return serve_growing_file(&mut stream, &request, root, file, *total, lifetime);
         }
         Mount::File(path) => {
             if !sub.is_empty() && file_cast_name(path).as_deref() != Some(sub) {
@@ -372,7 +418,8 @@ fn handle_client(
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
                 while !crate::media::preview::is_ready(dir, name) {
                     let control = std::fs::read_to_string(dir.join("control")).unwrap_or_default();
-                    if !dir.is_dir()
+                    if lifetime.strong_count() == 0
+                        || !dir.is_dir()
                         || control.trim() != "run"
                         || std::time::Instant::now() >= deadline
                     {
@@ -398,7 +445,7 @@ fn handle_client(
             file
         }
     };
-    serve_file(&mut stream, &request, &file_path)
+    serve_file(&mut stream, &request, &file_path, lifetime)
 }
 
 fn advertise_host(peer: Option<IpAddr>, port: u16) -> String {
@@ -485,7 +532,12 @@ fn thumbnail_request(request: &str) -> bool {
     })
 }
 
-fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result<(), String> {
+fn serve_file(
+    stream: &mut TcpStream,
+    request: &str,
+    file_path: &Path,
+    lifetime: &Weak<Mutex<MediaState>>,
+) -> Result<(), String> {
     let mut file = File::open(file_path).map_err(|error| error.to_string())?;
     let total = file.metadata().map_err(|error| error.to_string())?.len();
     let content_type = content_type(file_path);
@@ -501,7 +553,7 @@ fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result
         stream
             .write_all(header.as_bytes())
             .map_err(|error| error.to_string())?;
-        stream_bytes(stream, &mut file, start, length)
+        stream_bytes(stream, &mut file, start, length, lifetime)
     } else {
         let header = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
@@ -509,7 +561,7 @@ fn serve_file(stream: &mut TcpStream, request: &str, file_path: &Path) -> Result
         stream
             .write_all(header.as_bytes())
             .map_err(|error| error.to_string())?;
-        stream_bytes(stream, &mut file, 0, total)
+        stream_bytes(stream, &mut file, 0, total, lifetime)
     }
 }
 
@@ -534,6 +586,7 @@ fn serve_growing_file(
     root: &Path,
     path: &Path,
     total: u64,
+    lifetime: &Weak<Mutex<MediaState>>,
 ) -> Result<(), String> {
     let range = range_header(request);
     let Some((start, end)) = range
@@ -552,6 +605,9 @@ fn serve_growing_file(
     let mut headers_sent = false;
     let mut file = File::open(path).map_err(|error| error.to_string())?;
     loop {
+        if lifetime.strong_count() == 0 {
+            return Err("media server stopped".into());
+        }
         let available = downloaded_range_end(root, cursor, total);
         if head || available.is_some() {
             if !headers_sent {
@@ -568,7 +624,7 @@ fn serve_growing_file(
                 return Ok(());
             }
             let count = (available.unwrap().min(end) - cursor + 1).min(1024 * 1024);
-            stream_bytes(stream, &mut file, cursor, count)?;
+            stream_bytes(stream, &mut file, cursor, count, lifetime)?;
             cursor += count;
             if cursor > end {
                 return Ok(());
@@ -584,7 +640,10 @@ fn serve_growing_file(
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
             while downloaded_range_end(root, cursor, total).is_none() {
                 let control = std::fs::read_to_string(root.join("control")).unwrap_or_default();
-                if control.trim() != "run" || std::time::Instant::now() >= deadline {
+                if lifetime.strong_count() == 0
+                    || control.trim() != "run"
+                    || std::time::Instant::now() >= deadline
+                {
                     if !headers_sent {
                         return write_status(
                             stream,
@@ -605,12 +664,16 @@ fn stream_bytes(
     file: &mut File,
     start: u64,
     length: u64,
+    lifetime: &Weak<Mutex<MediaState>>,
 ) -> Result<(), String> {
     file.seek(SeekFrom::Start(start))
         .map_err(|error| error.to_string())?;
     let mut remaining = length;
     let mut buf = vec![0u8; STREAM_CHUNK];
     while remaining > 0 {
+        if lifetime.strong_count() == 0 {
+            return Err("media server stopped".into());
+        }
         let want = buf.len().min(remaining as usize);
         let read = file
             .read(&mut buf[..want])
@@ -702,6 +765,176 @@ fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slow_readers_fill_connection_limit_then_time_out_and_release_slots() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-slow-readers-{}-{}",
+            std::process::id(),
+            random_mount_token()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("large.bin");
+        File::create(&file)
+            .unwrap()
+            .set_len(32 * 1024 * 1024)
+            .unwrap();
+        let server = MediaServer::start_local().unwrap();
+        server.mount("large", file);
+        let address = ("127.0.0.1", server.bound_port());
+        let mut clients = Vec::new();
+        for _ in 0..MAX_MEDIA_CONNECTIONS {
+            let mut client = TcpStream::connect(address).unwrap();
+            client
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .unwrap();
+            client
+                .write_all(b"GET /media/large HTTP/1.1\r\n\r\n")
+                .unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                let mut byte = [0u8];
+                assert_eq!(client.read(&mut byte).unwrap(), 1);
+                header.push(byte[0]);
+                assert!(header.len() < REQUEST_HEADER_LIMIT);
+            }
+            assert!(header.starts_with(b"HTTP/1.1 200"));
+            clients.push(client);
+        }
+        let request = b"GET /media/large HTTP/1.1\r\nRange: bytes=0-0\r\n\r\n";
+        let mut rejected = TcpStream::connect(address).unwrap();
+        rejected
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let _ = rejected.write_all(request);
+        match rejected.read(&mut [0u8; 1]) {
+            Ok(0) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) => {}
+            other => panic!("over-limit connection was not rejected: {other:?}"),
+        }
+        // 保持所有慢读取连接打开；必须由服务端写超时归还槽位。
+        let deadline =
+            std::time::Instant::now() + WRITE_TIMEOUT + std::time::Duration::from_secs(4);
+        loop {
+            let mut probe = TcpStream::connect(address).unwrap();
+            probe
+                .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                .unwrap();
+            let _ = probe.write_all(request);
+            let mut response = Vec::new();
+            if probe.read_to_end(&mut response).is_ok() && response.starts_with(b"HTTP/1.1 206") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "slow readers retained every connection slot"
+            );
+            thread::sleep(std::time::Duration::from_millis(25));
+        }
+        drop(server);
+        drop(clients);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trickled_headers_cannot_extend_the_absolute_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            finished.send(read_request_headers(&mut stream)).unwrap();
+        });
+        let started = std::time::Instant::now();
+        client.write_all(b"GET / HTTP/1.1\r\nX-Slow: ").unwrap();
+        loop {
+            match result.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(value) => {
+                    assert!(value.unwrap_err().contains("timed out"));
+                    break;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+                    let _ = client.write_all(b"x");
+                }
+                Err(error) => panic!("header worker disconnected: {error}"),
+            }
+        }
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn dropping_server_closes_pending_download_clients_and_listener() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-server-drop-{}-{}",
+            std::process::id(),
+            random_mount_token()
+        ));
+        std::fs::create_dir_all(root.join("segments")).unwrap();
+        std::fs::write(root.join("control"), "run").unwrap();
+        let server = MediaServer::start_local().unwrap();
+        server.mount_downloading("pending", root.clone());
+        let address = ("127.0.0.1", server.bound_port());
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        client
+            .write_all(b"GET /media/pending/segments/000042.ts HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while crate::media::preview::priority_file(&root).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pending request never entered handler"
+            );
+            thread::yield_now();
+        }
+        drop(server);
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while TcpStream::connect(address).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "media listener survived its owner"
+            );
+            thread::yield_now();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn media_connections_are_bounded_and_release_slots_after_concurrent_use() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(std::sync::Barrier::new(MAX_MEDIA_CONNECTIONS + 1));
+        let release = Arc::new(std::sync::Barrier::new(MAX_MEDIA_CONNECTIONS + 1));
+        let workers: Vec<_> = (0..MAX_MEDIA_CONNECTIONS)
+            .map(|_| {
+                let active = Arc::clone(&active);
+                let entered = Arc::clone(&entered);
+                let release = Arc::clone(&release);
+                thread::spawn(move || {
+                    let _slot = MediaConnectionSlot::claim(&active).unwrap();
+                    entered.wait();
+                    release.wait();
+                })
+            })
+            .collect();
+        entered.wait();
+        let full = MediaConnectionSlot::claim(&active).is_none();
+        release.wait();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert!(full);
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+        assert!(MediaConnectionSlot::claim(&active).is_some());
+    }
 
     #[test]
     fn thumbnails_do_not_download_missing_segments_or_sparse_ranges() {

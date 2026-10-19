@@ -190,9 +190,38 @@ def run(args):
             assert player()['duration_seconds'] >= 45, 'Overlay acceptance requires a >=45-second multitrack fixture; short media clamps the 10-second seek'
             click('暂停')
             wait(lambda: player()['paused'], 'Pause did not reach mpv')
+            left, top, right, bottom = bounds('关闭播放器，下载继续')
+            before_tooltip = Image.open(io.BytesIO(ui('screen', raw=True))).convert('RGB')
+            action('move', x=(left+right)//2, y=(top+bottom)//2)
+            # 提示有 450ms 的产品延时，保留实际屏幕供核对文案和边缘裁切。
+            time.sleep(.7)
+            tooltip_png = ui('screen', raw=True)
+            args.report.with_name(args.report.stem+'-close-tooltip.png').write_bytes(tooltip_png)
+            window = report['window']
+            # /screen 使用 AWT 逻辑像素，控件边界使用设备像素；JVM 1.5 缩放时必须转换。
+            region = (max(0, round((window['deviceX']+left)/window['scaleX']-250)),
+                      round((window['deviceY']+top)/window['scaleY']),
+                      round((window['deviceX']+left-2)/window['scaleX']),
+                      round((window['deviceY']+bottom)/window['scaleY']))
+            tooltip_frame = Image.open(io.BytesIO(tooltip_png)).convert('RGB')
+            changed = ImageChops.difference(before_tooltip.crop(region), tooltip_frame.crop(region))
+            report['tooltip_header_changed_pixels'] = sum(any(c > 5 for c in p) for p in changed.get_flattened_data())
+            assert report['tooltip_header_changed_pixels'] > 250, 'Tooltip did not paint beside the button in the header'
+            record('close tooltip paints beside the button in the header, away from native video')
+            action('move', x=1, y=1)
             check_video_rect('main')
             capture('main')
+            header = bounds('header')
+            timeline = bounds('timeline')
+            scale = report['window']['scaleX']
+            assert (header[2]-header[0])/scale <= 960.5, 'Overlay exceeds compact maximum width'
+            assert timeline[3]/scale < report['window']['height'], 'Playback controls overflow the window'
             record('main-window overlay starts real playback and pause button pauses it')
+            action('key', key='K')
+            wait(lambda: not player()['paused'], 'K did not resume playback')
+            action('key', key='SPACE')
+            wait(lambda: player()['paused'], 'Space did not pause playback')
+            record('K and Space toggle the real playback session')
             click('播放')
             wait(lambda: not player()['paused'], 'Resume did not reach mpv')
             click('surface')
@@ -211,6 +240,18 @@ def run(args):
             left, top, right, bottom = bounds('volume')
             action('click', x=left+(right-left)//3, y=(top+bottom)//2)
             wait(lambda: 20 < player()['volume'] < 45, 'Volume slider failed')
+            before_volume = player()['volume']
+            before_position = player()['position_seconds']
+            action('key', key='RIGHT')
+            wait(lambda: player()['volume'] > before_volume, 'Focused volume slider ignored Right')
+            assert player()['paused'] and abs(player()['position_seconds']-before_position) < .2
+            action('key', key='HOME')
+            wait(lambda: player()['volume'] == 0, 'Volume Home did not reach minimum')
+            action('key', key='END')
+            wait(lambda: player()['volume'] == 100, 'Volume End did not reach maximum')
+            capture('volume-keyboard')
+            action('click', x=left+(right-left)//3, y=(top+bottom)//2)
+            record('focused volume keys change volume without triggering global seek')
             click('静音')
             wait(lambda: player()['muted'], 'Mute failed')
             click('取消静音')
@@ -234,20 +275,25 @@ def run(args):
             left, top, right, bottom = bounds('timeline')
             hover_x = int((right-left)*.38)
             action('move', x=left+hover_x, y=(top+bottom)//2)
+            preview_started = time.monotonic()
             time.sleep(1.5)
             capture('thumbnail')
-            assert player()['paused'] and abs(player()['position_seconds']-before) < .2
             thumb = send(ipc, {'type': 'player_thumbnail', 'request_id': 20, 'task_id': tid, 'seconds': 20.0})
             assert thumb['type'] == 'player_thumbnail', thumb
             expected_image = Image.open(io.BytesIO(base64.b64decode(thumb['jpeg_base64']))).convert('RGB')
-            screen = Image.open(args.report.with_name(args.report.stem+'-thumbnail.png')).convert('RGB')
             scale = ui('window')['scaleX']
             image_x = round((left+hover_x)/scale-92+(184-expected_image.width)/2)
             image_y = round(top/scale-136+(104-expected_image.height)/2)
-            actual_image = screen.crop((image_x, image_y, image_x+expected_image.width, image_y+expected_image.height))
-            difference = sum(ImageStat.Stat(ImageChops.difference(actual_image, expected_image)).mean)/3
-            report['thumbnail_pixel_mean_error'] = difference
-            assert difference < 25, f'Preview is obscured or misplaced: pixel error {difference}'
+            def preview_matches():
+                capture('thumbnail')
+                screen = Image.open(args.report.with_name(args.report.stem+'-thumbnail.png')).convert('RGB')
+                actual_image = screen.crop((image_x, image_y, image_x+expected_image.width, image_y+expected_image.height))
+                difference = sum(ImageStat.Stat(ImageChops.difference(actual_image, expected_image)).mean)/3
+                report['thumbnail_pixel_mean_error'] = difference
+                return difference < 25
+            wait(preview_matches, 'Preview is obscured, misplaced or not ready', 10)
+            report['thumbnail_ready_seconds'] = time.monotonic()-preview_started
+            assert player()['paused'] and abs(player()['position_seconds']-before) < .2
             record('hovering the preview preserves paused playback position')
             click('全屏')
             bounds('退出全屏')

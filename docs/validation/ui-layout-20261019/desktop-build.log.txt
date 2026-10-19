@@ -1,0 +1,38 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+Reusing configuration cache.
+> Task :generateComposeResClass SKIPPED
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :convertXmlValueResourcesForTest NO-SOURCE
+> Task :convertXmlValueResourcesForMain NO-SOURCE
+> Task :copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :copyNonXmlValueResourcesForTest NO-SOURCE
+> Task :prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForTest NO-SOURCE
+> Task :generateResourceAccessorsForTest SKIPPED
+> Task :generateResourceAccessorsForMain SKIPPED
+> Task :generateActualResourceCollectorsForMain SKIPPED
+> Task :assembleTestResources UP-TO-DATE
+> Task :assembleMainResources UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :compileKotlin
+> Task :compileJava NO-SOURCE
+> Task :classes UP-TO-DATE
+> Task :jar
+
+> Task :compileTestKotlin
+w: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/DialogKeyboardDismissTest.kt:28:61 'fun runComposeUiTest(effectContext: CoroutineContext = ..., runTestContext: CoroutineContext = ..., testTimeout: Duration = ..., block: suspend ComposeUiTest.() -> Unit): Unit' is deprecated. Use `androidx.compose.ui.test.v2.runComposeUiTest` instead. The v2 APIs use `StandardTestDispatcher` by default to better simulate production behavior where coroutines are queued rather than executed immediately.
+w: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/DialogKeyboardDismissTest.kt:49:62 'fun runComposeUiTest(effectContext: CoroutineContext = ..., runTestContext: CoroutineContext = ..., testTimeout: Duration = ..., block: suspend ComposeUiTest.() -> Unit): Unit' is deprecated. Use `androidx.compose.ui.test.v2.runComposeUiTest` instead. The v2 APIs use `StandardTestDispatcher` by default to better simulate production behavior where coroutines are queued rather than executed immediately.
+w: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/PressFeedbackCoverageTest.kt:94:25 Unnecessary non-null assertion (!!) on a non-null receiver of type 'Triple<String, Int, String>'.
+w: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/UiStateMirrorEffectTest.kt:28:71 'fun runComposeUiTest(effectContext: CoroutineContext = ..., runTestContext: CoroutineContext = ..., testTimeout: Duration = ..., block: suspend ComposeUiTest.() -> Unit): Unit' is deprecated. Use `androidx.compose.ui.test.v2.runComposeUiTest` instead. The v2 APIs use `StandardTestDispatcher` by default to better simulate production behavior where coroutines are queued rather than executed immediately.
+
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test
+
+[Incubating] Problems report is available at: file:///A:/Ubuntu/%E6%B5%8B%E8%AF%95/hls-downloader/desktop_ui/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 1m 19s
+8 actionable tasks: 4 executed, 4 up-to-date
+Configuration cache entry reused.

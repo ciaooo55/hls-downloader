@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.UiConvergenceGuardTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:20.535Z" hostname="DESKTOP-FTE6QH2" time="0.393">
+  <properties/>
+  <testcase name="line_heights_come_from_the_type_scale_only()" classname="com.hlsdownloader.desktop.UiConvergenceGuardTest" time="0.127"/>
+  <testcase name="every_scrollbar_wears_the_shared_style()" classname="com.hlsdownloader.desktop.UiConvergenceGuardTest" time="0.023"/>
+  <testcase name="press_feedback_is_applied_through_the_shared_modifier_only()" classname="com.hlsdownloader.desktop.UiConvergenceGuardTest" time="0.186"/>
+  <testcase name="the_shared_modifier_still_applies_all_three_feedback_steps_in_order()" classname="com.hlsdownloader.desktop.UiConvergenceGuardTest" time="0.005"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

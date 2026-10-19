@@ -5,7 +5,7 @@ import { subtitlePage, subtitleSettings, visibleSubtitle, type SubtitleCue, type
 
 export function installSubtitleContent(ctx: { onInvalidated(callback: () => void): void },
   resolveSource: (media: HTMLMediaElement) => MediaResource | undefined): (node: ParentNode) => void {
-  const players = new Map<HTMLMediaElement, { id: string; host: HTMLElement; button: HTMLButtonElement; caption: HTMLElement; source: HTMLElement; status: HTMLElement; back: HTMLButtonElement; next: HTMLButtonElement; earlier: HTMLButtonElement; later: HTMLButtonElement; hold: HTMLButtonElement }>()
+  const players = new Map<HTMLMediaElement, { id: string; host: HTMLElement; button: HTMLButtonElement; caption: HTMLElement; source: HTMLElement; status: HTMLElement; options: HTMLDetailsElement; back: HTMLButtonElement; next: HTMLButtonElement; earlier: HTMLButtonElement; later: HTMLButtonElement; hold: HTMLButtonElement }>()
   let nextId = 0
   const documentId = [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-')
   let settings: SubtitleSettings = subtitleSettings(null)
@@ -92,9 +92,12 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const style = document.createElement('style')
     // 播放器顶行留给下载和更多操作；窄播放器也不能让字幕工具栏遮住它们。
     style.textContent = `:host{position:fixed;z-index:2147483646;pointer-events:none;display:block;box-sizing:border-box}
-      *{box-sizing:border-box} .tools{position:absolute;right:8px;top:50px;display:flex;justify-content:flex-end;gap:4px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 16px);pointer-events:auto;font:12px system-ui;color:white}
+      *{box-sizing:border-box} [hidden]{display:none!important} .tools{position:absolute;right:8px;top:50px;display:flex;justify-content:flex-end;gap:4px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 16px);pointer-events:auto;font:12px system-ui;color:white}
       button{border:1px solid #596675;border-radius:5px;padding:5px 8px;background:#17202ee8;color:#fff;cursor:pointer;font:12px system-ui}button:hover{background:#285379}button:disabled{opacity:.65;cursor:default}
-      .status{padding:4px 6px;background:#111b;border-radius:4px;max-width:300px;white-space:normal}
+      button:focus-visible,summary:focus-visible{outline:2px solid #9ac5ff;outline-offset:2px}
+      details{position:relative}summary{padding:5px 7px;border:1px solid #596675;border-radius:5px;background:#17202ee8;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}
+      .options{position:absolute;right:0;top:32px;width:220px;max-width:calc(100vw - 24px);display:flex;flex-wrap:wrap;gap:5px;padding:8px;border:1px solid #596675;border-radius:7px;background:#17202ef5;box-shadow:0 4px 16px #0006}
+      .status{padding:4px 6px;background:#111b;border-radius:4px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .captions{position:absolute;bottom:48px;left:5%;width:90%;text-align:center;font:600 clamp(15px,2vw,24px)/1.4 system-ui;color:#fff;text-shadow:0 1px 3px #000;white-space:pre-wrap;overflow-wrap:anywhere}
       .line{display:table;margin:2px auto;padding:2px 8px;background:#000b;border-radius:4px}.line:empty{display:none}.source{font-size:.76em;font-weight:400;color:#eee}`
     const tools = document.createElement('div'); tools.className = 'tools'
@@ -120,20 +123,26 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const later = button('延后 0.2s', () => offset(0.2))
     const hold = button('保持暂停', () => { resumeAfterPrepare = false; render() })
     hold.title = '字幕准备完成后保持暂停，由你手动播放'
+    const options = document.createElement('details')
+    const summary = document.createElement('summary'); summary.textContent = '选项'; summary.setAttribute('aria-label', '字幕选项')
+    const extra = document.createElement('div'); extra.className = 'options'
+    extra.append(back, next, earlier, later, hold)
+    options.append(summary, extra)
+    options.addEventListener('click', event => event.stopPropagation())
+    options.addEventListener('keydown', event => { if (event.key === 'Escape' && options.open) { options.open = false; summary.focus(); event.stopPropagation() } })
     const state = document.createElement('span'); state.className = 'status'; state.setAttribute('role', 'status')
-    tools.append(start, back, next, earlier, later, hold, state)
+    tools.append(start, options, state)
     const captions = document.createElement('div'); captions.className = 'captions'; captions.setAttribute('aria-live', 'polite')
     const source = document.createElement('div'); source.className = 'line source'
     const caption = document.createElement('div'); caption.className = 'line translation'
     captions.append(source, caption); shadow.append(style, tools, captions)
     document.documentElement.append(host)
-    players.set(media, { id, host, button: start, caption, source, status: state, back, next, earlier, later, hold })
+    players.set(media, { id, host, button: start, caption, source, status: state, options, back, next, earlier, later, hold })
   }
   const inventory = async () => {
     if (invalidated || reporting) return
     reporting = true
     try {
-      document.querySelectorAll<HTMLMediaElement>('video,audio').forEach(add)
       for (const [media, ui] of players) if (!media.isConnected) { ui.host.remove(); players.delete(media) }
       const values = [...players].map(([media, ui]) => {
         const rect = media.getBoundingClientRect()
@@ -181,6 +190,14 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
         }
       }
     }
+    let canPrevious = false
+    let canNext = false
+    if (allowed && selected) for (const cue of cues.values()) {
+      if (!cue.final || !cue.translation) continue
+      if (cue.start + settings.offset < selected.currentTime - .5) canPrevious = true
+      if (cue.start + settings.offset > selected.currentTime + .5) canNext = true
+      if (canPrevious && canNext) break
+    }
     for (const [media, ui] of players) {
       const rect = media.getBoundingClientRect()
       // Firefox 的原生音频文档以 40px VIDEO 呈现，紧凑控件也需要字幕显示空间。
@@ -194,6 +211,8 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       ui.host.style.left = `${rect.left}px`; ui.host.style.top = `${rect.top}px`
       ui.host.style.width = `${rect.width}px`; ui.host.style.height = `${Math.max(rect.height, 110)}px`
       const active = selected === media && !['stopped', 'failed'].includes(status)
+      ui.options.hidden = !allowed || !active && !(selected === media && cues.size)
+      if (ui.options.hidden) ui.options.open = false
       ui.back.hidden = ui.next.hidden = !allowed || !active && !(selected === media && cues.size)
       ui.earlier.hidden = ui.later.hidden = !active
       ui.hold.hidden = !active || selected !== media || !preparing || !resumeAfterPrepare
@@ -202,7 +221,8 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       ui.button.textContent = !allowed ? '字幕翻译已关闭' : active ? '停止翻译' : '翻译字幕'
       ui.button.title = !allowed ? '在 HLS 插件弹窗中开启字幕翻译，检查全局、本站和本页开关' : '在线翻译当前播放器音频'
       ui.status.textContent = selected !== media ? '' : error || (active ? status === 'running'
-        ? `${capture === 'prefetch' ? `${preparing ? '正在准备字幕' : '提前翻译'} · 已备好 ${Math.max(0, readyEnd - media.currentTime).toFixed(1)} 秒` : media.paused || media.ended ? '等待播放器播放' : '翻译中'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
+        ? `${capture === 'prefetch' ? `${preparing ? '等待字幕' : '同步字幕'} · 已备好 ${Math.max(0, readyEnd - media.currentTime).toFixed(1)} 秒` : media.paused || media.ended ? '等待播放' : '实时翻译'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
+      ui.status.title = ui.status.textContent || ''
       const cue = allowed && selected === media ? visibleSubtitle(cues.values(), media.currentTime, settings.offset) : undefined
       // 同传有服务端延迟，最新译文在抵达后短暂显示；回看仍严格使用音频时间轴。
       const recent = capture !== 'prefetch' && allowed && active && live && Date.now() >= live.at + Math.max(0, settings.offset * 1000)
@@ -210,8 +230,8 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       const shown = cue || recent
       ui.caption.textContent = shown?.translation || ''
       ui.source.textContent = settings.showSource ? shown?.source || '' : ''
-      ui.back.disabled = !allowed || selected !== media || ![...cues.values()].some(c => c.final && c.translation && c.start + settings.offset < media.currentTime - .5)
-      ui.next.disabled = !allowed || selected !== media || ![...cues.values()].some(c => c.final && c.translation && c.start + settings.offset > media.currentTime + .5)
+      ui.back.disabled = selected !== media || !canPrevious
+      ui.next.disabled = selected !== media || !canNext
     }
   }
   const onPlay = (event: Event) => {
@@ -292,10 +312,17 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   document.addEventListener('fullscreenchange', render)
   window.addEventListener('scroll', render, { passive: true })
   window.addEventListener('resize', render)
-  const inventoryTimer = setInterval(() => void inventory(), 2000)
+  let inventoryTimer: ReturnType<typeof setTimeout> | undefined
+  const scheduleInventory = () => {
+    if (invalidated) return
+    const active = selected && !['stopped', 'failed'].includes(status)
+    inventoryTimer = setTimeout(() => { void inventory().finally(scheduleInventory) }, active || allowed && players.size > 0 ? 2000 : 10_000)
+  }
+  document.querySelectorAll<HTMLMediaElement>('video,audio').forEach(add)
   void inventory()
+  scheduleInventory()
   ctx.onInvalidated(() => {
-    invalidated = true; clearInterval(inventoryTimer); clearInterval(clockTimer)
+    invalidated = true; clearTimeout(inventoryTimer); clearInterval(clockTimer)
     stopCapture?.(); browser.runtime.onMessage.removeListener(listener)
     selected?.removeEventListener('seeking', reset); selected?.removeEventListener('ratechange', rateChanged)
     document.removeEventListener('play', onPlay, true); document.removeEventListener('playing', onPlay, true)

@@ -1,0 +1,9 @@
+powershell.exe : At line:1 char:22
+At C:\HLSValidation\single-task\rerun.ps1:24 char:5
++     & powershell.exe -NoProfile -NonInteractive -Command '[Console]:: ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (At line:1 char:22:String) [], Rem 
+   oteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+

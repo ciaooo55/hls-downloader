@@ -1,0 +1,686 @@
+{
+  "schema": 1,
+  "measured_at": "2026-10-18T11:50:23.0276325Z",
+  "source_base_commit": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "source_state": "uncommitted local candidate",
+  "baseline_release": "7.0.3-r12",
+  "baseline_source_commit": "36af74606f3d5398ba9e767251f0fc7cdeef939d",
+  "environment": {
+    "new_branches": 0,
+    "networking": "disabled; loopback fixtures only",
+    "new_worktrees": 0,
+    "new_msi": false,
+    "host_product_installations": 0,
+    "cloud_calls": 0,
+    "product_execution": "Windows Sandbox only"
+  },
+  "candidate_components": {
+    "HLSDownloaderNativeHost.exe": {
+      "sha256": "95e73bed7b3204d79eedd5f8c1b0c286e58bc29eb62d4db2fac3048cc0be0d9a",
+      "bytes": 3769856
+    },
+    "HLSDownloaderDesktop-7.0.3.jar": {
+      "sha256": "e8b2d0b1d1f47599b4d29195b9480ac8df61c205121a6533a62150ee5099d799",
+      "bytes": 1694248
+    },
+    "HLSDownloaderUpdater.exe": {
+      "sha256": "eeb341db631b161524cb1440d0a73e3a32fa5035d4063888f39cd1aa1041b302",
+      "bytes": 2251264
+    },
+    "HLSDownloaderEngine.exe": {
+      "sha256": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b",
+      "bytes": 14572032
+    }
+  },
+  "source_hashes": {
+    "native_shell/src/torrent_engine.rs": "2064776463b1319db7c18e4b07f6b86107587c56c1e06b6c5ca7ed1ab6faa73a",
+    "native_shell/src/core_service.rs": "a6d5f1024449ad6fa6b321aca3b89d3ce2d530c3435c845ce45ddc55290cc91f",
+    "native_shell/src/player.rs": "0ba3005e868fe47d78942a85a9f6ec50310cca74182e1a250c5502325147bfb6",
+    "native_shell/src/download_worker.rs": "b874151b93de749eb1cd4faad6f7d9a3e43634f4ed166a12086652520aa79236",
+    "native_shell/src/media/dash.rs": "2586af5ffdc5a0577722b48e8c2f68fa81450b2dc080342be52041ad793888f8",
+    "native_shell/src/media/hls.rs": "293660d47a3ec484baafef6b4d684eef788ba8fd5bbbe8ebb09403a1fd9a6f33",
+    "native_shell/src/core_server.rs": "1054ac4087be47c35a41190202bebaaf697cae92a6477b7a7f147b8bfa6414a6",
+    "native_shell/src/playback.rs": "48f5e3f06e9c0f067f377321185d510c65a289198872dea698d7811f66c37b47",
+    "native_shell/src/core_runtime.rs": "07db3cc4d1aece2e6d3de6aa9df06b968570fd02ed875b9ef5557ba6219dff03",
+    "native_shell/src/media/merge.rs": "02d34191a298d75af23d3ce4be5e22558560b6f4565930f7571bbff59942d8c2",
+    "extension/lib/nativeBridge.ts": "bfba6f93c73b97fbf3cc1201e1aece6586c4eb44dcebe335227bb318efbfc593",
+    "extension/lib/subtitleContent.ts": "e5bffad1453cf0327c3caf1caf3688b722427734ffbca40065da0ff729f80e5e"
+  },
+  "regressions": {
+    "desktop": {
+      "passed": 126,
+      "thousand_task_model_p95_ms": 17.909,
+      "failed": 0
+    },
+    "presenter": {
+      "passed": 9,
+      "failed": 0
+    },
+    "builds": [
+      "Core/Host/Updater release",
+      "Core/Presenter test binaries",
+      "desktop test/JAR",
+      "Chromium",
+      "Firefox"
+    ],
+    "extension": {
+      "passed": 381,
+      "failed": 0,
+      "files": 50
+    },
+    "core": {
+      "passed": 611,
+      "seconds": 42.46,
+      "failed": 0,
+      "ignored_in_full_run": 4
+    },
+    "hls_resume_isolated": {
+      "runs": 3,
+      "failed": 0
+    },
+    "real_ffmpeg_control": {
+      "passed": 1,
+      "exit_code": 0
+    }
+  },
+  "ignored_not_executed": [
+    "av_scan::tests::scanner_timeout_fixture",
+    "subtitle_audio_source::tests::decode_disguised_hls_audio",
+    "updater::tests::elevated_installer_returns_the_real_exit_code"
+  ],
+  "download_playback": {
+    "passed": true,
+    "engine_sha256": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b",
+    "performance": {
+      "core_idle": {
+        "elapsed_seconds": 3.0159999999999627,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "rss_sum_bytes": 12865536,
+        "processes": {
+          "1820": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.0,
+            "rss": 12865536,
+            "private": 2924544
+          }
+        }
+      },
+      "downloading": {
+        "elapsed_seconds": 3.0159999999999627,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "rss_sum_bytes": 15523840,
+        "processes": {
+          "1820": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.03125,
+            "rss": 15523840,
+            "private": 4583424
+          }
+        }
+      },
+      "downloading_and_playing": {
+        "elapsed_seconds": 3.0,
+        "cpu_one_core_percent": 1.0416666666666665,
+        "cpu_machine_percent": 0.13020833333333331,
+        "rss_sum_bytes": 159739904,
+        "processes": {
+          "1820": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.15625,
+            "rss": 17170432,
+            "private": 6209536
+          },
+          "6504": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.796875,
+            "rss": 142569472,
+            "private": 163119104
+          }
+        }
+      }
+    },
+    "checks": [
+      "ts: thumbnail leaves playback position, pause and speed unchanged",
+      "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+      "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+      "fmp4: thumbnail leaves playback position, pause and speed unchanged",
+      "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+      "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+      "aes: thumbnail leaves playback position, pause and speed unchanged",
+      "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+      "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+      "external: thumbnail leaves playback position, pause and speed unchanged",
+      "external: unfinished download decodes, exposes full duration and seeks to 80%",
+      "external: same-window final switch; complete decode; cache removed; delete preserves output",
+      "dash: thumbnail leaves playback position, pause and speed unchanged",
+      "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+      "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+      "http: thumbnail leaves playback position, pause and speed unchanged",
+      "http: unfinished download decodes, exposes full duration and seeks to 80%",
+      "http: same-window final switch; complete decode; cache removed; delete preserves output",
+      "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+      "closing playback during download stays closed after completion and allows cleanup",
+      "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output"
+    ]
+  },
+  "http_boundaries": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "signed-redirect-cookie-referer-complete-sha256",
+        "actual": true
+      },
+      {
+        "name": "actual-post-body-download-sha256",
+        "actual": true
+      },
+      {
+        "name": "http-403-fails-with-visible-task-error",
+        "actual": "HTTP 403"
+      },
+      {
+        "name": "failed-http-download-retry-recovers-sha256",
+        "actual": true
+      },
+      {
+        "name": "http-404-fails-with-visible-task-error",
+        "actual": "HTTP 404"
+      },
+      {
+        "name": "actual-http-connection-loss-visible-error-and-retry-sha256",
+        "actual": true
+      },
+      {
+        "name": "login-html-never-published-as-video",
+        "actual": true
+      },
+      {
+        "name": "browser-media-mime-survives-opaque-filename",
+        "actual": true
+      },
+      {
+        "name": "offer-confirmation-preserves-media-mime-and-rejects-html-without-extension",
+        "actual": true
+      },
+      {
+        "name": "intentional-html-file-download-still-works",
+        "actual": true
+      },
+      {
+        "name": "invalid-save-directory-visible-error-preserves-existing-file",
+        "actual": "create task directory: 当文件已存在时，无法创建该文件。 (os error 183)"
+      },
+      {
+        "name": "invalid-directory-task-does-not-block-following-download",
+        "actual": true
+      },
+      {
+        "name": "actual-core-restart-preserves-paused-task-and-resumes-sha256",
+        "actual": true
+      }
+    ],
+    "engine_sha256": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b"
+  },
+  "http_stall": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "single: stalled pause/resume",
+        "pause_seconds": 0.03100000000000591,
+        "resume_seconds": 0.39100000000001955
+      },
+      {
+        "name": "single: complete, SHA-256 verified, cache removed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "parallel: stalled pause/resume",
+        "pause_seconds": 0.03100000000000591,
+        "resume_seconds": 0.26600000000001955
+      },
+      {
+        "name": "parallel: complete, SHA-256 verified, cache removed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "delete while all connections are stalled removes task/cache",
+        "seconds": 0.10899999999998045
+      },
+      {
+        "name": "gap: complete, SHA-256 verified, cache removed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    ],
+    "engine_sha256": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b"
+  },
+  "core_soak": {
+    "candidate": {
+      "schema": 1,
+      "engine": "C:\\HLSRuntime\\app\\resources\\HLSDownloaderEngine.exe",
+      "idle": {
+        "actual_seconds": 30,
+        "samples": 31,
+        "working_set_start_mib": 11.852,
+        "working_set_end_mib": 11.887,
+        "working_set_growth_mib": 0.035,
+        "private_start_mib": 2.652,
+        "private_end_mib": 2.691,
+        "private_growth_mib": 0.039,
+        "handles_start": 206,
+        "handles_end": 207,
+        "handle_growth": 1,
+        "cpu_percent": 0.052
+      },
+      "stress": {
+        "request_count": 1000,
+        "actual_seconds": 0.172,
+        "equivalent_seconds_at_requested_rate": 100.0,
+        "throughput_requests_per_second": 5813.95,
+        "ipc_mean_ms": 0.184,
+        "ipc_p95_ms": 0.253,
+        "ipc_p99_ms": 0.474,
+        "ipc_max_ms": 0.631,
+        "working_set_growth_mib": 0.0,
+        "private_growth_mib": 0.0,
+        "handle_growth": 0,
+        "cpu_percent": 9.084,
+        "errors": []
+      },
+      "settled": {
+        "elapsed_seconds": 35.484,
+        "working_set_mib": 11.887,
+        "private_mib": 2.691,
+        "handles": 207,
+        "cpu_seconds": 0.046875
+      },
+      "thresholds": {
+        "idle_working_set_growth_mib": 8,
+        "idle_private_growth_mib": 8,
+        "idle_handle_growth": 4,
+        "idle_cpu_percent": 2,
+        "stress_working_set_growth_mib": 16,
+        "stress_private_growth_mib": 16,
+        "stress_handle_growth": 4,
+        "ipc_p95_ms": 75,
+        "ipc_max_ms": 500,
+        "errors": 0
+      },
+      "engine_alive_at_end": true,
+      "passed": true
+    },
+    "baseline": {
+      "schema": 1,
+      "engine": "C:\\HLSPrevious\\baseline-image\\HLSDownloader\\app\\resources\\HLSDownloaderEngine.exe",
+      "idle": {
+        "actual_seconds": 30,
+        "samples": 31,
+        "working_set_start_mib": 11.906,
+        "working_set_end_mib": 11.945,
+        "working_set_growth_mib": 0.039,
+        "private_start_mib": 2.672,
+        "private_end_mib": 2.734,
+        "private_growth_mib": 0.062,
+        "handles_start": 206,
+        "handles_end": 207,
+        "handle_growth": 1,
+        "cpu_percent": 0.052
+      },
+      "stress": {
+        "request_count": 1000,
+        "actual_seconds": 0.14,
+        "equivalent_seconds_at_requested_rate": 100.0,
+        "throughput_requests_per_second": 7142.86,
+        "ipc_mean_ms": 0.15,
+        "ipc_p95_ms": 0.257,
+        "ipc_p99_ms": 0.335,
+        "ipc_max_ms": 0.512,
+        "working_set_growth_mib": 0.0,
+        "private_growth_mib": 0.0,
+        "handle_growth": 0,
+        "cpu_percent": 0.0,
+        "errors": []
+      },
+      "settled": {
+        "elapsed_seconds": 35.453,
+        "working_set_mib": 11.945,
+        "private_mib": 2.734,
+        "handles": 207,
+        "cpu_seconds": 0.046875
+      },
+      "thresholds": {
+        "idle_working_set_growth_mib": 8,
+        "idle_private_growth_mib": 8,
+        "idle_handle_growth": 4,
+        "idle_cpu_percent": 2,
+        "stress_working_set_growth_mib": 16,
+        "stress_private_growth_mib": 16,
+        "stress_handle_growth": 4,
+        "ipc_p95_ms": 75,
+        "ipc_max_ms": 500,
+        "errors": 0
+      },
+      "engine_alive_at_end": true,
+      "passed": true
+    }
+  },
+  "thousand_task_progress": {
+    "candidate": {
+      "tasks": 1000,
+      "event_ring_warmup": 4100,
+      "commits": 1000,
+      "p50_ms": 1.261,
+      "p95_ms": 2.534,
+      "max_ms": 310.404,
+      "elapsed_seconds": 2.127,
+      "cpu_seconds": 0.938,
+      "cpu_one_core_percent": 44.084,
+      "rss_start_mib": 32.891,
+      "rss_end_mib": 35.148
+    },
+    "sha256": {
+      "baseline": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "candidate": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b"
+    },
+    "baseline": {
+      "tasks": 1000,
+      "event_ring_warmup": 4100,
+      "commits": 1000,
+      "p50_ms": 32.902,
+      "p95_ms": 47.55,
+      "max_ms": 158.055,
+      "elapsed_seconds": 36.771,
+      "cpu_seconds": 34.547,
+      "cpu_one_core_percent": 93.952,
+      "rss_start_mib": 52.602,
+      "rss_end_mib": 54.258
+    },
+    "passed": true
+  },
+  "player_recovery": {
+    "passed": true,
+    "scope": "r12 released engine versus local candidate; same VM/fixture",
+    "sha256": {
+      "baseline": "7dc587285078fedd8ddee1bac1ad96047b00ae5a6cfcf4ba12e55a38a8cccafa",
+      "candidate": "f2812a67a6be2c40d59551e44e6e95cd5ed66cd5d91d52eac8d6e359f615b19b"
+    },
+    "suspended_player": {
+      "timeout_seconds": 10.048,
+      "concurrent_snapshot_ms": 0.353,
+      "old_pid": 5920,
+      "replacement_pid": 1944,
+      "passed": true
+    }
+  },
+  "transfer_comparison": {
+    "candidate": {
+      "median_throughput_mib_s": 66.15,
+      "rounds": [
+        {
+          "schema": 1,
+          "stage_volume": "C:",
+          "payload_bytes": 268435456,
+          "elapsed_ms": 2564.12,
+          "throughput_mib_s": 99.84,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "range_requests": 32,
+          "full_requests": 0,
+          "requested_range_bytes": 268435456,
+          "unique_requested_range_bytes": 268435456,
+          "overlapping_requested_range_bytes": 0,
+          "bytes_sent_at_publish": 268435456,
+          "post_publish_extra_network_bytes": 0,
+          "baseline_working_set_mib": 12.23,
+          "peak_working_set_mib": 23.41,
+          "settled_working_set_mib": 16.0,
+          "working_set_growth_mib": 11.18,
+          "thresholds": {
+            "minimum_local_throughput_mib_s": 20,
+            "maximum_working_set_growth_mib": 256,
+            "post_publish_extra_network_bytes": 0
+          },
+          "passed": true
+        },
+        {
+          "schema": 1,
+          "stage_volume": "C:",
+          "payload_bytes": 268435456,
+          "elapsed_ms": 4252.32,
+          "throughput_mib_s": 60.2,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "range_requests": 32,
+          "full_requests": 0,
+          "requested_range_bytes": 268435456,
+          "unique_requested_range_bytes": 268435456,
+          "overlapping_requested_range_bytes": 0,
+          "bytes_sent_at_publish": 268435456,
+          "post_publish_extra_network_bytes": 0,
+          "baseline_working_set_mib": 12.24,
+          "peak_working_set_mib": 22.14,
+          "settled_working_set_mib": 16.0,
+          "working_set_growth_mib": 9.9,
+          "thresholds": {
+            "minimum_local_throughput_mib_s": 20,
+            "maximum_working_set_growth_mib": 256,
+            "post_publish_extra_network_bytes": 0
+          },
+          "passed": true
+        },
+        {
+          "schema": 1,
+          "stage_volume": "C:",
+          "payload_bytes": 268435456,
+          "elapsed_ms": 3870.23,
+          "throughput_mib_s": 66.15,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "range_requests": 32,
+          "full_requests": 0,
+          "requested_range_bytes": 268435456,
+          "unique_requested_range_bytes": 268435456,
+          "overlapping_requested_range_bytes": 0,
+          "bytes_sent_at_publish": 268435456,
+          "post_publish_extra_network_bytes": 0,
+          "baseline_working_set_mib": 12.25,
+          "peak_working_set_mib": 21.94,
+          "settled_working_set_mib": 15.97,
+          "working_set_growth_mib": 9.69,
+          "thresholds": {
+            "minimum_local_throughput_mib_s": 20,
+            "maximum_working_set_growth_mib": 256,
+            "post_publish_extra_network_bytes": 0
+          },
+          "passed": true
+        }
+      ]
+    },
+    "baseline": {
+      "median_throughput_mib_s": 65.53,
+      "rounds": [
+        {
+          "schema": 1,
+          "stage_volume": "C:",
+          "payload_bytes": 268435456,
+          "elapsed_ms": 3016.76,
+          "throughput_mib_s": 84.86,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "range_requests": 32,
+          "full_requests": 0,
+          "requested_range_bytes": 268435456,
+          "unique_requested_range_bytes": 268435456,
+          "overlapping_requested_range_bytes": 0,
+          "bytes_sent_at_publish": 268435456,
+          "post_publish_extra_network_bytes": 0,
+          "baseline_working_set_mib": 12.3,
+          "peak_working_set_mib": 23.41,
+          "settled_working_set_mib": 16.15,
+          "working_set_growth_mib": 11.11,
+          "thresholds": {
+            "minimum_local_throughput_mib_s": 20,
+            "maximum_working_set_growth_mib": 256,
+            "post_publish_extra_network_bytes": 0
+          },
+          "passed": true
+        },
+        {
+          "schema": 1,
+          "stage_volume": "C:",
+          "payload_bytes": 268435456,
+          "elapsed_ms": 4166.53,
+          "throughput_mib_s": 61.44,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "range_requests": 32,
+          "full_requests": 0,
+          "requested_range_bytes": 268435456,
+          "unique_requested_range_bytes": 268435456,
+          "overlapping_requested_range_bytes": 0,
+          "bytes_sent_at_publish": 268435456,
+          "post_publish_extra_network_bytes": 0,
+          "baseline_working_set_mib": 12.24,
+          "peak_working_set_mib": 22.18,
+          "settled_working_set_mib": 16.01,
+          "working_set_growth_mib": 9.94,
+          "thresholds": {
+            "minimum_local_throughput_mib_s": 20,
+            "maximum_working_set_growth_mib": 256,
+            "post_publish_extra_network_bytes": 0
+          },
+          "passed": true
+        },
+        {
+          "schema": 1,
+          "stage_volume": "C:",
+          "payload_bytes": 268435456,
+          "elapsed_ms": 3906.34,
+          "throughput_mib_s": 65.53,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "range_requests": 32,
+          "full_requests": 0,
+          "requested_range_bytes": 268435456,
+          "unique_requested_range_bytes": 268435456,
+          "overlapping_requested_range_bytes": 0,
+          "bytes_sent_at_publish": 268435456,
+          "post_publish_extra_network_bytes": 0,
+          "baseline_working_set_mib": 12.27,
+          "peak_working_set_mib": 20.88,
+          "settled_working_set_mib": 15.97,
+          "working_set_growth_mib": 8.6,
+          "thresholds": {
+            "minimum_local_throughput_mib_s": 20,
+            "maximum_working_set_growth_mib": 256,
+            "post_publish_extra_network_bytes": 0
+          },
+          "passed": true
+        }
+      ]
+    }
+  },
+  "footprint": {
+    "candidate_bytes": 472804740,
+    "baseline_bytes": 472749939,
+    "delta_bytes": 54801,
+    "extensions": "archives remain baseline; browser smoke uses current unpacked build",
+    "kind": "staged runtime image; no new MSI"
+  },
+  "browser": {
+    "passed": true,
+    "family": "Edge/Chromium headless production popup"
+  },
+  "subtitles": {
+    "prefetch": {
+      "passed": true,
+      "browser": "edge",
+      "headed": false,
+      "capture": "prefetch",
+      "player_dom": "nested-shadow",
+      "cross_origin": false,
+      "provider": "fixture Core, cloud accuracy not tested",
+      "idle_reconnect_verified": false,
+      "audio_frames": 206,
+      "nonzero_samples": 819880,
+      "seek_resets": 4,
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "fixture PCM prefetch in real browser",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI",
+        "manual commit waits for completed translation",
+        "originally paused player stays paused",
+        "PCM positions remain accurate during page thread stall",
+        "bounded pretranslation stops PCM",
+        "next cue seeks into prepared cache",
+        "missing subtitles pause actual playback",
+        "hold-pause prevents automatic resume",
+        "seek while playing resumes only after translation is ready"
+      ]
+    },
+    "element": {
+      "passed": true,
+      "browser": "edge",
+      "headed": false,
+      "capture": "element",
+      "player_dom": "dynamic-shadow",
+      "cross_origin": false,
+      "provider": "fixture Core, cloud accuracy not tested",
+      "idle_reconnect_verified": false,
+      "audio_frames": 23,
+      "nonzero_samples": 83819,
+      "seek_resets": 2,
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "real browser audio + AudioWorklet",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI"
+      ]
+    }
+  },
+  "initial_failures": [
+    "First Core run: missing copied icon fixture and one HLS first-segment 15-second timeout. Clean sandbox full rerun and three isolated HLS reruns passed; no production HLS workaround added.",
+    "Runner initially treated expected stderr as fatal, then failed to retain exit codes. Final runner retains process handles; final exit codes are recorded.",
+    "Resource fixture first submitted an unknown setting; fixed to assert the supported settings batch.",
+    "Player fixture initially used a published file outside its allowed download root; Core rejected it. Final fixture uses its own download root and passed."
+  ],
+  "media_connections": {
+    "slow_readers": 32,
+    "overflow_connection_rejected": true,
+    "write_timeout_releases_slots": true,
+    "test": "playback::tests::slow_readers_fill_connection_limit_then_time_out_and_release_slots",
+    "passed": true
+  },
+  "limits": [
+    "Single Windows Sandbox on this machine; not a cross-hardware guarantee.",
+    "1000-task benchmark is one measured sample per binary; max latency rose from 158.055 to 310.404 ms despite lower P95.",
+    "Three alternating 256 MiB local transfers; do not infer Internet/site throughput from them.",
+    "Footprint compares staged runtime images. No new MSI was built or installed; staged extension archives remain r12, while browser validation uses current unpacked builds.",
+    "No real cloud, physical casting/TVBox, UAC installer test or multi-hour soak.",
+    "Committed-worker notification and shutdown each have Core regressions; this run did not separately exercise concurrent long-poll waiters during shutdown."
+  ],
+  "cleanup": {
+    "sandbox_closed": true,
+    "temporary_folder": ".tool-cache/backend-validation",
+    "temporary_folder_removed": false,
+    "reason": "Automatic approval rejected the scoped removal: blocked by policy; no bypass attempted."
+  }
+}

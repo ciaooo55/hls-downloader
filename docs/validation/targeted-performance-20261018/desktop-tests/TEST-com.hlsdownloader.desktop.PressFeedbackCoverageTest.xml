@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.PressFeedbackCoverageTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:17.453Z" hostname="DESKTOP-FTE6QH2" time="0.107">
+  <properties/>
+  <testcase name="every_clickable_surface_feeds_an_interaction_source_that_reads_the_pressed_state()" classname="com.hlsdownloader.desktop.PressFeedbackCoverageTest" time="0.104"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

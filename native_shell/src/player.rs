@@ -5,11 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Mutex};
 
 pub const PLAYER_WINDOW_TITLE: &str = "HLS Downloader 播放器";
+const PLAYER_FRAME_LIMIT: usize = 1024 * 1024;
+const PLAYER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(test)]
 // 播放器和 Core 控制测试共享此环境变量，修改和使用必须在同一个锁内。
@@ -58,14 +60,14 @@ enum Backend {
 
 struct PlayerChild {
     process: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    requests: Option<mpsc::SyncSender<String>>,
+    responses: mpsc::Receiver<Result<String, String>>,
+    io_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for PlayerChild {
     fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
+        self.terminate();
     }
 }
 
@@ -325,7 +327,10 @@ impl Player {
                 .request("metadata", None)
                 .ok()
                 .and_then(|value| serde_json::from_value(value).ok())
-                .unwrap_or_default();
+                .unwrap_or_else(|| PlayerMetadata {
+                    session_active: Some(false),
+                    ..PlayerMetadata::default()
+                });
         }
         if matches!(&*inner, Backend::Mpv(session) if mpv_has_shutdown(session)) {
             *inner = Backend::Idle;
@@ -529,10 +534,12 @@ impl Player {
 
     fn ensure_backend(&self, inner: &mut Backend) -> Result<(), String> {
         // quit 后静态属性仍能读取，必须消费真正的 MPV_EVENT_SHUTDOWN。
-        let shutdown = if let Backend::Mpv(session) = inner {
-            mpv_has_shutdown(session)
-        } else {
-            false
+        let shutdown = match inner {
+            Backend::Mpv(session) => mpv_has_shutdown(session),
+            Backend::Child(child) => {
+                child.requests.is_none() || !matches!(child.process.try_wait(), Ok(None))
+            }
+            Backend::Idle => false,
         };
         if shutdown {
             *inner = Backend::Idle;
@@ -596,7 +603,7 @@ fn spawn_player_child() -> Result<PlayerChild, String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("启动播放器进程失败: {error}"))?;
-    let stdin = process
+    let mut stdin = process
         .stdin
         .take()
         .ok_or_else(|| "播放器 stdin 不可用".to_string())?;
@@ -604,14 +611,66 @@ fn spawn_player_child() -> Result<PlayerChild, String> {
         .stdout
         .take()
         .ok_or_else(|| "播放器 stdout 不可用".to_string())?;
-    Ok(PlayerChild {
-        process,
-        stdin,
-        stdout: BufReader::new(stdout),
-    })
+    let (requests, input) = mpsc::sync_channel::<String>(1);
+    let (output, responses) = mpsc::sync_channel(1);
+    let worker = std::thread::Builder::new()
+        .name("player-io".into())
+        .spawn(move || {
+            let mut stdout = BufReader::new(stdout);
+            while let Ok(line) = input.recv() {
+                let response = (|| {
+                    writeln!(stdin, "{line}")
+                        .and_then(|_| stdin.flush())
+                        .map_err(|error| format!("播放器命令写入失败: {error}"))?;
+                    read_player_frame(&mut stdout)?.ok_or_else(|| "播放器进程已退出".to_string())
+                })();
+                let failed = response.is_err();
+                if output.send(response).is_err() || failed {
+                    break;
+                }
+            }
+        });
+    match worker {
+        Ok(io_thread) => Ok(PlayerChild {
+            process,
+            requests: Some(requests),
+            responses,
+            io_thread: Some(io_thread),
+        }),
+        Err(error) => {
+            let _ = process.kill();
+            let _ = process.wait();
+            Err(format!("无法启动播放器通信线程: {error}"))
+        }
+    }
+}
+
+fn read_player_frame(reader: &mut impl BufRead) -> Result<Option<String>, String> {
+    let mut frame = String::new();
+    let count = reader
+        .take((PLAYER_FRAME_LIMIT + 1) as u64)
+        .read_line(&mut frame)
+        .map_err(|error| format!("播放器帧读取失败: {error}"))?;
+    if count == 0 {
+        return Ok(None);
+    }
+    if count > PLAYER_FRAME_LIMIT || !frame.ends_with('\n') {
+        return Err("播放器帧过大或不完整".into());
+    }
+    Ok(Some(frame))
 }
 
 impl PlayerChild {
+    fn terminate(&mut self) {
+        // 先断开队列，再结束进程，使等待命令、读和写三种状态都能退出。
+        self.requests.take();
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        if let Some(worker) = self.io_thread.take() {
+            let _ = worker.join();
+        }
+    }
+
     fn request(
         &mut self,
         op: &str,
@@ -623,19 +682,29 @@ impl PlayerChild {
             request.extend(fields);
         }
         let line = serde_json::Value::Object(request).to_string();
-        writeln!(self.stdin, "{line}").map_err(|error| format!("播放器命令写入失败: {error}"))?;
-        self.stdin
-            .flush()
-            .map_err(|error| format!("播放器命令刷新失败: {error}"))?;
-        let mut response = String::new();
-        self.stdout
-            .read_line(&mut response)
-            .map_err(|error| format!("播放器响应读取失败: {error}"))?;
-        if response.trim().is_empty() {
-            return Err("播放器进程已退出".into());
+        if line.len() + 1 > PLAYER_FRAME_LIMIT {
+            return Err("播放器请求过大".into());
         }
-        let value: serde_json::Value = serde_json::from_str(&response)
-            .map_err(|error| format!("播放器响应格式无效: {error}"))?;
+        let result = (|| {
+            self.requests
+                .as_ref()
+                .ok_or("播放器连接已关闭")?
+                .try_send(line)
+                .map_err(|_| "播放器通信不可用".to_string())?;
+            let response = self
+                .responses
+                .recv_timeout(PLAYER_REQUEST_TIMEOUT)
+                .map_err(|_| "播放器响应超时或连接已关闭".to_string())??;
+            serde_json::from_str::<serde_json::Value>(&response)
+                .map_err(|error| format!("播放器响应格式无效: {error}"))
+        })();
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => {
+                self.terminate();
+                return Err(error);
+            }
+        };
         if value.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
             return Err(value
                 .get("error")
@@ -674,9 +743,19 @@ pub fn run_player_process() -> i32 {
     // stdin 不阻塞事件处理。视频子 HWND 归此线程，必须持续泵送窗口消息。
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            if sender.send(line).is_err() {
-                break;
+        let mut stdin = std::io::stdin().lock();
+        loop {
+            match read_player_frame(&mut stdin) {
+                Ok(Some(line)) => {
+                    if sender.send(Ok(line)).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
             }
         }
     });
@@ -1024,6 +1103,27 @@ fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_frames_reject_truncation_oversize_and_invalid_utf8() {
+        let mut valid = std::io::Cursor::new(b"{\"ok\":true}\n{\"ok\":false}\n");
+        assert_eq!(
+            read_player_frame(&mut valid).unwrap().unwrap(),
+            "{\"ok\":true}\n"
+        );
+        assert_eq!(
+            read_player_frame(&mut valid).unwrap().unwrap(),
+            "{\"ok\":false}\n"
+        );
+        assert!(read_player_frame(&mut valid).unwrap().is_none());
+        for bytes in [
+            b"{\"ok\":true}".to_vec(),
+            vec![b'x'; PLAYER_FRAME_LIMIT + 1],
+            vec![0xff, b'\n'],
+        ] {
+            assert!(read_player_frame(&mut std::io::Cursor::new(bytes)).is_err());
+        }
+    }
 
     #[test]
     fn null_backend_accepts_embed_and_rejects_invalid_controls() {

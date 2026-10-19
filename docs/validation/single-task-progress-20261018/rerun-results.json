@@ -1,0 +1,34 @@
+[
+    {
+        "exit_code":  0,
+        "name":  "core-rerun"
+    },
+    {
+        "exit_code":  0,
+        "name":  "hls-resume-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "merge-control-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "hls-resume-2"
+    },
+    {
+        "exit_code":  0,
+        "name":  "merge-control-2"
+    },
+    {
+        "exit_code":  0,
+        "name":  "hls-resume-3"
+    },
+    {
+        "exit_code":  0,
+        "name":  "merge-control-3"
+    },
+    {
+        "exit_code":  0,
+        "name":  "real-ffmpeg-control"
+    }
+]

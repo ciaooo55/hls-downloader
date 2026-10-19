@@ -1,0 +1,604 @@
+{
+  "schema": 1,
+  "date": "2026-10-19",
+  "product_version": "7.0.3",
+  "scope": "AB-inspired frontend layout and interaction verification; not full-product recertification",
+  "git_head": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "working_tree": "uncommitted candidate",
+  "passed": true,
+  "desktop": {
+    "test_suites": [
+      {
+        "name": "com.hlsdownloader.desktop.CategoryParityTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.ControlBoundsReportingTest",
+        "tests": 9,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.ProtocolTest",
+        "tests": 25,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.ResponsiveLayoutTest",
+        "tests": 20,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.SelectionPruningTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.TaskIndexTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.UiConvergenceGuardTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0
+      }
+    ],
+    "test_count": 70.0,
+    "build_log": "ab-ui-20261019/desktop-dispatcher-build.log",
+    "jar_sha256": "5D4ED9C6574C5850FA66DEE80FE4AD55DB086A76084091E29D770864DE06D119"
+  },
+  "extension": {
+    "typecheck": "passed",
+    "test_files": 7,
+    "tests_passed": 130,
+    "chromium_build": "passed",
+    "firefox_build": "passed",
+    "chromium_sandbox": "passed",
+    "firefox_sandbox": "passed",
+    "popup_details": {
+      "passed": true,
+      "checks": [
+        "Hover keeps the download button in place",
+        "Tab moves from rescan to download",
+        "Long title stays within two lines without horizontal overflow",
+        "Copy produces success feedback or the explicit manual-copy fallback",
+        "Arrow keys switch tabs; reduced-motion disables panel and button animation",
+        "Browser device scale 1.5 renders without horizontal overflow (not an OS scaling test)"
+      ],
+      "copy_feedback": {
+        "copied": true,
+        "manual": false
+      },
+      "browser_scale": {
+        "dpr": 1.5,
+        "width": 360,
+        "scrollWidth": 360
+      }
+    }
+  },
+  "sandbox": {
+    "networking": "disabled; loopback fixtures only",
+    "desktop_interactions": {
+      "passed": true,
+      "checks": [
+        "Escape closes the right-click menu and preserves selection",
+        "Escape on the task table clears selection after the menu closes",
+        "Ctrl+A and Escape work on the focused task table",
+        "New dialog opens, accepts Tab navigation, and closes with Escape"
+      ],
+      "window": {
+        "x": 59,
+        "y": 0,
+        "width": 1400,
+        "height": 709,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "deviceX": 59,
+        "deviceY": 0,
+        "deviceWidth": 1400,
+        "deviceHeight": 709
+      }
+    },
+    "dark_window": {
+      "x": 0,
+      "y": 0,
+      "width": 1012,
+      "height": 473,
+      "active": true,
+      "showing": true,
+      "iconCount": 1,
+      "iconWidth": 192,
+      "iconHeight": 192,
+      "scaleX": 1.5,
+      "scaleY": 1.5,
+      "deviceX": 0,
+      "deviceY": 0,
+      "deviceWidth": 1518,
+      "deviceHeight": 710
+    },
+    "player_100": {
+      "passed": true,
+      "checks": [
+        "main-window overlay starts real playback and pause button pauses it",
+        "K and Space toggle the real playback session",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "focused volume keys change volume without triggering global seek",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "requested_java_ui_scale": 1.0,
+      "window": {
+        "x": 59,
+        "y": 0,
+        "width": 1400,
+        "height": 709,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.0,
+        "scaleY": 1.0,
+        "deviceX": 59,
+        "deviceY": 0,
+        "deviceWidth": 1400,
+        "deviceHeight": 709
+      },
+      "video_rectangles": {
+        "main": {
+          "expected": [
+            279,
+            128,
+            1239,
+            504
+          ],
+          "actual": [
+            [
+              279,
+              128,
+              1239,
+              504
+            ],
+            [
+              279,
+              128,
+              1239,
+              504
+            ]
+          ]
+        },
+        "fullscreen": {
+          "expected": [
+            0,
+            48,
+            1518,
+            644
+          ],
+          "actual": [
+            [
+              0,
+              48,
+              1518,
+              644
+            ],
+            [
+              0,
+              48,
+              1518,
+              644
+            ]
+          ]
+        },
+        "pip": {
+          "expected": [
+            998,
+            397,
+            1518,
+            584
+          ],
+          "actual": [
+            [
+              998,
+              397,
+              1518,
+              584
+            ],
+            [
+              998,
+              397,
+              1518,
+              584
+            ]
+          ]
+        },
+        "returned-main": {
+          "expected": [
+            279,
+            128,
+            1239,
+            504
+          ],
+          "actual": [
+            [
+              279,
+              128,
+              1239,
+              504
+            ],
+            [
+              279,
+              128,
+              1239,
+              504
+            ]
+          ]
+        }
+      },
+      "thumbnail_pixel_mean_error": 2.6120227146042363
+    },
+    "player_150": {
+      "passed": true,
+      "checks": [
+        "main-window overlay starts real playback and pause button pauses it",
+        "K and Space toggle the real playback session",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "focused volume keys change volume without triggering global seek",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "requested_java_ui_scale": 1.5,
+      "window": {
+        "x": 0,
+        "y": 0,
+        "width": 1012,
+        "height": 473,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.5,
+        "scaleY": 1.5,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1518,
+        "deviceHeight": 710
+      },
+      "video_rectangles": {
+        "main": {
+          "expected": [
+            39,
+            161,
+            1479,
+            434
+          ],
+          "actual": [
+            [
+              39,
+              161,
+              1479,
+              434
+            ],
+            [
+              39,
+              161,
+              1479,
+              434
+            ]
+          ]
+        },
+        "fullscreen": {
+          "expected": [
+            0,
+            72,
+            1518,
+            582
+          ],
+          "actual": [
+            [
+              0,
+              72,
+              1518,
+              582
+            ],
+            [
+              0,
+              72,
+              1518,
+              582
+            ]
+          ]
+        },
+        "pip": {
+          "expected": [
+            738,
+            242,
+            1518,
+            522
+          ],
+          "actual": [
+            [
+              738,
+              241,
+              1518,
+              521
+            ],
+            [
+              738,
+              241,
+              1518,
+              521
+            ]
+          ]
+        },
+        "returned-main": {
+          "expected": [
+            39,
+            161,
+            1479,
+            434
+          ],
+          "actual": [
+            [
+              39,
+              161,
+              1479,
+              434
+            ],
+            [
+              39,
+              161,
+              1479,
+              434
+            ]
+          ]
+        }
+      },
+      "thumbnail_pixel_mean_error": 5.937412904124861
+    },
+    "components": [
+      {
+        "sha256": "5D4ED9C6574C5850FA66DEE80FE4AD55DB086A76084091E29D770864DE06D119",
+        "name": "HLSDownloaderDesktop-7.0.3.jar",
+        "bytes": 1719205
+      },
+      {
+        "sha256": "7DC587285078FEDD8DDEE1BAC1AD96047B00AE5A6CFCF4BA12E55A38A8CCCAFA",
+        "name": "resources\\HLSDownloaderEngine.exe",
+        "bytes": 14513664
+      },
+      {
+        "sha256": "F709C7CA8B183BEC76B8158BF0C45C53018C63366750729352612F228FF7BDEA",
+        "name": "resources\\libmpv-2.dll",
+        "bytes": 119757824
+      },
+      {
+        "sha256": "513368C81583572CE1D09D5C7FF827FEED1A63DB352412A5001F4DA3A1583D98",
+        "name": "resources\\ffmpeg.exe",
+        "bytes": 165155840
+      }
+    ],
+    "backend": "Existing baseline Core, Presenter, FFmpeg and libmpv; current frontend JAR replaced and hashed",
+    "scaling": "Desktop JVM scale 1.0 and 1.5; browser DPR emulation 1.5, not Windows display scaling",
+    "closed": true
+  },
+  "fixes": [
+    "Rounded task rows, progress tracks and focused controls; compact status and completed 100%",
+    "Existing player vector icons, readable labels, dark hover/press/disabled feedback; Tab allowed while preparing",
+    "360px popup, two-line titles, stable hover position, busy state and reduced-motion support",
+    "Escape menu regression: removed the AWT global selection-clear branch that consumed Escape before Compose; menu takes focus and has priority over list shortcuts"
+  ],
+  "attempts": [
+    "First menu focus-only fix and second table-only priority fix both failed real Escape verification; their failed logs retained. AWT dispatcher fix then passed.",
+    "Dark-dialog PowerShell harness read a transient missing control; final Python check waits for the named control and passed.",
+    "Player wrapper stopped on expected fixture HTTP disconnect stderr under PowerShell ErrorActionPreference=Stop. Final execution captures stdout/stderr and checks process exit; both scales passed.",
+    "Volume Right/Home/End regression added and executed against real mpv at both scales.",
+    "Existing workbench smoke script includes menu Escape regression; the complete broad script was not rerun; the focused equivalent flow passed."
+  ],
+  "source_sha256": [
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+      "sha256": "657922630BFE96FD5610F2061940E60FF9C7E3F3133A3C7BA1E912E80B6EB5F6"
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+      "sha256": "24A80B222146624254CEFA5CF83CC265E20034BBDF7CE1EA21940E1B2F348ABD"
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt",
+      "sha256": "C2E350E24058B34552E70AE303A9C6DA116684FDE7E9025AA69AAD439DC386AB"
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt",
+      "sha256": "E8DEC4F49FB76807A2CCAE54D00EC8603C68F18C3EECE7064C96D446ED77DD64"
+    },
+    {
+      "path": "extension/lib/theme.ts",
+      "sha256": "4DBA738F7AE6A8F16EC78497A9257F652DA585EE6246C1B5EDB84883B9B2D64C"
+    },
+    {
+      "path": "extension/lib/resources.ts",
+      "sha256": "E6A0EDEAD0ACB90370F5CC0855213BD8005B4C882C7309F049F9A991524D3DF2"
+    },
+    {
+      "path": "extension/lib/nativeBridge.ts",
+      "sha256": "BFBA6F93C73B97FBF3CC1201E1AECE6586C4EB44DCEBE335227BB318EFBFC593"
+    },
+    {
+      "path": "extension/entrypoints/popup/main.ts",
+      "sha256": "7B4E21F5F9025E241B7D82CE7E2B7506C9A7388378D05E4FF841A01D485C7458"
+    },
+    {
+      "path": "extension/entrypoints/popup/style.css",
+      "sha256": "FD94D67269DAB3E6058A027C11DC6E0C31C39C0F7A120E6607562C75749CC477"
+    },
+    {
+      "path": "scripts/validation/smoke_v7_player_overlay.py",
+      "sha256": "5239A5E5473F67BC7920541D9C0AB6F70539E2D04BCF5D80D2CF0BAF1A57ED8C"
+    },
+    {
+      "path": "scripts/validation/smoke_v7_workbench_interactions.py",
+      "sha256": "6B7B3DCAB589C6F46851609F234A9D5F88C9CA41868FD776C8445557694D6416"
+    }
+  ],
+  "limits": [
+    "No current Core rebuild or full backend regression in this frontend batch",
+    "No cloud audio upload, physical casting/TVBox or public websites in this batch",
+    "No MSI generation, host product install, signing, commit, push or release",
+    "No CPU/memory or installation-size comparison in this batch",
+    "Desktop reduced-motion rendering, all disabled control keyboard paths and player tooltip rendering were not separately exhaustively verified",
+    "Previous cache-cleanup rejection was not retried; build caches remain, so this is not a source-only cleanliness attestation"
+  ],
+  "integration_follow_up": {
+    "passed": true,
+    "scope": "Current Core integration and frontend boundary follow-up; not full-product certification",
+    "core_build": "passed; release locked offline",
+    "desktop_suites": [
+      {
+        "name": "com.hlsdownloader.desktop.ControlBoundsReportingTest",
+        "tests": 9,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.MotionPreferencesTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.UiConvergenceGuardTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "name": "com.hlsdownloader.desktop.UiTestApiTest",
+        "tests": 7,
+        "failures": 0,
+        "errors": 0
+      }
+    ],
+    "desktop_test_count": 22,
+    "workbench": {
+      "passed": true,
+      "checks": 18,
+      "report": "ab-ui-20261019/integration-workbench.json",
+      "jar_sha256": "D9D636FE712E969CBCCCFD2278E3932BC67EE56F6FF7A8FD37626E85168A4D06"
+    },
+    "download_playback_cleanup": {
+      "passed": true,
+      "checks": 27,
+      "report": "ab-ui-20261019/integration-download-playback.json"
+    },
+    "player": {
+      "tooltips_visually_reviewed": true,
+      "scale_150": {
+        "passed": true,
+        "checks": 12,
+        "report": "ab-ui-20261019/integration-player-150.json",
+        "observed_ready_seconds": 2.359,
+        "thumbnail_wait": "Cold hover before reference request; bounded wait for actual matching pixels, unchanged threshold"
+      },
+      "scale_100": {
+        "passed": true,
+        "checks": 12,
+        "report": "ab-ui-20261019/integration-player-100.json",
+        "thumbnail_wait": "Original cold-hover 1.5-second capture passed"
+      }
+    },
+    "components": [
+      {
+        "Path": "C:\\HLSRuntime\\app\\HLSDownloaderDesktop-7.0.3.jar",
+        "Hash": "14943D5286075CB602770DD1B7ACEDE01BD165BDE3EDA8D8E82CAC129F34C525"
+      },
+      {
+        "Path": "C:\\HLSRuntime\\app\\resources\\HLSDownloaderEngine.exe",
+        "Hash": "D86313E6448C248574900A253654EB2E649402D20680819BAB2CC40C15E53C02"
+      }
+    ],
+    "jar_bytes": 1719698,
+    "jar_delta_from_previous_frontend_bytes": 493,
+    "runtime_image": {
+      "Count": 263,
+      "Sum": 472839804
+    },
+    "fixes": [
+      "Disabled text fields no longer show hover/focus borders while busy",
+      "Player hints stay to the left of controls, clear of native video and the close button",
+      "Control registrations track latest layout order so PiP disposal restores current main-window bounds",
+      "Invalid URL Enter and disabled-submit clicks verified against real Core"
+    ],
+    "attempts": [
+      "Initial PowerShell Start-Process -Wait included the restored resident UI; retained report passed, runner stalled. Later wrapper waits for immediate process and retains its handle for exit status.",
+      "First tooltip API signature exposed an experimental Foundation type to unrelated callers; compiler rejected it. Replaced with one behavior option; final build and tests passed.",
+      "Intermediate hint position covered the close button; visual review rejected it. Corrected against the installed positioning implementation.",
+      "150-percent screen assertion mixed AWT logical pixels with device bounds; fixed conversion rather than reducing the threshold.",
+      "PiP return exposed stale test bounds while native video was already correctly placed. Updated registration recency, added deterministic regression and reran playback.",
+      "One 150-percent thumbnail snapshot failed after a fixed delay. Final cold-hover verification waits for the real matching image with the original error threshold; failed evidence retained."
+    ],
+    "source_sha256": [
+      {
+        "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+        "sha256": "657922630BFE96FD5610F2061940E60FF9C7E3F3133A3C7BA1E912E80B6EB5F6"
+      },
+      {
+        "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt",
+        "sha256": "791DB892BA4BC3EECF03804A975E89D730563BF7DBC172FF44F067806770100A"
+      },
+      {
+        "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt",
+        "sha256": "420088635E8F1CE532247536293794A6912BF02E8EFC4CA35F434319AE7E8868"
+      },
+      {
+        "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/UiTestApi.kt",
+        "sha256": "C8A29DD50B55EC1216E2779402F0AD1807F0D5ED195F460B3A4A308579B214C2"
+      },
+      {
+        "path": "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/UiTestApiTest.kt",
+        "sha256": "5F772D868567DAE240C6348E6B0E4064FD800D493B9C22DC3CFE436ADC07C93F"
+      },
+      {
+        "path": "scripts/validation/smoke_v7_player_overlay.py",
+        "sha256": "CBCF2E37E3D604F7E6C6B2EBE591F5341308ADE3C656F86F6AFE9EF094600456"
+      },
+      {
+        "path": "scripts/validation/smoke_v7_workbench_interactions.py",
+        "sha256": "8F5591BEAC2F9D77C10EA89FC0FFF433B2E0302B3E4C5F05940B4533AAEC5B15"
+      }
+    ],
+    "runtime_remaining_processes": 0,
+    "limits": [
+      "Sandbox loopback fixtures only; no public websites, cloud audio or physical receivers",
+      "No MSI generation, host installation, signing, commit, push or release",
+      "Runtime image size is measured, not MSI installed footprint; no IDM/AB performance comparison in this follow-up",
+      "Exhaustive disabled-control paths, real reduced-motion rendering, busy double-submit and injected partial business failures remain outside these executed scenarios",
+      "Build caches remain; prior cleanup approval rejection was not retried"
+    ],
+    "sandbox_closed": true,
+    "finished_at_utc": "2026-10-19T05:38:26.5411184Z"
+  }
+}

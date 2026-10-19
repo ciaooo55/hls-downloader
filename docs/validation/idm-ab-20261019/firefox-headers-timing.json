@@ -1,0 +1,207 @@
+{
+  "passed": false,
+  "scope": "real Firefox + production extension + Native Host/Core; accept/reject via Core API, not rendered button input",
+  "checks": [
+    {
+      "name": "slow-handoff-latency",
+      "milliseconds": 8567.390799999997,
+      "click_command_ms": 370.3530000000228,
+      "handoff": "handoff-1a14ffacd41-2",
+      "began_wall": 1792343190526.9712
+    },
+    {
+      "name": "slow-decision",
+      "response": {
+        "type": "events",
+        "request_id": 4,
+        "events": [
+          {
+            "sequence": 11,
+            "event": {
+              "kind": "task_created",
+              "snapshot": {
+                "task_id": "task-1",
+                "resource_kind": "file",
+                "status": "queued",
+                "stage": "waiting",
+                "title": "slow.bin",
+                "filename": "slow.bin",
+                "downloaded_bytes": 0,
+                "total_bytes": 1048576,
+                "speed_bytes_per_sec": 0,
+                "peer_count": 0,
+                "seed_count": 0,
+                "uploaded_bytes": 0,
+                "upload_speed_bytes_per_sec": 0,
+                "eta_seconds": null,
+                "active_workers": 0,
+                "completed_ranges": 0,
+                "total_ranges": 1,
+                "playback_ready": false,
+                "is_live": false,
+                "available_actions": [
+                  "start",
+                  "delete",
+                  "queue_up",
+                  "queue_top",
+                  "queue_down",
+                  "queue_bottom"
+                ],
+                "url": "http://127.0.0.1:49753/slow.bin",
+                "error_code": null,
+                "error_message": null,
+                "error_stage": "",
+                "error_url": "",
+                "error_hint": "",
+                "http_status": null,
+                "error_attempt": 0,
+                "queue_index": 1,
+                "queue_id": "default",
+                "output_missing": false,
+                "output_path": "C:\\QAWork\\firefox-headers-output\\slow.bin",
+                "connection_hint": "",
+                "connection_parts": [],
+                "log_tail": [],
+                "speed_history": [],
+                "mirror_status": [],
+                "request_method": "GET",
+                "download_dir": "C:\\QAWork\\firefox-headers-output",
+                "speed_limit_kib": 0,
+                "expected_checksum": "",
+                "checksum_algorithm": "",
+                "checksum_actual": "",
+                "checksum_verified": null,
+                "av_scan": null,
+                "max_workers": 12,
+                "mirrors": [],
+                "scheduled_start_at": "",
+                "scheduled_stop_at": ""
+              }
+            }
+          },
+          {
+            "sequence": 12,
+            "event": {
+              "kind": "handoff_resolved",
+              "handoff_id": "handoff-1a14ffacd41-2",
+              "task_id": "task-1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "slow-browser-fallback-or-cleanup",
+      "item": null
+    }
+  ],
+  "background_sha256": "00c2b912309bad9aadd2271f6ca5350262b2106f55fe303358e255d9423be6ed",
+  "server_events": [
+    {
+      "event": "request",
+      "path": "/",
+      "time": 1792343189876.4626
+    },
+    {
+      "event": "request",
+      "path": "/favicon.ico",
+      "time": 1792343190080.8992
+    },
+    {
+      "event": "headers-sent",
+      "path": "/favicon.ico",
+      "time": 1792343190081.5396
+    },
+    {
+      "event": "request",
+      "path": "/slow.bin",
+      "time": 1792343190895.5159
+    },
+    {
+      "event": "headers-sent",
+      "path": "/slow.bin",
+      "time": 1792343190895.5159
+    },
+    {
+      "event": "request",
+      "path": "/slow.bin",
+      "time": 1792343199247.8357
+    },
+    {
+      "event": "headers-sent",
+      "path": "/slow.bin",
+      "time": 1792343199247.8357
+    },
+    {
+      "event": "request",
+      "path": "/slow.bin",
+      "time": 1792343199251.8855
+    },
+    {
+      "event": "headers-sent",
+      "path": "/slow.bin",
+      "time": 1792343199251.8855
+    },
+    {
+      "event": "request",
+      "path": "/slow.bin",
+      "time": 1792343199268.583
+    },
+    {
+      "event": "headers-sent",
+      "path": "/slow.bin",
+      "time": 1792343199268.583
+    },
+    {
+      "event": "request",
+      "path": "/slow.bin",
+      "time": 1792343199268.583
+    },
+    {
+      "event": "headers-sent",
+      "path": "/slow.bin",
+      "time": 1792343199268.583
+    }
+  ],
+  "ping": {
+    "__request_id": "mve2uwtc-2",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "trace": {
+    "trace-early-start": 1792343198910,
+    "trace-headers": 1792343198901,
+    "trace-native-response": 1792343199065,
+    "trace-offer-start": 1792343199005,
+    "trace-payload-start": 1792343199008,
+    "trace-resource-request": 1792343199011
+  },
+  "browser_events": {
+    "probeEvents": [
+      {
+        "event": "headers",
+        "requestId": "8",
+        "tabId": 1,
+        "time": 1792343198092,
+        "type": "image",
+        "url": "http://127.0.0.1:49753/favicon.ico"
+      },
+      {
+        "event": "headers",
+        "requestId": "9",
+        "tabId": 1,
+        "time": 1792343198913,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:49753/slow.bin"
+      }
+    ]
+  },
+  "responsive": false
+}

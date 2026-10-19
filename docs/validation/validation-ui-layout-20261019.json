@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-19",
+  "base_commit": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "dirty_worktree": true,
+  "scope": "Desktop toolbar, task table and sidebar layout; existing Compose components, no new dependencies",
+  "evidence_directory": "ui-layout-20261019",
+  "changes": [
+    "Keep New, Paste, Start all and Pause all in the toolbar; move five secondary actions into Tools using their existing callbacks",
+    "Give unused table width to filenames while retaining all six sortable columns",
+    "Completed rows show completion status without repeated full progress bars, percentages or segment counts; connection details remain in task details",
+    "Make queue and category groups collapsible; queue management remains accessible",
+    "Reduce decorative borders and progress thickness; keep existing selection, focus and menu components"
+  ],
+  "validation": {
+    "desktop_build": "passed: Gradle jar",
+    "targeted_tests": {"passed": 43, "failed": 0, "errors": 0, "evidence": "tests.json"},
+    "source_diff_check": "passed: git diff --check",
+    "sandbox_ui": {
+      "passed": true,
+      "input": "Actual sky computer-use clicks and keyboard input in Windows Sandbox",
+      "data": "Built-in tasks_1000 visual fixture; transfer operations were not executed",
+      "checks": [
+        "Tools opens; Batch add, Page harvest, Cast source, TVBox source and Browser extension dialogs open and close",
+        "Completed filter shows 200 fixture tasks without full progress bars or segment lines",
+        "Category group collapses and queue group expands without changing the completed filter; queue manager opens and closes",
+        "Typing 0103 into the focused search field narrows completed tasks to one visible matching row",
+        "Light layout at reported JVM scale 1.25 and dark layout at scale 1.5 inspected",
+        "Normal 150% startup constrains the window to 1012x473 logical pixels; title controls, table actions and bottom status remain visible",
+        "Tools menu and New download dialog open and close with Escape in the narrow dark window"
+      ],
+      "fixture_correction": "Initially forcing a 1024x600 audit window at 150% exceeded the guest work area. Relaunched without forced audit dimensions to exercise normal work-area constraints. Both window reports retained."
+    },
+    "initial_build_failure": "Used an unsupported leadingIcon parameter on the existing menu wrapper; corrected the caller to compose icon and text in its existing content slot, then rebuilt successfully",
+    "validation_scripts": "Updated the two existing workbench scripts for Tools menu and Browser extension labels; both passed Python AST syntax parsing; their full automated UI flows were not rerun"
+  },
+  "delivery": {
+    "host_product_installation": false,
+    "new_msi": false,
+    "github_updated": false,
+    "cloud_called": false,
+    "sandbox_closed": true,
+    "branches": ["main"],
+    "worktrees": 1,
+    "cleanup_complete": false,
+    "cleanup_block": {
+      "action": "Remove this-run scratch directory and accidentally created empty scratch directory",
+      "paths": [".tool-cache/ui-layout-20261019", "desktop_ui/.tool-cache/ui-layout-20261019"],
+      "reason": "Automatic approval review rejected exec_command: blocked by policy; no detailed reason provided",
+      "retried": false
+    },
+    "cleanup_follow_up": {
+      "user_requested": "Finish and clean generated project files",
+      "attempt": "Remove explicitly listed, untracked generated directories inside this workspace using native PowerShell",
+      "result": "Rejected before process creation: blocked by policy; no detailed reason provided. No files were deleted and no alternate deletion tool was used.",
+      "remaining": [".tool-cache", "desktop_ui/.tool-cache", "desktop_ui/.gradle", "desktop_ui/.kotlin", "desktop_ui/build", "extension/node_modules", "extension/.output", "extension/.wxt", "artifacts"],
+      "size_observed_gib": {".tool-cache": 9.342, "extension/node_modules": 0.160},
+      "source_hashes": "Main.kt, ResponsiveLayoutTest.kt and both modified workbench scripts match the saved validation hashes",
+      "diff_check": "passed",
+      "host_inventory": "No HLSDownloader uninstall entry in the three inspected HKCU/HKLM uninstall roots; five inspected standard product directories absent; no product or Sandbox process found. This is a targeted inventory, not a whole-disk guarantee.",
+      "new_tests_or_builds": false
+    }
+  },
+  "limits": "This is a validated UI source candidate. It is not a full transfer, playback, device, cloud, performance or installer recertification. Published r12 artifacts were not changed."
+}

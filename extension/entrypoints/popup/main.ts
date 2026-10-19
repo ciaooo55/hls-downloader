@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { normalizeHost, visibleMediaResources, type MediaResource } from '../../lib/resources'
+import { downloadSelectionKey, normalizeHost, selectMediaVariant, visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
@@ -315,10 +315,25 @@ async function main() {
   const sending: Record<string, SendState> = {}
   const pushing: Record<string, PushState> = {}
   // 同一资源的不同清晰度分别发送，状态必须对应实际链接。
-  const actionKey = (item: MediaResource, action = 'download') => JSON.stringify([item.id, item.url, action])
+  const actionKey = (item: MediaResource, action = 'download') => JSON.stringify([item.id, downloadSelectionKey(item), action])
   const manualCopy = new Set<string>()
-  // Chosen rendition per resource id: the list re-renders on every send or
-  // status poll, and the pick must survive those rebuilds.
+  const copyStates = new Map<string, 'copying' | 'copied'>()
+  const copyResetTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const renderCopyButton = (button: HTMLButtonElement, url: string) => {
+    const state = copyStates.get(url)
+    button.setAttribute('aria-disabled', String(state === 'copying'))
+    button.setAttribute('aria-busy', String(state === 'copying'))
+    button.classList.toggle('copied', state === 'copied')
+    button.replaceChildren(icon(state === 'copied' ? 'check' : 'copy'), el('span', 'copy-label', state === 'copying' ? '复制中…' : state === 'copied' ? '已复制' : '复制链接'))
+  }
+  const setCopyState = (url: string, state?: 'copying' | 'copied') => {
+    if (state) copyStates.set(url, state)
+    else copyStates.delete(url)
+    for (const button of list.querySelectorAll<HTMLButtonElement>('[data-action=copy]')) {
+      if (button.dataset.copyUrl === url) renderCopyButton(button, url)
+    }
+  }
+  // DASH 的多个清晰度可能共用 URL；选择和重绘恢复必须同时包含码率与高度。
   const chosenVariant: Record<string, string> = {}
   let resources: MediaResource[] = []
   let resourceState: 'loading' | 'ready' | 'scanning' | 'error' = 'loading'
@@ -335,6 +350,8 @@ async function main() {
       ? { id: document.activeElement.closest<HTMLElement>('article')?.dataset.resourceId, action: document.activeElement.dataset.action }
       : undefined
     const scrollTop = section.scrollTop
+    const expanded = new Set([...list.querySelectorAll<HTMLDetailsElement>('details[open]')]
+      .map(node => node.closest<HTMLElement>('article')?.dataset.resourceId))
     const visible = visibleMediaResources(resources)
     count.textContent = String(visible.length)
     list.replaceChildren()
@@ -367,8 +384,8 @@ async function main() {
       let selected = item
       const remembered = chosenVariant[item.id]
       if (remembered) {
-        const variant = item.variants?.find(value => value.url === remembered)
-        if (variant) selected = { ...item, ...variant, url: variant.url, variants: undefined }
+        const variant = item.variants?.find(value => downloadSelectionKey(selectMediaVariant(item, value)) === remembered)
+        if (variant) selected = selectMediaVariant(item, variant)
       }
       let itemHost = selected.url
       try { itemHost = new URL(selected.url).host } catch {}
@@ -394,9 +411,10 @@ async function main() {
       const copyBtn = el('button', 'copy-link') as HTMLButtonElement
       copyBtn.type = 'button'
       copyBtn.dataset.action = 'copy'
-      copyBtn.append(icon('copy'), el('span', 'copy-label', '\u590d\u5236\u94fe\u63a5'))
+      copyBtn.dataset.copyUrl = selected.url
+      renderCopyButton(copyBtn, selected.url)
       copyBtn.title = itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5'
-      copyBtn.addEventListener('click', () => void copyLink(selected.url, copyBtn))
+      copyBtn.addEventListener('click', () => void copyLink(selected.url))
       body.append(name, line)
       if (item.variants?.length) {
         const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
@@ -407,18 +425,18 @@ async function main() {
         const trigger = el('select', 'quality-trigger')
         trigger.dataset.action = 'quality'
         trigger.setAttribute('aria-label', '选择视频清晰度')
-        trigger.append(new Option(variantLabel(), item.url))
-        for (const variant of item.variants) trigger.append(new Option(variantLabel(variant), variant.url))
-        trigger.value = selected.url
+        trigger.append(new Option(variantLabel(), downloadSelectionKey(item)))
+        for (const variant of item.variants) trigger.append(new Option(variantLabel(variant), downloadSelectionKey(selectMediaVariant(item, variant))))
+        trigger.value = downloadSelectionKey(selected)
         trigger.addEventListener('change', () => {
-          if (trigger.value === item.url) delete chosenVariant[item.id]
+          if (trigger.value === downloadSelectionKey(item)) delete chosenVariant[item.id]
           else chosenVariant[item.id] = trigger.value
           renderList()
         })
         body.append(trigger)
       }
       const metaRow = el('div', 'resource-meta')
-      metaRow.append(mime, copyBtn)
+      metaRow.append(mime)
       body.append(metaRow)
       if (manualCopy.has(selected.url)) {
         const url = el('input', 'manual-copy')
@@ -433,6 +451,7 @@ async function main() {
         body.append(help, url)
       }
       const sendState = sending[actionKey(selected)]
+      article.dataset.state = sendState || ''
       const label = sendState ? SEND_LABELS[sendState] : '下载'
       const button = el('button', 'hlsd-button primary')
       button.dataset.state = sendState || ''
@@ -443,7 +462,11 @@ async function main() {
       button.disabled = locked
       button.classList.toggle('busy', sendPending)
       button.setAttribute('aria-busy', String(sendPending))
-      button.title = sendState === 'confirming' ? '请在主程序中确认本次下载' : '发送到主程序，确认后加入下载队列'
+      button.title = sendState === 'confirming' ? '请在主程序中确认本次下载'
+        : sendState === 'queued' ? '已加入主程序下载队列，可在主程序查看进度'
+        : sendState === 'sending' ? '正在发送到主程序，请稍候'
+        : sendState === 'retry' ? '上次未能加入队列，点击重试'
+        : '发送到主程序，确认后加入下载队列'
       button.addEventListener('click', () => void send(selected))
       const pushKey = actionKey(selected, 'tvbox')
       const pushState = pushing[pushKey]
@@ -472,15 +495,23 @@ async function main() {
       castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
       castButton.addEventListener('click', () => void castToDevice(selected))
       const actionCol = el('div', 'article-actions')
-      actionCol.append(button, castButton, pushButton)
+      const more = el('details', 'resource-more')
+      more.open = expanded.has(item.id)
+      const summary = el('summary', '', '更多')
+      summary.dataset.action = 'more'
+      summary.setAttribute('aria-label', '更多媒体操作')
+      const extra = el('div', 'resource-extra')
+      extra.append(copyBtn, castButton, pushButton)
+      more.append(summary, extra)
+      actionCol.append(button, more)
       article.append(body, actionCol)
       list.append(article)
     }
     section.scrollTop = scrollTop
     if (focused?.id) {
       const card = [...list.querySelectorAll('article')].find(node => node.dataset.resourceId === focused.id)
-      const control = [...(card?.querySelectorAll<HTMLButtonElement | HTMLSelectElement | HTMLInputElement>('[data-action]') || [])]
-        .find(node => node.dataset.action === focused.action && !node.disabled)
+      const control = [...(card?.querySelectorAll<HTMLElement>('[data-action]') || [])]
+        .find(node => node.dataset.action === focused.action && !node.matches(':disabled'))
       const target = control || card
       target?.focus({ preventScroll: true })
     }
@@ -580,19 +611,11 @@ async function main() {
     }
   }
 
-  const copyResetTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
-  const copyLink = async (url: string, node: HTMLButtonElement) => {
-    const label = node.querySelector<HTMLSpanElement>('.copy-label')
-    const done = (text: string) => {
-      clearTimeout(copyResetTimers.get(node))
-      if (label) label.textContent = text
-      node.classList.add('copied')
-      copyResetTimers.set(node, setTimeout(() => {
-        if (label) label.textContent = '复制链接'
-        node.classList.remove('copied')
-        copyResetTimers.delete(node)
-      }, 1_800))
-    }
+  const copyLink = async (url: string) => {
+    if (copyStates.get(url) === 'copying') return
+    clearTimeout(copyResetTimers.get(url))
+    copyResetTimers.delete(url)
+    setCopyState(url, 'copying')
     try {
       let copied = false
       try {
@@ -616,10 +639,18 @@ async function main() {
         }
       }
       manualCopy.delete(url)
-      node.closest('article')?.querySelector('.manual-copy')?.remove()
-      node.closest('article')?.querySelector('.manual-copy-help')?.remove()
-      done('\u5df2\u590d\u5236')
+      for (const button of list.querySelectorAll<HTMLButtonElement>('[data-action=copy]')) {
+        if (button.dataset.copyUrl !== url) continue
+        button.closest('article')?.querySelector('.manual-copy')?.remove()
+        button.closest('article')?.querySelector('.manual-copy-help')?.remove()
+      }
+      setCopyState(url, 'copied')
+      copyResetTimers.set(url, setTimeout(() => {
+        setCopyState(url)
+        copyResetTimers.delete(url)
+      }, 1_800))
     } catch {
+      setCopyState(url)
       manualCopy.add(url)
       renderList()
       const card = [...list.querySelectorAll('article')].find(card => card.querySelector<HTMLInputElement>('.manual-copy')?.value === url)
@@ -842,9 +873,17 @@ async function main() {
     if (!Array.isArray(pending)) return
     for (const handoff of pending) {
       const item = resources.find(resource => resource.id === handoff.resourceId)
-      if (!item || sending[item.id]) continue
-      void confirmDownload(item, String(handoff.id)).catch(reason => {
-        sending[item.id] = 'retry'
+      if (!item) continue
+      const selected = handoff.selectionKey
+        ? [item, ...(item.variants || []).map(variant => selectMediaVariant(item, variant))]
+          .find(candidate => downloadSelectionKey(candidate) === handoff.selectionKey)
+        : item
+      if (!selected) continue
+      const key = actionKey(selected)
+      if (sending[key]) continue
+      if (selected !== item && !chosenVariant[item.id]) chosenVariant[item.id] = downloadSelectionKey(selected)
+      void confirmDownload(selected, String(handoff.id)).catch(reason => {
+        sending[key] = 'retry'
         setError(reason instanceof Error ? reason.message : '无法读取下载确认状态')
         renderList()
       })

@@ -54,14 +54,14 @@ impl CoreServer {
 
     pub fn from_coordinator(coordinator: CoreCoordinator) -> Result<Self, String> {
         coordinator.recover_startup()?;
-        let sequence = coordinator.latest_sequence()?;
+        let notify = coordinator.event_notify()?;
         let stop = Arc::new(AtomicBool::new(false));
         spawn_torrent_watch(coordinator.clone(), Arc::clone(&stop));
         spawn_clipboard_watch(coordinator.clone(), Arc::clone(&stop));
         spawn_queue_scheduler(coordinator.clone(), Arc::clone(&stop));
         Ok(Self {
             coordinator,
-            notify: Arc::new((Mutex::new(sequence), Condvar::new())),
+            notify,
             stop,
             torrent_probe_active: Arc::new(AtomicBool::new(false)),
             subtitles: Arc::new(crate::subtitle_translate::SubtitleService::default()),
@@ -78,8 +78,7 @@ impl CoreServer {
 
     pub fn shutdown(&self) {
         self.subtitles.stop_all();
-        self.stop.store(true, Ordering::SeqCst);
-        self.notify.1.notify_all();
+        stop_event_waiters(&self.notify, &self.stop);
     }
 
     fn restore_install_result(&self) {
@@ -274,7 +273,6 @@ fn dispatch(
                     };
                 };
                 let coordinator = coordinator.clone();
-                let notify = Arc::clone(notify);
                 thread::spawn(move || {
                     let _slot = slot;
                     if let Err(error) = coordinator.dispatch(command) {
@@ -285,7 +283,6 @@ fn dispatch(
                             })
                         });
                     }
-                    bump_notify(&notify, &coordinator);
                 });
                 // Probe completion is delivered through the normal event stream. Returning
                 // immediately keeps slow tracker/DHT/metadata I/O off the IPC request thread.
@@ -297,19 +294,18 @@ fn dispatch(
             let should_shutdown = matches!(&command, CoreCommand::Shutdown);
             match coordinator.dispatch(command) {
                 Ok(events) => {
-                    bump_notify(notify, coordinator);
                     if should_shutdown {
-                        stop.store(true, Ordering::SeqCst);
-                        notify.1.notify_all();
+                        stop_event_waiters(notify, stop);
                     }
                     if events
                         .iter()
                         .any(|item| matches!(item.event, CoreEvent::UpdateInstallStarted { .. }))
                     {
                         let stop = Arc::clone(stop);
+                        let notify = Arc::clone(notify);
                         thread::spawn(move || {
                             thread::sleep(Duration::from_millis(500));
-                            stop.store(true, Ordering::SeqCst);
+                            stop_event_waiters(&notify, &stop);
                         });
                     }
                     CorePipeResponse::Events { request_id, events }
@@ -395,7 +391,7 @@ fn dispatch(
             after_sequence,
             timeout_ms,
         } => {
-            let events = wait_events(coordinator, notify, after_sequence, timeout_ms);
+            let events = wait_events(coordinator, notify, stop, after_sequence, timeout_ms);
             CorePipeResponse::Events { request_id, events }
         }
         CorePipeRequest::StoreSetting {
@@ -403,10 +399,7 @@ fn dispatch(
             key,
             value,
         } => match coordinator.set_setting(&key, value) {
-            Ok(()) => {
-                bump_notify(notify, coordinator);
-                settings_response(coordinator, request_id)
-            }
+            Ok(()) => settings_response(coordinator, request_id),
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
                 code: "setting_failed".into(),
@@ -415,10 +408,7 @@ fn dispatch(
         },
         CorePipeRequest::StoreSettings { request_id, values } => {
             match coordinator.set_settings(values) {
-                Ok(()) => {
-                    bump_notify(notify, coordinator);
-                    settings_response(coordinator, request_id)
-                }
+                Ok(()) => settings_response(coordinator, request_id),
                 Err(error) => CorePipeResponse::Error {
                     request_id: Some(request_id),
                     code: "settings_failed".into(),
@@ -609,23 +599,26 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
     }
 }
 
-fn bump_notify(notify: &Arc<(Mutex<u64>, Condvar)>, coordinator: &CoreCoordinator) {
-    if let Ok(sequence) = coordinator.latest_sequence() {
-        if let Ok(mut current) = notify.0.lock() {
-            *current = sequence;
-        }
-        notify.1.notify_all();
-    }
+fn stop_event_waiters(notify: &Arc<(Mutex<u64>, Condvar)>, stop: &AtomicBool) {
+    let _guard = notify.0.lock();
+    stop.store(true, Ordering::SeqCst);
+    notify.1.notify_all();
 }
 
 fn wait_events(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
+    stop: &AtomicBool,
     after_sequence: u64,
     timeout_ms: u64,
 ) -> Vec<EventEnvelope> {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.clamp(1, 60_000));
     loop {
+        // 不能持有通知锁读取 Core：提交事件的锁顺序是 Core → 通知锁。
+        let observed = match notify.0.lock() {
+            Ok(sequence) => *sequence,
+            Err(_) => return Vec::new(),
+        };
         if let Ok(events) = coordinator.events_after(after_sequence, 256) {
             if !events.is_empty() {
                 return events;
@@ -635,13 +628,18 @@ fn wait_events(
         if remaining.is_zero() {
             return Vec::new();
         }
-        // 下载工作线程直接发布事件，不经过 IPC 命令的 bump_notify。
-        // 分段等待让进度及时到达客户端，同时保留空闲长轮询的超时语义。
         let (lock, condvar) = notify.as_ref();
         let Ok(guard) = lock.lock() else {
             return Vec::new();
         };
-        let _ = condvar.wait_timeout(guard, remaining.min(Duration::from_millis(100)));
+        if stop.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+        // 查询和等待之间若有提交，直接重查，避免丢失唤醒。
+        if *guard != observed {
+            continue;
+        }
+        let _ = condvar.wait_timeout(guard, remaining);
     }
 }
 

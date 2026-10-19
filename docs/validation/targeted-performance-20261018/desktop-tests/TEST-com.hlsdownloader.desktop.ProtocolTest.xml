@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.ProtocolTest" tests="25" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:17.563Z" hostname="DESKTOP-FTE6QH2" time="1.715">
+  <properties/>
+  <testcase name="urlNormalizationTrimsAndRejectsUnsafeInput()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.009"/>
+  <testcase name="mediaPushRequestEventKeepsBrowserRequestForDevicePicker()" classname="com.hlsdownloader.desktop.ProtocolTest" time="1.3"/>
+  <testcase name="taskSnapshotPreservesConnectionsAndPerformanceHistory()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.009"/>
+  <testcase name="handoffStatusDecodesWithoutOfferPayload()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.004"/>
+  <testcase name="settingsUseTheCoreStorageContractInsteadOfResponseAliases()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.065"/>
+  <testcase name="preparedAndFinishedUpdateEventsKeepIdentityAndInstallerResult()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.017"/>
+  <testcase name="selectionStartResolvesMixedStatesWithoutRestartingCompletedTasks()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.003"/>
+  <testcase name="productCopyDoesNotExposeInternalNames()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.001"/>
+  <testcase name="resourceRecognitionUsesUrlPathBeforeQuery()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.001"/>
+  <testcase name="mediaPushTerminalSyncTreatsBusinessErrorEventAsFailure()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.005"/>
+  <testcase name="taskContextMenuUsesWindowRelativePointerPosition()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.002"/>
+  <testcase name="multiSelectionMenuOnlyKeepsCommonBatchActions()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.049"/>
+  <testcase name="updateEventsExposeVerifiedMsiContract()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.003"/>
+  <testcase name="queueProfilesRoundTripThroughSettingsStorageContract()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.004"/>
+  <testcase name="powerActionPendingEventKeepsConfirmationDetails()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.006"/>
+  <testcase name="queueProfileValidationRejectsAmbiguousOrInvalidSchedules()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.003"/>
+  <testcase name="taskSnapshotDecodesStructuredVerificationAndMirrorResults()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.008"/>
+  <testcase name="mediaSelectionRequiresOnePlayableTask()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.002"/>
+  <testcase name="handoffOfferUsesPublicMetadataAndSafeFilename()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.035"/>
+  <testcase name="eventEnvelopeDecodesTaskUpdate()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.019"/>
+  <testcase name="curlAndManualHeaderInputAreRecognizedWithoutLeakingIntoUrlParsing()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.007"/>
+  <testcase name="refreshRequestValidationRejectsUnsafeUrlsBeforeIpc()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.003"/>
+  <testcase name="localTorrentUsesTorrentProbeInsteadOfUrlProbe()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.005"/>
+  <testcase name="mediaPushResolvedEventKeepsUserVisibleResult()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.033"/>
+  <testcase name="settingsOnlyExposeWhetherTheDefaultCookieIsConfigured()" classname="com.hlsdownloader.desktop.ProtocolTest" time="0.064"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

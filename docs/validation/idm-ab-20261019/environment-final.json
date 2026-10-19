@@ -1,0 +1,14 @@
+{
+  "os": {
+    "Caption": "Microsoft Windows 11 企业版",
+    "Version": "10.0.22621",
+    "BuildNumber": "22621",
+    "TotalVisibleMemorySize": 6290380
+  },
+  "cpu": {
+    "Name": "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz",
+    "NumberOfLogicalProcessors": 8
+  },
+  "final_core_sha256": "7D4FEFBBA43F96A72CCADFF4FE53DDF8DE2238E0FA5E6D9DB694E9D72D911DA1",
+  "test_binary_sha256": "2234012B8A7495342BFBA6A7BA34982849A83AB769E0B581B1E295EAF47FE23E"
+}

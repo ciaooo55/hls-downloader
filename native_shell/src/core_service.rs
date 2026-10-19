@@ -6,10 +6,12 @@ use crate::{
 };
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex};
 
 pub struct PersistentCore {
     runtime: CoreRuntime,
     store: CoreStore,
+    event_notify: Arc<(Mutex<u64>, Condvar)>,
 }
 
 impl PersistentCore {
@@ -35,6 +37,33 @@ impl PersistentCore {
                 task_id: task_id.clone(),
                 lines,
             });
+        }
+        if let CoreCommand::UpdateProgress {
+            task_id,
+            downloaded_bytes,
+            total_bytes,
+            speed_bytes_per_sec,
+            stage,
+            status,
+        } = &command
+        {
+            let event = self.runtime.progress_event(
+                task_id,
+                *downloaded_bytes,
+                *total_bytes,
+                *speed_bytes_per_sec,
+                stage,
+                status,
+            );
+            let events = vec![EventEnvelope {
+                sequence: self.runtime.latest_sequence() + 1,
+                event,
+            }];
+            // 失败时运行态和事件环尚未改变；成功后才发布同一序号并唤醒订阅者。
+            self.store.apply_events(&events)?;
+            self.runtime.commit_progress(events[0].event.clone());
+            self.notify_committed(&events);
+            return Ok(events);
         }
         if let CoreCommand::RequestMediaPush { request } = &command {
             let active = self
@@ -94,6 +123,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -114,6 +144,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -124,6 +155,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -151,6 +183,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -170,6 +203,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -189,6 +223,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -261,6 +296,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(())
     }
 
@@ -292,6 +328,20 @@ impl PersistentCore {
         &mut self.store
     }
 
+    pub(crate) fn event_notify(&self) -> Arc<(Mutex<u64>, Condvar)> {
+        Arc::clone(&self.event_notify)
+    }
+
+    fn notify_committed(&self, events: &[EventEnvelope]) {
+        let Some(last) = events.last() else {
+            return;
+        };
+        if let Ok(mut sequence) = self.event_notify.0.lock() {
+            *sequence = last.sequence;
+            self.event_notify.1.notify_all();
+        }
+    }
+
     fn persist_runtime_events(
         &mut self,
         before: CoreRuntime,
@@ -305,6 +355,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.notify_committed(&events);
         Ok(events)
     }
 
@@ -365,7 +416,11 @@ impl PersistentCore {
                 }
             }
         }
-        Ok(Self { runtime, store })
+        Ok(Self {
+            event_notify: Arc::new((Mutex::new(runtime.latest_sequence()), Condvar::new())),
+            runtime,
+            store,
+        })
     }
 }
 
@@ -373,6 +428,163 @@ impl PersistentCore {
 mod tests {
     use super::*;
     use crate::{CoreCommand, ResourceKind, TaskSpec};
+
+    #[test]
+    fn failed_commit_restores_snapshot_spec_sequence_and_notification() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-core-rollback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("core.db");
+        let mut core = PersistentCore::open(&path).unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        // 填满历史环；失败的进度不能挤掉最早事件或推进订阅游标。
+        for index in 0..4096 {
+            core.runtime.emit(crate::CoreEvent::Toast {
+                level: "info".into(),
+                message: index.to_string(),
+            });
+        }
+        core.emit(crate::CoreEvent::Toast {
+            level: "info".into(),
+            message: "history ready".into(),
+        })
+        .unwrap();
+        let tasks = core.tasks();
+        let spec = core.task_spec("task-1").unwrap().clone();
+        let sequence = core.latest_sequence();
+        let events = core.events_after(0, 4096);
+        let progress = CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 1024,
+            total_bytes: Some(4096),
+            speed_bytes_per_sec: 512,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        };
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_task_write BEFORE INSERT ON tasks BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+
+        assert!(core.handle(progress.clone()).is_err());
+        assert!(core
+            .set_output_path("task-1", "changed.bin".into())
+            .is_err());
+        let mut changed = spec.clone();
+        changed.url = "https://example.test/changed.bin".into();
+        assert!(core.replace_spec("task-1", changed).is_err());
+        assert_eq!(core.tasks(), tasks);
+        assert_eq!(core.store().load_tasks().unwrap(), tasks);
+        assert_eq!(core.task_spec("task-1"), Some(&spec));
+        assert_eq!(core.store().load_task_specs().unwrap()[0].1, spec);
+        assert_eq!(core.latest_sequence(), sequence);
+        assert_eq!(core.events_after(0, 4096), events);
+        assert_eq!(*core.event_notify.0.lock().unwrap(), sequence);
+
+        connection
+            .execute_batch("DROP TRIGGER reject_task_write")
+            .unwrap();
+        // 在快照和日志已写入事务后再失败，二者仍必须与事件检查点一起回滚。
+        connection.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON event_checkpoints BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END;").unwrap();
+        assert!(core.handle(progress.clone()).is_err());
+        assert_eq!(core.tasks(), tasks);
+        assert_eq!(core.store().load_tasks().unwrap(), tasks);
+        assert!(core.store().load_task_log("task-1", 500).unwrap().is_empty());
+        assert_eq!(core.store().latest_sequence().unwrap(), sequence);
+        assert_eq!(core.latest_sequence(), sequence);
+        assert_eq!(core.events_after(0, 4096), events);
+        assert_eq!(*core.event_notify.0.lock().unwrap(), sequence);
+        connection
+            .execute_batch("DROP TRIGGER reject_checkpoint")
+            .unwrap();
+        let committed = core.handle(progress).unwrap();
+        assert_eq!(committed[0].sequence, sequence + 1);
+        assert_eq!(core.events_after(sequence, 1), committed);
+        assert_eq!(core.snapshot("task-1").unwrap().downloaded_bytes, 1024);
+        assert_eq!(core.store().load_tasks().unwrap(), core.tasks());
+        core.set_output_path("task-1", "committed.bin".into())
+            .unwrap();
+        assert_eq!(*core.event_notify.0.lock().unwrap(), core.latest_sequence());
+        assert_eq!(core.events_after(sequence, 1)[0].sequence, sequence + 1);
+        drop(connection);
+        drop(core);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persisted_progress_preserves_runtime_lifecycle_and_other_tasks() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let mut runtime = CoreRuntime::new();
+        let progress = |task_id: &str, bytes, status: &str, stage: &str| {
+            CoreCommand::UpdateProgress {
+                task_id: task_id.into(),
+                downloaded_bytes: bytes,
+                total_bytes: Some(4096),
+                speed_bytes_per_sec: 512,
+                stage: stage.into(),
+                status: status.into(),
+            }
+        };
+        for command in [
+            CoreCommand::CreateTask { spec: test_spec() },
+            CoreCommand::CreateTask { spec: test_spec() },
+            progress("task-1", 512, "downloading", "transfer"),
+            CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "pause".into(),
+            },
+            progress("task-1", 768, "downloading", "transfer"),
+            CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "resume".into(),
+            },
+            progress("task-1", 2048, "downloading", "transfer"),
+            progress("task-1", 4096, "completed", "completed"),
+            progress("task-1", 3072, "downloading", "transfer"),
+            progress("missing-task", 512, "downloading", "transfer"),
+        ] {
+            let expected = runtime.handle(command.clone());
+            let actual = core.handle(command).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(core.tasks(), runtime.list_tasks());
+            assert_eq!(core.store().load_tasks().unwrap(), core.tasks());
+            assert_eq!(core.latest_sequence(), runtime.latest_sequence());
+            assert_eq!(*core.event_notify.0.lock().unwrap(), core.latest_sequence());
+        }
+    }
+
+    #[test]
+    fn worker_commit_wakes_subscriber_without_an_ipc_command() {
+        let core = Arc::new(Mutex::new(PersistentCore::in_memory().unwrap()));
+        let notify = core.lock().unwrap().event_notify();
+        let guard = notify.0.lock().unwrap();
+        let worker_core = Arc::clone(&core);
+        let worker = std::thread::spawn(move || {
+            worker_core
+                .lock()
+                .unwrap()
+                .emit(crate::CoreEvent::Toast {
+                    level: "info".into(),
+                    message: "worker completed".into(),
+                })
+                .unwrap();
+        });
+        let (sequence, timeout) = notify
+            .1
+            .wait_timeout_while(guard, std::time::Duration::from_secs(5), |sequence| {
+                *sequence == 0
+            })
+            .unwrap();
+        assert!(!timeout.timed_out());
+        assert_eq!(*sequence, 1);
+        drop(sequence);
+        worker.join().unwrap();
+        assert_eq!(core.lock().unwrap().events_after(0, 256).len(), 1);
+    }
 
     #[test]
     fn service_persists_commands_through_the_shared_boundary() {

@@ -139,6 +139,8 @@ def run(args):
         return wait(find, "Missing installed UI control: " + name, 12)
 
     def click(name, index=0):
+        if name in {"批量添加", "页面抓取", "浏览器插件"}:
+            click("工具")
         target = node(name, True, index)
         if current_context.startswith("main"):
             categories = ("媒体", "程序", "压缩包", "其他")
@@ -479,11 +481,11 @@ def run(args):
             click("取消")
             record("new-task cancel removes dialog")
 
-            for button, expected in (("批量添加", "链接列表"), ("页面抓取", "抓取本页链接"), ("插件", "浏览器插件")):
+            for button, expected in (("批量添加", "链接列表"), ("页面抓取", "抓取本页链接"), ("浏览器插件", "浏览器插件")):
                 click(button)
                 node(expected)
                 probe_context("dialog-" + button, ("dialog.secondary.",))
-                click("取消" if button != "插件" else "关闭", -1)
+                click("取消" if button != "浏览器插件" else "完成", -1)
                 record("dialog open / cancel: " + button)
 
             click("管理队列")
@@ -623,6 +625,12 @@ def run(args):
                 enter("javascript:alert(1)")
                 node("链接格式无效或 cURL 命令不完整")
                 assert "enabled" not in node("创建下载", True)["states"]
+                action("key", key="ENTER")
+                pointer("dialog.primary.创建下载")
+                node("链接格式无效或 cURL 命令不完整")
+                assert len(core({"type": "snapshot", "request_id": 31})["tasks"]) == len(initial), "Disabled submit created a task"
+                record("invalid URL blocks both Enter and clicking the disabled submit button")
+                pointer("newtask.url")
                 enter(url, replace=True)
                 node("类型：file")
                 click("分析资源")
@@ -650,6 +658,14 @@ def run(args):
                 action("right_click", x=(left+right)//2, y=(top+bottom)//2)
                 menu = wait(lambda: ui("state")["contextMenuActions"], "Task menu did not open", 10)
                 record("real task right-click exposes legal actions", menu)
+                selected_before_escape = ui("state")["selectedTaskIds"]
+                action("key", key="ESCAPE")
+                wait(lambda: not ui("state")["contextMenuActions"], "Escape left task menu open", 10)
+                assert ui("state")["selectedTaskIds"] == selected_before_escape, "Menu Escape cleared selection"
+                record("Escape dismisses task menu without clearing selection")
+                left, top, right, bottom = ui("state")["controlBounds"][row]
+                action("right_click", x=(left+right)//2, y=(top+bottom)//2)
+                wait(lambda: ui("state")["contextMenuActions"], "Task menu did not reopen", 10)
                 click("详情与日志")
                 node("任务详情")
                 for tab in ("概览", "连接", "速度", "日志"):
@@ -1455,7 +1471,7 @@ public class DragFixture {
                 user.SetWindowPos(hwnd,None,original_window["deviceX"],original_window["deviceY"],1120,750,0x0014)
                 time.sleep(.5)
                 observe("window-narrow")
-                for label in ("新建","批量添加","页面抓取","设置"):
+                for label in ("新建","粘贴链接","工具","设置"):
                     target=node(label,True)
                     assert "showing" in target["states"] and target["bounds"][2]>0,target
                 click("新建")

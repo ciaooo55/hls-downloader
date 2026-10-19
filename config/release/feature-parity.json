@@ -159,7 +159,7 @@
       "id": "media.local_player_controls",
       "status": "verified",
       "v3_entry": "VideoPlayerModal with timeline, tracks and preview",
-      "compose_entry": "PlayerSessionHud controlling standalone libmpv window",
+      "compose_entry": "LocalVideoPlayer in the main-window overlay; optional picture-in-picture reuses the same libmpv session",
       "core_command": "play_task/player_control",
       "state_event": "player_session",
       "verification": "player_session_reports_play_pause_speed_and_stop; null backend isolation; real libmpv-2.dll loaded generated MP4 with audio and subtitle; aid/sid switch, 50% seek, pause, stop and forced-process recovery passed"
@@ -195,7 +195,7 @@
       "id": "media.cast_and_player_concurrency",
       "status": "verified",
       "v3_entry": "player and cast activity overlays",
-      "compose_entry": "stacked PlayerSessionHud and CastSessionHud",
+      "compose_entry": "LocalVideoPlayer overlay and independent CastSessionHud; local player and cast controls keep separate sessions",
       "core_command": "player_control/control_cast",
       "state_event": "player_session/cast_session",
       "verification": "visual/compose-media-stack-1024x600-125.png"

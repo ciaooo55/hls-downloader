@@ -1,0 +1,32 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+Reusing configuration cache.
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :generateComposeResClass SKIPPED
+> Task :copyNonXmlValueResourcesForTest NO-SOURCE
+> Task :copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :convertXmlValueResourcesForMain NO-SOURCE
+> Task :convertXmlValueResourcesForTest NO-SOURCE
+> Task :prepareComposeResourcesTaskForTest NO-SOURCE
+> Task :prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :generateResourceAccessorsForTest SKIPPED
+> Task :generateResourceAccessorsForMain SKIPPED
+> Task :generateActualResourceCollectorsForMain SKIPPED
+> Task :assembleMainResources UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :assembleTestResources UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :compileKotlin
+> Task :compileJava NO-SOURCE
+> Task :classes UP-TO-DATE
+> Task :jar
+> Task :compileTestKotlin
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test
+
+PerformanceModelTest > thousand_task_mapping_and_filtering_p95_stays_under_100ms() STANDARD_OUT
+    thousand_task_model_p95_ms=20.140
+
+BUILD SUCCESSFUL in 6m 56s
+8 actionable tasks: 4 executed, 4 up-to-date
+Configuration cache entry reused.

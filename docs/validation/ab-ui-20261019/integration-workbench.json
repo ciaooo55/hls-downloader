@@ -1,0 +1,2229 @@
+{
+  "passed": true,
+  "runtime": "C:\\HLSRuntime",
+  "checks": [
+    {
+      "name": "invalid URL blocks both Enter and clicking the disabled submit button",
+      "actual": true
+    },
+    {
+      "name": "new-task invalid input, disabled submit, analyze, actual 32MiB download and SHA256",
+      "actual": true
+    },
+    {
+      "name": "real task row click selects downloaded task",
+      "actual": true
+    },
+    {
+      "name": "real task right-click exposes legal actions",
+      "actual": [
+        "open",
+        "open_folder",
+        "retry",
+        "delete",
+        "delete_files"
+      ]
+    },
+    {
+      "name": "Escape dismisses task menu without clearing selection",
+      "actual": true
+    },
+    {
+      "name": "task details tab: 概览",
+      "actual": true
+    },
+    {
+      "name": "task details tab: 连接",
+      "actual": true
+    },
+    {
+      "name": "task details tab: 速度",
+      "actual": true
+    },
+    {
+      "name": "task details tab: 日志",
+      "actual": true
+    },
+    {
+      "name": "all-start, all-pause, selected-task resume, checkpoint and SHA256",
+      "actual": true
+    },
+    {
+      "name": "batch blocks invalid input, then downloads both corrected links",
+      "actual": true
+    },
+    {
+      "name": "harvest size filter: ≥ 1 MB",
+      "actual": true
+    },
+    {
+      "name": "harvest size filter: ≥ 10 MB",
+      "actual": true
+    },
+    {
+      "name": "harvest size filter: 全部大小",
+      "actual": true
+    },
+    {
+      "name": "page harvest, size probing, category selection, select/deselect and selected download",
+      "actual": true
+    },
+    {
+      "name": "queue manager creates and saves real queue",
+      "actual": "新队列"
+    },
+    {
+      "name": "selected task moves into saved queue",
+      "actual": true
+    },
+    {
+      "name": "test task count",
+      "actual": 6
+    }
+  ],
+  "controls": {
+    "main/新建": {
+      "clicked": true
+    },
+    "main/分析资源": {
+      "clicked": true
+    },
+    "newtask-valid-analysis/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "newtask-valid-analysis/关闭": {
+      "role": "push button",
+      "bounds": [
+        1109,
+        240,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "newtask-valid-analysis/取消": {
+      "role": "push button",
+      "bounds": [
+        982,
+        426,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-valid-analysis/创建下载": {
+      "role": "push button",
+      "bounds": [
+        1046,
+        426,
+        102,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-valid-analysis/详情与日志": {
+      "clicked": true
+    },
+    "newtask-valid-analysis/概览": {
+      "clicked": true
+    },
+    "task-details-概览/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "task-details-概览/关闭": {
+      "role": "push button",
+      "bounds": [
+        1152,
+        571,
+        71,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-概览/概览": {
+      "role": "push button",
+      "bounds": [
+        299,
+        291,
+        231,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-概览/连接": {
+      "role": "push button",
+      "bounds": [
+        530,
+        291,
+        230,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "task-details-概览/速度": {
+      "role": "push button",
+      "bounds": [
+        760,
+        291,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-概览/日志": {
+      "role": "push button",
+      "bounds": [
+        990,
+        291,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-概览/站点规则": {
+      "role": "push button",
+      "bounds": [
+        835,
+        571,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-概览/打开文件": {
+      "role": "push button",
+      "bounds": [
+        930,
+        571,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-概览/打开所在位置": {
+      "role": "push button",
+      "bounds": [
+        1025,
+        571,
+        127,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "task-details-连接/关闭": {
+      "role": "push button",
+      "bounds": [
+        1152,
+        507,
+        71,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/概览": {
+      "role": "push button",
+      "bounds": [
+        299,
+        354,
+        231,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/连接": {
+      "role": "push button",
+      "bounds": [
+        530,
+        354,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/速度": {
+      "role": "push button",
+      "bounds": [
+        760,
+        354,
+        230,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "task-details-连接/日志": {
+      "role": "push button",
+      "bounds": [
+        990,
+        354,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/站点规则": {
+      "role": "push button",
+      "bounds": [
+        835,
+        507,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/打开文件": {
+      "role": "push button",
+      "bounds": [
+        930,
+        507,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-连接/打开所在位置": {
+      "role": "push button",
+      "bounds": [
+        1025,
+        507,
+        127,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "task-details-速度/关闭": {
+      "role": "push button",
+      "bounds": [
+        1152,
+        587,
+        71,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/概览": {
+      "role": "push button",
+      "bounds": [
+        299,
+        272,
+        231,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/连接": {
+      "role": "push button",
+      "bounds": [
+        530,
+        272,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/速度": {
+      "role": "push button",
+      "bounds": [
+        760,
+        272,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/日志": {
+      "role": "push button",
+      "bounds": [
+        990,
+        272,
+        230,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "task-details-速度/站点规则": {
+      "role": "push button",
+      "bounds": [
+        835,
+        587,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/打开文件": {
+      "role": "push button",
+      "bounds": [
+        930,
+        587,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-速度/打开所在位置": {
+      "role": "push button",
+      "bounds": [
+        1025,
+        587,
+        127,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "task-details-日志/关闭": {
+      "role": "push button",
+      "bounds": [
+        1152,
+        622,
+        71,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "task-details-日志/概览": {
+      "role": "push button",
+      "bounds": [
+        299,
+        237,
+        231,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/连接": {
+      "role": "push button",
+      "bounds": [
+        530,
+        237,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/速度": {
+      "role": "push button",
+      "bounds": [
+        760,
+        237,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/日志": {
+      "role": "push button",
+      "bounds": [
+        990,
+        237,
+        230,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/站点规则": {
+      "role": "push button",
+      "bounds": [
+        835,
+        622,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/打开文件": {
+      "role": "push button",
+      "bounds": [
+        930,
+        622,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/打开所在位置": {
+      "role": "push button",
+      "bounds": [
+        1025,
+        622,
+        127,
+        42
+      ],
+      "enabled": true
+    },
+    "task-details-日志/工具": {
+      "clicked": true
+    },
+    "task-details-日志/批量添加": {
+      "clicked": true
+    },
+    "task-details-日志/添加 2 条链接": {
+      "clicked": true
+    },
+    "task-details-日志/页面抓取": {
+      "clicked": true
+    },
+    "task-details-日志/抓取本页链接": {
+      "clicked": true
+    },
+    "task-details-日志/取消当前分类": {
+      "clicked": true
+    },
+    "task-details-日志/全选当前分类": {
+      "clicked": true
+    },
+    "task-details-日志/读取文件大小": {
+      "clicked": true
+    },
+    "task-details-日志/≥ 1 MB": {
+      "clicked": true
+    },
+    "task-details-日志/≥ 10 MB": {
+      "clicked": true
+    },
+    "task-details-日志/全部大小": {
+      "clicked": true
+    },
+    "task-details-日志/压缩包 1": {
+      "clicked": true
+    },
+    "task-details-日志/创建 1 个下载": {
+      "clicked": true
+    },
+    "task-details-日志/管理队列": {
+      "clicked": true
+    },
+    "task-details-日志/新建队列": {
+      "clicked": true
+    },
+    "task-details-日志/保存队列": {
+      "clicked": true
+    },
+    "task-details-日志/选择队列 新队列": {
+      "clicked": true
+    },
+    "task-details-日志/移动": {
+      "clicked": true
+    },
+    "main-final/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "main-final/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/深色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部, 6": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/排队中, 1": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已完成, 5": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "main-final/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/压缩包, 1": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "main-final/其他, 5": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "main-final/取消选择": {
+      "role": "push button",
+      "bounds": [
+        407,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/开始": {
+      "role": "push button",
+      "bounds": [
+        452,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/暂停": {
+      "role": "push button",
+      "bounds": [
+        497,
+        112,
+        45,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/移动队列": {
+      "role": "push button",
+      "bounds": [
+        542,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/删除": {
+      "role": "push button",
+      "bounds": [
+        587,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1456,
+        542,
+        34,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/controls-e5632831381542bf9d0a2f3b55a05184.bin，HTTP .bin，已完成，进度 100%，大小 32.00 MB": {
+      "role": "label",
+      "bounds": [
+        242,
+        207,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 controls-e5632831381542bf9d0a2f3b55a05184.bin": {
+      "role": "check box",
+      "bounds": [
+        257,
+        227,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/打开所在位置：controls-e5632831381542bf9d0a2f3b55a05184.bin": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        217,
+        42,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/HTTP，排队中，进度 大小待定, 拖动排序": {
+      "role": "label",
+      "bounds": [
+        242,
+        272,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 ": {
+      "role": "check box",
+      "bounds": [
+        257,
+        292,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/resume-e5632831381542bf9d0a2f3b55a05184.bin，HTTP .bin，已完成，进度 100%，大小 32.00 MB": {
+      "role": "label",
+      "bounds": [
+        242,
+        337,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 resume-e5632831381542bf9d0a2f3b55a05184.bin": {
+      "role": "check box",
+      "bounds": [
+        257,
+        357,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/打开所在位置：resume-e5632831381542bf9d0a2f3b55a05184.bin": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        347,
+        42,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/controls-e5632831381542bf9d0a2f3b55a05184_1.bin，HTTP .bin，已完成，进度 100%，大小 32.00 MB": {
+      "role": "label",
+      "bounds": [
+        242,
+        402,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 controls-e5632831381542bf9d0a2f3b55a05184_1.bin": {
+      "role": "check box",
+      "bounds": [
+        257,
+        422,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/打开所在位置：controls-e5632831381542bf9d0a2f3b55a05184_1.bin": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        412,
+        42,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/controls-e5632831381542bf9d0a2f3b55a05184_2.bin，HTTP .bin，已完成，进度 100%，大小 32.00 MB": {
+      "role": "label",
+      "bounds": [
+        242,
+        467,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 controls-e5632831381542bf9d0a2f3b55a05184_2.bin": {
+      "role": "check box",
+      "bounds": [
+        257,
+        487,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/打开所在位置：controls-e5632831381542bf9d0a2f3b55a05184_2.bin": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        477,
+        42,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/controls-e5632831381542bf9d0a2f3b55a05184.zip，HTTP .zip，已完成，进度 100%，大小 32.00 MB": {
+      "role": "label",
+      "bounds": [
+        242,
+        532,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 controls-e5632831381542bf9d0a2f3b55a05184.zip": {
+      "role": "check box",
+      "bounds": [
+        257,
+        552,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/打开所在位置：controls-e5632831381542bf9d0a2f3b55a05184.zip": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        542,
+        42,
+        42
+      ],
+      "enabled": true
+    }
+  },
+  "feedback": [],
+  "test_script_sha256": "8f5591beac2f9d77c10ea89fc0fff433b2e0302b3e4c5f05940b4533aaec5b15",
+  "components": {
+    "app\\HLSDownloaderDesktop-7.0.3.jar": "d9d636fe712e969cbcccfd2278e3932bc67ee56f6ff7a8fd37626e85168a4d06",
+    "app\\resources\\HLSDownloaderEngine.exe": "d86313e6448c248574900a253654eb2e649402d20680819bab2cc40c15e53c02"
+  },
+  "window": {
+    "x": 0,
+    "y": 0,
+    "width": 1214,
+    "height": 567,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.25,
+    "scaleY": 1.25,
+    "deviceX": 0,
+    "deviceY": 0,
+    "deviceWidth": 1518,
+    "deviceHeight": 709
+  },
+  "start_at": "functional",
+  "pause_diagnostic": {
+    "ui_running_task": {
+      "selectedCount": 1,
+      "selectedTaskIds": [
+        "task-2"
+      ],
+      "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-1": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-1.open_folder": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "toolbar.取消选择": [
+          407,
+          112,
+          452,
+          157
+        ],
+        "toolbar.开始": [
+          452,
+          112,
+          497,
+          157
+        ],
+        "toolbar.暂停": [
+          497,
+          112,
+          542,
+          157
+        ],
+        "toolbar.移动队列": [
+          542,
+          112,
+          587,
+          157
+        ],
+        "toolbar.删除": [
+          587,
+          112,
+          632,
+          157
+        ],
+        "taskrow.task-2": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-2.pause": [
+          1413,
+          282,
+          1456,
+          325
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    },
+    "core_before_click": {
+      "task_id": "task-2",
+      "resource_kind": "file",
+      "status": "downloading",
+      "stage": "transfer",
+      "title": "resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "filename": "resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "downloaded_bytes": 524288,
+      "total_bytes": 33554432,
+      "speed_bytes_per_sec": 0,
+      "peer_count": 0,
+      "seed_count": 0,
+      "uploaded_bytes": 0,
+      "upload_speed_bytes_per_sec": 0,
+      "eta_seconds": null,
+      "active_workers": 1,
+      "completed_ranges": 0,
+      "total_ranges": 3,
+      "playback_ready": false,
+      "is_live": false,
+      "available_actions": [
+        "pause",
+        "cancel",
+        "delete"
+      ],
+      "url": "http://127.0.0.1:50797/controls-e5632831381542bf9d0a2f3b55a05184.bin?resume=1",
+      "error_code": null,
+      "error_message": null,
+      "error_stage": "",
+      "error_url": "",
+      "error_hint": "",
+      "http_status": null,
+      "error_attempt": 0,
+      "queue_index": 2,
+      "queue_id": "default",
+      "output_missing": false,
+      "output_path": "C:\\QAWork\\integration-downloads\\resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "connection_hint": "0B-512KB 排队 · 512KB-8.0MB 传输中 · 8.0MB-32.0MB 排队",
+      "connection_parts": [
+        {
+          "start": 0,
+          "end": 524287,
+          "done": 0,
+          "state": "queued"
+        },
+        {
+          "start": 524288,
+          "end": 8388607,
+          "done": 7864320,
+          "state": "active"
+        },
+        {
+          "start": 8388608,
+          "end": 33554431,
+          "done": 0,
+          "state": "queued"
+        }
+      ],
+      "log_tail": [
+        "downloading transfer 0/33554432",
+        "downloading transfer 262144/33554432",
+        "downloading transfer 524288/33554432"
+      ],
+      "speed_history": [
+        524288,
+        415943,
+        616064,
+        489357,
+        400193,
+        342936,
+        302038,
+        269780,
+        242279,
+        219831,
+        201905,
+        186777,
+        173277,
+        172940,
+        86979,
+        86926,
+        81397
+      ],
+      "mirror_status": [],
+      "request_method": "GET",
+      "download_dir": "C:\\QAWork\\integration-downloads",
+      "speed_limit_kib": 1024,
+      "expected_checksum": "",
+      "checksum_algorithm": "",
+      "checksum_actual": "",
+      "checksum_verified": null,
+      "av_scan": null,
+      "max_workers": 1,
+      "mirrors": [],
+      "scheduled_start_at": "",
+      "scheduled_stop_at": ""
+    },
+    "ui_at_click": {
+      "selectedCount": 1,
+      "selectedTaskIds": [
+        "task-2"
+      ],
+      "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-1": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-1.open_folder": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "toolbar.取消选择": [
+          407,
+          112,
+          452,
+          157
+        ],
+        "toolbar.开始": [
+          452,
+          112,
+          497,
+          157
+        ],
+        "toolbar.暂停": [
+          497,
+          112,
+          542,
+          157
+        ],
+        "toolbar.移动队列": [
+          542,
+          112,
+          587,
+          157
+        ],
+        "toolbar.删除": [
+          587,
+          112,
+          632,
+          157
+        ],
+        "taskrow.task-2": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-2.pause": [
+          1413,
+          282,
+          1456,
+          325
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    },
+    "click": {
+      "control": "toolbar.全部暂停",
+      "bounds": [
+        336,
+        53,
+        442,
+        98
+      ],
+      "point": [
+        389,
+        75
+      ]
+    },
+    "core_after_click": {
+      "task_id": "task-2",
+      "resource_kind": "file",
+      "status": "paused",
+      "stage": "waiting",
+      "title": "resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "filename": "resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "downloaded_bytes": 524288,
+      "total_bytes": 33554432,
+      "speed_bytes_per_sec": 0,
+      "peer_count": 0,
+      "seed_count": 0,
+      "uploaded_bytes": 0,
+      "upload_speed_bytes_per_sec": 0,
+      "eta_seconds": null,
+      "active_workers": 0,
+      "completed_ranges": 0,
+      "total_ranges": 1,
+      "playback_ready": false,
+      "is_live": false,
+      "available_actions": [
+        "resume",
+        "cancel",
+        "delete",
+        "queue_up",
+        "queue_down"
+      ],
+      "url": "http://127.0.0.1:50797/controls-e5632831381542bf9d0a2f3b55a05184.bin?resume=1",
+      "error_code": null,
+      "error_message": null,
+      "error_stage": "",
+      "error_url": "",
+      "error_hint": "",
+      "http_status": null,
+      "error_attempt": 0,
+      "queue_index": 2,
+      "queue_id": "default",
+      "output_missing": false,
+      "output_path": "C:\\QAWork\\integration-downloads\\resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "connection_hint": "0B-32.0MB 排队",
+      "connection_parts": [
+        {
+          "start": 0,
+          "end": 33554431,
+          "done": 0,
+          "state": "queued"
+        }
+      ],
+      "log_tail": [
+        "downloading transfer 0/33554432",
+        "downloading transfer 262144/33554432",
+        "downloading transfer 524288/33554432",
+        "paused waiting 524288/33554432"
+      ],
+      "speed_history": [
+        524288,
+        415943,
+        616064,
+        489357,
+        400193,
+        342936,
+        302038,
+        269780,
+        242279,
+        219831,
+        201905,
+        186777,
+        173277,
+        172940,
+        86979,
+        86926,
+        81397
+      ],
+      "mirror_status": [],
+      "request_method": "GET",
+      "download_dir": "C:\\QAWork\\integration-downloads",
+      "speed_limit_kib": 1024,
+      "expected_checksum": "",
+      "checksum_algorithm": "",
+      "checksum_actual": "",
+      "checksum_verified": null,
+      "av_scan": null,
+      "max_workers": 1,
+      "mirrors": [],
+      "scheduled_start_at": "",
+      "scheduled_stop_at": ""
+    },
+    "ui_after_click": {
+      "selectedCount": 1,
+      "selectedTaskIds": [
+        "task-2"
+      ],
+      "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-1": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-1.open_folder": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "toolbar.取消选择": [
+          407,
+          112,
+          452,
+          157
+        ],
+        "toolbar.开始": [
+          452,
+          112,
+          497,
+          157
+        ],
+        "toolbar.暂停": [
+          497,
+          112,
+          542,
+          157
+        ],
+        "toolbar.移动队列": [
+          542,
+          112,
+          587,
+          157
+        ],
+        "toolbar.删除": [
+          587,
+          112,
+          632,
+          157
+        ],
+        "taskrow.task-2": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-2.resume": [
+          1413,
+          282,
+          1456,
+          325
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    },
+    "core_after_settle": {
+      "task_id": "task-2",
+      "resource_kind": "file",
+      "status": "paused",
+      "stage": "waiting",
+      "title": "resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "filename": "resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "downloaded_bytes": 524288,
+      "total_bytes": 33554432,
+      "speed_bytes_per_sec": 0,
+      "peer_count": 0,
+      "seed_count": 0,
+      "uploaded_bytes": 0,
+      "upload_speed_bytes_per_sec": 0,
+      "eta_seconds": null,
+      "active_workers": 0,
+      "completed_ranges": 0,
+      "total_ranges": 1,
+      "playback_ready": false,
+      "is_live": false,
+      "available_actions": [
+        "resume",
+        "cancel",
+        "delete",
+        "queue_up",
+        "queue_down"
+      ],
+      "url": "http://127.0.0.1:50797/controls-e5632831381542bf9d0a2f3b55a05184.bin?resume=1",
+      "error_code": null,
+      "error_message": null,
+      "error_stage": "",
+      "error_url": "",
+      "error_hint": "",
+      "http_status": null,
+      "error_attempt": 0,
+      "queue_index": 2,
+      "queue_id": "default",
+      "output_missing": false,
+      "output_path": "C:\\QAWork\\integration-downloads\\resume-e5632831381542bf9d0a2f3b55a05184.bin",
+      "connection_hint": "0B-32.0MB 排队",
+      "connection_parts": [
+        {
+          "start": 0,
+          "end": 33554431,
+          "done": 0,
+          "state": "queued"
+        }
+      ],
+      "log_tail": [
+        "downloading transfer 0/33554432",
+        "downloading transfer 262144/33554432",
+        "downloading transfer 524288/33554432",
+        "paused waiting 524288/33554432"
+      ],
+      "speed_history": [
+        524288,
+        415943,
+        616064,
+        489357,
+        400193,
+        342936,
+        302038,
+        269780,
+        242279,
+        219831,
+        201905,
+        186777,
+        173277,
+        172940,
+        86979,
+        86926,
+        81397
+      ],
+      "mirror_status": [],
+      "request_method": "GET",
+      "download_dir": "C:\\QAWork\\integration-downloads",
+      "speed_limit_kib": 1024,
+      "expected_checksum": "",
+      "checksum_algorithm": "",
+      "checksum_actual": "",
+      "checksum_verified": null,
+      "av_scan": null,
+      "max_workers": 1,
+      "mirrors": [],
+      "scheduled_start_at": "",
+      "scheduled_stop_at": ""
+    },
+    "ui_after_settle": {
+      "selectedCount": 1,
+      "selectedTaskIds": [
+        "task-2"
+      ],
+      "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-1": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-1.open_folder": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "toolbar.取消选择": [
+          407,
+          112,
+          452,
+          157
+        ],
+        "toolbar.开始": [
+          452,
+          112,
+          497,
+          157
+        ],
+        "toolbar.暂停": [
+          497,
+          112,
+          542,
+          157
+        ],
+        "toolbar.移动队列": [
+          542,
+          112,
+          587,
+          157
+        ],
+        "toolbar.删除": [
+          587,
+          112,
+          632,
+          157
+        ],
+        "taskrow.task-2": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-2.resume": [
+          1413,
+          282,
+          1456,
+          325
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    }
+  },
+  "normal_runtime_restored": true
+}

@@ -1,0 +1,125 @@
+{
+  "passed": true,
+  "checks": [
+    "main-window overlay starts real playback and pause button pauses it",
+    "K and Space toggle the real playback session",
+    "resume and video-surface click update real pause state",
+    "forward/back buttons and timeline drag seek the actual decoder",
+    "focused volume keys change volume without triggering global seek",
+    "volume and mute controls change mpv volume/mute",
+    "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+    "hovering the preview preserves paused playback position",
+    "main fullscreen enters and Escape restores the overlay",
+    "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+    "close button and Escape release playback; reopening works"
+  ],
+  "requested_java_ui_scale": 1.0,
+  "window": {
+    "x": 59,
+    "y": 0,
+    "width": 1400,
+    "height": 709,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.0,
+    "scaleY": 1.0,
+    "deviceX": 59,
+    "deviceY": 0,
+    "deviceWidth": 1400,
+    "deviceHeight": 709
+  },
+  "video_rectangles": {
+    "main": {
+      "expected": [
+        279,
+        128,
+        1239,
+        504
+      ],
+      "actual": [
+        [
+          279,
+          128,
+          1239,
+          504
+        ],
+        [
+          279,
+          128,
+          1239,
+          504
+        ]
+      ]
+    },
+    "fullscreen": {
+      "expected": [
+        0,
+        48,
+        1518,
+        644
+      ],
+      "actual": [
+        [
+          0,
+          48,
+          1518,
+          644
+        ],
+        [
+          0,
+          48,
+          1518,
+          644
+        ]
+      ]
+    },
+    "pip": {
+      "expected": [
+        998,
+        397,
+        1518,
+        584
+      ],
+      "actual": [
+        [
+          998,
+          397,
+          1518,
+          584
+        ],
+        [
+          998,
+          397,
+          1518,
+          584
+        ]
+      ]
+    },
+    "returned-main": {
+      "expected": [
+        279,
+        128,
+        1239,
+        504
+      ],
+      "actual": [
+        [
+          279,
+          128,
+          1239,
+          504
+        ],
+        [
+          279,
+          128,
+          1239,
+          504
+        ]
+      ]
+    }
+  },
+  "thumbnail_pixel_mean_error": 2.6120227146042363
+}

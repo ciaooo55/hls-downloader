@@ -1,0 +1,22 @@
+[
+  {
+    "sha256": "f20624834df4f00e99b15c4973a0f60a747d2c41d95d3986988581436437dea6",
+    "path": "extension/.output/firefox-mv3/background.js"
+  },
+  {
+    "sha256": "dc38fc232cc3ab34cd3ea134583947dc56fdf7a2d12e462d1bf401e1e4ac217d",
+    "path": "extension/.output/chrome-mv3/background.js"
+  },
+  {
+    "sha256": "7d4fefbba43f96a72ccadff4fe53ddf8de2238e0fa5e6d9db694e9d72d911da1",
+    "path": ".tool-cache/targeted-validation/idm-ab-20261019/HLSDownloaderEngine-retained.exe"
+  },
+  {
+    "sha256": "bedcc5744f02a36d2964c363ff65a71d6d303476b56bd3b9fe6844b508f52dc7",
+    "path": ".tool-cache/targeted-validation/idm-ab-20261019/HLSDownloaderEngine-before-startup.exe"
+  },
+  {
+    "sha256": "2234012b8a7495342bfba6a7ba34982849a83ab769e0b581b1e295eaf47fe23e",
+    "path": ".tool-cache/targeted-validation/idm-ab-20261019/core-retained-tests.exe"
+  }
+]

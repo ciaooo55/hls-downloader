@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.UiTestApiTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:21.316Z" hostname="DESKTOP-FTE6QH2" time="0.058">
+  <properties/>
+  <testcase name="api_is_explicitly_gated_authenticated_and_loopback_only()" classname="com.hlsdownloader.desktop.UiTestApiTest" time="0.011"/>
+  <testcase name="app_owned_popup_focus_is_preserved_by_the_test_api()" classname="com.hlsdownloader.desktop.UiTestApiTest" time="0.003"/>
+  <testcase name="context_menu_state_exposes_pointer_targets_and_actions()" classname="com.hlsdownloader.desktop.UiTestApiTest" time="0.002"/>
+  <testcase name="product_icon_is_packaged_and_toolbar_does_not_repeat_the_brand()" classname="com.hlsdownloader.desktop.UiTestApiTest" time="0.022"/>
+  <testcase name="action_validation_rejects_unsafe_or_incomplete_input()" classname="com.hlsdownloader.desktop.UiTestApiTest" time="0.005"/>
+  <testcase name="selection_state_is_stable_and_sorted_for_api_assertions()" classname="com.hlsdownloader.desktop.UiTestApiTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

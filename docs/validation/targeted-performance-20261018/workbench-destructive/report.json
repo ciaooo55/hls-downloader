@@ -1,0 +1,3085 @@
+{
+  "passed": false,
+  "runtime": "C:\\HLSRuntime",
+  "checks": [
+    {
+      "name": "prepared three downloaded files for remaining interactions",
+      "actual": true
+    }
+  ],
+  "controls": {
+    "main/搜索任务": {
+      "clicked": true
+    }
+  },
+  "feedback": [],
+  "test_script_sha256": "730f6affc978a2a80ad9f374cf86cd23e3b66f7857443d8b2f233eb376112ed1",
+  "components": {
+    "app\\HLSDownloaderDesktop-7.0.3.jar": "21afaadf4f5b06c3f1e81276aa6dc0319245f3c6e6f46f6eb095377970008fc9",
+    "app\\resources\\HLSDownloaderEngine.exe": "d20b510a4a3e0f8bd18b67864361130b72860bb0d57e02290ef88aa5e69f1be4"
+  },
+  "window": {
+    "x": 0,
+    "y": 0,
+    "width": 1214,
+    "height": 567,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.25,
+    "scaleY": 1.25,
+    "deviceX": 0,
+    "deviceY": 0,
+    "deviceWidth": 1518,
+    "deviceHeight": 709
+  },
+  "start_at": "extras",
+  "error": "Search did not filter rows",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\HLSTests\\scripts\\validation\\smoke_v7_workbench_interactions.py\", line 875, in run\n    wait(lambda: not any(k.startswith(\"taskrow.\") for k in ui(\"state\")[\"controlBounds\"]),\"Search did not filter rows\",10)\n  File \"C:\\HLSTests\\scripts\\validation\\smoke_v7_portable_app.py\", line 97, in wait\n    raise TimeoutError(description)\nTimeoutError: Search did not filter rows\n",
+  "failure_tasks": [
+    {
+      "task_id": "task-1",
+      "resource_kind": "file",
+      "status": "completed",
+      "stage": "finished",
+      "title": "extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "filename": "extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "downloaded_bytes": 32768,
+      "total_bytes": 32768,
+      "speed_bytes_per_sec": 0,
+      "peer_count": 0,
+      "seed_count": 0,
+      "uploaded_bytes": 0,
+      "upload_speed_bytes_per_sec": 0,
+      "eta_seconds": null,
+      "active_workers": 0,
+      "completed_ranges": 1,
+      "total_ranges": 1,
+      "playback_ready": true,
+      "is_live": false,
+      "available_actions": [
+        "open",
+        "open_folder",
+        "retry",
+        "delete"
+      ],
+      "url": "http://127.0.0.1:61567/extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "error_code": null,
+      "error_message": null,
+      "error_stage": "",
+      "error_url": "",
+      "error_hint": "",
+      "http_status": null,
+      "error_attempt": 0,
+      "queue_index": 1,
+      "queue_id": "default",
+      "output_missing": false,
+      "output_path": "C:\\QAWork\\ui-downloads\\extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "connection_hint": "0B-32KB 排队",
+      "connection_parts": [
+        {
+          "start": 0,
+          "end": 32767,
+          "done": 0,
+          "state": "queued"
+        }
+      ],
+      "log_tail": [
+        "checking checking 32768/32768",
+        "completed finished 32768/32768"
+      ],
+      "speed_history": [],
+      "mirror_status": [],
+      "request_method": "GET",
+      "download_dir": "C:\\QAWork\\ui-downloads",
+      "speed_limit_kib": 0,
+      "expected_checksum": "",
+      "checksum_algorithm": "",
+      "checksum_actual": "",
+      "checksum_verified": null,
+      "av_scan": null,
+      "max_workers": 12,
+      "mirrors": [],
+      "scheduled_start_at": "",
+      "scheduled_stop_at": ""
+    },
+    {
+      "task_id": "task-2",
+      "resource_kind": "file",
+      "status": "completed",
+      "stage": "finished",
+      "title": "extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "filename": "extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "downloaded_bytes": 32768,
+      "total_bytes": 32768,
+      "speed_bytes_per_sec": 0,
+      "peer_count": 0,
+      "seed_count": 0,
+      "uploaded_bytes": 0,
+      "upload_speed_bytes_per_sec": 0,
+      "eta_seconds": null,
+      "active_workers": 0,
+      "completed_ranges": 1,
+      "total_ranges": 1,
+      "playback_ready": true,
+      "is_live": false,
+      "available_actions": [
+        "open",
+        "open_folder",
+        "retry",
+        "delete"
+      ],
+      "url": "http://127.0.0.1:61567/extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "error_code": null,
+      "error_message": null,
+      "error_stage": "",
+      "error_url": "",
+      "error_hint": "",
+      "http_status": null,
+      "error_attempt": 0,
+      "queue_index": 2,
+      "queue_id": "default",
+      "output_missing": false,
+      "output_path": "C:\\QAWork\\ui-downloads\\extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "connection_hint": "0B-32KB 排队",
+      "connection_parts": [
+        {
+          "start": 0,
+          "end": 32767,
+          "done": 0,
+          "state": "queued"
+        }
+      ],
+      "log_tail": [
+        "checking checking 32768/32768",
+        "completed finished 32768/32768"
+      ],
+      "speed_history": [],
+      "mirror_status": [],
+      "request_method": "GET",
+      "download_dir": "C:\\QAWork\\ui-downloads",
+      "speed_limit_kib": 0,
+      "expected_checksum": "",
+      "checksum_algorithm": "",
+      "checksum_actual": "",
+      "checksum_verified": null,
+      "av_scan": null,
+      "max_workers": 12,
+      "mirrors": [],
+      "scheduled_start_at": "",
+      "scheduled_stop_at": ""
+    },
+    {
+      "task_id": "task-3",
+      "resource_kind": "file",
+      "status": "completed",
+      "stage": "finished",
+      "title": "extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "filename": "extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "downloaded_bytes": 160279,
+      "total_bytes": 160279,
+      "speed_bytes_per_sec": 0,
+      "peer_count": 0,
+      "seed_count": 0,
+      "uploaded_bytes": 0,
+      "upload_speed_bytes_per_sec": 0,
+      "eta_seconds": null,
+      "active_workers": 0,
+      "completed_ranges": 1,
+      "total_ranges": 1,
+      "playback_ready": true,
+      "is_live": false,
+      "available_actions": [
+        "open",
+        "open_folder",
+        "play",
+        "cast",
+        "retry",
+        "delete"
+      ],
+      "url": "http://127.0.0.1:61567/extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "error_code": null,
+      "error_message": null,
+      "error_stage": "",
+      "error_url": "",
+      "error_hint": "",
+      "http_status": null,
+      "error_attempt": 0,
+      "queue_index": 3,
+      "queue_id": "default",
+      "output_missing": false,
+      "output_path": "C:\\QAWork\\ui-downloads\\extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "connection_hint": "0B-157KB 排队",
+      "connection_parts": [
+        {
+          "start": 0,
+          "end": 160278,
+          "done": 0,
+          "state": "queued"
+        }
+      ],
+      "log_tail": [
+        "checking checking 160279/160279",
+        "completed finished 160279/160279"
+      ],
+      "speed_history": [],
+      "mirror_status": [],
+      "request_method": "GET",
+      "download_dir": "C:\\QAWork\\ui-downloads",
+      "speed_limit_kib": 0,
+      "expected_checksum": "",
+      "checksum_algorithm": "",
+      "checksum_actual": "",
+      "checksum_verified": null,
+      "av_scan": null,
+      "max_workers": 12,
+      "mirrors": [],
+      "scheduled_start_at": "",
+      "scheduled_stop_at": ""
+    }
+  ],
+  "failure_state": {
+    "selectedCount": 0,
+    "selectedTaskIds": [],
+    "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+    "contextMenuPosition": [],
+    "contextMenuTaskIds": [],
+    "contextMenuActions": [],
+    "activeFilter": "全部",
+    "activeCategory": "",
+    "activeQueueId": "",
+    "controlBounds": {
+      "toolbar.新建": [
+        19,
+        53,
+        95,
+        98
+      ],
+      "toolbar.粘贴链接": [
+        112,
+        53,
+        218,
+        98
+      ],
+      "toolbar.批量添加": [
+        220,
+        53,
+        326,
+        98
+      ],
+      "toolbar.页面抓取": [
+        328,
+        53,
+        434,
+        98
+      ],
+      "toolbar.全部开始": [
+        451,
+        53,
+        557,
+        98
+      ],
+      "toolbar.全部暂停": [
+        559,
+        53,
+        665,
+        98
+      ],
+      "toolbar.投屏到电视": [
+        682,
+        53,
+        803,
+        98
+      ],
+      "toolbar.TVBox 推送": [
+        805,
+        53,
+        929,
+        98
+      ],
+      "toolbar.插件": [
+        946,
+        53,
+        1022,
+        98
+      ],
+      "toolbar.设置": [
+        1378,
+        53,
+        1454,
+        98
+      ],
+      "toolbar.深色模式": [
+        1455,
+        53,
+        1500,
+        98
+      ],
+      "sidebar.status.全部": [
+        11,
+        154,
+        221,
+        199
+      ],
+      "sidebar.status.进行中": [
+        11,
+        199,
+        221,
+        244
+      ],
+      "sidebar.status.排队中": [
+        11,
+        244,
+        221,
+        289
+      ],
+      "sidebar.status.已暂停": [
+        11,
+        289,
+        221,
+        334
+      ],
+      "sidebar.status.已完成": [
+        11,
+        334,
+        221,
+        379
+      ],
+      "sidebar.status.失败": [
+        11,
+        379,
+        221,
+        424
+      ],
+      "sidebar.queue.默认队列": [
+        11,
+        481,
+        221,
+        526
+      ],
+      "sidebar.category.媒体": [
+        11,
+        576,
+        221,
+        621
+      ],
+      "sidebar.category.程序": [
+        11,
+        621,
+        221,
+        666
+      ],
+      "sidebar.category.压缩包": [
+        11,
+        666,
+        221,
+        711
+      ],
+      "sidebar.category.其他": [
+        11,
+        711,
+        221,
+        756
+      ],
+      "content_header.clear_completed": [
+        1262,
+        113,
+        1381,
+        156
+      ],
+      "content_header.refresh": [
+        1381,
+        113,
+        1455,
+        156
+      ],
+      "toolbar.更多操作": [
+        1455,
+        112,
+        1500,
+        157
+      ],
+      "taskrow.task-1": [
+        238,
+        206,
+        1509,
+        271
+      ],
+      "task.action.task-1.open_folder": [
+        1270,
+        217,
+        1313,
+        260
+      ],
+      "taskrow.task-2": [
+        238,
+        271,
+        1509,
+        336
+      ],
+      "task.action.task-2.open_folder": [
+        1270,
+        282,
+        1313,
+        325
+      ],
+      "taskrow.task-3": [
+        238,
+        336,
+        1509,
+        401
+      ],
+      "task.action.task-3.play": [
+        1270,
+        347,
+        1313,
+        390
+      ]
+    },
+    "engineText": "下载引擎 · 已连接",
+    "noticeHistory": []
+  },
+  "failure_tree": [
+    {
+      "depth": 0,
+      "name": "HLS Downloader",
+      "description": "",
+      "role": "frame",
+      "states": "enabled,focusable,visible,showing,active,resizable",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": []
+    },
+    {
+      "depth": 1,
+      "name": "",
+      "description": "",
+      "role": "root pane",
+      "states": "enabled,focusable,visible,showing,opaque",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 2,
+      "actions": [],
+      "path": [
+        0
+      ]
+    },
+    {
+      "depth": 2,
+      "name": "",
+      "description": "",
+      "role": "panel",
+      "states": "enabled,focusable",
+      "bounds": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 2,
+      "name": "",
+      "description": "",
+      "role": "layered pane",
+      "states": "enabled,focusable,visible,showing",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 3,
+      "name": "",
+      "description": "",
+      "role": "panel",
+      "states": "enabled,focusable,visible,showing,opaque",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "depth": 4,
+      "name": "",
+      "description": "",
+      "role": "layered pane",
+      "states": "enabled,focusable,visible,showing",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 5,
+      "name": "",
+      "description": "",
+      "role": "panel",
+      "states": "enabled,focusable,visible,showing,focused",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 6,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,visible,showing",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 7,
+      "name": "",
+      "description": "",
+      "role": "groupbox",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 8,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible,focusable,focused",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "children": 5,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 9,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        14,
+        0,
+        1504,
+        42
+      ],
+      "children": 5,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        14,
+        11,
+        21,
+        21
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "HLS Downloader 7.0.3",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        44,
+        12,
+        150,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "最小化",
+      "description": "最小化",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "最大化",
+      "description": "最大化",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "关闭",
+      "description": "关闭",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4
+      ]
+    },
+    {
+      "depth": 9,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        0,
+        42,
+        1517,
+        65
+      ],
+      "children": 16,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "新建",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        102,
+        64,
+        2,
+        22
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "粘贴链接",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        112,
+        52,
+        106,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "批量添加",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        220,
+        52,
+        106,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        3
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "页面抓取",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        327,
+        52,
+        106,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        4
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        441,
+        64,
+        2,
+        22
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        5
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "全部开始",
+      "description": "",
+      "role": "push button",
+      "states": "showing,visible",
+      "bounds": [
+        451,
+        52,
+        106,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        6
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "全部暂停",
+      "description": "",
+      "role": "push button",
+      "states": "showing,visible",
+      "bounds": [
+        559,
+        52,
+        106,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        7
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        672,
+        64,
+        2,
+        22
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        8
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "投屏到电视",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        682,
+        52,
+        121,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        9
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "TVBox 推送",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        805,
+        52,
+        124,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        10
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        936,
+        64,
+        2,
+        22
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        11
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "插件",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        946,
+        52,
+        76,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        12
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        1146,
+        52,
+        212,
+        45
+      ],
+      "children": 2,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        13
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "搜索",
+      "description": "搜索",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        1146,
+        65,
+        21,
+        21
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        13,
+        0
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "搜索任务",
+      "description": "搜索任务",
+      "role": "text",
+      "states": "enabled,editable,showing,visible,focusable",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        13,
+        1
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "设置",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        14
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "深色模式",
+      "description": "深色模式",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        15
+      ]
+    },
+    {
+      "depth": 9,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        11,
+        122,
+        216,
+        537
+      ],
+      "children": 3,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "任务状态",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        24,
+        127,
+        60,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "scroll pane",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        11,
+        154,
+        216,
+        506
+      ],
+      "children": 15,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "全部, 3",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable,selected",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        0
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "进行中, 0",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "排队中, 0",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        2
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "已暂停, 0",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        3
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "已完成, 3",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        4
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "失败, 0",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        5
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "下载队列",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        24,
+        449,
+        60,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        6
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "管理队列",
+      "description": "管理队列",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        185,
+        442,
+        32,
+        32
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        7
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "默认队列, 3",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        481,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        8
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "分类",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        24,
+        550,
+        30,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        9
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "媒体, 1",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        576,
+        210,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        10
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "程序, 0",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        621,
+        210,
+        39
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        11
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "压缩包, 1",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        666,
+        0,
+        0
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        12
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "其他, 1",
+      "description": "",
+      "role": "page tab",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        11,
+        711,
+        0,
+        0
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        13
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "",
+      "description": "",
+      "role": "scroll bar",
+      "states": "enabled,vertical",
+      "bounds": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        14
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        219,
+        154,
+        7,
+        425
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        2
+      ]
+    },
+    {
+      "depth": 9,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        237,
+        107,
+        1280,
+        566
+      ],
+      "children": 2,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        237,
+        107,
+        1280,
+        52
+      ],
+      "children": 6,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "全部",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        256,
+        124,
+        32,
+        22
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "3 项",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        299,
+        125,
+        27,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "选择任务后可进行批量操作",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        345,
+        125,
+        180,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        2
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "清理已完成",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        3
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "刷新",
+      "description": "",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        4
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "更多操作",
+      "description": "更多操作",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        5
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "下载任务列表，共 3 项，已选择 0 项",
+      "description": "下载任务列表，共 3 项，已选择 0 项",
+      "role": "unknown",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        237,
+        161,
+        1280,
+        512
+      ],
+      "children": 1,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1
+      ]
+    },
+    {
+      "depth": 11,
+      "name": "",
+      "description": "",
+      "role": "scroll pane",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        237,
+        161,
+        1280,
+        512
+      ],
+      "children": 3,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0
+      ]
+    },
+    {
+      "depth": 12,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        257,
+        161,
+        1242,
+        45
+      ],
+      "children": 7,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "选择全部任务",
+      "description": "选择全部任务",
+      "role": "check box",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "名称",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        290,
+        161,
+        317,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "进度 / 分段",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        607,
+        161,
+        275,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        2
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "状态",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        882,
+        161,
+        150,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        3
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "速度",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1032,
+        161,
+        125,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        4
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "大小",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1157,
+        161,
+        112,
+        45
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        5
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "操作",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        1270,
+        172,
+        32,
+        22
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        0,
+        6
+      ]
+    },
+    {
+      "depth": 12,
+      "name": "",
+      "description": "",
+      "role": "scroll pane",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        237,
+        206,
+        1271,
+        467
+      ],
+      "children": 4,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "extras-3219ecb3164e49c583c5045b9ccd43a5.bin，HTTP .bin，已完成，进度 100%，大小 32.0 KB",
+      "description": "extras-3219ecb3164e49c583c5045b9ccd43a5.bin，HTTP .bin，已完成，进度 100%，大小 32.0 KB",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        237,
+        206,
+        1271,
+        65
+      ],
+      "children": 3,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "选择 extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "description": "选择 extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "role": "check box",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        257,
+        227,
+        22,
+        22
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "打开所在位置：extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "description": "打开所在位置：extras-3219ecb3164e49c583c5045b9ccd43a5.bin",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1270,
+        217,
+        42,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "更多操作",
+      "description": "更多操作",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1312,
+        217,
+        42,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "extras-3219ecb3164e49c583c5045b9ccd43a5.zip，HTTP .zip，已完成，进度 100%，大小 32.0 KB",
+      "description": "extras-3219ecb3164e49c583c5045b9ccd43a5.zip，HTTP .zip，已完成，进度 100%，大小 32.0 KB",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        237,
+        271,
+        1271,
+        65
+      ],
+      "children": 3,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "选择 extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "description": "选择 extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "role": "check box",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        257,
+        292,
+        22,
+        22
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "打开所在位置：extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "description": "打开所在位置：extras-3219ecb3164e49c583c5045b9ccd43a5.zip",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1270,
+        282,
+        42,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "更多操作",
+      "description": "更多操作",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1312,
+        282,
+        42,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "extras-3219ecb3164e49c583c5045b9ccd43a5.mkv，HTTP .mkv，已完成，进度 100%，大小 156.5 KB",
+      "description": "extras-3219ecb3164e49c583c5045b9ccd43a5.mkv，HTTP .mkv，已完成，进度 100%，大小 156.5 KB",
+      "role": "label",
+      "states": "enabled,showing,visible,focusable,selectable",
+      "bounds": [
+        237,
+        336,
+        1271,
+        65
+      ],
+      "children": 3,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "选择 extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "description": "选择 extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "role": "check box",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        257,
+        357,
+        22,
+        22
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "播放：extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "description": "播放：extras-3219ecb3164e49c583c5045b9ccd43a5.mkv",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1270,
+        347,
+        42,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        2,
+        1
+      ]
+    },
+    {
+      "depth": 14,
+      "name": "更多操作",
+      "description": "更多操作",
+      "role": "push button",
+      "states": "enabled,showing,visible,focusable",
+      "bounds": [
+        1312,
+        347,
+        42,
+        42
+      ],
+      "children": 0,
+      "actions": [
+        "click"
+      ],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        2,
+        2
+      ]
+    },
+    {
+      "depth": 13,
+      "name": "",
+      "description": "",
+      "role": "scroll bar",
+      "states": "enabled,vertical",
+      "bounds": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        1,
+        3
+      ]
+    },
+    {
+      "depth": 12,
+      "name": "",
+      "description": "",
+      "role": "scroll bar",
+      "states": "enabled,horizontal",
+      "bounds": [
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "depth": 9,
+      "name": "",
+      "description": "",
+      "role": "unknown",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        15,
+        674,
+        1487,
+        35
+      ],
+      "children": 5,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "活动任务 0",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        15,
+        682,
+        72,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "队列 0",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        106,
+        682,
+        42,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        1
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "总速度 0 KB/s",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        167,
+        682,
+        92,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        2
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "下载引擎 · 已连接",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        1236,
+        682,
+        117,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        3
+      ]
+    },
+    {
+      "depth": 10,
+      "name": "浏览器插件 · 未连接",
+      "description": "",
+      "role": "label",
+      "states": "enabled,showing,visible",
+      "bounds": [
+        1371,
+        682,
+        132,
+        20
+      ],
+      "children": 0,
+      "actions": [],
+      "path": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        4
+      ]
+    }
+  ],
+  "normal_runtime_restored": true
+}

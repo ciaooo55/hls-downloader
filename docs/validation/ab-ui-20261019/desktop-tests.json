@@ -1,0 +1,44 @@
+[
+  {
+    "name": "com.hlsdownloader.desktop.CategoryParityTest",
+    "tests": 4,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "com.hlsdownloader.desktop.ControlBoundsReportingTest",
+    "tests": 9,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "com.hlsdownloader.desktop.ProtocolTest",
+    "tests": 25,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "com.hlsdownloader.desktop.ResponsiveLayoutTest",
+    "tests": 20,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "com.hlsdownloader.desktop.SelectionPruningTest",
+    "tests": 6,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "com.hlsdownloader.desktop.TaskIndexTest",
+    "tests": 2,
+    "failures": 0,
+    "errors": 0
+  },
+  {
+    "name": "com.hlsdownloader.desktop.UiConvergenceGuardTest",
+    "tests": 4,
+    "failures": 0,
+    "errors": 0
+  }
+]

@@ -1,0 +1,26 @@
+[
+    {
+        "exit_code":  0,
+        "name":  "core"
+    },
+    {
+        "exit_code":  0,
+        "name":  "comparison"
+    },
+    {
+        "exit_code":  0,
+        "name":  "subtitle-element"
+    },
+    {
+        "exit_code":  0,
+        "name":  "subtitle-prefetch"
+    },
+    {
+        "exit_code":  1,
+        "name":  "workbench-all"
+    },
+    {
+        "exit_code":  1,
+        "name":  "workbench-destructive"
+    }
+]

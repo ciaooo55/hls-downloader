@@ -21,15 +21,18 @@ class ResponsiveLayoutTest {
         val columns = taskColumnsForWidth(1210.dp)
         assertFalse(columns.compact)
         assertTrue(columns.name >= 280.dp)
-        assertTrue(columns.progress >= 220.dp)
+        assertTrue(columns.requiredWidth <= 1210.dp)
     }
 
     @Test
     fun task_columns_use_the_product_layout_at_every_width() {
-        val columns = resolveTaskColumns(834.dp)
-        assertEquals(listOf("name", "progress", "status", "speed", "size", "actions"), columns.items.map { it.id })
-        assertEquals(225.dp, columns.items.first().width)
-        assertTrue(columns.compact)
+        listOf(834.dp, 930.dp, 1024.dp, 1210.dp, 1600.dp).forEach { width ->
+            val columns = resolveTaskColumns(width)
+            assertEquals(listOf("name", "progress", "status", "speed", "size", "actions"), columns.items.map { it.id })
+            assertTrue(columns.items.first().width >= 250.dp)
+            assertTrue(columns.requiredWidth <= width, "任务列超出可用宽度 $width")
+            assertEquals(width < TASK_TABLE_COMPACT_WIDTH, columns.compact)
+        }
         assertEquals("name:desc", nextTaskSort("name:asc", "name"))
         assertEquals("size:asc", nextTaskSort("name:desc", "size"))
     }
@@ -122,7 +125,7 @@ class ResponsiveLayoutTest {
         val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
         // 折叠态与展开态共用同一套选中/回调，别让两套导航状态各走各的。
         assertTrue(source.contains("if (compact) {"))
-        assertTrue(source.contains("SidebarRail(selected, selectedCategory, selectedQueueId, profiles, tasks"))
+        assertTrue(source.contains("SidebarRail(selected, selectedCategory, selectedQueueId, profiles, counts"))
         assertTrue(source.contains("maxWidth < SIDEBAR_COLLAPSE_WIDTH"))
         assertTrue(source.contains("Modifier.width(SIDEBAR_RAIL_WIDTH)"))
         // 夹具模式必须锁在 (0,0)：平台默认位置是层叠的，实测出现过 (805,245)，

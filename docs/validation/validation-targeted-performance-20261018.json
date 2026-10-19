@@ -1,0 +1,359 @@
+{
+  "schema": 1,
+  "measured_at": "2026-10-18T13:09:48.3144631Z",
+  "source_base_commit": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "source_state": "uncommitted local candidate",
+  "validation_completed": true,
+  "functional_regressions_passed": true,
+  "performance_improvement_demonstrated": false,
+  "release_ready": false,
+  "environment": {
+    "host_product_installations": 0,
+    "new_msi": false,
+    "product_execution": "Windows Sandbox only",
+    "new_branches": 0,
+    "networking": "disabled; loopback fixtures only",
+    "cloud_calls": 0,
+    "new_worktrees": 0
+  },
+  "candidate_components": [
+    {
+      "name": "HLSDownloaderDesktop-7.0.3.jar",
+      "bytes": 1694618,
+      "sha256": "21afaadf4f5b06c3f1e81276aa6dc0319245f3c6e6f46f6eb095377970008fc9"
+    },
+    {
+      "name": "HLSDownloaderEngine.exe",
+      "bytes": 14568960,
+      "sha256": "d20b510a4a3e0f8bd18b67864361130b72860bb0d57e02290ef88aa5e69f1be4"
+    },
+    {
+      "name": "HLSDownloaderNativeHost.exe",
+      "bytes": 3769856,
+      "sha256": "058b0190e17e3e862cd1282a132b2cc848ab5f62266709a8abca5ef6b54e1e38"
+    },
+    {
+      "name": "HLSDownloaderUpdater.exe",
+      "bytes": 2251264,
+      "sha256": "c10c514b2c9452ee39a7e4e70a0e77defa98d9317d9e3e3579eeb4641b2ffe12"
+    }
+  ],
+  "source_hashes": {
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/TaskIndexTest.kt": "aa9cbdaeca1e2e63e1db875729fd6c5f0d6b40bf364e52f6bec10e704bfdd3de",
+    "extension/lib/subtitlePopup.ts": "bd045c21fef818680b9458ba15ded70b570c279b5adf6dcb5b0273e54c65688d",
+    "scripts/validation/smoke_v7_resource_boundaries.py": "e1dc16de37d141d70cfbab69fb3e448f7956883ae9ea39f7ea7033935e1c8bd3",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "865c9647988c9ac62ca2f483a99cd6d6fa215d440abaf76ed5483465d0f32449",
+    "native_shell/src/store.rs": "acbacd5f3d2afff194a6c5247c694167e03c15cdcf4aae613c1ac13c05e3f465",
+    "scripts/validation/smoke_extension_subtitles.py": "92935bb3897e9493a5b145c75289bc5dd27817da342b4de683c1334f87009ca7"
+  },
+  "regressions": {
+    "extension": {
+      "failed": 0,
+      "passed": 381,
+      "files": 50
+    },
+    "builds": [
+      "Core lib test binary",
+      "Core/NativeHost/Updater release",
+      "desktop test/JAR",
+      "Chromium",
+      "Firefox"
+    ],
+    "core": {
+      "failed": 0,
+      "ignored": 4,
+      "passed": 612,
+      "seconds": 47.09
+    },
+    "desktop": {
+      "errors": 0,
+      "tests": 127,
+      "failures": 0,
+      "skipped": 0
+    }
+  },
+  "browser": {
+    "prefetch": {
+      "passed": true,
+      "browser": "edge",
+      "headed": false,
+      "capture": "prefetch",
+      "player_dom": "nested-shadow",
+      "cross_origin": false,
+      "provider": "fixture Core, cloud accuracy not tested",
+      "idle_reconnect_verified": false,
+      "audio_frames": 205,
+      "nonzero_samples": 815900,
+      "seek_resets": 4,
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "fixture PCM prefetch in real browser",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI",
+        "manual commit waits for completed translation",
+        "originally paused player stays paused",
+        "PCM positions remain accurate during page thread stall",
+        "bounded pretranslation stops PCM",
+        "next cue seeks into prepared cache",
+        "missing subtitles pause actual playback",
+        "hold-pause prevents automatic resume",
+        "seek while playing resumes only after translation is ready"
+      ],
+      "resource_updates_verified": true
+    },
+    "element": {
+      "passed": true,
+      "browser": "edge",
+      "headed": false,
+      "capture": "element",
+      "player_dom": "dynamic-shadow",
+      "cross_origin": false,
+      "provider": "fixture Core, cloud accuracy not tested",
+      "idle_reconnect_verified": false,
+      "audio_frames": 22,
+      "nonzero_samples": 80841,
+      "seek_resets": 2,
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "real browser audio + AudioWorklet",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI"
+      ],
+      "resource_updates_verified": true
+    }
+  },
+  "workbench": {
+    "destructive": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "prepared three downloaded files for remaining interactions",
+          "actual": true
+        },
+        {
+          "name": "search matches filename and empty result then restores test-only view",
+          "actual": true
+        },
+        {
+          "name": "select-all respects search and destructive confirmation cancel preserves tasks",
+          "actual": true
+        },
+        {
+          "name": "local video opens in the workbench overlay and closes using its own close button",
+          "actual": true
+        },
+        {
+          "name": "settings save persists changed option; original restored in cleanup",
+          "actual": true
+        },
+        {
+          "name": "confirmed delete removes task and preserves completed file",
+          "actual": true
+        },
+        {
+          "name": "delete task and file: cancel preserves both; confirm removes both",
+          "actual": true
+        },
+        {
+          "name": "clear completed: cancel preserves records; confirm removes completed records, preserves queued task and file SHA256",
+          "actual": true
+        }
+      ]
+    },
+    "all": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "main more-menu opens and closes: 通知中心",
+          "actual": true
+        },
+        {
+          "name": "main more-menu opens and closes: 关于 HLS Downloader",
+          "actual": true
+        },
+        {
+          "name": "prepared three downloaded files for remaining interactions",
+          "actual": true
+        },
+        {
+          "name": "search matches filename and empty result then restores test-only view",
+          "actual": true
+        },
+        {
+          "name": "name, size, status sort directions persist through actual table header clicks",
+          "actual": true
+        },
+        {
+          "name": "select-all respects search and destructive confirmation cancel preserves tasks",
+          "actual": true
+        },
+        {
+          "name": "local video opens in the workbench overlay and closes using its own close button",
+          "actual": true
+        },
+        {
+          "name": "settings save persists changed option; original restored in cleanup",
+          "actual": true
+        },
+        {
+          "name": "confirmed delete removes task and preserves completed file",
+          "actual": true
+        }
+      ]
+    }
+  },
+  "performance": {
+    "medians": [
+      {
+        "baseline": {
+          "p50_ms": 1.168,
+          "rss_end_mib": 30.504,
+          "cpu_seconds": 0.609,
+          "p95_ms": 2.34,
+          "max_ms": 26.635
+        },
+        "candidate": {
+          "p50_ms": 1.281,
+          "rss_end_mib": 30.582,
+          "cpu_seconds": 0.766,
+          "p95_ms": 2.115,
+          "max_ms": 23.139
+        },
+        "tasks": 10
+      },
+      {
+        "baseline": {
+          "p50_ms": 1.618,
+          "rss_end_mib": 34.953,
+          "cpu_seconds": 1.469,
+          "p95_ms": 3.188,
+          "max_ms": 138.439
+        },
+        "candidate": {
+          "p50_ms": 2.235,
+          "rss_end_mib": 36.594,
+          "cpu_seconds": 2.0,
+          "p95_ms": 3.693,
+          "max_ms": 158.366
+        },
+        "tasks": 1000
+      }
+    ],
+    "baseline": "previous backend candidate, not r12",
+    "raw_report": "targeted-performance-20261018/comparison.json",
+    "conclusion": "Mixed results: 10-task P95 decreased, 1000-task P95 and CPU increased. Overall performance benefit is not demonstrated; no causal attribution from these three rounds."
+  },
+  "component_size_delta_bytes": -2702,
+  "initial_failures": [
+    "TypeScript TS2322 in storage.onChanged: dynamic property value was unknown. Fixed by narrowing a local variable; complete extension test/build rerun passed.",
+    "First desktop acceptance attempts were blocked by the core-tests firewall permission dialog, confirmed by screenshot. User canceled it. Remote input to relaunch tests was unreliable; a fresh Sandbox directly ran the remaining desktop scripts. No firewall setting was changed."
+  ],
+  "limits": [
+    "Three alternating rounds in one Windows Sandbox, not a cross-hardware guarantee.",
+    "Core benchmark covers 1000 IPC progress commits after event-ring warmup, not desktop frame latency or Internet throughput.",
+    "No real cloud provider, physical casting/TVBox, multi-hour soak, new MSI installation, signing, GitHub push or release.",
+    "Candidate remains local and uncommitted; previous reports still apply only to their recorded hashes."
+  ],
+  "cleanup": {
+    "round_temporary_directory": ".tool-cache/targeted-validation",
+    "round_temporary_directory_removed": false,
+    "own_sandboxes_closed": true,
+    "automatic_approval_review": "rejected: blocked by policy; no specific reason supplied",
+    "previously_blocked_paths_not_retried": [
+      ".tool-cache/backend-validation",
+      ".tool-cache/compact-ui-validation",
+      ".tool-cache/build-cache",
+      "extension/node_modules",
+      "extension/.output",
+      "extension/.wxt"
+    ]
+  },
+  "performance_follow_up": {
+    "measured_at": "2026-10-18T13:43:07.600344Z",
+    "raw_report": "targeted-performance-20261018/log-comparison.json",
+    "passed": true,
+    "process_exit_code": 0,
+    "independent_runs": 18,
+    "builds_performed": 0,
+    "production_changes": 0,
+    "source_hashes": {
+      "scripts/validation/compare_v7_progress_logs.py": "3cd13fcb7923ea419fa45fb66529810c5a1056a34a28d863e35bb2f46a809397",
+      "scripts/validation/smoke_v7_resource_boundaries.py": "9c46f171e12b3c3fd58da93a215728fe5e2a9e9ec0d7f29021ca91812868f341",
+      "native_shell/src/store.rs": "acbacd5f3d2afff194a6c5247c694167e03c15cdcf4aae613c1ac13c05e3f465"
+    },
+    "control": "baseline-a and baseline-b use the same executable; order rotates across three rounds",
+    "fixture": "1000 paused tasks; 4100 warmup commands; 1000 progress commits; changing bytes versus one task with 500 persisted logs and repeated log text",
+    "invariants": "All task states and final bytes verified; all persisted repeated-progress log row values unchanged, including IDs and timestamps.",
+    "medians": {
+      "changing": {
+        "baseline-a": {
+          "p50_ms": 2.202,
+          "p95_ms": 4.671,
+          "cpu_seconds": 1.922,
+          "rss_end_mib": 34.598
+        },
+        "baseline-b": {
+          "p50_ms": 2.776,
+          "p95_ms": 4.971,
+          "cpu_seconds": 2.031,
+          "rss_end_mib": 34.289
+        },
+        "candidate": {
+          "p50_ms": 2.654,
+          "p95_ms": 6.363,
+          "cpu_seconds": 1.906,
+          "rss_end_mib": 34.195
+        }
+      },
+      "repeated-full-log": {
+        "baseline-a": {
+          "p50_ms": 2.173,
+          "p95_ms": 4.627,
+          "cpu_seconds": 2.234,
+          "rss_end_mib": 34.949
+        },
+        "baseline-b": {
+          "p50_ms": 2.574,
+          "p95_ms": 6.981,
+          "cpu_seconds": 2.562,
+          "rss_end_mib": 35.363
+        },
+        "candidate": {
+          "p50_ms": 1.755,
+          "p95_ms": 3.952,
+          "cpu_seconds": 1.344,
+          "rss_end_mib": 34.113
+        }
+      }
+    },
+    "conclusion": "Repeated-full-log workload uses less Core CPU in this sample. Changing-progress candidate P95 remains higher; identical-baseline controls also fluctuate. Overall speedup and cause of the P95 difference remain unproven. Retain the bounded no-insert/no-trim change without claiming a general latency improvement.",
+    "own_sandbox_closed": true,
+    "limits": [
+      "Prior backend and candidate binaries, not a freshly rebuilt single-variable A/B experiment.",
+      "Three rounds per case in one Sandbox; no cross-hardware or multi-hour guarantee.",
+      "No host product run/install, cloud calls, signing, commit, push, release or MSI build."
+    ]
+  }
+}

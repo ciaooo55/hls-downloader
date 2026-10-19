@@ -141,6 +141,7 @@ export default defineContentScript({
         generic: !href,
         opensNewTab: linkOpensNewTab(targetValue),
         controlHint: downloadHint,
+        downloadAttribute: Boolean(htmlLink?.hasAttribute('download')),
       })
     }
     // Many download controls start navigation from pointerdown or tear down the

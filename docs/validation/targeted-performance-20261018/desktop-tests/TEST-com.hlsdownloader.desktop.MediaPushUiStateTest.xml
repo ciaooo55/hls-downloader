@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.MediaPushUiStateTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:15.549Z" hostname="DESKTOP-FTE6QH2" time="0.023">
+  <properties/>
+  <testcase name="terminal_sync_retry_budget_is_finite_and_covers_the_backoff_ceiling()" classname="com.hlsdownloader.desktop.MediaPushUiStateTest" time="0.002"/>
+  <testcase name="terminal_resolution_closes_only_the_matching_active_picker()" classname="com.hlsdownloader.desktop.MediaPushUiStateTest" time="0.001"/>
+  <testcase name="terminal_sync_bounded_retry_total_stays_within_a_plausible_operator_wait()" classname="com.hlsdownloader.desktop.MediaPushUiStateTest" time="0.001"/>
+  <testcase name="terminal_sync_retries_unless_the_durable_request_is_gone()" classname="com.hlsdownloader.desktop.MediaPushUiStateTest" time="0.003"/>
+  <testcase name="terminal_sync_retry_backoff_caps_quickly()" classname="com.hlsdownloader.desktop.MediaPushUiStateTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

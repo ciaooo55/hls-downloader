@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser'
+import { compactResources, pageResourceKey, pruneExpiredResources, type MediaResource } from './resources'
 import { SUBTITLE_LANGUAGES, subtitlePage, subtitleSite } from './subtitleSettings'
 
 export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined): void {
@@ -19,18 +20,21 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   for (const [value, label] of [['inherit', '默认'], ['on', '开启'], ['off', '关闭']]) {
     site.append(new Option(`本站：${label}`, value)); page.append(new Option(`本页：${label}`, value))
   }
-  row.append(enabledLabel, site, page)
+  row.append(enabledLabel)
+  const advanced = node('details'); advanced.append(node('summary', '字幕与站点选项'))
+  const scopeRow = node('div'); scopeRow.className = 'subtitle-row'; scopeRow.append(site, page)
   const languageRow = node('div'); languageRow.className = 'subtitle-row'
   const source = node('select'); source.setAttribute('aria-label', '来源语言'); source.append(new Option('自动识别', 'auto'))
   const target = node('select'); target.setAttribute('aria-label', '目标语言')
   for (const [code, label] of SUBTITLE_LANGUAGES) { source.append(new Option(label, code)); target.append(new Option(label, code)) }
   const offset = node('input'); offset.type = 'number'; offset.step = '0.2'; offset.min = '-30'; offset.max = '30'; offset.setAttribute('aria-label', '字幕时间偏移秒')
-  languageRow.append(source, node('span', '→'), target, offset, node('span', '秒'))
+  languageRow.append(source, node('span', '→'), target)
   const originals = node('input'); originals.type = 'checkbox'
   const originalLabel = node('label'); originalLabel.append(originals, node('span', '显示原文'))
   const prefetch = node('input'); prefetch.type = 'checkbox'; prefetch.dataset.subtitlePrefetch = 'true'
-  const prefetchLabel = node('label'); prefetchLabel.append(prefetch, node('span', '提前翻译音轨（最多 30 秒）'))
-  const prefetchHelp = node('small', '点播会先暂停准备字幕，再按播放位置滚动预取音频；显示的是已完成翻译的时长。准备期间可停止翻译。直播及无法确认音源的网页请关闭此项，使用实时采集。')
+  const prefetchLabel = node('label'); prefetchLabel.append(prefetch, node('span', '同步字幕（不足时暂停视频）'))
+  const prefetchHelp = node('small', '关闭：实时翻译，不控制视频暂停，译文会有延迟。开启：先等待字幕，再播放；字幕不足会再次暂停，倍速播放可能频繁等待。仅支持已确认音源的点播。')
+  const offsetRow = node('div'); offsetRow.className = 'subtitle-row'; offsetRow.append(node('span', '字幕偏移'), offset, node('span', '秒'))
   const player = node('select'); player.setAttribute('aria-label', '字幕播放器'); player.className = 'subtitle-player'
   const start = node('button', '开始翻译'); start.className = 'hlsd-button primary'; start.dataset.subtitleStart = 'true'
   const actionRow = node('div'); actionRow.className = 'subtitle-row'; actionRow.append(player, start)
@@ -59,10 +63,15 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
   service.onchange = updateProviderFields
   updateProviderFields()
   provider.append(form)
-  root.append(heading, row, languageRow, originalLabel, prefetchLabel, prefetchHelp, actionRow, tracks, error, provider)
+  advanced.append(originalLabel, offsetRow, scopeRow, tracks)
+  root.append(heading, row, languageRow, prefetchLabel, prefetchHelp, actionRow, error, advanced, provider)
   let state: any
   let busy = false
   let refreshing = false
+  let disposed = false
+  let resourceKey = ''
+  let resourceGeneration = 0
+  let resources: MediaResource[] = []
   let live = false
   let hasKey = false
   let loadingProvider = true
@@ -80,12 +89,45 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     if (!response?.ok) throw new Error(response?.error || '插件字幕服务不可用')
     return response
   }
+  const renderTracks = () => {
+    const known = new Set<string>((state?.players || []).flatMap((p: any) => p.tracks || []))
+    const current = compactResources(pruneExpiredResources(resources), 40, true)
+    for (const resource of compactResources(current, 40)) {
+      for (const track of resource.audioTracks || []) {
+        const label = [track.label, track.language].filter(Boolean).join(' · ')
+        if (label) known.add(label)
+      }
+    }
+    const text = known.size ? `已发现音轨：${[...known].join('、')}` : '采集当前播放器音轨；网页提供音轨信息时会提前显示。'
+    if (tracks.textContent !== text) tracks.textContent = text
+  }
+  const onResourcesChanged: Parameters<typeof browser.storage.onChanged.addListener>[0] = (changes, area) => {
+    if (disposed || area !== 'session' || !Object.hasOwn(changes, resourceKey)) return
+    resourceGeneration++
+    const value = changes[resourceKey].newValue
+    resources = Array.isArray(value) ? value : []
+  }
+  const loadResources = async (pageUrl: string) => {
+    const nextKey = pageResourceKey(tabId!, pageUrl)
+    if (resourceKey === nextKey) return
+    resourceKey = nextKey
+    resources = []
+    const generation = ++resourceGeneration
+    try {
+      const stored = await browser.storage.session.get(nextKey)
+      // 初始化读取不能覆盖读取期间收到的新资源，也不能跨越页面导航。
+      if (disposed || resourceKey !== nextKey || resourceGeneration !== generation) return
+      resources = Array.isArray(stored[nextKey]) ? stored[nextKey] as MediaResource[] : []
+    } catch {
+      if (resourceKey === nextKey && resourceGeneration === generation) resourceKey = ''
+    }
+  }
   const refresh = async () => {
-    if (root.hidden || busy || refreshing || tabId == null) return
+    if (disposed || root.hidden || busy || refreshing || tabId == null) return
     refreshing = true
     try {
       state = await send({ type: 'subtitle-state-get' })
-      if (busy) return
+      if (disposed || busy) return
       const settings = state.settings
       enabled.checked = settings.enabled
       if (document.activeElement !== source) source.value = settings.source
@@ -100,8 +142,8 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
       const playing = (state.players || []).some((p: any) => p.mediaId === state.session?.mediaId && p.frameId === state.session?.frameId && p.playing)
       status.textContent = !settings.enabled ? '全局已关闭' : !state.allowed ? '当前页已关闭' : live
         ? state.session.status === 'running' ? state.session.capture === 'prefetch'
-          ? `提前翻译 · 已备好 ${Math.max(0, (state.session.readyEnd || 0) - (state.session.clock?.position || 0)).toFixed(1)} 秒`
-          : playing ? '翻译中' : '等待播放器播放' : '连接中' : '已开启 · 待启动'
+          ? `同步字幕 · 已备好 ${Math.max(0, (state.session.readyEnd || 0) - (state.session.clock?.position || 0)).toFixed(1)} 秒`
+          : playing ? '实时翻译中' : '等待播放器播放' : '连接中' : '已开启 · 待启动'
       start.textContent = live ? '停止翻译' : '开始翻译'
       const options = (state.players || []).map((p: any, index: number) => ({ value: `${p.frameId}:${p.mediaId}`, label: `播放器 ${index + 1}${p.playing ? ' · 播放中' : ''} · ${String(p.label).slice(0, 36)}` }))
       const old = player.value
@@ -116,15 +158,8 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
         }
       }
       updateControls()
-      const known = [...new Set<string>((state.players || []).flatMap((p: any) => p.tracks || []))]
-      const resources = await browser.runtime.sendMessage({ type: 'list', tabId, pageUrl: state.pageUrl }).catch(() => [])
-      for (const resource of Array.isArray(resources) ? resources : []) {
-        for (const track of resource.audioTracks || []) {
-          const label = [track.label, track.language].filter(Boolean).join(' · ')
-          if (label && !known.includes(label)) known.push(label)
-        }
-      }
-      tracks.textContent = known.length ? `已发现音轨：${known.join('、')}` : '采集当前播放器音轨；网页提供音轨信息时会提前显示。'
+      await loadResources(state.pageUrl)
+      renderTracks()
       if (state.session?.status === 'failed') report(state.session.error || '字幕连接失败，请重试')
     } catch (reason) { report(reason instanceof Error ? reason.message : String(reason)) }
     finally { refreshing = false }
@@ -178,7 +213,14 @@ export function mountSubtitlePopup(root: HTMLElement, tabId: number | undefined)
     .catch(() => { keyState.textContent = '请启动新版 HLS 桌面端后配置服务' })
     .finally(() => { loadingProvider = false; updateControls() })
   updateControls()
+  browser.storage.onChanged.addListener(onResourcesChanged)
   void refresh()
   const timer = setInterval(() => void refresh(), 1000)
-  window.addEventListener('pagehide', () => { clearInterval(timer); key.value = '' }, { once: true })
+  window.addEventListener('pagehide', () => {
+    disposed = true
+    clearInterval(timer)
+    browser.storage.onChanged.removeListener(onResourcesChanged)
+    resources = []
+    key.value = ''
+  }, { once: true })
 }

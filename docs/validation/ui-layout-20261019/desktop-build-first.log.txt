@@ -1,0 +1,45 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+Calculating task graph as no cached configuration is available for tasks: test --tests *ResponsiveLayoutTest --tests *SelectionPruningTest --tests *CategoryParityTest --tests *ControlBoundsReportingTest --tests *UiConvergenceGuardTest jar
+> Task :generateComposeResClass SKIPPED
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :copyNonXmlValueResourcesForTest NO-SOURCE
+> Task :copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :convertXmlValueResourcesForTest NO-SOURCE
+> Task :convertXmlValueResourcesForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForTest NO-SOURCE
+> Task :generateResourceAccessorsForMain SKIPPED
+> Task :generateResourceAccessorsForTest SKIPPED
+> Task :generateActualResourceCollectorsForMain SKIPPED
+> Task :assembleMainResources
+> Task :assembleTestResources
+> Task :processTestResources
+> Task :processResources
+> Task :compileKotlin
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2479:29 No parameter with name 'leadingIcon' found.
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2479:45 @Composable invocations can only happen from the context of a @Composable function
+
+> Task :compileKotlin FAILED
+
+[Incubating] Problems report is available at: file:///R:/compose-build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':compileKotlin' (registered by plugin 'org.jetbrains.kotlin.jvm').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Kotlin compiler: NAMED_PARAMETER_NOT_FOUND
+       Kotlin compiler error
+         No parameter with name 'leadingIcon' found.
+         Location: A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt line 2479
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 1m 45s
+5 actionable tasks: 5 executed
+Configuration cache entry stored.

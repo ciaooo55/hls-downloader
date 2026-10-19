@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-19",
+  "head": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "dirty_worktree": true,
+  "release_ready": false,
+  "performance_parity": false,
+  "scope": "Windows Sandbox: HTTP product comparison, Core/media regression, headed Firefox takeover and actual confirmation buttons",
+  "evidence_directory": "idm-ab-20261019",
+  "checks": {
+    "final_retained_core": { "passed": 613, "failed": 0, "ignored": 4, "seconds": 49.63, "exit_code": 0, "evidence": "core-retained.log.txt" },
+    "download_playback_cleanup": { "passed": true, "records": 27, "evidence": "download-playback.json" },
+    "http_boundaries": { "passed": true, "records": 13, "evidence": "http-boundaries-final.json" },
+    "http_stall": { "passed": true, "records": 6, "evidence": "http-stall-final.json" },
+    "extension_typecheck_tests": { "passed": true, "tests": 382, "evidence": "extension-ownership-tests-rerun.log.txt" },
+    "extension_builds": { "passed": true, "browsers": ["Chromium", "Firefox"], "evidence": "extension-ownership-build.log.txt" },
+    "firefox_takeover": { "passed": true, "decisions": "Core API", "evidence": "firefox-final.json" },
+    "firefox_confirmation_buttons": { "passed": true, "decisions": "actual computer-use clicks on Start download and Cancel", "evidence": "firefox-ui-final.json" },
+    "comparison": { "passed": true, "verified_files": 18, "rounds": 3, "evidence": "comparison-clean.json" }
+  },
+  "retained_changes": [
+    "HTTP pending ranges sorted once; ordinary claims pop; no pending clone; workers bounded by remaining ranges",
+    "Firefox trusted same-origin download links offered using real outgoing request headers",
+    "Firefox early handoff request identity persisted through background reload; Alt bypass retained"
+  ],
+  "reverted_experiments": ["HTTP initial workers increased from 2 to 8", "Firefox webRequestBlocking permission and diagnostic trace"],
+  "cleanup": {
+    "sandbox_closed": true,
+    "sandbox_data_destroyed": true,
+    "this_run_openwith_processes_closed": [4240, 10480],
+    "preexisting_openwith_process_preserved": 19244,
+    "local_branches": ["main"],
+    "worktrees": 1,
+    "source_only": false,
+    "deletion_block": {
+      "action": "Remove this-run generated validation directory after saving evidence",
+      "path": ".tool-cache/targeted-validation/idm-ab-20261019",
+      "files_remaining": 639,
+      "bytes_remaining": 547844309,
+      "reason": "Automatic approval review rejected exec_command: blocked by policy; no detailed reason provided",
+      "retried": false
+    },
+    "previously_blocked_generated_paths_still_present": [
+      ".tool-cache/backend-validation",
+      ".tool-cache/compact-ui-validation",
+      ".tool-cache/build-cache",
+      ".tool-cache/targeted-validation",
+      "extension/node_modules",
+      "extension/.output",
+      "extension/.wxt"
+    ]
+  },
+  "limitations": [
+    "Local HTTP default-configuration samples do not establish public-network or equal-connection performance",
+    "HLS limited-download median remains slower than AB; CPU and memory do not match IDM",
+    "Cross-origin and ordinary Firefox links still wait for download evidence",
+    "Full browser-restart and desktop-disconnection recovery not rerun in this batch",
+    "No full product feature certification, cloud calls, new MSI, signing, host installation, commit, push or release"
+  ]
+}

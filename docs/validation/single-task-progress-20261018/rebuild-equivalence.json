@@ -1,0 +1,74 @@
+{
+  "tested_sha256": "838f6319353b26c7c1b9b6e184a5318697b180071e713243ba73b290d3021971",
+  "rebuilt_sha256": "2cdf04041894dd77eaaba0f2ab1b08691c4bffca7373915cc73c15f4d88c6063",
+  "bytes": 14577152,
+  "differing_bytes": 24,
+  "unclassified_difference_offsets": [],
+  "metadata_only": true,
+  "sections": [
+    {
+      "name": ".text",
+      "tested_sha256": "7fd53abb34b4a43d35cb493a119671cee61ea10b403f0a6a886257a359d5a536",
+      "rebuilt_sha256": "7fd53abb34b4a43d35cb493a119671cee61ea10b403f0a6a886257a359d5a536"
+    },
+    {
+      "name": ".rdata",
+      "tested_sha256": "5f3050368b6f5e4bfcc8382b67bff0ebb27cd2c708181dc2e5d9f2b45af126a5",
+      "rebuilt_sha256": "0d46eabcd55d7798b92346eaebe01702604fc9381e2d4acf2a24543a9514e137"
+    },
+    {
+      "name": ".data",
+      "tested_sha256": "e26319571e3e0948dc3c792382729b3f36d759486cac6a787c23bba856a8a27d",
+      "rebuilt_sha256": "e26319571e3e0948dc3c792382729b3f36d759486cac6a787c23bba856a8a27d"
+    },
+    {
+      "name": ".pdata",
+      "tested_sha256": "ea73e47c8c68587727fa92e189caf970f85e33d7771c91f04f1162a6c3f1102d",
+      "rebuilt_sha256": "ea73e47c8c68587727fa92e189caf970f85e33d7771c91f04f1162a6c3f1102d"
+    },
+    {
+      "name": ".reloc",
+      "tested_sha256": "b941483198cb5faec8e9676501a6a1eb9887dad2e243fb173754d0fabe222d6c",
+      "rebuilt_sha256": "b941483198cb5faec8e9676501a6a1eb9887dad2e243fb173754d0fabe222d6c"
+    }
+  ],
+  "changed_fields": [
+    {
+      "name": "COFF timestamp",
+      "differing_bytes": 2
+    },
+    {
+      "name": "debug timestamp",
+      "differing_bytes": 2
+    },
+    {
+      "name": "CodeView PDB identifier",
+      "differing_bytes": 16
+    },
+    {
+      "name": "debug timestamp",
+      "differing_bytes": 2
+    },
+    {
+      "name": "debug timestamp",
+      "differing_bytes": 2
+    }
+  ],
+  "debug_records": [
+    {
+      "type": 2,
+      "offset": 12475580,
+      "size": 50
+    },
+    {
+      "type": 12,
+      "offset": 12475632,
+      "size": 20
+    },
+    {
+      "type": 13,
+      "offset": 12475652,
+      "size": 796
+    }
+  ]
+}

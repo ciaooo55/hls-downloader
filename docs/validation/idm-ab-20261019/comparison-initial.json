@@ -1,0 +1,858 @@
+{
+  "schema": 1,
+  "scope": "loopback default-settings transfer and whole-product process resources; not UI response or public Internet",
+  "samples": [
+    {
+      "product": "hls",
+      "round": 1,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 33.712400000013076,
+      "first_byte_ms": 40.00750000000153,
+      "verified_output_ms": 2983.7082999999893,
+      "last_ten_percent_ms": 983.8775000000055,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 219181056,
+        "private": 265715712,
+        "cpu": 5.78125,
+        "threads": 88,
+        "handles": 1267,
+        "read_bytes": 21589099,
+        "write_bytes": 114133,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "peak": {
+        "rss": 282247168,
+        "private": 317992960,
+        "cpu": 5.78125,
+        "threads": 108,
+        "handles": 1390,
+        "read_bytes": 21589099,
+        "write_bytes": 114133,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "after": {
+        "rss": 261644288,
+        "private": 292188160,
+        "cpu": 10.3125,
+        "threads": 92,
+        "handles": 1314,
+        "read_bytes": 22373264,
+        "write_bytes": 134757902,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "cpu_seconds": 4.53125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 2796202,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.7475288
+        },
+        {
+          "start": 2796203,
+          "end": 5592405,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.7580646
+        },
+        {
+          "start": 5592406,
+          "end": 8388608,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.9007606
+        },
+        {
+          "start": 8388609,
+          "end": 11184811,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.9061396
+        },
+        {
+          "start": 11184812,
+          "end": 13981014,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.9139906
+        },
+        {
+          "start": 16777218,
+          "end": 19573420,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.9911369
+        },
+        {
+          "start": 13981015,
+          "end": 16777217,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.9960178
+        },
+        {
+          "start": 19573421,
+          "end": 22369623,
+          "status": 206,
+          "sent": 2796203,
+          "started": 419.9972028
+        },
+        {
+          "start": 22369624,
+          "end": 25165826,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.0070979
+        },
+        {
+          "start": 30758233,
+          "end": 33554435,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.172625
+        },
+        {
+          "start": 27962030,
+          "end": 30758232,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.1741351
+        },
+        {
+          "start": 25165827,
+          "end": 27962029,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.1830483
+        },
+        {
+          "start": 36350639,
+          "end": 39146841,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.1878062
+        },
+        {
+          "start": 33554436,
+          "end": 36350638,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.207778
+        },
+        {
+          "start": 39146842,
+          "end": 41943044,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.3612868
+        },
+        {
+          "start": 44739248,
+          "end": 47535450,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.3680562
+        },
+        {
+          "start": 47535451,
+          "end": 50331653,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.3721597
+        },
+        {
+          "start": 50331654,
+          "end": 53127856,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.3842528
+        },
+        {
+          "start": 53127857,
+          "end": 55924059,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.3923562
+        },
+        {
+          "start": 41943045,
+          "end": 44739247,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.4036227
+        },
+        {
+          "start": 55924060,
+          "end": 58720262,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5194204
+        },
+        {
+          "start": 58720263,
+          "end": 61516465,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5436611
+        },
+        {
+          "start": 64312669,
+          "end": 67108871,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5463949
+        },
+        {
+          "start": 69905075,
+          "end": 72701277,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5465657
+        },
+        {
+          "start": 61516466,
+          "end": 64312668,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5513157
+        },
+        {
+          "start": 72701278,
+          "end": 75497480,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5565461
+        },
+        {
+          "start": 67108872,
+          "end": 69905074,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.5612143
+        },
+        {
+          "start": 75497481,
+          "end": 78293683,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.8659471
+        },
+        {
+          "start": 78293684,
+          "end": 81089886,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.8734046
+        },
+        {
+          "start": 83886090,
+          "end": 86682292,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.8781489
+        },
+        {
+          "start": 81089887,
+          "end": 83886089,
+          "status": 206,
+          "sent": 2796203,
+          "started": 420.8843307
+        },
+        {
+          "start": 86682293,
+          "end": 89478495,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.0438546
+        },
+        {
+          "start": 89478496,
+          "end": 92274698,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.062151
+        },
+        {
+          "start": 95070902,
+          "end": 97867104,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.0707781
+        },
+        {
+          "start": 97867105,
+          "end": 100663307,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.0748447
+        },
+        {
+          "start": 92274699,
+          "end": 95070901,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.082592
+        },
+        {
+          "start": 100663308,
+          "end": 103459510,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.3062157
+        },
+        {
+          "start": 106255714,
+          "end": 109051916,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.3100459
+        },
+        {
+          "start": 109051917,
+          "end": 111848119,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.322341
+        },
+        {
+          "start": 114644323,
+          "end": 117440525,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.3245617
+        },
+        {
+          "start": 111848120,
+          "end": 114644322,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.3355973
+        },
+        {
+          "start": 103459511,
+          "end": 106255713,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.3425891
+        },
+        {
+          "start": 117440526,
+          "end": 120236728,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.6128471
+        },
+        {
+          "start": 120236729,
+          "end": 123032931,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.6449221
+        },
+        {
+          "start": 125829135,
+          "end": 128625337,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.645025
+        },
+        {
+          "start": 123032932,
+          "end": 125829134,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.6451243
+        },
+        {
+          "start": 128625338,
+          "end": 131421540,
+          "status": 206,
+          "sent": 2796203,
+          "started": 421.8564481
+        },
+        {
+          "start": 131421541,
+          "end": 134217727,
+          "status": 206,
+          "sent": 2796187,
+          "started": 421.859206
+        }
+      ],
+      "server_bytes_sent": 134217728,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 1,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 33.080999999981486,
+      "first_byte_ms": 112.95189999998456,
+      "verified_output_ms": 5099.962800000014,
+      "last_ten_percent_ms": 1080.1029000000426,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 260067328,
+        "private": 286806016,
+        "cpu": 10.65625,
+        "threads": 92,
+        "handles": 1315,
+        "read_bytes": 22373686,
+        "write_bytes": 134791285,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "peak": {
+        "rss": 312745984,
+        "private": 327294976,
+        "cpu": 10.65625,
+        "threads": 109,
+        "handles": 1399,
+        "read_bytes": 22373686,
+        "write_bytes": 134791285,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "after": {
+        "rss": 290684928,
+        "private": 301260800,
+        "cpu": 16.96875,
+        "threads": 93,
+        "handles": 1318,
+        "read_bytes": 22539881,
+        "write_bytes": 202699897,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "cpu_seconds": 6.3125,
+      "requests": [
+        {
+          "start": 1398102,
+          "end": 2796203,
+          "status": 206,
+          "sent": 1398102,
+          "started": 423.1682242
+        },
+        {
+          "start": 0,
+          "end": 1398101,
+          "status": 206,
+          "sent": 1398102,
+          "started": 423.1683331
+        },
+        {
+          "start": 2796204,
+          "end": 4194305,
+          "status": 206,
+          "sent": 1398102,
+          "started": 423.6501777
+        },
+        {
+          "start": 4194306,
+          "end": 5592407,
+          "status": 206,
+          "sent": 1398102,
+          "started": 423.6544081
+        },
+        {
+          "start": 5592408,
+          "end": 6990509,
+          "status": 206,
+          "sent": 1398102,
+          "started": 423.6547321
+        },
+        {
+          "start": 6990510,
+          "end": 8388611,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.1729621
+        },
+        {
+          "start": 8388612,
+          "end": 9786713,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.1783049
+        },
+        {
+          "start": 9786714,
+          "end": 11184815,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.1788825
+        },
+        {
+          "start": 11184816,
+          "end": 12582917,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.1924227
+        },
+        {
+          "start": 12582918,
+          "end": 13981019,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.6357722
+        },
+        {
+          "start": 13981020,
+          "end": 15379121,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.6415189
+        },
+        {
+          "start": 16777224,
+          "end": 18175325,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.6436223
+        },
+        {
+          "start": 15379122,
+          "end": 16777223,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.6459695
+        },
+        {
+          "start": 18175326,
+          "end": 19573427,
+          "status": 206,
+          "sent": 1398102,
+          "started": 424.64791
+        },
+        {
+          "start": 19573428,
+          "end": 20971529,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.134076
+        },
+        {
+          "start": 20971530,
+          "end": 22369631,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.1386496
+        },
+        {
+          "start": 23767734,
+          "end": 25165835,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.1402591
+        },
+        {
+          "start": 26563938,
+          "end": 27962039,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.1428532
+        },
+        {
+          "start": 25165836,
+          "end": 26563937,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.1446599
+        },
+        {
+          "start": 22369632,
+          "end": 23767733,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.1463081
+        },
+        {
+          "start": 27962040,
+          "end": 29360141,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.6262986
+        },
+        {
+          "start": 29360142,
+          "end": 30758243,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.6322512
+        },
+        {
+          "start": 32156346,
+          "end": 33554447,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.632836
+        },
+        {
+          "start": 30758244,
+          "end": 32156345,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.6349856
+        },
+        {
+          "start": 36350652,
+          "end": 37748753,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.6362762
+        },
+        {
+          "start": 34952550,
+          "end": 36350651,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.6385727
+        },
+        {
+          "start": 33554448,
+          "end": 34952549,
+          "status": 206,
+          "sent": 1398102,
+          "started": 425.63973
+        },
+        {
+          "start": 37748754,
+          "end": 39146855,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.1757101
+        },
+        {
+          "start": 41943060,
+          "end": 43341161,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.1825935
+        },
+        {
+          "start": 43341162,
+          "end": 44739263,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.1977142
+        },
+        {
+          "start": 47535468,
+          "end": 48933569,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.1980909
+        },
+        {
+          "start": 44739264,
+          "end": 46137365,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.1982442
+        },
+        {
+          "start": 39146856,
+          "end": 40544957,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.2009343
+        },
+        {
+          "start": 46137366,
+          "end": 47535467,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.2012259
+        },
+        {
+          "start": 40544958,
+          "end": 41943059,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.2025756
+        },
+        {
+          "start": 48933570,
+          "end": 50331671,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7183742
+        },
+        {
+          "start": 50331672,
+          "end": 51729773,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7188996
+        },
+        {
+          "start": 53127876,
+          "end": 54525977,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7225127
+        },
+        {
+          "start": 51729774,
+          "end": 53127875,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7251024
+        },
+        {
+          "start": 58720284,
+          "end": 60118385,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7278256
+        },
+        {
+          "start": 60118386,
+          "end": 61516487,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7288149
+        },
+        {
+          "start": 55924080,
+          "end": 57322181,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.731186
+        },
+        {
+          "start": 54525978,
+          "end": 55924079,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7329068
+        },
+        {
+          "start": 57322182,
+          "end": 58720283,
+          "status": 206,
+          "sent": 1398102,
+          "started": 426.7349773
+        },
+        {
+          "start": 61516488,
+          "end": 62914589,
+          "status": 206,
+          "sent": 1398102,
+          "started": 427.2531478
+        },
+        {
+          "start": 62914590,
+          "end": 64312691,
+          "status": 206,
+          "sent": 1398102,
+          "started": 427.2546327
+        },
+        {
+          "start": 64312692,
+          "end": 65710793,
+          "status": 206,
+          "sent": 1398102,
+          "started": 427.2680892
+        },
+        {
+          "start": 65710794,
+          "end": 67108863,
+          "status": 206,
+          "sent": 1398070,
+          "started": 427.2682619
+        }
+      ],
+      "server_bytes_sent": 67108864,
+      "unique_server_bytes": 67108864
+    }
+  ],
+  "errors": [],
+  "installed_bytes": {
+    "hls": 472811891,
+    "ab": 172564357,
+    "idm": 26044102
+  },
+  "binaries": {
+    "hls": {
+      "path": "C:\\HLSRuntime\\HLSDownloader.exe",
+      "sha256": "841b23b44128b652efa457f733272faa06ba6a6ed803af41fd5550bbdc0e535d"
+    },
+    "ab": {
+      "path": "C:\\ABDownloadManager\\ABDownloadManager.exe",
+      "sha256": "843d936ded4952ff845e6c42720e394c7e6e1b997177b046f21cd5f1e89650b7"
+    },
+    "idm": {
+      "path": "C:\\Program Files (x86)\\Internet Download Manager\\IDMan.exe",
+      "sha256": "e3fc655a335e17a6fdd09a9b315291d0c8863180f0d801e5dd7433c9e56afbd8"
+    }
+  },
+  "idle": [
+    {
+      "product": "hls",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 215064576,
+        "private": 264040448,
+        "cpu": 5.78125,
+        "threads": 83,
+        "handles": 1191,
+        "read_bytes": 21491087,
+        "write_bytes": 113667,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "after": {
+        "rss": 219181056,
+        "private": 265715712,
+        "cpu": 5.78125,
+        "threads": 88,
+        "handles": 1267,
+        "read_bytes": 21589099,
+        "write_bytes": 114133,
+        "pids": [
+          1168,
+          1736,
+          4052,
+          5732
+        ]
+      },
+      "cpu_seconds": 0.0
+    }
+  ]
+}

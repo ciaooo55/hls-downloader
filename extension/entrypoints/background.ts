@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { localDownloadIntentUrl } from '../lib/resources'
+import { downloadSelectionKey, localDownloadIntentUrl } from '../lib/resources'
 import { mediaPushRequestId } from '../lib/mediaPush'
 import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggregateTabMedia } from '../lib/sniffCommand'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
@@ -156,7 +156,8 @@ async function continueLocalDownloadHandoffs(): Promise<void> {
  * Chromium delivers a browser DownloadItem after the response has already
  * been accepted. Keep a short-lived promise for direct responses offered from
  * onHeadersReceived so onCreated can reuse that handoff instead of issuing a
- * second offer. Firefox uses the DownloadItem path directly.
+ * second offer. Firefox also uses this for same-origin download links observed
+ * at onSendHeaders, before a slow first byte can delay its response events.
  */
 export interface EarlyBrowserTakeover {
   requestId: string
@@ -164,7 +165,7 @@ export interface EarlyBrowserTakeover {
   urls: string[]
   tabId: number
   frameId: number
-  promise: Promise<{ resource: MediaResource, response: any } | null>
+  promise: Promise<{ resource: MediaResource, response: any, bypass?: boolean } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const activeDownloadOffers = new Map<string, Promise<any>>()
@@ -224,7 +225,9 @@ const HANDOFF_TRACKER_STORAGE_KEY = 'handoff-tracker-v1'
 interface TrackedHandoff {
   id: string
   resourceId: string
+  selectionKey?: string
   tabId?: number
+  browserRequestId?: string
   status: string
   checkedAt: number
   failures: number
@@ -364,7 +367,9 @@ async function hydrateHandoffTracker(): Promise<void> {
     trackedHandoffs.set(id, {
       id,
       resourceId: String(item.resourceId || ''),
+      selectionKey: typeof item.selectionKey === 'string' ? item.selectionKey : undefined,
       tabId: validIdentity(item.tabId) ? item.tabId : undefined,
+      browserRequestId: typeof item.browserRequestId === 'string' ? item.browserRequestId : undefined,
       status: String(item.status || 'pending'),
       checkedAt: Number(item.checkedAt || 0),
       failures: Math.max(0, Number(item.failures || 0)),
@@ -430,17 +435,18 @@ function scheduleHandoffPoll(delay = 120): void {
   }, delay)
 }
 
-async function trackHandoff(handoffId: string, resourceId = '', tabId?: number): Promise<TrackedHandoff> {
+async function trackHandoff(handoffId: string, resourceId = '', tabId?: number, selectionKey?: string): Promise<TrackedHandoff> {
   await hydrateHandoffTracker()
   const id = String(handoffId || '')
   const current = trackedHandoffs.get(id)
   if (current) {
     if (resourceId && !current.resourceId) current.resourceId = resourceId
+    if (selectionKey) current.selectionKey = selectionKey
     if (validIdentity(tabId)) current.tabId = tabId
     scheduleHandoffPoll()
     return current
   }
-  const tracked: TrackedHandoff = { id, resourceId, tabId, status: 'pending', checkedAt: 0, failures: 0 }
+  const tracked: TrackedHandoff = { id, resourceId, selectionKey, tabId, status: 'pending', checkedAt: 0, failures: 0 }
   trackedHandoffs.set(id, tracked)
   pruneTrackedHandoffs()
   await persistHandoffTracker()
@@ -1166,18 +1172,16 @@ async function requestDownload(
 ) {
   if (validIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`)
   await hydrateHandoffTracker()
+  const selectionKey = downloadSelectionKey(resource)
   const pending = [...trackedHandoffs.values()].find(item => item.tabId === resource.tabId
-    && item.resourceId === resource.id && item.status === 'pending')
+    && item.resourceId === resource.id && item.status === 'pending'
+    && (!item.selectionKey || item.selectionKey === selectionKey))
   if (pending) {
     const previous = await native({ op: 'handoff_status', handoff_id: pending.id })
     if (!previous?.ok) throw new Error(previous?.error || '无法读取下载确认状态')
     updateTrackedHandoff(pending, previous.handoff || {})
     await persistHandoffTracker()
     if (pending.status === 'pending') return previous
-  }
-  // 保留主清单的外置音轨/字幕关系，Core 按用户选定的码率和高度选择视频轨。
-  if (resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')) {
-    resource = { ...resource, url: resource.manifestUrl }
   }
   const key = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
   const active = activeDownloadOffers.get(key)
@@ -1226,8 +1230,11 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
     requestId = globalThis.crypto?.randomUUID?.()
       || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
   }
+  // 只改写传输负载；原选择身份继续用于去重和弹窗恢复，避免同码率的不同线路串状态。
+  const downloadResource = resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')
+    ? { ...resource, url: resource.manifestUrl } : resource
   const payload = {
-    ...await resourcePayload(resource, chain, options),
+    ...await resourcePayload(downloadResource, chain, options),
     // 自动接管按资源去重；主动点击取消/完成后允许再次打开确认窗。
     client_request_id: options.explicit ? `explicit:${crypto.randomUUID()}` : requestId,
   }
@@ -1239,7 +1246,7 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
   }
   // Handoff creation is the acknowledgement. Presentation happens in the
   // desktop queue and must never hold the browser button at “发送中”.
-  await trackHandoff(String(handoff.id), resource.id, resource.tabId)
+  await trackHandoff(String(handoff.id), resource.id, resource.tabId, downloadSelectionKey(resource))
   return response
 }
 
@@ -1372,6 +1379,7 @@ async function waitForClickIntent(
   referrer = '',
   chain?: RequestChain,
   attempts = 12,
+  downloadAttributeOnly = false,
 ): Promise<DownloadClickIntent | undefined> {
   // The trusted pointerdown message normally precedes the network request.
   // Keep only a short MV3 wake-up grace period: a classified DownloadItem is
@@ -1385,6 +1393,7 @@ async function waitForClickIntent(
       referrer: referrer || chain?.pageUrl || '',
       chainUrls: chain?.urls,
       tabId: chain?.tabId,
+      downloadAttributeOnly,
     })
     if (intent) return intent
     if (attempt + 1 < polls) await new Promise(resolve => setTimeout(resolve, 25))
@@ -1472,8 +1481,8 @@ function trackedSize(chain: RequestChain | undefined): number {
   return rangeTotal || Number(responseHeader(chain, 'content-length') || 0)
 }
 
-function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }): void {
-  if (!chain || !observed.resource || !isEarlyDirectDownloadResponse(details, observed)) return
+function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefined, observed: { disposition: string, resource: ObservedDownloadResource | null }, beforeResponse = false): void {
+  if (!chain || !observed.resource || (!beforeResponse && !isEarlyDirectDownloadResponse(details, observed))) return
   const observedResource = observed.resource
   const requestId = String(chain.requestId || details.requestId || '')
   if (!requestId || earlyBrowserTakeovers.has(requestId)) return
@@ -1503,7 +1512,10 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         resource.pageUrl || chain.pageUrl || '',
         chain,
         clickIntentPollsForKind(resource.kind),
+        beforeResponse,
       )
+      if (beforeResponse && !intent) return null
+      if (intent?.altBypass) return { resource, response: null, bypass: true }
       if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
       if (!shouldTakeover({
         url: resource.url,
@@ -1516,7 +1528,12 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
         explicitClick: Boolean(intent),
         strongEvidence: true,
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
-      const response = await offer(resource, chain)
+      const response = await offer(resource, chain, { allowUnverified: beforeResponse })
+      if (beforeResponse && desktopAcceptedHandoff(response)) {
+        const tracked = await trackHandoff(String(response.handoff.id), resource.id, resource.tabId)
+        tracked.browserRequestId = requestId
+        await persistHandoffTracker()
+      }
       // Keep a response with a handoff id even when its presentation was
       // rejected; onCreated must not issue a duplicate desktop task in that
       // case.  A missing id means the early attempt never reached the app and
@@ -1540,7 +1557,7 @@ function rememberEarlyBrowserTakeover(details: any, chain: RequestChain | undefi
     setTimeout(() => {
       const current = earlyBrowserTakeovers.get(requestId)
       if (current?.promise === promise) earlyBrowserTakeovers.delete(requestId)
-    }, 30_000)
+    }, beforeResponse ? 300_000 : 30_000)
   })
   // Keep the map bounded on pages that repeatedly navigate through downloads.
   if (earlyBrowserTakeovers.size > 128) {
@@ -1665,7 +1682,16 @@ export default defineBackground(() => {
   })
 
   ;(browser.webRequest.onSendHeaders.addListener as any)((details: any) => {
-    requestChains.observeRequest(details)
+    const chain = requestChains.observeRequest(details)
+    if (import.meta.env.FIREFOX && details.method === 'GET' && ['main_frame', 'sub_frame'].includes(details.type)) {
+      // Firefox 有时等首字节后才发响应头事件。仅同源 download 链接可依据已记录的
+      // 可信点击提前提交；请求头来自当前真实请求，拒绝和失败仍由原浏览器下载回退。
+      rememberEarlyBrowserTakeover(details, chain, { disposition: '', resource: {
+        url: details.url, kind: classifyDownload(details.url, '', '', '', true) || 'file',
+        pageUrl: chain.pageUrl, tabId: details.tabId, frameId: details.frameId,
+        method: chain.method, requestHeaders: chain.requestHeaders,
+      } }, true)
+    }
   }, TRACKED_REQUEST_FILTER, requestHeaderExtraInfo(import.meta.env.CHROME))
   ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
@@ -1682,7 +1708,7 @@ export default defineBackground(() => {
     // window opened; rejecting that window then left no DownloadItem to
     // resume. onCreated pauses the browser item and either removes it after
     // a successful desktop transfer or resumes it on reject/expire.
-    // Firefox 的 DownloadItem 与响应事件无法可靠关联，只由 onCreated 提交一次接管。
+    // Firefox 的普通下载由 onCreated 提交；同源 download 链接可复用发请求时的接管。
     if (import.meta.env.CHROME) {
       rememberEarlyBrowserTakeover(details, chain, observed)
     }
@@ -1746,21 +1772,30 @@ export default defineBackground(() => {
           [(item as any).finalUrl, item.url, originalRequest.url],
           downloadIdentity(item),
         )
-      if (earlyTakeover) {
-        const earlyResult = await earlyTakeover.promise
-        earlyBrowserTakeovers.delete(earlyTakeover.requestId)
-        if (earlyResult?.response?.handoff?.id) {
+      // 原请求可跨过 Firefox 后台重载。按浏览器 requestId 恢复已有接管，
+      // 不能在用户已拒绝后仅凭相同 URL 再弹一次确认。
+      await hydrateHandoffTracker()
+      const originalChain = provisionalChain
+      const restored = !earlyTakeover && originalChain
+        ? [...trackedHandoffs.values()].find(tracked => tracked.browserRequestId === originalChain.requestId
+          && tracked.tabId === originalChain.tabId)
+        : undefined
+      if (earlyTakeover || restored) {
+        const earlyResult = await earlyTakeover?.promise
+        if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
+        if (earlyResult?.bypass) return
+        const handoffId = String(earlyResult?.response?.handoff?.id || restored?.id || '')
+        if (handoffId) {
           // The early response already created the desktop handoff.  If the
           // desktop rejected presentation, leave the original browser item
           // untouched; otherwise wait for the user's final decision and clean
           // up the browser item only after acceptance. The follow-up deadline
           // is persisted before waiting so a suspended worker continues this
           // flow from the shared alarm.
-          if (!desktopAcceptedHandoff(earlyResult.response)) return
+          if (!restored && !desktopAcceptedHandoff(earlyResult?.response)) return
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
-          const handoffId = String(earlyResult.response.handoff.id)
           followUpHandoffId = handoffId
           followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
           const handoff = await waitForHandoffResolution(handoffId)
@@ -2030,6 +2065,7 @@ export default defineBackground(() => {
         frameId: sender.frameId,
         opensNewTab: Boolean(message.opensNewTab),
         controlHint: Boolean(message.controlHint),
+        downloadAttribute: Boolean(message.downloadAttribute),
         at: Date.now(),
       })
         .then(() => sendResponse({ ok: true }))

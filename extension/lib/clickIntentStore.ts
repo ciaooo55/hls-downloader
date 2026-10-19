@@ -11,6 +11,7 @@ export interface IntentDownload {
   referrer?: string
   chainUrls?: string[]
   tabId?: number
+  downloadAttributeOnly?: boolean
 }
 
 const RETENTION_MS = 7_000
@@ -82,6 +83,7 @@ export class ClickIntentStore {
             frameId: optionalNumber(item.frameId),
             opensNewTab: Boolean(item.opensNewTab),
             controlHint: Boolean(item.controlHint),
+            downloadAttribute: Boolean(item.downloadAttribute),
             at: Number(item.at) || now,
           }))
         this.intents = normalizeIntents([...this.intents, ...restored], now)
@@ -113,7 +115,17 @@ export class ClickIntentStore {
     const now = this.now()
     const previousCount = this.intents.length
     this.intents = normalizeIntents(this.intents, now)
-    const index = this.intents.findIndex(intent => matchesDownloadClick(intent, download, now))
+    const index = this.intents.findIndex(intent => {
+      if (!matchesDownloadClick(intent, download, now)) return false
+      if (!download.downloadAttributeOnly) return true
+      // 跨域 download 属性会被浏览器忽略，不能据此在响应到达前认定为下载。
+      try {
+        return intent.downloadAttribute === true
+          && new URL(intent.href).origin === new URL(intent.pageUrl).origin
+      } catch {
+        return false
+      }
+    })
     if (index < 0) {
       // Waiting for the content-script message is a hot 50 ms poll. Persist
       // only when pruning changed state, never once per miss. If hydration is

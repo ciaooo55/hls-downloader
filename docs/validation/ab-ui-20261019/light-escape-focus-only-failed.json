@@ -1,0 +1,264 @@
+﻿{
+    "selectedCount":  0,
+    "selectedTaskIds":  [
+
+                        ],
+    "inputTarget":  "",
+    "contextMenuPosition":  [
+                                433,
+                                187
+                            ],
+    "contextMenuTaskIds":  [
+                               "audit-task-0"
+                           ],
+    "contextMenuActions":  [
+                               "pause",
+                               "cancel",
+                               "play",
+                               "cast",
+                               "push_tvbox"
+                           ],
+    "activeFilter":  "全部",
+    "activeCategory":  "",
+    "activeQueueId":  "",
+    "controlBounds":  {
+                          "toolbar.新建":  [
+                                             15,
+                                             42,
+                                             76,
+                                             78
+                                         ],
+                          "toolbar.粘贴链接":  [
+                                               84,
+                                               42,
+                                               169,
+                                               78
+                                           ],
+                          "toolbar.全部开始":  [
+                                               183,
+                                               42,
+                                               268,
+                                               78
+                                           ],
+                          "toolbar.全部暂停":  [
+                                               270,
+                                               42,
+                                               355,
+                                               78
+                                           ],
+                          "toolbar.工具":  [
+                                             357,
+                                             42,
+                                             418,
+                                             78
+                                         ],
+                          "toolbar.设置":  [
+                                             1288,
+                                             42,
+                                             1349,
+                                             78
+                                         ],
+                          "toolbar.深色模式":  [
+                                               1350,
+                                               42,
+                                               1386,
+                                               78
+                                           ],
+                          "sidebar.status.全部":  [
+                                                    9,
+                                                    123,
+                                                    176,
+                                                    159
+                                                ],
+                          "sidebar.status.进行中":  [
+                                                     9,
+                                                     159,
+                                                     176,
+                                                     195
+                                                 ],
+                          "sidebar.status.排队中":  [
+                                                     9,
+                                                     195,
+                                                     176,
+                                                     231
+                                                 ],
+                          "sidebar.status.已暂停":  [
+                                                     9,
+                                                     231,
+                                                     176,
+                                                     267
+                                                 ],
+                          "sidebar.status.已完成":  [
+                                                     9,
+                                                     267,
+                                                     176,
+                                                     303
+                                                 ],
+                          "sidebar.status.失败":  [
+                                                    9,
+                                                    303,
+                                                    176,
+                                                    339
+                                                ],
+                          "sidebar.toggle_queues":  [
+                                                        9,
+                                                        351,
+                                                        150,
+                                                        385
+                                                    ],
+                          "sidebar.toggle_categories":  [
+                                                            9,
+                                                            397,
+                                                            176,
+                                                            431
+                                                        ],
+                          "sidebar.category.媒体":  [
+                                                      9,
+                                                      431,
+                                                      176,
+                                                      467
+                                                  ],
+                          "sidebar.category.程序":  [
+                                                      9,
+                                                      467,
+                                                      176,
+                                                      503
+                                                  ],
+                          "sidebar.category.压缩包":  [
+                                                       9,
+                                                       503,
+                                                       176,
+                                                       539
+                                                   ],
+                          "sidebar.category.其他":  [
+                                                      9,
+                                                      539,
+                                                      176,
+                                                      575
+                                                  ],
+                          "content_header.clear_completed":  [
+                                                                 1196,
+                                                                 90,
+                                                                 1291,
+                                                                 124
+                                                             ],
+                          "content_header.refresh":  [
+                                                         1291,
+                                                         90,
+                                                         1350,
+                                                         124
+                                                     ],
+                          "toolbar.更多操作":  [
+                                               1350,
+                                               89,
+                                               1386,
+                                               125
+                                           ],
+                          "taskrow.audit-task-0":  [
+                                                       190,
+                                                       164,
+                                                       1393,
+                                                       216
+                                                   ],
+                          "task.action.audit-task-0.pause":  [
+                                                                 1315,
+                                                                 173,
+                                                                 1349,
+                                                                 207
+                                                             ],
+                          "taskrow.audit-task-1":  [
+                                                       190,
+                                                       216,
+                                                       1393,
+                                                       268
+                                                   ],
+                          "taskrow.audit-task-10":  [
+                                                        190,
+                                                        268,
+                                                        1393,
+                                                        320
+                                                    ],
+                          "task.action.audit-task-10.pause":  [
+                                                                  1315,
+                                                                  277,
+                                                                  1349,
+                                                                  311
+                                                              ],
+                          "taskrow.audit-task-100":  [
+                                                         190,
+                                                         320,
+                                                         1393,
+                                                         372
+                                                     ],
+                          "task.action.audit-task-100.pause":  [
+                                                                   1315,
+                                                                   329,
+                                                                   1349,
+                                                                   363
+                                                               ],
+                          "taskrow.audit-task-101":  [
+                                                         190,
+                                                         372,
+                                                         1393,
+                                                         424
+                                                     ],
+                          "taskrow.audit-task-102":  [
+                                                         190,
+                                                         424,
+                                                         1393,
+                                                         476
+                                                     ],
+                          "task.action.audit-task-102.resume":  [
+                                                                    1315,
+                                                                    433,
+                                                                    1349,
+                                                                    467
+                                                                ],
+                          "taskrow.audit-task-103":  [
+                                                         190,
+                                                         476,
+                                                         1393,
+                                                         528
+                                                     ],
+                          "task.action.audit-task-103.play":  [
+                                                                  1315,
+                                                                  485,
+                                                                  1349,
+                                                                  519
+                                                              ],
+                          "taskrow.audit-task-104":  [
+                                                         190,
+                                                         528,
+                                                         1393,
+                                                         580
+                                                     ],
+                          "task.action.audit-task-104.retry":  [
+                                                                   1315,
+                                                                   537,
+                                                                   1349,
+                                                                   571
+                                                               ],
+                          "taskrow.audit-task-105":  [
+                                                         190,
+                                                         580,
+                                                         1393,
+                                                         632
+                                                     ],
+                          "task.action.audit-task-105.pause":  [
+                                                                   1315,
+                                                                   589,
+                                                                   1349,
+                                                                   623
+                                                               ],
+                          "taskrow.audit-task-106":  [
+                                                         190,
+                                                         632,
+                                                         1393,
+                                                         684
+                                                     ]
+                      },
+    "engineText":  "下载引擎 · 已连接",
+    "noticeHistory":  [
+
+                      ]
+}

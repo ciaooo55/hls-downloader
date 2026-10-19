@@ -1,0 +1,22 @@
+[
+  {
+    "name": "HLSDownloaderDesktop-7.0.3.jar",
+    "bytes": 1694618,
+    "sha256": "21afaadf4f5b06c3f1e81276aa6dc0319245f3c6e6f46f6eb095377970008fc9"
+  },
+  {
+    "name": "HLSDownloaderEngine.exe",
+    "bytes": 14568960,
+    "sha256": "d20b510a4a3e0f8bd18b67864361130b72860bb0d57e02290ef88aa5e69f1be4"
+  },
+  {
+    "name": "HLSDownloaderNativeHost.exe",
+    "bytes": 3769856,
+    "sha256": "058b0190e17e3e862cd1282a132b2cc848ab5f62266709a8abca5ef6b54e1e38"
+  },
+  {
+    "name": "HLSDownloaderUpdater.exe",
+    "bytes": 2251264,
+    "sha256": "c10c514b2c9452ee39a7e4e70a0e77defa98d9317d9e3e3579eeb4641b2ffe12"
+  }
+]

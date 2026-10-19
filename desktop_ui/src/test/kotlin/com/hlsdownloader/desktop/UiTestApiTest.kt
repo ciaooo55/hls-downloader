@@ -103,6 +103,26 @@ class UiTestApiTest {
     }
 
     @Test
+    fun removing_a_host_restores_the_most_recent_layout_of_the_remaining_hosts() {
+        val name = "test.shared-player-surface"
+        val main = Any()
+        val pip = Any()
+        val exiting = Any()
+        try {
+            UiTestState.reportControlBounds(name, 10, 20, 970, 520, main)
+            UiTestState.reportControlBounds(name, 0, 48, 520, 235, pip)
+            UiTestState.reportControlBounds(name, 30, 40, 990, 540, main)
+            UiTestState.reportControlBounds(name, 1, 2, 3, 4, exiting)
+            UiTestState.clearControlBounds(name, exiting)
+            assertEquals(listOf(30, 40, 990, 540), UiTestState.snapshot().controlBounds[name])
+            UiTestState.clearControlBounds(name, main)
+            assertEquals(listOf(0, 48, 520, 235), UiTestState.snapshot().controlBounds[name])
+        } finally {
+            listOf(main, pip, exiting).forEach { UiTestState.clearControlBounds(name, it) }
+        }
+    }
+
+    @Test
     fun product_icon_is_packaged_and_toolbar_does_not_repeat_the_brand() {
         val main = File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
         val build = File("build.gradle.kts").readText()

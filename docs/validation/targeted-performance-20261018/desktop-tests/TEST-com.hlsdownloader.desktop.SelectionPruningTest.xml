@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.SelectionPruningTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:19.670Z" hostname="DESKTOP-FTE6QH2" time="0.097">
+  <properties/>
+  <testcase name="an_empty_visible_set_keeps_the_selection()" classname="com.hlsdownloader.desktop.SelectionPruningTest" time="0.081"/>
+  <testcase name="an_unchanged_selection_returns_the_same_instance()" classname="com.hlsdownloader.desktop.SelectionPruningTest" time="0.002"/>
+  <testcase name="selection_is_pruned_to_the_visible_rows()" classname="com.hlsdownloader.desktop.SelectionPruningTest" time="0.001"/>
+  <testcase name="an_empty_selection_is_returned_untouched()" classname="com.hlsdownloader.desktop.SelectionPruningTest" time="0.001"/>
+  <testcase name="pruning_keeps_at_most_the_visible_count()" classname="com.hlsdownloader.desktop.SelectionPruningTest" time="0.001"/>
+  <testcase name="selection_can_become_empty_when_nothing_visible_is_selected()" classname="com.hlsdownloader.desktop.SelectionPruningTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

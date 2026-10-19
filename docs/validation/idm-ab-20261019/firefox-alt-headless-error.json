@@ -1,0 +1,42 @@
+{
+  "passed": false,
+  "scope": "real Firefox + production extension + Native Host/Core; accept/reject via Core API, not rendered button input",
+  "checks": [],
+  "background_sha256": "54a89b65cae88e7e14ccc083a5c3b1893bb18f84e743499a39a8932da24cffeb",
+  "server_events": [
+    {
+      "event": "request",
+      "path": "/",
+      "time": 1792343739198.3718
+    },
+    {
+      "event": "request",
+      "path": "/favicon.ico",
+      "time": 1792343739382.445
+    },
+    {
+      "event": "headers-sent",
+      "path": "/favicon.ico",
+      "time": 1792343739382.6177
+    },
+    {
+      "event": "browser-body-ready",
+      "path": "/favicon.ico",
+      "time": 1792343747383.8938
+    }
+  ],
+  "ping": {
+    "__request_id": "mve36onh-2",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "error": "AssertionError('Alt bypass did not finish in browser')",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\HLSValidation\\idm-ab-20261019\\firefox-slow-start.py\", line 201, in main\n    raise AssertionError('Alt bypass did not finish in browser')\nAssertionError: Alt bypass did not finish in browser\n"
+}

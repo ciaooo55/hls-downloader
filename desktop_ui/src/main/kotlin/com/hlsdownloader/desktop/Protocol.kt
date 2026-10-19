@@ -446,9 +446,9 @@ object EnginePipeClient {
         put("task_ids", buildJsonArray { taskIds.map(String::trim).filter(String::isNotBlank).distinct().forEach { add(JsonPrimitive(it)) } })
         put("queue_id", queueId.trim())
     })
-    fun playTask(taskId: String) = requireNoCoreError(command(commandOf("play_task", "task_id" to taskId)), "无法开始播放")
+    fun playTask(taskId: String) = command(commandOf("play_task", "task_id" to taskId), "无法开始播放")
     fun castTask(taskId: String) = command(commandOf("cast_task", "task_id" to taskId))
-    fun playerControl(action: String) = requireNoCoreError(command(commandOf("player_control", "action" to action)), "播放器操作失败")
+    fun playerControl(action: String) = command(commandOf("player_control", "action" to action), "播放器操作失败")
     fun playerThumbnail(taskId: String, seconds: Double?): String = session { connection ->
         val response = connection.request(buildJsonObject {
             put("type", "player_thumbnail"); put("request_id", nextRequestId())
@@ -471,14 +471,13 @@ object EnginePipeClient {
         },
     ))
     fun resolveMediaPush(requestId: String, status: String, message: String = "", location: String = ""): CommandResult {
-        val result = command(buildJsonObject {
+        return command(buildJsonObject {
             put("kind", "resolve_media_push")
             put("request_id", requestId)
             put("status", status)
             put("message", message)
             put("location", location)
-        })
-        return requireNoCoreError(result, "媒体推送状态同步失败")
+        }, "媒体推送状态同步失败")
     }
     fun probeUrl(url: String) = probeUrl(TaskDraft(url = url))
 
@@ -714,13 +713,17 @@ object EnginePipeClient {
         }.filter { it.id.startsWith("media-push-") && it.status == "pending" }
     }
 
-    private fun command(payload: JsonObject): CommandResult = session { connection ->
-        val requestId = nextRequestId()
-        val response = connection.request(buildJsonObject {
-            put("type", "command"); put("request_id", requestId); put("command", payload)
-        })
-        response.requireType("events", "下载引擎命令失败")
-        CommandResult(requestId, response["events"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) })
+    private fun command(payload: JsonObject, fallback: String = "下载引擎命令失败"): CommandResult {
+        val result = session { connection ->
+            val requestId = nextRequestId()
+            val response = connection.request(buildJsonObject {
+                put("type", "command"); put("request_id", requestId); put("command", payload)
+            })
+            response.requireType("events", fallback)
+            CommandResult(requestId, response["events"]?.jsonArray.orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) })
+        }
+        // 完整读取后再检查业务错误，既不误报成功，也不丢弃仍然同步的连接。
+        return requireNoCoreError(result, fallback)
     }
 
     /** Windows 命名管道：优先，打不开才回退，所以 Windows 上的行为完全不变。 */

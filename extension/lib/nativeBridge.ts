@@ -99,6 +99,7 @@ export class NativeBridge {
     retryCount = 0,
   ): Promise<any> {
     if (this.closed) return Promise.reject(new Error('插件连接已关闭'))
+    if (this.queue.length >= 64) return Promise.reject(new Error('插件请求过多，请等待当前操作完成后重试'))
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
       const request: PendingRequest = {

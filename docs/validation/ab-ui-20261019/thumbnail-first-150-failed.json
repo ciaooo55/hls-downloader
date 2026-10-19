@@ -1,0 +1,301 @@
+{
+  "passed": false,
+  "checks": [
+    "close tooltip paints beside the button in the header, away from native video",
+    "main-window overlay starts real playback and pause button pauses it",
+    "K and Space toggle the real playback session",
+    "resume and video-surface click update real pause state",
+    "forward/back buttons and timeline drag seek the actual decoder",
+    "focused volume keys change volume without triggering global seek",
+    "volume and mute controls change mpv volume/mute",
+    "rate, alternate audio/subtitle selection and subtitle-off affect real tracks"
+  ],
+  "requested_java_ui_scale": 1.5,
+  "window": {
+    "x": 0,
+    "y": 0,
+    "width": 1012,
+    "height": 473,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.5,
+    "scaleY": 1.5,
+    "deviceX": 0,
+    "deviceY": 0,
+    "deviceWidth": 1518,
+    "deviceHeight": 710
+  },
+  "tooltip_header_changed_pixels": 3125,
+  "video_rectangles": {
+    "main": {
+      "expected": [
+        39,
+        161,
+        1479,
+        434
+      ],
+      "actual": [
+        [
+          39,
+          161,
+          1479,
+          434
+        ],
+        [
+          39,
+          161,
+          1479,
+          434
+        ]
+      ]
+    }
+  },
+  "thumbnail_pixel_mean_error": 131.72998536789297,
+  "error": "Traceback (most recent call last):\n  File \"C:\\HLSTests\\scripts\\validation\\smoke_v7_player_overlay.py\", line 291, in run\n    assert difference < 25, f'Preview is obscured or misplaced: pixel error {difference}'\n           ^^^^^^^^^^^^^^^\nAssertionError: Preview is obscured or misplaced: pixel error 131.72998536789297\n",
+  "ui_state": {
+    "selectedCount": 0,
+    "selectedTaskIds": [],
+    "inputTarget": "org.jetbrains.skiko.SkiaLayer$1;mouse=1;motion=1",
+    "contextMenuPosition": [],
+    "contextMenuTaskIds": [],
+    "contextMenuActions": [],
+    "activeFilter": "全部",
+    "activeCategory": "",
+    "activeQueueId": "",
+    "controlBounds": {
+      "toolbar.新建": [
+        23,
+        63,
+        115,
+        117
+      ],
+      "toolbar.粘贴链接": [
+        128,
+        63,
+        256,
+        117
+      ],
+      "toolbar.全部开始": [
+        276,
+        63,
+        330,
+        117
+      ],
+      "toolbar.全部暂停": [
+        330,
+        63,
+        384,
+        117
+      ],
+      "toolbar.工具": [
+        386,
+        63,
+        478,
+        117
+      ],
+      "toolbar.设置": [
+        1389,
+        63,
+        1443,
+        117
+      ],
+      "toolbar.深色模式": [
+        1443,
+        63,
+        1497,
+        117
+      ],
+      "rail.status.全部": [
+        12,
+        146,
+        69,
+        206
+      ],
+      "rail.status.进行中": [
+        12,
+        209,
+        69,
+        269
+      ],
+      "rail.status.排队中": [
+        12,
+        272,
+        69,
+        332
+      ],
+      "rail.status.已暂停": [
+        12,
+        335,
+        69,
+        395
+      ],
+      "rail.status.已完成": [
+        12,
+        398,
+        69,
+        458
+      ],
+      "rail.status.失败": [
+        12,
+        461,
+        69,
+        521
+      ],
+      "rail.queue.默认队列": [
+        12,
+        551,
+        69,
+        611
+      ],
+      "rail.category.媒体": [
+        12,
+        641,
+        69,
+        701
+      ],
+      "rail.category.程序": [
+        12,
+        704,
+        69,
+        764
+      ],
+      "rail.category.压缩包": [
+        12,
+        767,
+        69,
+        827
+      ],
+      "rail.category.其他": [
+        12,
+        830,
+        69,
+        890
+      ],
+      "rail.manage": [
+        12,
+        591,
+        72,
+        651
+      ],
+      "content_header.clear_completed": [
+        1211,
+        135,
+        1354,
+        186
+      ],
+      "content_header.refresh": [
+        1354,
+        135,
+        1443,
+        186
+      ],
+      "toolbar.更多操作": [
+        1443,
+        134,
+        1497,
+        188
+      ],
+      "taskrow.task-1": [
+        84,
+        246,
+        1507,
+        324
+      ],
+      "task.action.task-1.play": [
+        1391,
+        260,
+        1442,
+        311
+      ],
+      "video.header": [
+        39,
+        89,
+        1479,
+        161
+      ],
+      "video.关闭播放器，下载继续": [
+        1413,
+        98,
+        1470,
+        152
+      ],
+      "video.surface": [
+        39,
+        161,
+        1479,
+        434
+      ],
+      "video.timeline": [
+        54,
+        464,
+        1464,
+        506
+      ],
+      "video.后退 10 秒": [
+        111,
+        506,
+        168,
+        560
+      ],
+      "video.前进 10 秒": [
+        168,
+        506,
+        225,
+        560
+      ],
+      "video.rate": [
+        1398,
+        508,
+        1464,
+        559
+      ],
+      "video.volume": [
+        111,
+        565,
+        1252,
+        610
+      ],
+      "video.音轨": [
+        1252,
+        562,
+        1301,
+        613
+      ],
+      "video.字幕": [
+        1301,
+        562,
+        1350,
+        613
+      ],
+      "video.画中画": [
+        1350,
+        560,
+        1407,
+        614
+      ],
+      "video.全屏": [
+        1407,
+        560,
+        1464,
+        614
+      ],
+      "video.播放": [
+        54,
+        506,
+        111,
+        560
+      ],
+      "video.静音": [
+        54,
+        560,
+        111,
+        614
+      ]
+    },
+    "engineText": "下载引擎 · 已连接",
+    "noticeHistory": []
+  }
+}

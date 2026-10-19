@@ -4,6 +4,8 @@
 
 Rust Core 是下载、调度、任务恢复和 SQLite 的唯一所有者。Compose 工作台、Presenter 和 Native Host 通过协议使用同一个 Core，不直接读写数据库。
 
+进度更新先生成当前任务的新快照，在 SQLite 事务提交成功后才替换内存快照、发布事件并通知客户端。写入失败时不改变运行态、历史事件或通知游标；这条高频路径不复制整个任务库作回滚。其他命令继续使用原有回滚边界。这项修改已完成构建及沙盒回归，具体范围见文末证据；随后新增的 HTTP 调度队列改动仍待验证。
+
 ```text
 WXT 扩展 → Native Messaging Host → Rust Core + SQLite
                                      ↕ 本地 IPC
@@ -46,3 +48,5 @@ Windows 正常 IPC 使用带 owner/SYSTEM DACL 的 `\\.\pipe\HLSDownloader.v7` �
 运行包包含裁剪 JRE、Core、Host、Presenter、FFmpeg 和 libmpv；ffprobe 和完整扩展图标库不进入生产包。依赖按固定配置重建，源码中不保留依赖缓存或安装镜像。
 
 候选包与正式包的门禁不同。canonical 功能合同、具体包 provenance 和某次实测报告各自描述不同范围；不能以一个布尔值或旧测试数量代替当前包的证据。见 [验证状态](../validation/v7-verification.md)与 [发布 runner](../releases/v7-release-runner.md)。
+
+当前未发布的 Core、播放服务、消息队列与响应优化见 [资源与性能审查](performance-audit-20261018.md)。最新单任务进度提交已完成 Core 构建、613 项沙盒回归、六种媒体下载播放与清理验收，以及 10/1000 任务共 36 次性能运行，见[本批证据](../validation/validation-single-task-progress-20261018.json)。结果只覆盖记录的哈希及场景，未生成新安装包或发布。

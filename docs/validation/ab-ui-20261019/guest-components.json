@@ -1,0 +1,22 @@
+﻿[
+    {
+        "sha256":  "5D4ED9C6574C5850FA66DEE80FE4AD55DB086A76084091E29D770864DE06D119",
+        "name":  "HLSDownloaderDesktop-7.0.3.jar",
+        "bytes":  1719205
+    },
+    {
+        "sha256":  "7DC587285078FEDD8DDEE1BAC1AD96047B00AE5A6CFCF4BA12E55A38A8CCCAFA",
+        "name":  "resources\\HLSDownloaderEngine.exe",
+        "bytes":  14513664
+    },
+    {
+        "sha256":  "F709C7CA8B183BEC76B8158BF0C45C53018C63366750729352612F228FF7BDEA",
+        "name":  "resources\\libmpv-2.dll",
+        "bytes":  119757824
+    },
+    {
+        "sha256":  "513368C81583572CE1D09D5C7FF827FEED1A63DB352412A5001F4DA3A1583D98",
+        "name":  "resources\\ffmpeg.exe",
+        "bytes":  165155840
+    }
+]

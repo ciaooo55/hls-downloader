@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.DialogKeyboardDismissTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:47:38.521Z" hostname="DESKTOP-FTE6QH2" time="36.962">
+  <properties/>
+  <testcase name="escape_dismisses_a_dismissible_workbench_dialog()" classname="com.hlsdownloader.desktop.DialogKeyboardDismissTest" time="36.575"/>
+  <testcase name="escape_does_not_dismiss_while_the_dialog_is_busy()" classname="com.hlsdownloader.desktop.DialogKeyboardDismissTest" time="0.385"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

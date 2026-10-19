@@ -1,0 +1,22 @@
+[
+  {
+    "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+    "sha256": "a455202aa9a38cb32d6d216deef6bbd737bcc536edc2ba31fc3d96938ffb3e15"
+  },
+  {
+    "path": "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/ResponsiveLayoutTest.kt",
+    "sha256": "ae0c580d183a7cf3c686154404f4eb282a330cceaf3c8d905ce0ff51d55daa93"
+  },
+  {
+    "path": ".tool-cache/ui-layout-20261019/HLSDownloaderDesktop-7.0.3.jar",
+    "sha256": "24f8f2bb87ef0b035f5e6908e97a0b21c015d3b95cd703e073dd9fc1618626f6"
+  },
+  {
+    "path": "scripts/validation/smoke_v7_workbench_controls.py",
+    "sha256": "d46a9f57fa08987a49321d896f688664c1e3c4f7bae0fd5b9d75dcf921332f7a"
+  },
+  {
+    "path": "scripts/validation/smoke_v7_workbench_interactions.py",
+    "sha256": "1325056249587f1e89eed8f0a48d6869dc89bbe0eaf460b306ac044b7514559d"
+  }
+]

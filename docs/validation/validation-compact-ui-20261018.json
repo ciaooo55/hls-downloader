@@ -1,0 +1,407 @@
+{
+  "schema": 1,
+  "date": "2026-10-18",
+  "scope": "紧凑界面工作区候选；未发布，未生成新安装包",
+  "base_commit": "3e6574abe01dd63ff2a409e0221dabaf3b58bdde",
+  "source_hashes": {
+    "extension/lib/subtitleContent.ts": "1CC613D955D65AA875467D44C7D7BFD07998DE358508632C37511B7B3F8D9C60",
+    "extension/entrypoints/popup/index.html": "7EDDB7AD59AA84183610C6DF8A13E9C8F1AE5AD4CB7000F7171F7FAD40E6E392",
+    "extension/entrypoints/popup/main.ts": "EB05893FABD1C4798020E13A43067778A5673BD76675BAC10D6B40C9A0FC9CA1",
+    "extension/lib/subtitlePopup.ts": "55D27444558C1D4E02978E5900D7990F2173971AC7644F664B5973F99B427D44",
+    "extension/entrypoints/popup/style.css": "004A3A94B6EE28A6E7DB8E3C1D94AECC38BC37661B074318FD761D4FB5C8DAA3",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt": "82C8A6270B630BDC48443CE28C5D4BEB71BCED1ACC68D97E9A81453A4F76684B"
+  },
+  "checks": {
+    "extension_typecheck": "passed: wxt prepare + tsc --noEmit",
+    "extension_tests": {
+      "passed": true,
+      "files": [
+        "lib/subtitle.test.ts",
+        "lib/popupButtonCascade.test.ts",
+        "lib/buttonMotion.test.ts"
+      ],
+      "test_count": 30
+    },
+    "extension_builds": [
+      "Chromium MV3 passed",
+      "Firefox MV3 passed"
+    ],
+    "desktop_build": "passed: Gradle jar",
+    "sandbox_browser": {
+      "passed": true,
+      "engine": "Microsoft Edge / Chromium",
+      "mode": "headless real extension, local fixtures",
+      "checks": [
+        "360px body width",
+        "no horizontal overflow",
+        "secondary actions hidden by default",
+        "more exposes copy/cast/TVBox",
+        "Enter expands and collapses focused summary",
+        "resource identification and rescan",
+        "light and dark theme",
+        "hover card and pointer transition",
+        "selected link collection"
+      ]
+    },
+    "sandbox_subtitles": {
+      "element": {
+        "passed": true,
+        "browser": "edge",
+        "headed": false,
+        "capture": "element",
+        "player_dom": "document",
+        "cross_origin": false,
+        "provider": "fixture Core, cloud accuracy not tested",
+        "idle_reconnect_verified": false,
+        "audio_frames": 28,
+        "nonzero_samples": 103831,
+        "seek_resets": 1,
+        "checks": [
+          "production popup",
+          "global switch broadcast",
+          "site disable and page override",
+          "real browser audio + AudioWorklet",
+          "real Native Host PCM forwarding",
+          "subtitle render",
+          "seek reset",
+          "rate change preserves original-speed audio timeline",
+          "time offset",
+          "provider failure and retry",
+          "reset rejection and retry",
+          "disable hides cached navigation and reenable restores audio",
+          "language change clears old cues",
+          "stop capture",
+          "removed player clears subtitle UI"
+        ]
+      },
+      "prefetch": {
+        "passed": true,
+        "browser": "edge",
+        "headed": false,
+        "capture": "prefetch",
+        "player_dom": "document",
+        "cross_origin": false,
+        "provider": "fixture Core, cloud accuracy not tested",
+        "idle_reconnect_verified": false,
+        "audio_frames": 206,
+        "nonzero_samples": 819880,
+        "seek_resets": 4,
+        "checks": [
+          "production popup",
+          "global switch broadcast",
+          "site disable and page override",
+          "fixture PCM prefetch in real browser",
+          "real Native Host PCM forwarding",
+          "subtitle render",
+          "seek reset",
+          "rate change preserves original-speed audio timeline",
+          "time offset",
+          "provider failure and retry",
+          "reset rejection and retry",
+          "disable hides cached navigation and reenable restores audio",
+          "language change clears old cues",
+          "stop capture",
+          "removed player clears subtitle UI",
+          "manual commit waits for completed translation",
+          "originally paused player stays paused",
+          "PCM positions remain accurate during page thread stall",
+          "bounded pretranslation stops PCM",
+          "next cue seeks into prepared cache",
+          "missing subtitles pause actual playback",
+          "hold-pause prevents automatic resume",
+          "seek while playing resumes only after translation is ready"
+        ]
+      },
+      "additional_checks": [
+        "subtitle tab entered before controls",
+        "advanced settings expanded before use",
+        "Escape closes options and restores summary focus"
+      ]
+    },
+    "sandbox_player": {
+      "scale_100": {
+        "passed": true,
+        "checks": [
+          "main-window overlay starts real playback and pause button pauses it",
+          "K and Space toggle the real playback session",
+          "resume and video-surface click update real pause state",
+          "forward/back buttons and timeline drag seek the actual decoder",
+          "volume and mute controls change mpv volume/mute",
+          "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+          "hovering the preview preserves paused playback position",
+          "main fullscreen enters and Escape restores the overlay",
+          "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+          "close button and Escape release playback; reopening works"
+        ],
+        "requested_java_ui_scale": 1.0,
+        "window": {
+          "x": 59,
+          "y": 0,
+          "width": 1400,
+          "height": 709,
+          "active": true,
+          "showing": true,
+          "iconCount": 1,
+          "iconWidth": 192,
+          "iconHeight": 192,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "deviceX": 59,
+          "deviceY": 0,
+          "deviceWidth": 1400,
+          "deviceHeight": 709
+        },
+        "video_rectangles": {
+          "main": {
+            "expected": [
+              279,
+              128,
+              1239,
+              504
+            ],
+            "actual": [
+              [
+                279,
+                128,
+                1239,
+                504
+              ],
+              [
+                279,
+                128,
+                1239,
+                504
+              ]
+            ]
+          },
+          "fullscreen": {
+            "expected": [
+              0,
+              48,
+              1518,
+              644
+            ],
+            "actual": [
+              [
+                0,
+                48,
+                1518,
+                644
+              ],
+              [
+                0,
+                48,
+                1518,
+                644
+              ]
+            ]
+          },
+          "pip": {
+            "expected": [
+              998,
+              397,
+              1518,
+              584
+            ],
+            "actual": [
+              [
+                998,
+                397,
+                1518,
+                584
+              ],
+              [
+                998,
+                397,
+                1518,
+                584
+              ]
+            ]
+          },
+          "returned-main": {
+            "expected": [
+              279,
+              128,
+              1239,
+              504
+            ],
+            "actual": [
+              [
+                279,
+                128,
+                1239,
+                504
+              ],
+              [
+                279,
+                128,
+                1239,
+                504
+              ]
+            ]
+          }
+        },
+        "thumbnail_pixel_mean_error": 2.6120227146042363
+      },
+      "scale_150": {
+        "passed": true,
+        "checks": [
+          "main-window overlay starts real playback and pause button pauses it",
+          "K and Space toggle the real playback session",
+          "resume and video-surface click update real pause state",
+          "forward/back buttons and timeline drag seek the actual decoder",
+          "volume and mute controls change mpv volume/mute",
+          "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+          "hovering the preview preserves paused playback position",
+          "main fullscreen enters and Escape restores the overlay",
+          "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+          "close button and Escape release playback; reopening works"
+        ],
+        "requested_java_ui_scale": 1.5,
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 1012,
+          "height": 473,
+          "active": true,
+          "showing": true,
+          "iconCount": 1,
+          "iconWidth": 192,
+          "iconHeight": 192,
+          "scaleX": 1.5,
+          "scaleY": 1.5,
+          "deviceX": 0,
+          "deviceY": 0,
+          "deviceWidth": 1518,
+          "deviceHeight": 710
+        },
+        "video_rectangles": {
+          "main": {
+            "expected": [
+              39,
+              161,
+              1479,
+              434
+            ],
+            "actual": [
+              [
+                39,
+                161,
+                1479,
+                434
+              ],
+              [
+                39,
+                161,
+                1479,
+                434
+              ]
+            ]
+          },
+          "fullscreen": {
+            "expected": [
+              0,
+              72,
+              1518,
+              582
+            ],
+            "actual": [
+              [
+                0,
+                72,
+                1518,
+                582
+              ],
+              [
+                0,
+                72,
+                1518,
+                582
+              ]
+            ]
+          },
+          "pip": {
+            "expected": [
+              738,
+              242,
+              1518,
+              522
+            ],
+            "actual": [
+              [
+                738,
+                241,
+                1518,
+                521
+              ],
+              [
+                738,
+                241,
+                1518,
+                521
+              ]
+            ]
+          },
+          "returned-main": {
+            "expected": [
+              39,
+              161,
+              1479,
+              434
+            ],
+            "actual": [
+              [
+                39,
+                161,
+                1479,
+                434
+              ],
+              [
+                39,
+                161,
+                1479,
+                434
+              ]
+            ]
+          }
+        },
+        "thumbnail_pixel_mean_error": 5.937412904124861
+      }
+    }
+  },
+  "artifacts": {
+    "ui_jar_sha256": "E8B2D0B1D1F47599B4D29195B9480AC8DF61C205121A6533A62150EE5099D799",
+    "ui_jar_bytes": 1694248,
+    "baseline_ui_jar_bytes": 1694231,
+    "baseline_runtime": "r12 MSI administrative image; only UI jar replaced in Sandbox",
+    "baseline_msi_sha256": "801EEFE5EF096BBC57A7807E78BFC2343BB15F20236C80EBE2EEB1D9F758C4D7"
+  },
+  "screenshots": [
+    "compact-ui-20261018/browser-popup.png",
+    "compact-ui-20261018/browser-popup-dark.png",
+    "compact-ui-20261018/browser-popup-more.png",
+    "compact-ui-20261018/player-1.0-main.png",
+    "compact-ui-20261018/player-1.5-main.png"
+  ],
+  "limitations": [
+    "翻译服务为本地夹具，未进行真实云端识别/翻译",
+    "Firefox完成构建，本轮未执行Firefox原生弹窗验收",
+    "Chromium检查为插件页面渲染，未测量工具栏原生弹窗边框",
+    "未构建新MSI，不能将界面缩小描述为安装包显著瘦身",
+    "未进行CPU/内存性能对比",
+    "播放器、FFmpeg和JVM复用r12组件"
+  ],
+  "cleanup": {
+    "status": "blocked_by_automatic_approval",
+    "reason": "blocked by policy; no more specific reason provided",
+    "retained_generated_directories": [
+      ".tool-cache/compact-ui-validation",
+      ".tool-cache/build-cache",
+      "extension/node_modules",
+      "extension/.output",
+      "extension/.wxt"
+    ],
+    "sandbox_closed": true,
+    "host_product_installed": false
+  }
+}

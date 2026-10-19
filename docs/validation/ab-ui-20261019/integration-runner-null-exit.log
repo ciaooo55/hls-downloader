@@ -1,0 +1,9 @@
+Download/playback exit 
+At C:\HLSIntegrationQA\jobs\02-download-playback.ps1:5 char:23
++ if($p.ExitCode -ne 0){throw "Download/playback exit $($p.ExitCode)"}
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Download/playback exit :Strin 
+   g) [], RuntimeException
+    + FullyQualifiedErrorId : Download/playback exit 
+ 
+

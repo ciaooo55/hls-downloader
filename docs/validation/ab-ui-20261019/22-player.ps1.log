@@ -1,0 +1,9 @@
+python.exe : ----------------------------------------
+At C:\HLSFrontQA\jobs\22-player.ps1:5 char:1
++ & C:\HLSPython\python.exe C:\HLSFrontQA\guest-player.py
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (--------------------------------- 
+   -------:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+

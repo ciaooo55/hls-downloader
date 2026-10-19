@@ -69,6 +69,21 @@ function matchingDownload() {
 }
 
 describe('persistent click-intent store', () => {
+  it('reserves early offers for persisted same-origin download links without consuming ordinary or cross-origin clicks', async () => {
+    const storage = new MemoryStorage()
+    const store = new ClickIntentStore(storage, 'intents', () => 10_100)
+    await store.remember(intent({ downloadAttribute: true }))
+    const restored = new ClickIntentStore(storage, 'intents', () => 10_100)
+    expect(await restored.consume({ ...matchingDownload(), downloadAttributeOnly: true }))
+      .toMatchObject({ downloadAttribute: true })
+
+    for (const click of [intent({ altBypass: true }), intent({ href: 'https://cdn.test/file.zip', downloadAttribute: true })]) {
+      await restored.remember(click)
+      expect(await restored.consume({ ...matchingDownload(), downloadAttributeOnly: true })).toBeUndefined()
+      expect(await restored.consume(matchingDownload())).toMatchObject(click)
+    }
+  })
+
   it('shares one hydration across concurrent service-worker requests', async () => {
     const storage = new MemoryStorage()
     let release: () => void = () => {}

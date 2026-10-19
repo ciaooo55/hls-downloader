@@ -1,0 +1,22 @@
+[
+    {
+        "exit_code":  101,
+        "name":  "core"
+    },
+    {
+        "exit_code":  0,
+        "name":  "download-playback"
+    },
+    {
+        "exit_code":  0,
+        "name":  "http-boundaries"
+    },
+    {
+        "exit_code":  0,
+        "name":  "http-stall"
+    },
+    {
+        "exit_code":  0,
+        "name":  "comparison"
+    }
+]

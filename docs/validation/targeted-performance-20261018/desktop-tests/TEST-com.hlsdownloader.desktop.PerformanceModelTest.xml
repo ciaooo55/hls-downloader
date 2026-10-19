@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.PerformanceModelTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-18T12:48:16.818Z" hostname="DESKTOP-FTE6QH2" time="0.633">
+  <properties/>
+  <testcase name="thousand_task_mapping_and_filtering_p95_stays_under_100ms()" classname="com.hlsdownloader.desktop.PerformanceModelTest" time="0.551"/>
+  <testcase name="visual_fixture_has_stable_keys_and_hostile_content()" classname="com.hlsdownloader.desktop.PerformanceModelTest" time="0.078"/>
+  <system-out><![CDATA[thousand_task_model_p95_ms=20.140
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -388,6 +388,25 @@ def _dispatch_mouse_move(websocket_url: str, x: float, y: float) -> None:
         connection.close()
 
 
+def _dispatch_key(websocket_url: str, key: str, code: str, virtual_key: int) -> None:
+    connection = websocket.create_connection(websocket_url, timeout=2, suppress_origin=True)
+    try:
+        for request_id, kind in enumerate(("keyDown", "keyUp"), start=1):
+            params = {"type": kind, "key": key, "code": code, "windowsVirtualKeyCode": virtual_key}
+            if key == "Enter" and kind == "keyDown":
+                params["text"] = "\r"
+            connection.send(json.dumps({"id": request_id, "method": "Input.dispatchKeyEvent",
+                "params": params}))
+            while True:
+                message = json.loads(connection.recv())
+                if message.get("id") == request_id:
+                    if message.get("error"):
+                        raise RuntimeError(f"Chromium keyboard dispatch failed: {message['error']}")
+                    break
+    finally:
+        connection.close()
+
+
 def _pointer_transition_chromium(websocket_url: str) -> object:
     start = _evaluate(
         websocket_url,
@@ -630,21 +649,25 @@ def _exercise_chrome(
                         "rescanBusy:Boolean(document.querySelector('.scan-button')?.disabled),"
                         "resourceCount:document.querySelectorAll('article').length,"
                         "resourceMeta:document.querySelector('.resource-body>span')?.textContent||'',"
-                        "actions:[...document.querySelectorAll('.article-actions button')].map(button=>button.textContent?.trim())})",
+                        "fits:document.body.scrollWidth<=document.body.clientWidth,"
+                        "secondaryHidden:[...document.querySelectorAll('.resource-extra')].every(node=>!node.getBoundingClientRect().height),"
+                        "actions:[...document.querySelectorAll('.article-actions > button')].map(button=>button.textContent?.trim())})",
                     )
                     diagnostics["popup"] = popup_details
                     if (
                         isinstance(popup_details, dict)
                         and popup_details.get("ready") == "ready"
                         and "HLS Downloader" in str(popup_details.get("text", ""))
-                        and float(popup_details.get("width", 0)) >= 400
+                        and float(popup_details.get("width", 0)) == 360
                         and float(popup_details.get("height", 0)) >= 200
                         and popup_details.get("background") not in {"transparent", "rgba(0, 0, 0, 0)"}
                         and popup_details.get("rescanTriggered") is True
                         and popup_details.get("rescanBusy") is False
                         and int(popup_details.get("resourceCount", 0)) >= 1
                         and str(popup_details.get("resourceMeta", "")).startswith("音频 · .wav")
-                        and popup_details.get("actions") == ["下载", "投屏", "TVBox"]
+                        and popup_details.get("actions") == ["下载"]
+                        and popup_details.get("fits") is True
+                        and popup_details.get("secondaryHidden") is True
                         and isinstance(selection_details, dict)
                         and selection_details.get("selected") is True
                         and selection_details.get("triggered") is True
@@ -652,6 +675,25 @@ def _exercise_chrome(
                         and selection_details.get("sources") == [f"{urlparse(page_url).hostname}/sample.mp4"]
                         and not selection_details.get("error")
                     ):
+                        more_details = _evaluate(
+                            popup_websocket_url,
+                            "(() => {const details=document.querySelector('.resource-more');"
+                            "details.querySelector('summary').click();"
+                            "return {open:details.open,actions:[...details.querySelectorAll('button')]"
+                            ".filter(button=>button.getBoundingClientRect().height>0).map(button=>button.textContent.trim())};})()",
+                        )
+                        if more_details != {"open": True, "actions": ["复制链接", "投屏", "TVBox"]}:
+                            raise RuntimeError(f"Compact resource menu did not expose its actions: {more_details}")
+                        if screenshot is not None:
+                            _capture_screenshot(popup_websocket_url, screenshot.with_name(f"{screenshot.stem}-popup-more{screenshot.suffix}"))
+                        _evaluate(popup_websocket_url, "document.querySelector('.resource-more summary').click()")
+                        _evaluate(popup_websocket_url, "document.querySelector('.resource-more summary').focus()")
+                        _dispatch_key(popup_websocket_url, "Enter", "Enter", 13)
+                        if _evaluate(popup_websocket_url, "document.querySelector('.resource-more').open") is not True:
+                            raise RuntimeError("Enter did not expand the focused resource menu")
+                        _dispatch_key(popup_websocket_url, "Enter", "Enter", 13)
+                        if _evaluate(popup_websocket_url, "document.querySelector('.resource-more').open") is not False:
+                            raise RuntimeError("Enter did not collapse the focused resource menu")
                         if screenshot is not None:
                             _capture_screenshot(websocket_url, screenshot)
                             _capture_screenshot(
