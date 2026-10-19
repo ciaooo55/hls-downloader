@@ -706,6 +706,8 @@ def run(
                             raise AssertionError(f"{mode}: 展开面板未沿用指定播放器的清单: {locations}, expected {expected_leaf}")
                         panels.append({'resourceId': resource_id, 'locations': locations})
                     state['playerPanels'] = panels
+                state['mode'] = mode
+                results[-1] = state
         finally:
             if driver is not None:
                 with contextlib.suppress(Exception):

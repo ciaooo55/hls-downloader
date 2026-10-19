@@ -1,0 +1,780 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "real-host-connected",
+      "actual": true
+    },
+    {
+      "name": "plain-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "plain-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "plain-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "attribute-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "attribute-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "attribute-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "redirect-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "redirect-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "redirect-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "inline-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "inline-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "inline-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "opaque-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "opaque-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "opaque-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "stream-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "stream-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "stream-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "image-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "image-Core-output",
+      "actual": {
+        "bytes": 68,
+        "sha256": "6af484b8a73288a07fec730818a6de8bebce88aa915b52f66a8769bfb865f434"
+      }
+    },
+    {
+      "name": "image-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "export-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "export-Core-output",
+      "actual": {
+        "bytes": 32,
+        "sha256": "8cc6d67e9c047e92fa51eadb250504c11471cec93c4864cb2e66a96ae0b2361f"
+      }
+    },
+    {
+      "name": "export-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "XHR-response-left-to-page",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "cancel-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "cancel-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "failed-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "failed-Core-visible-failure",
+      "actual": "HTTP 403"
+    },
+    {
+      "name": "failed-after-failure",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "public-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "public-Core-output",
+      "actual": {
+        "bytes": 102535433,
+        "sha256": "3f98533c3ff1c0fcea635358a1c8b79dd5df94668ae03df723230901ec05bbd6"
+      }
+    },
+    {
+      "name": "public-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "disabled-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "excluded-browser-bypass-no-desktop-offer",
+      "actual": true
+    }
+  ],
+  "decision_transport": "Core protocol",
+  "background_sha256": "3eac7d534a4c8322f9db3cb44e4042febd1e126f185455d1ab24e552553fa76d",
+  "browser_version": "158.0",
+  "error": "offline: intentional browser download did not complete",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QAInput\\scripts\\smoke_firefox_response_takeover.py\", line 277, in run\n    item = wait(browser_completed, name + ': intentional browser download did not complete', 35)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAInput\\scripts\\smoke_v7_portable_app.py\", line 97, in wait\n    raise TimeoutError(description)\nTimeoutError: offline: intentional browser download did not complete\n",
+  "browser_state": {
+    "events": [],
+    "items": []
+  },
+  "handoffs": [
+    {
+      "created_at_ms": 1792424246054,
+      "filename": "plain.bin",
+      "id": "handoff-1a154cf7b26-2",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cf7b24-1",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "plain.bin",
+        "handoff_id": "handoff-1a154cf7b26-2",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:8",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/plain.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424261248,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:56978361-e0b3-4b8b-a31f-339bf5cb981f",
+      "size": 2097152,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-1",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424252525,
+      "filename": "attribute.bin",
+      "id": "handoff-1a154cf946d-4",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cf946a-3",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "attribute.bin",
+        "handoff_id": "handoff-1a154cf946d-4",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:11",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/attribute.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424267629,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:b37ea91a-46fe-4ed5-be48-7eb53c0554bd",
+      "size": 2097152,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-2",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424253823,
+      "filename": "redirected.bin",
+      "id": "handoff-1a154cf997f-6",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cf997c-5",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "redirected.bin",
+        "handoff_id": "handoff-1a154cf997f-6",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:15",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/redirected.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424273860,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:19e2cecd-4038-4435-9de1-c3b4e0b03931",
+      "size": 2097152,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-3",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424259723,
+      "filename": "inline.bin",
+      "id": "handoff-1a154cfb08b-8",
+      "mime_type": "application/pdf",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cfb089-7",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "inline.bin",
+        "handoff_id": "handoff-1a154cfb08b-8",
+        "local_source_path": null,
+        "mime_type": "application/pdf",
+        "owner": "tab:1:frame:0:18",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/inline.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424274834,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:07291ea8-8ccb-40bb-9e24-a3d41fab34e1",
+      "size": 2097152,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-4",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424260837,
+      "filename": "opaque",
+      "id": "handoff-1a154cfb4e5-a",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.84,
+        "credential_ref": "cred-1a154cfb4da-9",
+        "evidence": [
+          "response_headers",
+          "request_chain"
+        ],
+        "filename": "",
+        "handoff_id": "handoff-1a154cfb4e5-a",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:26",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/opaque"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424280876,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:34b46647-9b24-46d9-9922-3191a7b07eae",
+      "size": 2097152,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-5",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424266915,
+      "filename": "stream.bin",
+      "id": "handoff-1a154cfcca3-c",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cfcc9a-b",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "stream.bin",
+        "handoff_id": "handoff-1a154cfcca3-c",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:67",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 0,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/stream.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424286953,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:0fc311ac-7040-4f74-afe5-e9d598a44123",
+      "size": 0,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-6",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424272890,
+      "filename": "image.bin",
+      "id": "handoff-1a154cfe3fa-e",
+      "mime_type": "image/png",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cfe3f0-d",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "image.bin",
+        "handoff_id": "handoff-1a154cfe3fa-e",
+        "local_source_path": null,
+        "mime_type": "image/png",
+        "owner": "tab:1:frame:0:101",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 68,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/image.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424292948,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:38431517-a53f-4e07-b257-91815cb74dbb",
+      "size": 68,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-7",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424279080,
+      "filename": "export.bin",
+      "id": "handoff-1a154cffc28-10",
+      "mime_type": "application/json",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154cffc23-f",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "export.bin",
+        "handoff_id": "handoff-1a154cffc28-10",
+        "local_source_path": null,
+        "mime_type": "application/json",
+        "owner": "tab:1:frame:0:130",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 32,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/export.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424299130,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:b1c669e0-22f5-4d7b-a1d0-bbdb480c43c6",
+      "size": 32,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-8",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424285702,
+      "filename": "cancel.bin",
+      "id": "handoff-1a154d01606-12",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154d01604-11",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "cancel.bin",
+        "handoff_id": "handoff-1a154d01606-12",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:161",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/cancel.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424305754,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:a4f77952-0987-48ed-9d48-0f34f5044014",
+      "size": 2097152,
+      "status": "rejected",
+      "suppression": null,
+      "task_id": null,
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424292304,
+      "filename": "failed.bin",
+      "id": "handoff-1a154d02fd0-14",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154d02fca-13",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "failed.bin",
+        "handoff_id": "handoff-1a154d02fd0-14",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:164",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/failed.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424312349,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:d346e53a-e93a-486c-a5b7-1541dc5f72c2",
+      "size": 2097152,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-9",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424300008,
+      "filename": "Codex-Account-Switcher-Portable-0.13.14.exe",
+      "id": "handoff-1a154d04de8-16",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154d04de3-15",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "Codex-Account-Switcher-Portable-0.13.14.exe",
+        "handoff_id": "handoff-1a154d04de8-16",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:167",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 102535433,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "https://release-assets.githubusercontent.com/github-production-release-asset/1301281603/67d639f9-6435-4648-b038-1ab8f0416966?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-19T16%3A33%3A04Z&rscd=attachment%3B+filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-10-19T15%3A32%3A52Z&ske=2026-10-19T16%3A33%3A04Z&sks=b&skv=2018-11-09&sig=PQjSUi%2FgXdbNssizzrjId3fKtt8SucL8A7hQcjqfgLQ%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc5MjQyNjA5OSwibmJmIjoxNzkyNDI0Mjk5LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.bIWIiZ2NyEQFeHpQ9gDoIq7HxmpkVzSubSFc7qiYYFs&response-content-disposition=attachment%3B%20filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&response-content-type=application%2Foctet-stream"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424318486,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:17bdb657-b97c-4dd7-b4a3-f45aa40d184f",
+      "size": 102535433,
+      "status": "accepted",
+      "suppression": null,
+      "task_id": "task-10",
+      "title": ""
+    },
+    {
+      "created_at_ms": 1792424344708,
+      "filename": "offline.bin",
+      "id": "handoff-1a154d0fc84-2",
+      "mime_type": "application/octet-stream",
+      "offer": {
+        "confidence": 0.99,
+        "credential_ref": "cred-1a154d0fc7c-1",
+        "evidence": [
+          "response_headers",
+          "content_disposition",
+          "request_chain"
+        ],
+        "filename": "offline.bin",
+        "handoff_id": "handoff-1a154d0fc84-2",
+        "local_source_path": null,
+        "mime_type": "application/octet-stream",
+        "owner": "tab:1:frame:0:176",
+        "preferred_bandwidth": 0,
+        "preferred_height": 0,
+        "replay_context_ref": null,
+        "request_method": "GET",
+        "resource_kind": "file",
+        "size": 2097152,
+        "source_page_url": "http://127.0.0.1:49824/page",
+        "title": "",
+        "url": "http://127.0.0.1:49824/offline.bin"
+      },
+      "presentation": "presented",
+      "presentation_lease_until_ms": 1792424395010,
+      "presentation_owner": "presenter-3216-1792424246223",
+      "request_id": "explicit:55218fbc-e37d-4b99-afba-1ecbd0cda3d1",
+      "size": 2097152,
+      "status": "pending",
+      "suppression": null,
+      "task_id": null,
+      "title": ""
+    }
+  ]
+}

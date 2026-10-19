@@ -1,0 +1,4146 @@
+[
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "511e44e67a5ece754ba2973cc87b0b94"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.081235,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=direct",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "511e44e67a5ece754ba2973cc87b0b94"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.081235,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=direct",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "direct",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "e212ba390cdbc5be2ec81acdf77b1a07"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.000605,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=chosen",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "e212ba390cdbc5be2ec81acdf77b1a07"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.000605,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=chosen",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "dual-source",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1",
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "ccf8f3514c8c94d462a79204dce5e489"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.04205,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "BODY",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 8,
+          "y": 8
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=srcdoc",
+        "style": {
+          "display": "inline",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [],
+        "panelActions": [],
+        "panelResources": [],
+        "resourceIds": [],
+        "runtimeErrors": [],
+        "uiHost": null,
+        "videos": [],
+        "framePath": []
+      },
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "stream.mp4MEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "ccf8f3514c8c94d462a79204dce5e489"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 17.599990844726562,
+            "width": 0,
+            "x": 648,
+            "y": 353.6000061035156
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.04205,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "BODY",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 8,
+              "y": 8
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=srcdoc",
+            "style": {
+              "display": "inline",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": [
+          0
+        ]
+      }
+    ],
+    "mode": "srcdoc",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "6af4d91c3aed7bc880e8e75acaf75f1d"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.000122,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": null,
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=shadow",
+        "style": {
+          "display": "inline",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "6af4d91c3aed7bc880e8e75acaf75f1d"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 448.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.000122,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": null,
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=shadow",
+            "style": {
+              "display": "inline",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "shadow",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "749cede9eed55cb425a52025131347f1"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.040795,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": null,
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=dynamic-shadow",
+        "style": {
+          "display": "inline",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "749cede9eed55cb425a52025131347f1"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 448.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.040795,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": null,
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=dynamic-shadow",
+            "style": {
+              "display": "inline",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "dynamic-shadow",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1",
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "511e44e67a5ece754ba2973cc87b0b94"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.041121,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=direct",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [],
+        "panelActions": [],
+        "panelResources": [],
+        "resourceIds": [],
+        "runtimeErrors": [],
+        "uiHost": null,
+        "videos": [],
+        "framePath": []
+      },
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 大小未知 · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "511e44e67a5ece754ba2973cc87b0b94"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.041121,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=direct",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": [
+          0
+        ]
+      }
+    ],
+    "mode": "iframe",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1",
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "dae5690fe170d00daeea0721f156940c"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.284945,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://localhost:49693/stream.mp4?player=direct",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [],
+        "panelActions": [],
+        "panelResources": [],
+        "resourceIds": [],
+        "runtimeErrors": [],
+        "uiHost": null,
+        "videos": [],
+        "framePath": []
+      },
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · localhost:49693localhost/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "dae5690fe170d00daeea0721f156940c"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.284945,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://localhost:49693/stream.mp4?player=direct",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": [
+          0
+        ]
+      }
+    ],
+    "mode": "cross-iframe",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "abdaf6972f93333955c77a097afd3aa4"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.162922,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=main",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "abdaf6972f93333955c77a097afd3aa4"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.162922,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=main",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "ad-direct",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "8e9530a7e5cdb6917490a85e497fa002"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.163035,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=spa-two",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "8e9530a7e5cdb6917490a85e497fa002"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.163035,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=spa-two",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "spa",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "773b70961bf065d6be49ca389f3adf47"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 9.4e-05,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/ab2da184-49da-4bbf-be59-f13b043ed5fd",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/ab2da184-49da-4bbf-be59-f13b043ed5fd",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=single",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "773b70961bf065d6be49ca389f3adf47"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 9.4e-05,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/ab2da184-49da-4bbf-be59-f13b043ed5fd",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "mse",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "6838da81dd8ab1b833f60c127601894d"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.08097,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/797aa196-a44a-4955-be79-bc5444a967b2",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/797aa196-a44a-4955-be79-bc5444a967b2",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=sliced",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "6838da81dd8ab1b833f60c127601894d"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.08097,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/797aa196-a44a-4955-be79-bc5444a967b2",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "mse-sliced",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "9c69723e5791036b967fc5aae8173220"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.040835,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/425488e4-1b39-48e6-8df6-941204d30b77",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/425488e4-1b39-48e6-8df6-941204d30b77",
+            "mediaUrl": "http://127.0.0.1:49693/encrypted.mp4",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeFILE · 78.3 KB · 127.0.0.1:49693127.0.0.1/encrypted.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "9c69723e5791036b967fc5aae8173220"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.040835,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/425488e4-1b39-48e6-8df6-941204d30b77",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "mse-encrypted",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "8c11c1ea07a37d006f676c70b80c6251"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.164237,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/3e909f72-dc29-4a83-82ca-94eb341d1ec7",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3e909f72-dc29-4a83-82ca-94eb341d1ec7",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=worker",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "8c11c1ea07a37d006f676c70b80c6251"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.164237,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/3e909f72-dc29-4a83-82ca-94eb341d1ec7",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "mse-worker",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "267d3c2c2de75e4419639638fde50489"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.162057,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/a70f5f20-348d-430d-944a-3aa7b51dcade",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/a70f5f20-348d-430d-944a-3aa7b51dcade",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=worker-dedicated",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "267d3c2c2de75e4419639638fde50489"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.162057,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/a70f5f20-348d-430d-944a-3aa7b51dcade",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "mse-worker-dedicated",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频",
+      "下载视频"
+    ],
+    "resourceIds": [
+      "7ef8167633ad4dff98de033ec999289c",
+      "334b8d76995ef135e184c27ffd58a426"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接",
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.121921,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/3851b90a-a1c5-4f27-8d7e-72b754d69763",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      },
+      {
+        "currentTime": 0.125022,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 444.4666748046875
+        },
+        "src": "blob:http://127.0.0.1:49693/be7fe128-ca6e-433a-a903-8baa72a4ec66",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频",
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/be7fe128-ca6e-433a-a903-8baa72a4ec66",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=worker-two",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3851b90a-a1c5-4f27-8d7e-72b754d69763",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=worker-one",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接",
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "7ef8167633ad4dff98de033ec999289c",
+          "334b8d76995ef135e184c27ffd58a426"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 804.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.121921,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/3851b90a-a1c5-4f27-8d7e-72b754d69763",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          },
+          {
+            "currentTime": 0.125022,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 444.4666748046875
+            },
+            "src": "blob:http://127.0.0.1:49693/be7fe128-ca6e-433a-a903-8baa72a4ec66",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "multi-worker",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频",
+      "下载视频"
+    ],
+    "resourceIds": [
+      "1f486a5c6cdd052c5d575993ad137d0d",
+      "5c54a35c8f8f5ab61e32252800da15ef"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接",
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.08364,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/31604e3d-4fe4-4266-bfc1-4af95bfe63d9",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      },
+      {
+        "currentTime": 0.083705,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 444.4666748046875
+        },
+        "src": "blob:http://127.0.0.1:49693/99ea9b1e-2238-4c01-ab3a-25ef9739d8f0",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频",
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/31604e3d-4fe4-4266-bfc1-4af95bfe63d9",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=one",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/99ea9b1e-2238-4c01-ab3a-25ef9739d8f0",
+            "mediaUrl": "http://127.0.0.1:49693/stream.mp4?channel=two",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接",
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "1f486a5c6cdd052c5d575993ad137d0d",
+          "5c54a35c8f8f5ab61e32252800da15ef"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 804.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.08364,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/31604e3d-4fe4-4266-bfc1-4af95bfe63d9",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          },
+          {
+            "currentTime": 0.083705,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 444.4666748046875
+            },
+            "src": "blob:http://127.0.0.1:49693/99ea9b1e-2238-4c01-ab3a-25ef9739d8f0",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "multi-mse",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "6ec4d8cac6367b28b23482f9d7c2897d"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.081619,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+            "mediaUrl": "http://127.0.0.1:49693/hls/init.mp4",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-000.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-003.m4s",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeHLS · 0:04 · 275 B · 127.0.0.1:49693127.0.0.1/hls/index.m3u8下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "6ec4d8cac6367b28b23482f9d7c2897d"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.081619,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/7e0f1ce9-82c9-4357-a507-cbe572c8376f",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "hls-mse",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "46b57f56f251f158bca0bdd49d7c8c55"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.000128,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+            "mediaUrl": "http://127.0.0.1:49693/hls/init.mp4",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-000.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+            "mediaUrl": "http://127.0.0.1:49693/hls/segment-003.m4s",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeHLS · 直播 · 487 B · 127.0.0.1:49693127.0.0.1/llhls/index.m3u8下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "46b57f56f251f158bca0bdd49d7c8c55"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.000128,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/ec700722-2d91-4192-bcea-463f812fe662",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "ll-hls-mse",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "e75e78dcec458f3494f4b4e2d0d96cf1"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.083237,
+        "error": "",
+        "manifest": "http://127.0.0.1:49693/dash/manifest.mpd?token=browser-smoke",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+            "mediaUrl": "http://127.0.0.1:49693/dash/init-0.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00003.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00004.m4s",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeDASH · 最高 360p · 640×360 · 0.1 Mbps · 0:04 · 1.1 KB · 127.0.0.1:49693127.0.0.1/dash/manifest.mpd自动（最高）360p · 0.1 Mbps下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "e75e78dcec458f3494f4b4e2d0d96cf1"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.083237,
+            "error": "",
+            "manifest": "http://127.0.0.1:49693/dash/manifest.mpd?token=browser-smoke",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/34595861-7a1b-4abe-bf91-b5d54d3e0dcc",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "dash-mse",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "fd6f5a0e57e7433ab3b248082ab2d5e3"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.163607,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "http://127.0.0.1:49693/stream.mp4?player=after-empty",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:49693127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "fd6f5a0e57e7433ab3b248082ab2d5e3"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.163607,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "http://127.0.0.1:49693/stream.mp4?player=after-empty",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "empty-video-src",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "44d724acc58ef802112780651dd93cfb"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.08107,
+        "error": "",
+        "manifest": "http://127.0.0.1:49693/dash/low.mpd",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+            "mediaUrl": "http://127.0.0.1:49693/dash/init-0.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00003.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00004.m4s",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeDASH · 最高 1080p · 1920×1080 · 6.0 Mbps · 0:04 · 444 B · 127.0.0.1:49693127.0.0.1/dash/low.mpd自动（最高）1080p · 6.0 Mbps360p · 0.5 Mbps下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "44d724acc58ef802112780651dd93cfb"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.08107,
+            "error": "",
+            "manifest": "http://127.0.0.1:49693/dash/low.mpd",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/c68756c3-f6c3-477d-8f60-6301db7c0e21",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "dash-low-mse",
+    "browserErrors": []
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频",
+      "下载视频"
+    ],
+    "resourceIds": [
+      "f6e0cdb19d2303aa66bb547b161b7013",
+      "ad42a832febc8c249b9ac745ab2033c5"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接",
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 0.043429,
+        "error": "",
+        "manifest": "http://127.0.0.1:49693/dash/one.mpd",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      },
+      {
+        "currentTime": 7.4e-05,
+        "error": "",
+        "manifest": "http://127.0.0.1:49693/dash/two.mpd",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 444.4666748046875
+        },
+        "src": "blob:http://127.0.0.1:49693/f9d7d753-26cf-4a36-a325-33fbcddfed39",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频",
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+            "mediaUrl": "http://127.0.0.1:49693/dash/one-init-0.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/f9d7d753-26cf-4a36-a325-33fbcddfed39",
+            "mediaUrl": "http://127.0.0.1:49693/dash/two-init-0.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+            "mediaUrl": "http://127.0.0.1:49693/dash/one-chunk-0-00001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/f9d7d753-26cf-4a36-a325-33fbcddfed39",
+            "mediaUrl": "http://127.0.0.1:49693/dash/two-chunk-0-00001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+            "mediaUrl": "http://127.0.0.1:49693/dash/one-chunk-0-00002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/f9d7d753-26cf-4a36-a325-33fbcddfed39",
+            "mediaUrl": "http://127.0.0.1:49693/dash/two-chunk-0-00002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+            "mediaUrl": "http://127.0.0.1:49693/dash/one-chunk-0-00003.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/f9d7d753-26cf-4a36-a325-33fbcddfed39",
+            "mediaUrl": "http://127.0.0.1:49693/dash/two-chunk-0-00003.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+            "mediaUrl": "http://127.0.0.1:49693/dash/one-chunk-0-00004.m4s",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接",
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeDASH · 最高 1080p · 1920×1080 · 6.0 Mbps · 0:04 · 452 B · 127.0.0.1:49693127.0.0.1/dash/two.mpd自动（最高）1080p · 6.0 Mbps360p · 0.5 Mbps下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "f6e0cdb19d2303aa66bb547b161b7013",
+          "ad42a832febc8c249b9ac745ab2033c5"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 804.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 0.043429,
+            "error": "",
+            "manifest": "http://127.0.0.1:49693/dash/one.mpd",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/b5ebcd68-fa87-4220-9671-ffb5b9b2fc7c",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          },
+          {
+            "currentTime": 7.4e-05,
+            "error": "",
+            "manifest": "http://127.0.0.1:49693/dash/two.mpd",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 444.4666748046875
+            },
+            "src": "blob:http://127.0.0.1:49693/f9d7d753-26cf-4a36-a325-33fbcddfed39",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "multi-dash-mse",
+    "browserErrors": [],
+    "playerPanels": [
+      {
+        "resourceId": "ad42a832febc8c249b9ac745ab2033c5",
+        "locations": [
+          "127.0.0.1/dash/one.mpd"
+        ]
+      },
+      {
+        "resourceId": "f6e0cdb19d2303aa66bb547b161b7013",
+        "locations": [
+          "127.0.0.1/dash/two.mpd"
+        ]
+      }
+    ]
+  },
+  {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "正在识别"
+    ],
+    "resourceIds": [
+      ""
+    ],
+    "moreButtons": [],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 1.186335,
+        "error": "",
+        "manifest": "",
+        "networkState": 2,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.46665954589844
+        },
+        "src": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "正在识别"
+        ],
+        "marker": "1",
+        "mediaOwnership": [
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+            "mediaUrl": "http://127.0.0.1:49693/dash/init-0.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00001.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00002.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00003.m4s",
+            "purpose": "mse"
+          },
+          {
+            "blobUrl": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+            "mediaUrl": "http://127.0.0.1:49693/dash/chunk-0-00004.m4s",
+            "purpose": "mse"
+          }
+        ],
+        "moreButtons": [],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeDASH · 最高 1080p · 1920×1080 · 6.0 Mbps · 0:04 · 456 B · 127.0.0.1:49693127.0.0.1/dash/other.mpd自动（最高）1080p · 6.0 Mbps360p · 0.5 Mbps下载TVBox投屏"
+        ],
+        "resourceIds": [
+          ""
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.4666748046875
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 1.186335,
+            "error": "",
+            "manifest": "",
+            "networkState": 2,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.46665954589844
+            },
+            "src": "blob:http://127.0.0.1:49693/3a298ab0-a23c-4aa1-966d-50f0391ad726",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ],
+    "mode": "dash-unknown-mse"
+  }
+]

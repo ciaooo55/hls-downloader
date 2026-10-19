@@ -1,0 +1,10 @@
+﻿{
+    "passed":  true,
+    "environment":  "Windows Sandbox",
+    "host_installation":  false,
+    "upgrade_exit_code":  0,
+    "same_path_and_latest_extension":  true,
+    "old_registration_removed":  true,
+    "paused_task_resumed_and_hash_verified":  true,
+    "uninstall_exit_code":  0
+}

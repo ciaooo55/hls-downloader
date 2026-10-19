@@ -1,0 +1,22 @@
+[
+  {
+    "Path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-main-b832d2a-未签名.msi",
+    "Length": 203436032,
+    "SHA256": "EA95C189AADAB604CA665B4D3EA9EC12BFEE41CFB703F98245ABD5B74F955333"
+  },
+  {
+    "Path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-Firefox-未签名.zip",
+    "Length": 326335,
+    "SHA256": "558251C43164F86EEFFB92F868A92445AA50627E8BC85184C60AA38C7A8F7341"
+  },
+  {
+    "Path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-Chromium.zip",
+    "Length": 326357,
+    "SHA256": "21055B8FC74D0A1337D218A1400C17FFE5228F732A65601173E6396DEDC96F51"
+  },
+  {
+    "Path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-Firefox-审核源码.zip",
+    "Length": 279555,
+    "SHA256": "976F0BE403BAA907EC6E5A2087B870EB5DE0FB506ECF6F89DF9297CC9D5B3859"
+  }
+]

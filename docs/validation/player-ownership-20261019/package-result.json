@@ -1,0 +1,26 @@
+﻿{
+    "passed":  true,
+    "host_installation":  false,
+    "environment":  "Windows Sandbox",
+    "checks":  [
+                   {
+                       "sha256":  "558251C43164F86EEFFB92F868A92445AA50627E8BC85184C60AA38C7A8F7341",
+                       "path":  "app\\resources\\extensions\\HLSDownloader-7.0.3-Firefox.zip"
+                   },
+                   {
+                       "sha256":  "21055B8FC74D0A1337D218A1400C17FFE5228F732A65601173E6396DEDC96F51",
+                       "path":  "app\\resources\\extensions\\HLSDownloader-7.0.3-Chromium.zip"
+                   },
+                   {
+                       "sha256":  "F14CF10A64B95F55601E1FD9877A0EB792CBD01C4B607D8A5BFC61A8C2EE338F",
+                       "path":  "app\\resources\\HLSDownloaderEngine.exe"
+                   }
+               ],
+    "install_exit_code":  0,
+    "source_commit":  "b832d2abc7f992bcbec4989bff92c9fb509e4c78",
+    "selected_install_path":  "C:\\QAWork\\Installed HLSDownloader",
+    "installed_file_bytes":  469462823,
+    "installed_registration_present":  true,
+    "uninstall_exit_code":  0,
+    "program_and_registry_removed":  true
+}

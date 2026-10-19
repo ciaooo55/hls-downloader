@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "source_commit": "b832d2abc7f992bcbec4989bff92c9fb509e4c78",
+  "source_tree": "44bbe5e2c2c6e9cad2d2f871736960ae92e22609",
+  "source_branch": "main",
+  "source_tag": "",
+  "git_worktree_clean": false,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "feature_parity_path": "config/release/feature-parity.json",
+  "feature_parity_sha256": "a9f0a5bd29bf4efb11435dfe18dd50f5d43471ff22745f4331967b2029d02956",
+  "feature_summary": {
+    "verified": 27,
+    "partial": 2,
+    "blocked": 0,
+    "total": 29
+  },
+  "generated_at_utc": "2026-10-19T15:42:30.3029567Z",
+  "base_msi_sha256": "e6c5678f079cc222dfb04b276d16f5cfd9f27fe1adeb28d53a24e87bde87e899",
+  "validation_scope": "Extension ownership/lifecycle fix b832d2a; 386 extension tests and 23 Firefox media scenarios passed. Final lifecycle/fallback and MSI validation pending; unchanged desktop/Core runtime reused.",
+  "reused_runtime_source_commit": "3d3de7bf7fb003c1af8e4434c15ea8ccdf35e11a"
+}

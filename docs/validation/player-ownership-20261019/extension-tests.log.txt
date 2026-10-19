@@ -1,0 +1,18 @@
+$ wxt prepare && tsc --noEmit && vitest run
+
+WXT 0.21.4
+i Generating types...
+√ Finished in 1.474 s
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+
+ Test Files  50 passed (50)
+      Tests  386 passed (386)
+   Start at  23:33:00
+   Duration  3.75s (transform 43%, import 26%, tests 22%, worker 7%)
+
+  Transform  transforming modules took 3.23s · 43% of tracked time, re-done on every run
+             persist transforms across runs with fsModuleCache: true
+             learn more: https://vitest.dev/guide/improving-performance#caching-between-reruns
+
