@@ -1,7 +1,8 @@
 param(
     [int]$TimeoutSeconds = 12,
     [string]$InstallDir = "",
-    [switch]$IncludeNativeHost
+    [switch]$IncludeNativeHost,
+    [switch]$RequireCheckpoint
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -76,6 +77,19 @@ $runningEngine = $targetRunningAtStart |
     Where-Object { $_.ProcessName -in @("HLSDownloaderEngine", "hls-downloader-engine") } |
     Select-Object -First 1
 $gracefulCoreExit = "not-running"
+# 先关闭会重新连接 Core 的工作台及桥接进程，防止停机期间再次启动引擎。
+if ($RequireCheckpoint) {
+    if (-not $InstallDir) { Write-Error '升级停机必须指定安装目录'; exit 1 }
+    foreach ($desktop in @(Get-TargetProcesses @('HLSDownloader'))) {
+        $desktop.CloseMainWindow() | Out-Null
+    }
+    Start-Sleep -Milliseconds 300
+    foreach ($desktop in @(Get-TargetProcesses @('HLSDownloader'))) {
+        # 不使用 /T：Core 可能是其子进程，必须先单独保存续传状态。
+        $desktop | Stop-Process -Force
+    }
+    Get-TargetProcesses @('HLSDownloaderNativeHost*') | Stop-Process -Force
+}
 if ($runningEngine) {
     $shutdownEngine = Get-ProcessExecutablePath $runningEngine
     if (-not $shutdownEngine -and $InstallDir) {
@@ -85,8 +99,19 @@ if ($runningEngine) {
 if ($shutdownEngine -and (Test-Path -LiteralPath $shutdownEngine -PathType Leaf)) {
     # v7 has no HTTP supervisor. Ask the resident Core to checkpoint and stop
     # through its versioned named-pipe contract before the bounded kill fallback.
-    & $shutdownEngine --shutdown
-    $gracefulCoreExit = [string]$LASTEXITCODE
+    # Engine 是窗口型 EXE；显式等待，避免把尚未返回的空 LASTEXITCODE 当成失败。
+    $shutdownRequest = Start-Process -FilePath $shutdownEngine -ArgumentList '--shutdown' -WindowStyle Hidden -PassThru
+    if ($shutdownRequest.WaitForExit(8000)) {
+        $gracefulCoreExit = [string]$shutdownRequest.ExitCode
+    } else {
+        $shutdownRequest | Stop-Process -Force
+        $gracefulCoreExit = 'timeout'
+    }
+    if ($RequireCheckpoint -and $gracefulCoreExit -ne '0' -and
+        @(Get-TargetProcesses @('HLSDownloaderEngine', 'hls-downloader-engine')).Count -gt 0) {
+        Write-Output '任务状态未能安全保存，已停止升级；旧版本仍保留。'
+        exit 1
+    }
 }
 
 $gracefulDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(4, [Math]::Max(1, $TimeoutSeconds)))
@@ -104,8 +129,7 @@ Get-TargetProcesses @("HLSDownloaderCore") | Stop-Process -Force
 
 if ($IncludeNativeHost) {
     # Versioned hosts are named HLSDownloaderNativeHost-<version>.exe.  This
-    # path is used only by uninstallation after browser registration is gone;
-    # updates deliberately leave browser-owned hosts alone.
+    # 卸载和升级预停机都必须关闭桥接进程，防止它在事务期间再次启动 Core。
     Get-TargetProcesses @("HLSDownloaderNativeHost*") | Stop-Process -Force
 }
 
@@ -123,7 +147,7 @@ function Test-ApplicationFilesWritable {
             $stream = [System.IO.File]::Open(
                 $target,
                 [System.IO.FileMode]::Open,
-                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileAccess]::Read,
                 [System.IO.FileShare]::None
             )
             $stream.Dispose()

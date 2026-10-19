@@ -1,0 +1,38 @@
+[
+    {
+        "ProcessId":  5216,
+        "ParentProcessId":  532,
+        "Name":  "HLSDownloaderEngine.exe",
+        "ExecutablePath":  "C:\\QAWork\\Other Project\\HLSDownloaderEngine.exe"
+    },
+    {
+        "ProcessId":  6440,
+        "ParentProcessId":  1528,
+        "Name":  "HLSDownloaderPresenter.exe",
+        "ExecutablePath":  "C:\\QAWork\\Custom Install\\HLSDownloader\\app\\resources\\HLSDownloaderPresenter.exe"
+    },
+    {
+        "ProcessId":  2884,
+        "ParentProcessId":  3460,
+        "Name":  "HLSDownloaderNativeHost.exe",
+        "ExecutablePath":  "C:\\QAWork\\Custom Install\\HLSDownloader\\app\\resources\\HLSDownloaderNativeHost.exe"
+    },
+    {
+        "ProcessId":  3940,
+        "ParentProcessId":  2884,
+        "Name":  "HLSDownloaderEngine.exe",
+        "ExecutablePath":  "C:\\QAWork\\Custom Install\\HLSDownloader\\app\\resources\\HLSDownloaderEngine.exe"
+    },
+    {
+        "ProcessId":  6280,
+        "ParentProcessId":  7052,
+        "Name":  "HLSDownloader.exe",
+        "ExecutablePath":  "C:\\QAWork\\Custom Install\\HLSDownloader\\HLSDownloader.exe"
+    },
+    {
+        "ProcessId":  3584,
+        "ParentProcessId":  6280,
+        "Name":  "HLSDownloader.exe",
+        "ExecutablePath":  "C:\\QAWork\\Custom Install\\HLSDownloader\\HLSDownloader.exe"
+    }
+]

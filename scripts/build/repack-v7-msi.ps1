@@ -24,10 +24,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "WiX dark failed: $LASTEXITCODE" }
     $wxs = Join-Path $work 'HLSDownloader.wxs'
     $text = [IO.File]::ReadAllText($wxs, [Text.Encoding]::UTF8)
-    # WiX 3's default UI library is codepage 1252. Keep the installer's UI
-    # ASCII-safe while all application-facing text remains in the packaged app.
-    $text = [regex]::Replace($text, '[^\x00-\x7F]', '')
-    $text = $text.Replace('Title=""', 'Title="Main Features"')
     $text = [regex]::Replace($text, 'Source="[^"]*\\(File|Binary|Icon)\\', 'Source="$1\\')
     $text = [regex]::Replace($text, 'SourceFile="[^"]*\\(File|Binary|Icon)\\', 'SourceFile="$1\\')
     $text = [regex]::Replace($text, '<File\b(?![^>]*\bCompressed=)', '<File Compressed="yes"')
@@ -36,6 +32,19 @@ try {
     [xml]$model = $text
     $namespace = $model.DocumentElement.NamespaceURI
     $product = $model.Wix.Product
+    $product.SetAttribute('Language', '2052')
+    $product.SetAttribute('Codepage', '936')
+    $product.Package.SetAttribute('Languages', '2052')
+    $product.Package.SetAttribute('SummaryCodepage', '936')
+    # dark 展开后的英文控件是字面量，单独设置 culture 不会翻译它们。
+    # 重新链接 WiX 自带的简体中文标准向导，保留首次安装的目录选择。
+    foreach ($node in @($product.SelectNodes("./*[local-name()='UI' or local-name()='UIRef']"))) {
+        $product.RemoveChild($node) | Out-Null
+    }
+    # 这些是展开向导时落在 Product 下的同一批符号，必须一起交回 UI 库管理。
+    foreach ($node in @($product.SelectNodes("./*[local-name()='Binary' and starts-with(@Id,'WixUI')] | ./*[local-name()='CustomAction' and starts-with(@Id,'WixUI')] | ./*[local-name()='Property' and (@Id='DefaultUIFont' or @Id='WixUI_Mode' or @Id='WixUIRMOption' or @Id='ARPNOMODIFY' or @Id='ErrorDialog')] | ./*[local-name()='InstallUISequence']/*[local-name()='Show']"))) {
+        $node.ParentNode.RemoveChild($node) | Out-Null
+    }
     # jpackage 的包可能已有向导，但缺少间接目录控件依赖的属性；不能只在新增向导时补。
     if ($model.SelectNodes("//*[local-name()='Directory' and @Id='INSTALLDIR']").Count -ne 1) {
         throw 'Installer INSTALLDIR directory is not unique.'
@@ -52,36 +61,16 @@ try {
     $license = [regex]::Replace($license, '\r?\n', '\par ')
     $licensePath = Join-Path $work 'License.rtf'
     [IO.File]::WriteAllText($licensePath, '{\rtf1\ansi\deff0 {\fonttbl {\f0 Segoe UI;}}\f0\fs20 ' + $license + '}', [Text.Encoding]::ASCII)
-    # 部分旧基础包没有安装向导；补上目录选择，不能只支持命令行 INSTALLDIR。
-    if ($model.SelectNodes("//*[local-name()='Dialog']").Count -eq 0 -and
-        $null -eq $model.SelectSingleNode("//*[local-name()='UIRef' and @Id='WixUI_InstallDir']")) {
-        $ui = $model.CreateElement('UIRef', $namespace)
-        $ui.SetAttribute('Id', 'WixUI_InstallDir')
-        $product.AppendChild($ui) | Out-Null
+    $ui = $model.CreateElement('UIRef', $namespace)
+    $ui.SetAttribute('Id', 'WixUI_InstallDir')
+    $product.AppendChild($ui) | Out-Null
+    $variable = $model.SelectSingleNode("//*[local-name()='WixVariable' and @Id='WixUILicenseRtf']")
+    if ($null -eq $variable) {
+        $variable = $model.CreateElement('WixVariable', $namespace)
+        $variable.SetAttribute('Id', 'WixUILicenseRtf')
+        $product.AppendChild($variable) | Out-Null
     }
-    $control = $model.SelectSingleNode("//*[local-name()='Dialog' and @Id='LicenseAgreementDlg']/*[local-name()='Control' and @Id='LicenseText']")
-    if ($null -ne $control) {
-        # 许可正文已展开到 Control 时，WixUILicenseRtf 不能覆盖这份文本。
-        $control.RemoveAttribute('Text')
-        foreach ($node in @($control.SelectNodes("./*[local-name()='Text']"))) {
-            $control.RemoveChild($node) | Out-Null
-        }
-        $licenseText = $model.CreateElement('Text', $namespace)
-        $licenseText.SetAttribute('SourceFile', $licensePath)
-        $control.PrependChild($licenseText) | Out-Null
-    } else {
-        # dark 会将标准向导还原为 UIRef，但保留 jpackage 自定义对话框。
-        if ($null -eq $model.SelectSingleNode("//*[local-name()='UIRef' and @Id='WixUI_InstallDir']")) {
-            throw 'Installer license dialog or WixUI_InstallDir reference is missing.'
-        }
-        $variable = $model.SelectSingleNode("//*[local-name()='WixVariable' and @Id='WixUILicenseRtf']")
-        if ($null -eq $variable) {
-            $variable = $model.CreateElement('WixVariable', $namespace)
-            $variable.SetAttribute('Id', 'WixUILicenseRtf')
-            $product.AppendChild($variable) | Out-Null
-        }
-        $variable.SetAttribute('Value', $licensePath)
-    }
+    $variable.SetAttribute('Value', $licensePath)
     # 标准 FindRelatedProducts 已支持三段版本；jpackage 自定义检测会错误清空已找到的旧产品。
     foreach ($node in @($model.SelectNodes("//*[local-name()='Custom' and @Action='JpFindRelatedProducts'] | //*[local-name()='CustomAction' and @Id='JpFindRelatedProducts']"))) {
         $node.ParentNode.RemoveChild($node) | Out-Null
@@ -281,6 +270,33 @@ try {
         }
         $model.Save($wxs)
     }
+    # 安装前助手只使用 Rust 标准库并静态链接 CRT，可在干净 Windows 的临时目录运行。
+    $rustCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
+    $rustc = if ($rustCommand) { $rustCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
+    $preflight = Join-Path $work 'installer-preflight.exe'
+    & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $PSScriptRoot '../install/installer-preflight.rs') -o $preflight
+    if ($LASTEXITCODE -ne 0) { throw "Installer preflight build failed: $LASTEXITCODE" }
+    foreach ($node in @($model.SelectNodes("//*[local-name()='Binary' and @Id='V7InstallerHelper'] | //*[local-name()='CustomAction' and @Id='V7StopRunningApplications'] | //*[local-name()='Custom' and @Action='V7StopRunningApplications']"))) {
+        $node.ParentNode.RemoveChild($node) | Out-Null
+    }
+    $binary = $model.CreateElement('Binary', $namespace)
+    $binary.SetAttribute('Id', 'V7InstallerHelper')
+    $binary.SetAttribute('SourceFile', $preflight)
+    $product.AppendChild($binary) | Out-Null
+    $action = $model.CreateElement('CustomAction', $namespace)
+    $action.SetAttribute('Id', 'V7StopRunningApplications')
+    $action.SetAttribute('BinaryKey', 'V7InstallerHelper')
+    $action.SetAttribute('ExeCommand', '"[V7_EXISTING_INSTALLDIR]\."')
+    $action.SetAttribute('Return', 'check')
+    $product.AppendChild($action) | Out-Null
+    $sequence = $model.SelectSingleNode("//*[local-name()='InstallExecuteSequence']")
+    if ($null -eq $sequence) { throw 'Installer execute sequence is missing.' }
+    $stop = $model.CreateElement('Custom', $namespace)
+    $stop.SetAttribute('Action', 'V7StopRunningApplications')
+    $stop.SetAttribute('Before', 'InstallValidate')
+    $stop.InnerText = 'V7_EXISTING_INSTALLDIR AND (JP_UPGRADABLE_FOUND OR Installed) AND NOT UPGRADINGPRODUCTCODE'
+    $sequence.AppendChild($stop) | Out-Null
+    $model.Save($wxs)
     $wixobj = Join-Path $work 'HLSDownloader.wixobj'
     & (Join-Path $WixRoot 'candle.exe') $wxs -o $wixobj -nologo -ext (Join-Path $WixRoot 'WixUtilExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX candle failed: $LASTEXITCODE" }
@@ -288,7 +304,7 @@ try {
     # jpackage emits RemoveExistingProducts before the final lifecycle patch
     # moves it to 1510. Suppress that transient ICE27 finding here; the patch
     # script verifies the persisted sequence after repacking.
-    & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -sice:ICE27 -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
+    & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -cultures:zh-CN -sice:ICE27 -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX light failed: $LASTEXITCODE" }
     # 静默安装不会初始化向导控件；在交付前检查最终 MSI 中的目录绑定及完整许可正文。
     $installer = $null

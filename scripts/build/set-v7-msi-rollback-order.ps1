@@ -158,11 +158,12 @@ try {
     $originalProductCode = Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'"
     $upgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
     $initialize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallInitialize'"
+    $validate = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallValidate'"
     $installFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallFiles'"
     $removeFiles = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveFiles'"
     $finalize = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='InstallFinalize'"
     $engineFile = Find-MsiFileKey 'HLSDownloaderEngine.exe'
-    if ($null -eq $current -or $null -eq $initialize -or $null -eq $installFiles -or $null -eq $removeFiles -or $null -eq $finalize) {
+    if ($null -eq $current -or $null -eq $initialize -or $null -eq $validate -or $null -eq $installFiles -or $null -eq $removeFiles -or $null -eq $finalize) {
         throw 'MSI is missing the install/upgrade actions required for rollback and Native Host registration.'
     }
     if ([String]::IsNullOrWhiteSpace($engineFile)) {
@@ -256,8 +257,14 @@ try {
     # 必须在移除旧产品前拒绝未提升权限的升级，不能只依赖 SummaryInfo 标志。
     $privilegeAction = 'V7RequireUpgradePrivileges'
     $privilegeCondition = 'JP_UPGRADABLE_FOUND AND NOT Privileged'
-    $privilegeMessage = 'Please run this upgrade as administrator so Windows Installer can safely restore the previous version if installation fails.'
-    $privilegeSequence = [int]$initialize - 10
+    $chineseUI = (Invoke-MsiStringQuery "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductLanguage'") -eq '2052'
+    $privilegeMessage = if ($chineseUI) {
+        '请以管理员权限运行升级安装包，以便安装失败时安全恢复旧版本。'
+    } else {
+        # 隔离生命周期测试的英文夹具不具备中文数据库代码页。
+        'Please run this upgrade as administrator so Windows Installer can safely restore the previous version if installation fails.'
+    }
+    $privilegeSequence = [int]$validate - 20
     $relatedSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='FindRelatedProducts'"
     if ($null -eq $relatedSequence -or $privilegeSequence -le [int]$relatedSequence) {
         throw 'MSI does not provide an upgrade privilege check before InstallInitialize.'
@@ -266,6 +273,28 @@ try {
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$privilegeAction'"
     Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Target``) VALUES ('$privilegeAction',19,'$privilegeMessage')"
     Invoke-MsiNonQuery "INSERT INTO ``InstallExecuteSequence`` (``Action``,``Condition``,``Sequence``) VALUES ('$privilegeAction','$privilegeCondition',$privilegeSequence)"
+
+    if ($null -ne (Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7StopRunningApplications'")) {
+        $stopSequence = [int]$validate - 10
+        Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$stopSequence WHERE ``Action``='V7StopRunningApplications'"
+    }
+    # 升级沿用现有目录，只确认一次；首次安装仍走许可和目录选择。
+    if ($chineseUI -and $null -ne (Invoke-MsiStringQuery "SELECT ``Dialog`` FROM ``Dialog`` WHERE ``Dialog``='WelcomeDlg'")) {
+        Invoke-MsiNonQuery "UPDATE ``TextStyle`` SET ``FaceName``='Microsoft YaHei UI' WHERE ``TextStyle``='WixUI_Font_Normal'"
+        Invoke-MsiNonQuery "UPDATE ``TextStyle`` SET ``FaceName``='Microsoft YaHei UI' WHERE ``TextStyle``='WixUI_Font_Bigger'"
+        Invoke-MsiNonQuery "UPDATE ``TextStyle`` SET ``FaceName``='Microsoft YaHei UI' WHERE ``TextStyle``='WixUI_Font_Title'"
+        Invoke-MsiNonQuery "UPDATE ``Control`` SET ``Text``='继续(&N)' WHERE ``Dialog_``='WelcomeDlg' AND ``Control``='Next'"
+        Invoke-MsiNonQuery "UPDATE ``Control`` SET ``Text``='此向导将安装或升级 [ProductName]。升级会自动退出旧程序，保留任务、设置和下载文件，并沿用原安装目录。点击继续开始。' WHERE ``Dialog_``='WelcomeDlg' AND ``Control``='Description'"
+        # Condition 属于 ControlEvent 的主键，Windows Installer 不允许直接 UPDATE。
+        Invoke-MsiNonQuery "DELETE FROM ``ControlEvent`` WHERE ``Dialog_``='WelcomeDlg' AND ``Control_``='Next' AND ``Event``='NewDialog'"
+        Invoke-MsiNonQuery "INSERT INTO ``ControlEvent`` (``Dialog_``,``Control_``,``Event``,``Argument``,``Condition``,``Ordering``) VALUES ('WelcomeDlg','Next','NewDialog','LicenseAgreementDlg','NOT Installed AND NOT JP_UPGRADABLE_FOUND',1)"
+        Invoke-MsiNonQuery "INSERT INTO ``ControlEvent`` (``Dialog_``,``Control_``,``Event``,``Argument``,``Condition``,``Ordering``) VALUES ('WelcomeDlg','Next','NewDialog','VerifyReadyDlg','Installed AND PATCH AND NOT JP_UPGRADABLE_FOUND',2)"
+        Invoke-MsiNonQuery "DELETE FROM ``ControlEvent`` WHERE ``Dialog_``='WelcomeDlg' AND ``Control_``='Next' AND ``Event``='EndDialog' AND ``Argument``='Return'"
+        Invoke-MsiNonQuery "INSERT INTO ``ControlEvent`` (``Dialog_``,``Control_``,``Event``,``Argument``,``Condition``,``Ordering``) VALUES ('WelcomeDlg','Next','EndDialog','Return','JP_UPGRADABLE_FOUND',1)"
+        Invoke-MsiNonQuery "UPDATE ``InstallUISequence`` SET ``Condition``='NOT JP_UPGRADABLE_FOUND' WHERE ``Action``='ExitDialog'"
+    }
+    Invoke-MsiNonQuery "DELETE FROM ``Property`` WHERE ``Property``='MSIDISABLERMRESTART'"
+    Invoke-MsiNonQuery "INSERT INTO ``Property`` (``Property``,``Value``) VALUES ('MSIDISABLERMRESTART','1')"
 
     $prepareSequence = [int]$installFiles + 10
     if ($prepareSequence -ge [int]$finalize) {
@@ -361,6 +390,13 @@ try {
     $verifiedPrivilegeType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='$privilegeAction'"
     if ([int]$verifiedPrivilegeSequence -ne $privilegeSequence -or $verifiedPrivilegeCondition -ne $privilegeCondition -or [int]$verifiedPrivilegeType -ne 19) {
         throw 'MSI upgrade privilege guard verification failed.'
+    }
+    $verifiedStopSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='V7StopRunningApplications'"
+    if ($null -ne $verifiedStopSequence) {
+        $stopType = Invoke-MsiScalarQuery "SELECT ``Type`` FROM ``CustomAction`` WHERE ``Action``='V7StopRunningApplications'"
+        if ([int]$stopType -ne 2 -or [int]$verifiedStopSequence -le [int]$verifiedPrivilegeSequence -or [int]$verifiedStopSequence -ge [int]$validate) {
+            throw 'MSI must run the temporary shutdown helper after the privilege guard and before file-in-use validation.'
+        }
     }
     $verifiedInstallDirSearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='V7_EXISTING_INSTALLDIR'"
     if ($verifiedInstallDirSearch -ne $installDirSearch -or $null -ne (Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='INSTALLDIR'")) {
