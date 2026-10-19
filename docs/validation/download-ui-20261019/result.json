@@ -200,5 +200,25 @@
     }
   ],
   "delivery_directory": "Desktop/HLSDownloader/最新-46d09b5",
-  "cleanup_limit": "Automatic approval rejected the combined overwrite/delete operation for old Desktop delivery files (blocked by policy, no further reason). New packages were copied to a new directory without modifying old files."
+  "cleanup": {
+    "completed_on": "2026-10-19",
+    "script": "finish-cleanup.ps1",
+    "exit_code": 0,
+    "delivery_hashes_reverified": true,
+    "sandbox_process_20092_stopped": true,
+    "generated_directories_confirmed_absent": [
+      ".tool-cache",
+      "desktop_ui/.gradle",
+      "desktop_ui/.kotlin",
+      "desktop_ui/.tool-cache",
+      "desktop_ui/build",
+      "extension/node_modules",
+      "extension/.wxt",
+      "extension/.output"
+    ],
+    "hash_matched_old_desktop_packages_removed": 3,
+    "remaining_local_branch": "main",
+    "worktree_count": 1,
+    "host_installed_app_and_user_downloads_modified": false
+  }
 }
