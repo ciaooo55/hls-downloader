@@ -1,8 +1,0 @@
-Cannot index into a null array.
-At C:\HLSFrontQA\jobs\21-final-dark-dialog.ps1:6 char:1
-+ Act @{type='click';x=[int](($b[0]+$b[2])/2);y=[int](($b[1]+$b[3])/2)}
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
-    + FullyQualifiedErrorId : NullArray
- 
-

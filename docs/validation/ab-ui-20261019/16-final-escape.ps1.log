@@ -1,9 +1,0 @@
-Esc left context menu open
-At C:\HLSFrontQA\jobs\16-final-escape.ps1:6 char:39
-+ ... s.contextMenuTaskIds.Count -gt 0){throw 'Esc left context menu open'}
-+                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OperationStopped: (Esc left context menu open:St 
-   ring) [], RuntimeException
-    + FullyQualifiedErrorId : Esc left context menu open
- 
-

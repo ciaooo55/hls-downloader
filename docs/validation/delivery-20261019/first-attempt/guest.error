@@ -1,9 +1,0 @@
-Installer validation failed: 1
-At C:\HLSDeliveryQA\guest.ps1:33 char:30
-+ ... itCode -ne 0) { throw "Installer validation failed: $($p.ExitCode)" }
-+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : OperationStopped: (Installer validation failed:  
-   1:String) [], RuntimeException
-    + FullyQualifiedErrorId : Installer validation failed: 1
- 
-

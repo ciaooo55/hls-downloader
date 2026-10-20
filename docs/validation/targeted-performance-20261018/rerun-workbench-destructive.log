@@ -1,8 +1,0 @@
-{"check": "prepared three downloaded files for remaining interactions"}
-{"check": "search matches filename and empty result then restores test-only view"}
-{"check": "select-all respects search and destructive confirmation cancel preserves tasks"}
-{"check": "local video opens in the workbench overlay and closes using its own close button"}
-{"check": "settings save persists changed option; original restored in cleanup"}
-{"check": "confirmed delete removes task and preserves completed file"}
-{"check": "delete task and file: cancel preserves both; confirm removes both"}
-{"check": "clear completed: cancel preserves records; confirm removes completed records, preserves queued task and file SHA256"}
