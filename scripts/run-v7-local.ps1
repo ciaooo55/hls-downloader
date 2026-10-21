@@ -10,7 +10,7 @@ $env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
 $env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
 $jdkRoot = $env:HLS_V7_JAVA_HOME
 if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
-if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\build-v7.ps1 -Task bootstrap.' }
+if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
 $env:JAVA_HOME = $jdkRoot
 
 if (-not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
