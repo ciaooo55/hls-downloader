@@ -241,11 +241,14 @@ def run(args):
                 accelerated.clear()
                 start_requests = len(report['requests'])
                 tid = create(path, kind, name+'.mp4')
-                task = wait_task(ipc, tid, lambda t: t['playback_ready'] or t['status'] == 'failed', 90)
+                # 预览清单与合并后的进度事件分别发布；续传验收须先等到非零检查点。
+                task = wait_task(ipc, tid, lambda t: (t['playback_ready']
+                    and t['downloaded_bytes'] > 0) or t['status'] == 'failed', 90)
                 assert task['status'] not in ('failed', 'completed'), task
                 work = root/'downloads/.hls-tasks'/tid
                 command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
-                paused = wait_task(ipc, tid, lambda t: t['status'] == 'paused', 30)
+                paused = wait_task(ipc, tid, lambda t: t['status'] == 'paused'
+                                   and t['active_workers'] == 0, 30)
                 assert work.is_dir() and paused['downloaded_bytes'] > 0, paused
                 command({'kind': 'task_action', 'task_id': tid, 'action': 'resume'})
                 task = wait_task(ipc, tid, lambda t: (t['status'] == 'downloading'

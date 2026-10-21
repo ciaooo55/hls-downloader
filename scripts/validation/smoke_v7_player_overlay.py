@@ -312,7 +312,13 @@ def run(args):
             record('main fullscreen enters and Escape restores the overlay')
             click('画中画')
             active_port = pip_port
-            wait(lambda: ui('window')['showing'], 'PiP not visible')
+            def pip_visible():
+                # PiP 的 DisposableEffect 在窗口组合后才启动独立测试接口。
+                try:
+                    return ui('window')['showing']
+                except OSError:
+                    return False
+            wait(pip_visible, 'PiP not visible')
             bounds('返回主界面播放器')
             check_video_rect('pip')
             capture('pip')

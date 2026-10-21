@@ -101,7 +101,17 @@ def run(args):
         report['largest_files'] = [{'path': p.relative_to(install).as_posix(), 'bytes': p.stat().st_size}
                                   for p in sorted(paths, key=lambda p: p.stat().st_size, reverse=True)[:12]]
         report['installed_components_sha256'] = {name: hashlib.sha256((resources/name).read_bytes()).hexdigest()
-            for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe', 'HLSDownloaderUpdater.exe')}
+            for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe',
+                         'HLSDownloaderPresenter.exe', 'HLSDownloaderUpdater.exe')}
+        if args.expected_components:
+            expected_components = json.loads(args.expected_components.read_text(encoding='utf-8-sig'))
+            actual_components = {}
+            for relative, expected_hash in expected_components.items():
+                path = install / relative
+                assert path.resolve().is_relative_to(install.resolve()), relative
+                actual_components[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                assert actual_components[relative] == expected_hash, f'Installed payload differs: {relative}'
+            record('installed payload hashes match the tested components and delivery archives', actual_components)
         version = json.loads((resources/'BUILD-PROVENANCE.json').read_text(encoding='utf-8-sig'))['product_version']
         extensions = {}
         for family in ('Chromium', 'Firefox'):
@@ -238,5 +248,7 @@ if __name__ == '__main__':
     parser.add_argument('--msi', type=Path, required=True)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--expected-components', type=Path,
+                        help='JSON mapping installation-relative paths to tested SHA256 values')
     parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
     raise SystemExit(run(parser.parse_args()))

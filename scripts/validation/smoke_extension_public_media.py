@@ -111,7 +111,8 @@ def run(args):
     temp_root = Path(__file__).resolve().parents[2] / ".tool-cache" / "test-tmp"
     temp_root.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    result = {"browser": args.browser, "passed": False, "cases": [], "extension_sha256": {
+    result = {"browser": args.browser, "without_extension": args.without_extension,
+              "passed": False, "cases": [], "extension_sha256": {
         str(p.relative_to(extension)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(extension.rglob("*")) if p.is_file()
     }}
@@ -124,7 +125,7 @@ def run(args):
                 options.binary_location = str(_find_edge())
                 for value in [f"--user-data-dir={root / 'profile'}", *([] if args.headed else ['--headless=new']),
                               "--disable-features=DisableLoadExtensionCommandLineSwitch",
-                              f"--disable-extensions-except={extension}", f"--load-extension={extension}",
+                              *([] if args.without_extension else [f"--disable-extensions-except={extension}", f"--load-extension={extension}"]),
                               "--autoplay-policy=no-user-gesture-required", "--no-first-run", "--window-size=1280,900"]:
                     options.add_argument(value)
                 options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
@@ -155,7 +156,8 @@ def run(args):
                 service = FirefoxService(executable_path=str(args.driver),
                                          service_args=["--profile-root", str(root)])
                 driver = webdriver.Firefox(service=service, options=options)
-                driver.install_addon(str(addon), temporary=True)
+                if not args.without_extension:
+                    driver.install_addon(str(addon), temporary=True)
             _fit_browser_window(driver)
             driver.set_page_load_timeout(30)
             for name, url, expected in CASES:
@@ -181,7 +183,7 @@ def run(args):
                         state = _overlay_state(driver)
                         record["state"] = state
                         # The button must point at the requested manifest/media, not merely any detected URL.
-                        if _resource_id(expected) in state["resourceIds"] and any(v["currentTime"] > 0 for v in state["videos"]):
+                        if (args.without_extension or _resource_id(expected) in state["resourceIds"]) and any(v["currentTime"] > 0 for v in state["videos"]):
                             record["passed"] = True
                             break
                         time.sleep(.5)
@@ -210,5 +212,6 @@ if __name__ == "__main__":
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--browser", choices=("edge", "firefox"), default="edge")
     parser.add_argument("--headed", action="store_true")
+    parser.add_argument("--without-extension", action="store_true", help="Control run: verify upstream playback without loading the extension")
     parser.add_argument("--case", choices=tuple(c[0] for c in CASES), action="append")
     raise SystemExit(0 if run(parser.parse_args())["passed"] else 1)

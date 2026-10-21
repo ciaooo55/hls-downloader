@@ -223,7 +223,7 @@ def run(args):
         bounds = controls.get(control)
         if not bounds:
             raise AssertionError("Control has no current bounds: " + control)
-        if control.startswith("settings."):
+        if current_context.startswith("settings-") and control != "dialog.secondary.取消":
             footer = controls.get("dialog.primary.保存设置")
             if footer:
                 for _ in range(8):
@@ -260,6 +260,9 @@ def run(args):
                   "selected_segment": selected,
                   "hover_changed_pixels": pixels(baseline, hover),
                   "press_changed_pixels": pixels(hover, pressed)}
+        if control.startswith("toolbar."):
+            target = node(control.removeprefix("toolbar."), True)
+            result["enabled"] = "enabled" in target["states"]
         filename = f"feedback-{len(report['feedback']):03d}"
         crop_width, crop_height = region[2]-region[0], region[3]-region[1]
         strip = Image.new("RGB", (crop_width, crop_height*3))
@@ -269,6 +272,10 @@ def run(args):
         result["image"] = filename + ".png"
         report["feedback"].append(result)
         save()
+        if result.get("enabled") is False:
+            # 禁用按钮仍可显示解释原因的 tooltip，截图差异不能代表按压反馈。
+            # 实际启用后的动作在 functional 阶段用下载状态及成品哈希验收。
+            return
         if (not selected and not result["hover_changed_pixels"]) or not result["press_changed_pixels"]:
             raise AssertionError("Missing pointer feedback: " + json.dumps(result))
 
@@ -285,6 +292,9 @@ def run(args):
                 if name.startswith("settings.choice."):
                     field = {"settings-下载": "existing_file_policy", "settings-计划": "completion_power_action", "settings-网络": "proxy_mode"}.get(context)
                     selected = bool(field) and name == "settings.choice." + original_settings[field]
+                    if context == "settings-字幕翻译":
+                        selected = name.removeprefix("settings.choice.") in (
+                            original_subtitle["provider"], original_subtitle["region"])
                 feedback(name, context, selected=selected)
         record("pointer feedback: " + context)
 
@@ -293,6 +303,8 @@ def run(args):
     try:
         p = Pipe()
         original_settings = p.request({"type": "load_settings", "request_id": 1})
+        original_subtitle = p.request({"type": "subtitle", "request_id": 3,
+                                       "request": {"action": "configuration"}})["result"]
         initial_browser_connected = p.request({"type":"snapshot", "request_id":2}).get("browser_connected", False)
         p.close()
         (evidence / "settings-before.json").write_text(json.dumps(original_settings), encoding="utf8")
@@ -512,7 +524,7 @@ def run(args):
             node("保存设置")
             started_settings = args.settings_start_tab == "通用"
             for tab, heading in (("通用", "文件与运行"), ("下载", "默认并发"), ("计划", "限速与队列计划"),
-                                 ("网络", "代理与站点"), ("媒体", "媒体处理与直播"), ("BT", "BT 与种子"),
+                                 ("网络", "代理与站点"), ("媒体", "媒体处理与直播"), ("字幕翻译", "网页在线字幕翻译"), ("BT", "BT 与种子"),
                                  ("安全", "发布与扫描"), ("浏览器", "浏览器下载接管"), ("外观", "外观与可访问性")):
                 started_settings = started_settings or tab == args.settings_start_tab
                 if not started_settings:

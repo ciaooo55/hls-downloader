@@ -214,7 +214,7 @@ def transfer(product, round_index, scenario, server):
     elif product == 'ab':
         request_json('http://127.0.0.1:15151/start-headless-download', {'downloadSource': {'type': 'http', 'link': url}, 'folder': str(directory), 'name': key, 'startDownload': True})
     else:
-        subprocess.Popen([str(IDM), '/d', url, '/p', str(directory), '/f', key, '/n', '/h'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([str(IDM), '/d', url, '/p', str(directory), '/f', key, '/n'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     submit_ms = (time.perf_counter() - began) * 1000
     sha = hashlib.sha256()
     for _ in range(size // len(PATTERN)):

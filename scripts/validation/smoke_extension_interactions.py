@@ -378,7 +378,7 @@ def run(args):
                 if attempt == 2:
                     raise
 
-    with tempfile.TemporaryDirectory(prefix="all-buttons-firefox-", dir=args.runtime.resolve().parents[1]/"test-tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="extension-interactions-") as temporary:
         stage = Path(temporary)
         try:
             fixture_root = stage / 'video-fixture'
@@ -975,13 +975,17 @@ def run(args):
             popup_button("重新识别").click()
             wait(lambda: driver.execute_script("return !document.querySelector('.scan-button').disabled"), "Rescan did not finish", 20)
             wait(lambda: driver.find_elements(By.CSS_SELECTOR,"article .copy-link"), "Rescan lost local video", 20)
+            resource_more = driver.find_element(By.CSS_SELECTOR, "article .resource-more summary")
+            resource_more.click()
+            wait(lambda: driver.find_element(By.CSS_SELECTOR, "article .copy-link").is_displayed(),
+                 "Resource more menu did not expose copy-link", 5)
             copy = driver.find_element(By.CSS_SELECTOR,"article .copy-link")
             driver.execute_script("arguments[0].scrollIntoView({block:'center'})", copy)
             copy.click()
-            wait(lambda: "已复制" in driver.find_element(By.CSS_SELECTOR,"article .copy-link").text, "Copy link did not confirm success", 5)
-            copy.click()
-            assert copy.find_elements(By.CSS_SELECTOR, '.hlsd-icon svg'), 'Repeated copy removed the icon'
-            wait(lambda: copy.find_element(By.CSS_SELECTOR, '.copy-label').text == '复制链接', 'Copy label did not reset', 5)
+            wait(lambda: driver.execute_script("return document.querySelector('article .copy-link .copy-label')?.textContent === '已复制'"), "Copy link did not confirm success", 5)
+            driver.find_element(By.CSS_SELECTOR, 'article .copy-link').click()
+            assert driver.find_elements(By.CSS_SELECTOR, 'article .copy-link .hlsd-icon svg'), 'Repeated copy removed the icon'
+            wait(lambda: driver.execute_script("return document.querySelector('article .copy-link .copy-label')?.textContent === '复制链接'"), 'Copy label did not reset', 5)
             record("popup rescan and copy-link buttons")
 
             if args.partitioned_cookies:
@@ -1043,31 +1047,26 @@ def run(args):
             assert not driver.execute_script('return arguments[0].classList.contains("busy")', queued)
             record('confirmed download has a stable check icon and no busy animation')
 
-            # 此处只验证字幕设置交互；真实云端音频另行验收。
+            # 服务凭据、语言和模式只在主程序配置；插件保留页面/站点开关。
             popup_button("字幕").click()
-            for label, value in (("来源语言", "en"), ("目标语言", "ja"), ("本站字幕翻译", "off"), ("本页字幕翻译", "on")):
-                select = driver.find_element(By.CSS_SELECTOR,f'select[aria-label="{label}"]')
+            assert not driver.find_elements(By.CSS_SELECTOR,
+                'select[aria-label="来源语言"],select[aria-label="目标语言"],.subtitle-provider,input[type="password"]'), 'Plugin exposes desktop-only subtitle configuration'
+            hint = driver.find_element(By.CSS_SELECTOR, '.subtitle-panel').text
+            assert '设置 → 字幕翻译' in hint and '主程序' in hint, hint
+            driver.find_element(By.CSS_SELECTOR, '.subtitle-panel summary').click()
+            for label, value in (("本站字幕翻译", "off"), ("本页字幕翻译", "on")):
+                selector = f'select[aria-label="{label}"]'
+                select = wait(lambda: (element if (element := driver.find_element(By.CSS_SELECTOR, selector)).is_enabled() else None),
+                              'Subtitle state not ready: ' + label, 15)
                 original = select.get_attribute("value")
                 Select(select).select_by_value(value)
-                wait(lambda: driver.find_element(By.CSS_SELECTOR,f'select[aria-label="{label}"]').get_attribute("value")==value,
+                wait(lambda: driver.execute_script('const s=document.querySelector(arguments[0]);return s && !s.disabled && s.value===arguments[1]', selector, value),
                      "Subtitle choice did not apply: "+label, 10)
                 Select(driver.find_element(By.CSS_SELECTOR,f'select[aria-label="{label}"]')).select_by_value(original)
+                wait(lambda: driver.execute_script('const s=document.querySelector(arguments[0]);return s && !s.disabled && s.value===arguments[1]', selector, original),
+                     "Subtitle choice did not restore: "+label, 10)
                 record("subtitle popup select and restore: "+label)
-            driver.find_element(By.CSS_SELECTOR, ".subtitle-panel summary").click()
-            for b in driver.find_elements(By.CSS_SELECTOR, ".subtitle-provider button"):
-                if not args.actions_only: measure(b, "subtitle provider")
-            service = driver.find_element(By.CSS_SELECTOR, 'select[aria-label="翻译服务"]')
-            original_service = service.get_attribute('value')
-            workspace = driver.find_element(By.CSS_SELECTOR, 'input[aria-label="百炼业务空间 ID"]')
-            original_workspace = workspace.get_attribute('value')
-            Select(service).select_by_value('dashscope')
-            workspace.clear()
-            save_button = popup_button("保存服务设置")
-            save_button.click()
-            assert not driver.execute_script("return document.querySelector('.subtitle-provider').checkValidity()")
-            driver.execute_script('arguments[0].value=arguments[1]', workspace, original_workspace)
-            Select(service).select_by_value(original_service)
-            record("DashScope without workspace: browser validation prevents invalid save and original service is restored")
+            record("subtitle configuration stays in desktop; popup exposes only page/site controls and desktop guidance")
             popup_button("主程序").click()
             record("popup open desktop button")
             driver.save_screenshot(str(evidence/"popup-final.png"))

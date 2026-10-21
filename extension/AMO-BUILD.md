@@ -41,8 +41,11 @@ automated tests so an update cannot accidentally create a second listing.
 
 ## Permission notes
 
-- `downloads`: after a real link or an explicit download control is clicked,
-  observe the real browser download
+- `webRequestBlocking` (Firefox only): hold eligible GET download navigation
+  responses while the desktop application receives the handoff, then cancel
+  before Firefox creates a download item. Normal page/player requests continue;
+  an unavailable desktop or failed handoff leaves the original response intact.
+- `downloads`: for downloads not intercepted at response time, observe the real browser download
   (including redirects and response filenames), pause GET downloads, and send them to the
   desktop confirmation dialog. The browser download remains paused until the
   user accepts and the desktop task is ready. The browser copy is then canceled
@@ -71,8 +74,10 @@ Firefox data transmission permissions are declared as `browsingActivity`,
 `websiteContent`, and `authenticationInfo`. Native Messaging transfers outside
 the browser are included in this declaration, even though the developer does not
 receive those messages. The payloads include the selected resource URL, page
-identity, media metadata, replay headers, explicitly authorized cookies, and
-user-configured subtitle service credentials, and completed local export paths.
+identity, media metadata, replay headers, explicitly authorized cookies, captured
+subtitle audio, and completed local export paths. Subtitle service credentials
+are configured and encrypted in the desktop application; the popup has no
+credential configuration form.
 
 No analytics, advertising, telemetry, or remote code is used. URLs and optionally
 authorized cookies are sent only to the Native Messaging application on the same

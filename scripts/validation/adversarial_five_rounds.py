@@ -98,6 +98,8 @@ def run(args):
                 save()
 
     env = os.environ
+    if args.java:
+        env['HLS_JAVA_EXE'] = str(args.java)
     env['HLS_V7_DATA_DIR'] = str(work / 'default-data')
     env['HLS_V7_DOWNLOAD_DIR'] = str(work / 'default-downloads')
     # The takeover suite exercises the default pipe and lets the real Host start Core.
@@ -146,7 +148,25 @@ def run(args):
         case('player-fault-resource', 'smoke_v7_resource_boundaries.py', [
             '--baseline', engine, '--candidate', engine, '--media', media], 300)
     if args.round == 5:
-        case('workbench', 'smoke_v7_workbench_interactions.py', ['--runtime', args.runtime], 1200)
+        from smoke_v7_portable_app import Pipe
+        # 其他套件自行启动 Core；工作台套件要求连接到已运行的 Core。
+        with (args.report / 'workbench-core.log').open('wb') as core_log:
+            subprocess.Popen([str(engine)], stdout=core_log, stderr=core_log,
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    client = Pipe()
+                    try:
+                        assert client.request({'type': 'snapshot', 'request_id': 1})['type'] == 'snapshot'
+                    finally:
+                        client.close()
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(.05)
+            case('workbench', 'smoke_v7_workbench_interactions.py', ['--runtime', args.runtime], 1200)
     # LAN sharing intentionally opens an external listener and may prompt Windows.
     # Run it after UI acceptance; each round uses a fresh Sandbox.
     case('protocols', 'smoke_v7_protocol_features.py', ['--engine', engine, '--no-firewall-rule'], 600)
@@ -159,6 +179,7 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--round', type=int, choices=range(1, 6), required=True)
+    parser.add_argument('--java', type=Path, help='Full JDK java.exe for the native file-drag fixture')
     for name in ('runtime', 'extension', 'firefox', 'driver', 'report'):
         parser.add_argument('--' + name, type=Path, required=True)
     raise SystemExit(run(parser.parse_args()))
