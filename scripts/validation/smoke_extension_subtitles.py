@@ -463,9 +463,11 @@ def run(args):
                 core.configure_preferences(enabled=False)
                 wait(lambda:all(s['status']=='stopped' for s in core.sessions.values()),"disable with cached captions did not stop translation")
                 wait(lambda:evaluate(page,"getComputedStyle(document.querySelector('[data-hls-subtitle]')).display === 'none'"),"disable left cached subtitle controls visible")
+                wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-panel] [role=status]')?.textContent.includes('主程序字幕已关闭') && document.querySelector('[data-subtitle-start]')?.disabled === true"),"popup did not acknowledge disabled subtitles")
                 previous_sessions = len(core.sessions)
                 core.configure_preferences(enabled=True)
-                wait(lambda:evaluate(popup,"document.querySelector('[data-subtitle-start]')?.disabled === false"),"global enable did not restore start")
+                # 旧会话的“停止翻译”也可点击，不能把它误判为已恢复的“开始翻译”。
+                wait(lambda:evaluate(popup,"(()=>{const b=document.querySelector('[data-subtitle-start]');return b?.disabled === false && b.textContent === '开始翻译' && document.querySelector('[data-subtitle-panel] [role=status]')?.textContent.includes('已开启')})()"),"global enable did not restore start")
                 if args.capture != 'prefetch': evaluate(page,"window.testMedia.play().then(()=>true)")
                 evaluate(popup,"document.querySelector('[data-subtitle-start]').click()")
                 wait(lambda:len(core.sessions) > previous_sessions and any(s['chunks'] >= 4 and s['status']=='running' for s in core.sessions.values()),"reenable did not restore audio")
