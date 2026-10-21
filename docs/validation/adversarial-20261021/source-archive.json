@@ -1,0 +1,7 @@
+{
+  "source_commit": "2965534c58161c619dbf12e262944ff98a1baecd",
+  "files": 124,
+  "source_archive_sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8",
+  "verified": true,
+  "comparison": "Git blobs; worktree CRLF normalization is not a source difference"
+}

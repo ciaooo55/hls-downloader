@@ -1,0 +1,31 @@
+{
+  "source_commit": "2965534c58161c619dbf12e262944ff98a1baecd",
+  "directory": "最新-2965534",
+  "assets": [
+    {
+      "name": "HLSDownloader-7.0.3-main-2965534-未签名.msi",
+      "bytes": 203472896,
+      "sha256": "0b8335a339cf4650955b76d4ba30e883d6b1f6b4fcc0b9e4456b36ad5cb92a97"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329533,
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 329554,
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 370660,
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    }
+  ],
+  "installer_product_code": "{2C9F6EFA-0158-47CB-9BDD-86C9D7729312}",
+  "installer_acceptance": true,
+  "upgrade_acceptance": true,
+  "unsigned": true,
+  "release_ready": false
+}

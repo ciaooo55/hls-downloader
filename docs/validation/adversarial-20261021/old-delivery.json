@@ -1,0 +1,21 @@
+{
+  "files": [
+    {
+      "sha256": "21055b8fc74d0a1337d218a1400c17ffe5228f732a65601173e6396dedc96f51",
+      "name": "HLSDownloader-7.0.3-Chromium.zip"
+    },
+    {
+      "sha256": "976f0be403baa907ec6e5a2087b870eb5de0fb506ecf6f89df9297cc9d5b3859",
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip"
+    },
+    {
+      "sha256": "558251c43164f86eeffb92f868a92445aa50627e8bc85184c60aa38c7a8f7341",
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip"
+    },
+    {
+      "sha256": "ea95c189aadab604ca665b4d3ea9ec12bfee41cfb703f98245abd5b74f955333",
+      "name": "HLSDownloader-7.0.3-main-b832d2a-未签名.msi"
+    }
+  ],
+  "directory": "最新-b832d2a"
+}

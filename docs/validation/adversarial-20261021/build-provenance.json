@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "source_commit": "2965534c58161c619dbf12e262944ff98a1baecd",
+  "source_tree": "8ce64e5af58b03a264b759ee4646eccfac91c747",
+  "source_branch": "main",
+  "source_tag": "",
+  "git_worktree_clean": false,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "feature_parity_path": "config/release/feature-parity.json",
+  "feature_parity_sha256": "a9f0a5bd29bf4efb11435dfe18dd50f5d43471ff22745f4331967b2029d02956",
+  "feature_summary": {
+    "verified": 27,
+    "partial": 2,
+    "blocked": 0,
+    "total": 29
+  },
+  "generated_at_utc": "2026-10-21T16:06:50.0945243Z",
+  "base_msi_sha256": "e6c5678f079cc222dfb04b276d16f5cfd9f27fe1adeb28d53a24e87bde87e899",
+  "validation_scope": "620 Core tests passed; five adversarial rounds and independent retests completed; installed payload and same-version upgrade passed; 18/18 three-product benchmark samples verified. Real cloud subtitles and physical casting excluded. Chromium zero-download-event takeover not achieved; supplied site blocked by security verification.",
+  "reused_runtime_source_commit": "3d3de7bf7fb003c1af8e4434c15ea8ccdf35e11a",
+  "component_sha256": {
+    "engine": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+    "host": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+    "presenter": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa",
+    "extension": "64adb41345e21b82f8d8148edf47d0c947c71564955fb11b3c4d526325e155de"
+  },
+  "installer_preflight_source_sha256": "8d3fb2b6907f200fdbec5420a96422fcc9aa755ab155e3dc9bc236e91b06aec7",
+  "local_changes_scope": "Untracked validation reports only; product and test source committed."
+}

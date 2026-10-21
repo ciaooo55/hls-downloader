@@ -1,0 +1,162 @@
+{
+  "checked_at": "2026-10-22T00:17:34.4020223+08:00",
+  "scope": "Named product locations and registrations only; read-only",
+  "native_host_keys": [
+    {
+      "path": "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\Vivaldi\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\Opera Software\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\Chromium\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\Vivaldi\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKCU:\\Software\\WOW6432Node\\Opera Software\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\Chromium\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\Vivaldi\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\Opera Software\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\Chromium\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\Vivaldi\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    },
+    {
+      "path": "HKLM:\\Software\\WOW6432Node\\Opera Software\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "present": false
+    }
+  ],
+  "installations": [],
+  "paths": [
+    {
+      "path": "C:\\Program Files\\HLSDownloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Program Files\\HLS Downloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Program Files (x86)\\HLSDownloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Program Files (x86)\\HLS Downloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Users\\lee\\AppData\\Local\\HLSDownloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Users\\lee\\AppData\\Roaming\\HLSDownloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Users\\lee\\AppData\\Local\\HLS Downloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Users\\lee\\AppData\\Roaming\\HLS Downloader",
+      "present": false
+    },
+    {
+      "path": "C:\\Users\\lee\\AppData\\Local\\Programs\\HLS Downloader v6",
+      "present": false
+    },
+    {
+      "path": "E:\\HLS Downloader",
+      "present": false
+    }
+  ],
+  "processes": []
+}

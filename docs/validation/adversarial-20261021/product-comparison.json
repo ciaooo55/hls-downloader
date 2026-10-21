@@ -1,0 +1,5794 @@
+{
+  "schema": 1,
+  "scope": "loopback default-settings transfer and whole-product process resources; not UI response or public Internet",
+  "samples": [
+    {
+      "product": "hls",
+      "round": 1,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 46.91990000000601,
+      "first_byte_ms": 69.49539999999388,
+      "verified_output_ms": 3818.106,
+      "last_ten_percent_ms": 1293.178299999994,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 216526848,
+        "private": 210366464,
+        "cpu": 7.34375,
+        "threads": 88,
+        "handles": 1291,
+        "read_bytes": 21603949,
+        "write_bytes": 114242,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.15625,
+            "private": 4087808,
+            "rss": 16498688
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 6.96875,
+            "private": 201121792,
+            "rss": 176144384
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.1875,
+            "private": 3780608,
+            "rss": 17571840
+          }
+        ]
+      },
+      "peak": {
+        "rss": 246472704,
+        "private": 243822592,
+        "cpu": 7.34375,
+        "threads": 107,
+        "handles": 1411,
+        "read_bytes": 21603949,
+        "write_bytes": 114242,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.15625,
+            "private": 4087808,
+            "rss": 16498688
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 6.96875,
+            "private": 201121792,
+            "rss": 176144384
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.1875,
+            "private": 3780608,
+            "rss": 17571840
+          }
+        ]
+      },
+      "after": {
+        "rss": 241647616,
+        "private": 234065920,
+        "cpu": 13.3125,
+        "threads": 92,
+        "handles": 1335,
+        "read_bytes": 22375073,
+        "write_bytes": 134840510,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.5,
+            "private": 6250496,
+            "rss": 19062784
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.46875,
+            "private": 221192192,
+            "rss": 195706880
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.3125,
+            "private": 5246976,
+            "rss": 20566016
+          }
+        ]
+      },
+      "cpu_seconds": 5.96875,
+      "cpu_live_process_delta": 5.96875,
+      "requests": [
+        {
+          "start": 2796203,
+          "end": 5592405,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.1575715
+        },
+        {
+          "start": 0,
+          "end": 2796202,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.1596625
+        },
+        {
+          "start": 5592406,
+          "end": 8388608,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.2925469
+        },
+        {
+          "start": 8388609,
+          "end": 11184811,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.3065066
+        },
+        {
+          "start": 11184812,
+          "end": 13981014,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.3255987
+        },
+        {
+          "start": 13981015,
+          "end": 16777217,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.4272619
+        },
+        {
+          "start": 16777218,
+          "end": 19573420,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.4498508
+        },
+        {
+          "start": 22369624,
+          "end": 25165826,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.4621867
+        },
+        {
+          "start": 19573421,
+          "end": 22369623,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.4644359
+        },
+        {
+          "start": 25165827,
+          "end": 27962029,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.6943388
+        },
+        {
+          "start": 27962030,
+          "end": 30758232,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.6960055
+        },
+        {
+          "start": 33554436,
+          "end": 36350638,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.6962857
+        },
+        {
+          "start": 36350639,
+          "end": 39146841,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.6970479
+        },
+        {
+          "start": 30758233,
+          "end": 33554435,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.7012379
+        },
+        {
+          "start": 41943045,
+          "end": 44739247,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.9152763
+        },
+        {
+          "start": 39146842,
+          "end": 41943044,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.9156432
+        },
+        {
+          "start": 47535451,
+          "end": 50331653,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.9158457
+        },
+        {
+          "start": 50331654,
+          "end": 53127856,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.9318331
+        },
+        {
+          "start": 53127857,
+          "end": 55924059,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.932399
+        },
+        {
+          "start": 44739248,
+          "end": 47535450,
+          "status": 206,
+          "sent": 2796203,
+          "started": 189.9325135
+        },
+        {
+          "start": 55924060,
+          "end": 58720262,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.1863575
+        },
+        {
+          "start": 58720263,
+          "end": 61516465,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.199461
+        },
+        {
+          "start": 61516466,
+          "end": 64312668,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.2137476
+        },
+        {
+          "start": 69905075,
+          "end": 72701277,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.233104
+        },
+        {
+          "start": 72701278,
+          "end": 75497480,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.2517157
+        },
+        {
+          "start": 64312669,
+          "end": 67108871,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.2587972
+        },
+        {
+          "start": 67108872,
+          "end": 69905074,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.2607563
+        },
+        {
+          "start": 75497481,
+          "end": 78293683,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.4502654
+        },
+        {
+          "start": 78293684,
+          "end": 81089886,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.5704863
+        },
+        {
+          "start": 83886090,
+          "end": 86682292,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.5767198
+        },
+        {
+          "start": 89478496,
+          "end": 92274698,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.6164054
+        },
+        {
+          "start": 86682293,
+          "end": 89478495,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.61736
+        },
+        {
+          "start": 81089887,
+          "end": 83886089,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.6413641
+        },
+        {
+          "start": 92274699,
+          "end": 95070901,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.934115
+        },
+        {
+          "start": 103459511,
+          "end": 106255713,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.9343429
+        },
+        {
+          "start": 97867105,
+          "end": 100663307,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.934517
+        },
+        {
+          "start": 95070902,
+          "end": 97867104,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.9356328
+        },
+        {
+          "start": 100663308,
+          "end": 103459510,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.9366738
+        },
+        {
+          "start": 106255714,
+          "end": 109051916,
+          "status": 206,
+          "sent": 2796203,
+          "started": 190.937939
+        },
+        {
+          "start": 109051917,
+          "end": 111848119,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.2575031
+        },
+        {
+          "start": 111848120,
+          "end": 114644322,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.301444
+        },
+        {
+          "start": 117440526,
+          "end": 120236728,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.3016289
+        },
+        {
+          "start": 114644323,
+          "end": 117440525,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.301816
+        },
+        {
+          "start": 120236729,
+          "end": 123032931,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.5835593
+        },
+        {
+          "start": 125829135,
+          "end": 128625337,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.5837009
+        },
+        {
+          "start": 123032932,
+          "end": 125829134,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.5933852
+        },
+        {
+          "start": 131421541,
+          "end": 134217727,
+          "status": 206,
+          "sent": 2796187,
+          "started": 191.593749
+        },
+        {
+          "start": 128625338,
+          "end": 131421540,
+          "status": 206,
+          "sent": 2796203,
+          "started": 191.6145652
+        }
+      ],
+      "server_bytes_sent": 134217728,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 1,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 60.15360000000669,
+      "first_byte_ms": 131.58640000000332,
+      "verified_output_ms": 5632.984000000022,
+      "last_ten_percent_ms": 1250.3105000000119,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 241971200,
+        "private": 234467328,
+        "cpu": 13.484375,
+        "threads": 92,
+        "handles": 1336,
+        "read_bytes": 22375495,
+        "write_bytes": 134873893,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.515625,
+            "private": 6250496,
+            "rss": 19091456
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.625,
+            "private": 221593600,
+            "rss": 196411392
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.3125,
+            "private": 5246976,
+            "rss": 20156416
+          }
+        ]
+      },
+      "peak": {
+        "rss": 284020736,
+        "private": 283467776,
+        "cpu": 13.484375,
+        "threads": 109,
+        "handles": 1423,
+        "read_bytes": 22375495,
+        "write_bytes": 134873893,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.515625,
+            "private": 6250496,
+            "rss": 19091456
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.625,
+            "private": 221593600,
+            "rss": 196411392
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.3125,
+            "private": 5246976,
+            "rss": 20156416
+          }
+        ]
+      },
+      "after": {
+        "rss": 252665856,
+        "private": 246878208,
+        "cpu": 23.171875,
+        "threads": 93,
+        "handles": 1342,
+        "read_bytes": 22545599,
+        "write_bytes": 202769736,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 2.515625,
+            "private": 6356992,
+            "rss": 19464192
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 20.234375,
+            "private": 233906176,
+            "rss": 206262272
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.390625,
+            "private": 5238784,
+            "rss": 20627456
+          }
+        ]
+      },
+      "cpu_seconds": 9.6875,
+      "cpu_live_process_delta": 9.6875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 1398101,
+          "status": 206,
+          "sent": 1398102,
+          "started": 193.425842
+        },
+        {
+          "start": 1398102,
+          "end": 2796203,
+          "status": 206,
+          "sent": 1398102,
+          "started": 193.432829
+        },
+        {
+          "start": 2796204,
+          "end": 4194305,
+          "status": 206,
+          "sent": 1398102,
+          "started": 193.9098186
+        },
+        {
+          "start": 4194306,
+          "end": 5592407,
+          "status": 206,
+          "sent": 1398102,
+          "started": 193.9257109
+        },
+        {
+          "start": 5592408,
+          "end": 6990509,
+          "status": 206,
+          "sent": 1398102,
+          "started": 193.9317269
+        },
+        {
+          "start": 6990510,
+          "end": 8388611,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.4244836
+        },
+        {
+          "start": 8388612,
+          "end": 9786713,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.4359871
+        },
+        {
+          "start": 11184816,
+          "end": 12582917,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.4699912
+        },
+        {
+          "start": 9786714,
+          "end": 11184815,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.5175053
+        },
+        {
+          "start": 12582918,
+          "end": 13981019,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.9441704
+        },
+        {
+          "start": 13981020,
+          "end": 15379121,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.9471499
+        },
+        {
+          "start": 15379122,
+          "end": 16777223,
+          "status": 206,
+          "sent": 1398102,
+          "started": 194.956395
+        },
+        {
+          "start": 18175326,
+          "end": 19573427,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.0245949
+        },
+        {
+          "start": 16777224,
+          "end": 18175325,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.0284597
+        },
+        {
+          "start": 19573428,
+          "end": 20971529,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.4636289
+        },
+        {
+          "start": 20971530,
+          "end": 22369631,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.471303
+        },
+        {
+          "start": 26563938,
+          "end": 27962039,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.4815073
+        },
+        {
+          "start": 22369632,
+          "end": 23767733,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.4854668
+        },
+        {
+          "start": 23767734,
+          "end": 25165835,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.4914098
+        },
+        {
+          "start": 25165836,
+          "end": 26563937,
+          "status": 206,
+          "sent": 1398102,
+          "started": 195.4961719
+        },
+        {
+          "start": 30758244,
+          "end": 32156345,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.1335149
+        },
+        {
+          "start": 27962040,
+          "end": 29360141,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.1336823
+        },
+        {
+          "start": 36350652,
+          "end": 37748753,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.1341037
+        },
+        {
+          "start": 29360142,
+          "end": 30758243,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.134642
+        },
+        {
+          "start": 34952550,
+          "end": 36350651,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.1354082
+        },
+        {
+          "start": 32156346,
+          "end": 33554447,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.1357663
+        },
+        {
+          "start": 33554448,
+          "end": 34952549,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.1366145
+        },
+        {
+          "start": 37748754,
+          "end": 39146855,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.6957416
+        },
+        {
+          "start": 41943060,
+          "end": 43341161,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.706068
+        },
+        {
+          "start": 43341162,
+          "end": 44739263,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.7064326
+        },
+        {
+          "start": 39146856,
+          "end": 40544957,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.7126902
+        },
+        {
+          "start": 44739264,
+          "end": 46137365,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.7158759
+        },
+        {
+          "start": 46137366,
+          "end": 47535467,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.7464729
+        },
+        {
+          "start": 47535468,
+          "end": 48933569,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.7479606
+        },
+        {
+          "start": 40544958,
+          "end": 41943059,
+          "status": 206,
+          "sent": 1398102,
+          "started": 196.7750567
+        },
+        {
+          "start": 50331672,
+          "end": 51729773,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3099427
+        },
+        {
+          "start": 48933570,
+          "end": 50331671,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3103293
+        },
+        {
+          "start": 53127876,
+          "end": 54525977,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3104474
+        },
+        {
+          "start": 54525978,
+          "end": 55924079,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3117837
+        },
+        {
+          "start": 57322182,
+          "end": 58720283,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3123704
+        },
+        {
+          "start": 51729774,
+          "end": 53127875,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3135596
+        },
+        {
+          "start": 55924080,
+          "end": 57322181,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.322333
+        },
+        {
+          "start": 60118386,
+          "end": 61516487,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3253144
+        },
+        {
+          "start": 58720284,
+          "end": 60118385,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.3313355
+        },
+        {
+          "start": 61516488,
+          "end": 62914589,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.9541544
+        },
+        {
+          "start": 64312692,
+          "end": 65710793,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.9571961
+        },
+        {
+          "start": 62914590,
+          "end": 64312691,
+          "status": 206,
+          "sent": 1398102,
+          "started": 197.9576365
+        },
+        {
+          "start": 65710794,
+          "end": 67108863,
+          "status": 206,
+          "sent": 1398070,
+          "started": 197.9613602
+        }
+      ],
+      "server_bytes_sent": 67108864,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "ab",
+      "round": 1,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 670.8149999999762,
+      "first_byte_ms": 843.5963000000015,
+      "verified_output_ms": 5453.016699999978,
+      "last_ten_percent_ms": 3481.1910999999895,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 231333888,
+        "private": 254713856,
+        "cpu": 23.15625,
+        "threads": 64,
+        "handles": 785,
+        "read_bytes": 35889087,
+        "write_bytes": 344957,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 23.15625,
+            "private": 253267968,
+            "rss": 224899072
+          }
+        ]
+      },
+      "peak": {
+        "rss": 280416256,
+        "private": 300199936,
+        "cpu": 23.15625,
+        "threads": 92,
+        "handles": 909,
+        "read_bytes": 35889087,
+        "write_bytes": 344957,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 23.15625,
+            "private": 253267968,
+            "rss": 224899072
+          }
+        ]
+      },
+      "after": {
+        "rss": 284360704,
+        "private": 305106944,
+        "cpu": 37.078125,
+        "threads": 82,
+        "handles": 871,
+        "read_bytes": 38763757,
+        "write_bytes": 134568561,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 37.078125,
+            "private": 303661056,
+            "rss": 277925888
+          }
+        ]
+      },
+      "cpu_seconds": 13.921875,
+      "cpu_live_process_delta": 13.921875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 255,
+          "status": 206,
+          "sent": 256,
+          "started": 217.5665578
+        },
+        {
+          "start": 50331648,
+          "end": 67108863,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7056439
+        },
+        {
+          "start": 0,
+          "end": 16777215,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7119054
+        },
+        {
+          "start": 100663296,
+          "end": 117440511,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7187115
+        },
+        {
+          "start": 33554432,
+          "end": 50331647,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7242671
+        },
+        {
+          "start": 117440512,
+          "end": 134217727,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7342188
+        },
+        {
+          "start": 16777216,
+          "end": 33554431,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.740662
+        },
+        {
+          "start": 83886080,
+          "end": 100663295,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7582963
+        },
+        {
+          "start": 67108864,
+          "end": 83886079,
+          "status": 206,
+          "sent": 16777216,
+          "started": 217.7728125
+        },
+        {
+          "start": 133169152,
+          "end": 134217727,
+          "status": 206,
+          "sent": 1048576,
+          "started": 220.3256759
+        },
+        {
+          "start": 83361792,
+          "end": 83886079,
+          "status": 206,
+          "sent": 524288,
+          "started": 220.3495428
+        }
+      ],
+      "server_bytes_sent": 135790848,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "ab",
+      "round": 1,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 129.59639999999695,
+      "first_byte_ms": 212.0542000000114,
+      "verified_output_ms": 3053.4605,
+      "last_ten_percent_ms": 799.9920999999972,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 284307456,
+        "private": 305250304,
+        "cpu": 37.078125,
+        "threads": 81,
+        "handles": 869,
+        "read_bytes": 38763757,
+        "write_bytes": 134568561,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 37.078125,
+            "private": 303804416,
+            "rss": 277872640
+          }
+        ]
+      },
+      "peak": {
+        "rss": 296210432,
+        "private": 318242816,
+        "cpu": 37.078125,
+        "threads": 97,
+        "handles": 934,
+        "read_bytes": 38763757,
+        "write_bytes": 134568561,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 37.078125,
+            "private": 303804416,
+            "rss": 277872640
+          }
+        ]
+      },
+      "after": {
+        "rss": 281071616,
+        "private": 306872320,
+        "cpu": 42.65625,
+        "threads": 87,
+        "handles": 898,
+        "read_bytes": 38765443,
+        "write_bytes": 201683302,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 42.65625,
+            "private": 305426432,
+            "rss": 274636800
+          }
+        ]
+      },
+      "cpu_seconds": 5.578125,
+      "cpu_live_process_delta": 5.578125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 255,
+          "status": 206,
+          "sent": 256,
+          "started": 222.7361172
+        },
+        {
+          "start": 58720256,
+          "end": 67108863,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8517447
+        },
+        {
+          "start": 8388608,
+          "end": 16777215,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8526215
+        },
+        {
+          "start": 0,
+          "end": 8388607,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8529185
+        },
+        {
+          "start": 50331648,
+          "end": 58720255,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8542413
+        },
+        {
+          "start": 33554432,
+          "end": 41943039,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.854909
+        },
+        {
+          "start": 41943040,
+          "end": 50331647,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8592078
+        },
+        {
+          "start": 16777216,
+          "end": 25165823,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8608775
+        },
+        {
+          "start": 25165824,
+          "end": 33554431,
+          "status": 206,
+          "sent": 8388608,
+          "started": 222.8630404
+        },
+        {
+          "start": 49283072,
+          "end": 50331647,
+          "status": 206,
+          "sent": 983040,
+          "started": 225.0434177
+        },
+        {
+          "start": 66584576,
+          "end": 67108863,
+          "status": 206,
+          "sent": 524288,
+          "started": 225.0720973
+        },
+        {
+          "start": 41418752,
+          "end": 41943039,
+          "status": 206,
+          "sent": 524288,
+          "started": 225.073323
+        },
+        {
+          "start": 49807360,
+          "end": 50331647,
+          "status": 206,
+          "sent": 524288,
+          "started": 225.0938048
+        }
+      ],
+      "server_bytes_sent": 69665024,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "idm",
+      "round": 1,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 3.0070999999907144,
+      "first_byte_ms": 880.5688999999859,
+      "verified_output_ms": 2923.395599999992,
+      "last_ten_percent_ms": 1021.8217000000038,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 45580288,
+        "private": 12001280,
+        "cpu": 1.109375,
+        "threads": 20,
+        "handles": 797,
+        "read_bytes": 1286397,
+        "write_bytes": 8047,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11272192
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 0.984375,
+            "private": 8663040,
+            "rss": 34308096
+          }
+        ]
+      },
+      "peak": {
+        "rss": 68681728,
+        "private": 22761472,
+        "cpu": 1.109375,
+        "threads": 29,
+        "handles": 1167,
+        "read_bytes": 1286397,
+        "write_bytes": 8047,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11272192
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 0.984375,
+            "private": 8663040,
+            "rss": 34308096
+          }
+        ]
+      },
+      "after": {
+        "rss": 51597312,
+        "private": 14520320,
+        "cpu": 2.4375,
+        "threads": 23,
+        "handles": 906,
+        "read_bytes": 135461238,
+        "write_bytes": 268262903,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11276288
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 2.3125,
+            "private": 11182080,
+            "rss": 40321024
+          }
+        ]
+      },
+      "cpu_seconds": 1.390625,
+      "cpu_live_process_delta": 1.328125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 2490368,
+          "started": 240.0646115
+        },
+        {
+          "start": 233600,
+          "end": 134217727,
+          "status": 206,
+          "sent": 38797312,
+          "started": 240.1864163
+        },
+        {
+          "start": 67237427,
+          "end": 134217727,
+          "status": 206,
+          "sent": 37945344,
+          "started": 240.2181878
+        },
+        {
+          "start": 100727577,
+          "end": 134217727,
+          "status": 206,
+          "sent": 33490151,
+          "started": 240.2233705
+        },
+        {
+          "start": 33846557,
+          "end": 67237490,
+          "status": 206,
+          "sent": 33390934,
+          "started": 240.2560119
+        }
+      ],
+      "server_bytes_sent": 146114109,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "idm",
+      "round": 1,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 4.452100000008841,
+      "first_byte_ms": 612.8015999999832,
+      "verified_output_ms": 4094.222400000007,
+      "last_ten_percent_ms": 894.3207000000086,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 51712000,
+        "private": 14581760,
+        "cpu": 2.4375,
+        "threads": 23,
+        "handles": 907,
+        "read_bytes": 135461238,
+        "write_bytes": 268262903,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11276288
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 2.3125,
+            "private": 11243520,
+            "rss": 40435712
+          }
+        ]
+      },
+      "peak": {
+        "rss": 74182656,
+        "private": 22122496,
+        "cpu": 2.4375,
+        "threads": 32,
+        "handles": 1265,
+        "read_bytes": 135461238,
+        "write_bytes": 268262903,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11276288
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 2.3125,
+            "private": 11243520,
+            "rss": 40435712
+          }
+        ]
+      },
+      "after": {
+        "rss": 55312384,
+        "private": 15798272,
+        "cpu": 3.390625,
+        "threads": 24,
+        "handles": 936,
+        "read_bytes": 191348197,
+        "write_bytes": 391336214,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11280384
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 3.265625,
+            "private": 12460032,
+            "rss": 44032000
+          }
+        ]
+      },
+      "cpu_seconds": 1.09375,
+      "cpu_live_process_delta": 0.953125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 11272192,
+          "started": 243.0825527
+        },
+        {
+          "start": 233600,
+          "end": 67108863,
+          "status": 206,
+          "sent": 0,
+          "started": 243.18923
+        },
+        {
+          "start": 33677071,
+          "end": 67108863,
+          "status": 206,
+          "sent": 10747904,
+          "started": 243.2236839
+        },
+        {
+          "start": 50404730,
+          "end": 67108863,
+          "status": 206,
+          "sent": 10551296,
+          "started": 243.3538092
+        },
+        {
+          "start": 17124039,
+          "end": 33677134,
+          "status": 206,
+          "sent": 10420224,
+          "started": 243.3540578
+        },
+        {
+          "start": 60865628,
+          "end": 67108863,
+          "status": 206,
+          "sent": 6225920,
+          "started": 244.4552559
+        },
+        {
+          "start": 27509386,
+          "end": 33677134,
+          "status": 206,
+          "sent": 6167749,
+          "started": 244.4651618
+        },
+        {
+          "start": 44417716,
+          "end": 50404793,
+          "status": 206,
+          "sent": 5987078,
+          "started": 244.4695444
+        },
+        {
+          "start": 11227907,
+          "end": 17124102,
+          "status": 206,
+          "sent": 5896196,
+          "started": 244.4750447
+        },
+        {
+          "start": 66739757,
+          "end": 67108863,
+          "status": 206,
+          "sent": 369107,
+          "started": 245.8499133
+        },
+        {
+          "start": 33345740,
+          "end": 33677134,
+          "status": 206,
+          "sent": 196608,
+          "started": 245.8709064
+        },
+        {
+          "start": 66924310,
+          "end": 67108863,
+          "status": 206,
+          "sent": 184554,
+          "started": 245.9457969
+        },
+        {
+          "start": 33511405,
+          "end": 33677134,
+          "status": 206,
+          "sent": 0,
+          "started": 245.9951336
+        }
+      ],
+      "server_bytes_sent": 68018828,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "ab",
+      "round": 2,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 596.4606000000003,
+      "first_byte_ms": 749.8736000000008,
+      "verified_output_ms": 4192.576499999973,
+      "last_ten_percent_ms": 1141.022399999997,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 234942464,
+        "private": 255275008,
+        "cpu": 17.5,
+        "threads": 65,
+        "handles": 791,
+        "read_bytes": 36339607,
+        "write_bytes": 315755,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 17.46875,
+            "private": 253833216,
+            "rss": 228139008
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "peak": {
+        "rss": 286359552,
+        "private": 306700288,
+        "cpu": 17.5,
+        "threads": 96,
+        "handles": 913,
+        "read_bytes": 36339607,
+        "write_bytes": 315755,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 17.46875,
+            "private": 253833216,
+            "rss": 228139008
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "after": {
+        "rss": 296050688,
+        "private": 317145088,
+        "cpu": 31.984375,
+        "threads": 87,
+        "handles": 877,
+        "read_bytes": 38798760,
+        "write_bytes": 134539687,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 31.953125,
+            "private": 315703296,
+            "rss": 289247232
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "cpu_seconds": 14.484375,
+      "cpu_live_process_delta": 14.484375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 255,
+          "status": 206,
+          "sent": 256,
+          "started": 264.8536942
+        },
+        {
+          "start": 0,
+          "end": 16777215,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.0081904
+        },
+        {
+          "start": 50331648,
+          "end": 67108863,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.0250818
+        },
+        {
+          "start": 117440512,
+          "end": 134217727,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.0305312
+        },
+        {
+          "start": 100663296,
+          "end": 117440511,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.0655503
+        },
+        {
+          "start": 83886080,
+          "end": 100663295,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.0713697
+        },
+        {
+          "start": 33554432,
+          "end": 50331647,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.0986983
+        },
+        {
+          "start": 16777216,
+          "end": 33554431,
+          "status": 206,
+          "sent": 16777216,
+          "started": 265.1040169
+        },
+        {
+          "start": 67108864,
+          "end": 83886079,
+          "status": 206,
+          "sent": 16777216,
+          "started": 266.0873992
+        },
+        {
+          "start": 79167488,
+          "end": 83886079,
+          "status": 206,
+          "sent": 4718592,
+          "started": 267.2301105
+        },
+        {
+          "start": 47185920,
+          "end": 50331647,
+          "status": 206,
+          "sent": 3145728,
+          "started": 267.2407937
+        },
+        {
+          "start": 76808192,
+          "end": 79167487,
+          "status": 206,
+          "sent": 2359296,
+          "started": 267.2985334
+        },
+        {
+          "start": 32505856,
+          "end": 33554431,
+          "status": 206,
+          "sent": 1048576,
+          "started": 267.4328125
+        },
+        {
+          "start": 31981568,
+          "end": 32505855,
+          "status": 206,
+          "sent": 524288,
+          "started": 267.5038963
+        }
+      ],
+      "server_bytes_sent": 146014464,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "ab",
+      "round": 2,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 121.74609999999575,
+      "first_byte_ms": 204.2177999999808,
+      "verified_output_ms": 2904.7790999999847,
+      "last_ten_percent_ms": 725.0382999999943,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 292110336,
+        "private": 313053184,
+        "cpu": 32.375,
+        "threads": 86,
+        "handles": 875,
+        "read_bytes": 38798760,
+        "write_bytes": 134539687,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 32.34375,
+            "private": 311611392,
+            "rss": 285306880
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "peak": {
+        "rss": 303042560,
+        "private": 326557696,
+        "cpu": 32.375,
+        "threads": 97,
+        "handles": 936,
+        "read_bytes": 38798760,
+        "write_bytes": 134539687,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 32.34375,
+            "private": 311611392,
+            "rss": 285306880
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "after": {
+        "rss": 302145536,
+        "private": 326209536,
+        "cpu": 39.265625,
+        "threads": 88,
+        "handles": 900,
+        "read_bytes": 38883341,
+        "write_bytes": 201654190,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 39.234375,
+            "private": 324767744,
+            "rss": 295342080
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "cpu_seconds": 6.890625,
+      "cpu_live_process_delta": 6.890625,
+      "requests": [
+        {
+          "start": 0,
+          "end": 255,
+          "status": 206,
+          "sent": 256,
+          "started": 268.8573782
+        },
+        {
+          "start": 58720256,
+          "end": 67108863,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.9707683
+        },
+        {
+          "start": 50331648,
+          "end": 58720255,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.9713047
+        },
+        {
+          "start": 25165824,
+          "end": 33554431,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.9722525
+        },
+        {
+          "start": 8388608,
+          "end": 16777215,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.9725557
+        },
+        {
+          "start": 0,
+          "end": 8388607,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.974199
+        },
+        {
+          "start": 16777216,
+          "end": 25165823,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.9846298
+        },
+        {
+          "start": 41943040,
+          "end": 50331647,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.9847466
+        },
+        {
+          "start": 33554432,
+          "end": 41943039,
+          "status": 206,
+          "sent": 8388608,
+          "started": 268.98541
+        }
+      ],
+      "server_bytes_sent": 67109120,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "idm",
+      "round": 2,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 8.46769999998287,
+      "first_byte_ms": 844.5654999999874,
+      "verified_output_ms": 3704.5651999999905,
+      "last_ten_percent_ms": 1361.3038999999958,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 45817856,
+        "private": 11825152,
+        "cpu": 1.015625,
+        "threads": 20,
+        "handles": 820,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 0.921875,
+            "private": 8654848,
+            "rss": 34635776
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11182080
+          }
+        ]
+      },
+      "peak": {
+        "rss": 66699264,
+        "private": 20836352,
+        "cpu": 1.015625,
+        "threads": 29,
+        "handles": 1190,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 0.921875,
+            "private": 8654848,
+            "rss": 34635776
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11182080
+          }
+        ]
+      },
+      "after": {
+        "rss": 50950144,
+        "private": 14209024,
+        "cpu": 2.984375,
+        "threads": 23,
+        "handles": 901,
+        "read_bytes": 105935899,
+        "write_bytes": 238240405,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 2.890625,
+            "private": 11038720,
+            "rss": 39763968
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11186176
+          }
+        ]
+      },
+      "cpu_seconds": 2.09375,
+      "cpu_live_process_delta": 1.96875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 34603008,
+          "started": 285.9857376
+        },
+        {
+          "start": 233600,
+          "end": 134217727,
+          "status": 206,
+          "sent": 0,
+          "started": 286.0506068
+        },
+        {
+          "start": 67231503,
+          "end": 134217727,
+          "status": 206,
+          "sent": 34406400,
+          "started": 286.0673643
+        },
+        {
+          "start": 100742135,
+          "end": 134217727,
+          "status": 206,
+          "sent": 33475593,
+          "started": 286.1002072
+        },
+        {
+          "start": 34789591,
+          "end": 67231566,
+          "status": 206,
+          "sent": 32309248,
+          "started": 286.1059274
+        },
+        {
+          "start": 129189214,
+          "end": 134217727,
+          "status": 206,
+          "sent": 5028514,
+          "started": 287.3872506
+        },
+        {
+          "start": 95719378,
+          "end": 100742198,
+          "status": 206,
+          "sent": 5022821,
+          "started": 287.4024367
+        },
+        {
+          "start": 62713990,
+          "end": 67231566,
+          "status": 206,
+          "sent": 4517577,
+          "started": 287.4178573
+        },
+        {
+          "start": 30283675,
+          "end": 34789654,
+          "status": 206,
+          "sent": 4505980,
+          "started": 287.4226851
+        },
+        {
+          "start": 133957794,
+          "end": 134217727,
+          "status": 206,
+          "sent": 259934,
+          "started": 287.821714
+        },
+        {
+          "start": 100490920,
+          "end": 100742198,
+          "status": 206,
+          "sent": 251279,
+          "started": 287.8386016
+        },
+        {
+          "start": 128952557,
+          "end": 129189277,
+          "status": 206,
+          "sent": 236721,
+          "started": 287.8689946
+        },
+        {
+          "start": 95485600,
+          "end": 95719441,
+          "status": 206,
+          "sent": 233842,
+          "started": 287.8802121
+        }
+      ],
+      "server_bytes_sent": 154850917,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "idm",
+      "round": 2,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 2.0203999999921507,
+      "first_byte_ms": 500.1591999999846,
+      "verified_output_ms": 4045.003500000007,
+      "last_ten_percent_ms": 713.0473000000279,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 50950144,
+        "private": 14209024,
+        "cpu": 2.984375,
+        "threads": 23,
+        "handles": 901,
+        "read_bytes": 105935899,
+        "write_bytes": 238240405,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 2.890625,
+            "private": 11038720,
+            "rss": 39763968
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11186176
+          }
+        ]
+      },
+      "peak": {
+        "rss": 71069696,
+        "private": 21659648,
+        "cpu": 2.984375,
+        "threads": 32,
+        "handles": 1259,
+        "read_bytes": 105935899,
+        "write_bytes": 238240405,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 2.890625,
+            "private": 11038720,
+            "rss": 39763968
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11186176
+          }
+        ]
+      },
+      "after": {
+        "rss": 52637696,
+        "private": 15273984,
+        "cpu": 3.640625,
+        "threads": 24,
+        "handles": 908,
+        "read_bytes": 160949738,
+        "write_bytes": 360419667,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 3.546875,
+            "private": 12103680,
+            "rss": 41451520
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11186176
+          }
+        ]
+      },
+      "cpu_seconds": 0.75,
+      "cpu_live_process_delta": 0.65625,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 12124160,
+          "started": 289.6839025
+        },
+        {
+          "start": 233600,
+          "end": 67108863,
+          "status": 206,
+          "sent": 0,
+          "started": 289.7987755
+        },
+        {
+          "start": 33677071,
+          "end": 67108863,
+          "status": 206,
+          "sent": 11599872,
+          "started": 289.827997
+        },
+        {
+          "start": 50410487,
+          "end": 67108863,
+          "status": 206,
+          "sent": 11403264,
+          "started": 289.9337217
+        },
+        {
+          "start": 17166215,
+          "end": 33677134,
+          "status": 206,
+          "sent": 11272192,
+          "started": 289.9368763
+        },
+        {
+          "start": 61759083,
+          "end": 67108863,
+          "status": 206,
+          "sent": 5242880,
+          "started": 291.4507777
+        },
+        {
+          "start": 28415210,
+          "end": 33677134,
+          "status": 206,
+          "sent": 5261925,
+          "started": 291.469685
+        },
+        {
+          "start": 45266722,
+          "end": 50410550,
+          "status": 206,
+          "sent": 5143829,
+          "started": 291.4723142
+        },
+        {
+          "start": 12100963,
+          "end": 17166278,
+          "status": 206,
+          "sent": 5065316,
+          "started": 291.4857975
+        },
+        {
+          "start": 33339900,
+          "end": 33677134,
+          "status": 206,
+          "sent": 0,
+          "started": 292.6694669
+        },
+        {
+          "start": 66826037,
+          "end": 67108863,
+          "status": 206,
+          "sent": 282827,
+          "started": 292.6837235
+        },
+        {
+          "start": 50230668,
+          "end": 50410550,
+          "status": 206,
+          "sent": 0,
+          "started": 292.7112798
+        },
+        {
+          "start": 33508485,
+          "end": 33677134,
+          "status": 206,
+          "sent": 0,
+          "started": 292.7477527
+        },
+        {
+          "start": 66967450,
+          "end": 67108863,
+          "status": 206,
+          "sent": 0,
+          "started": 292.7685439
+        }
+      ],
+      "server_bytes_sent": 67396265,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "hls",
+      "round": 2,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 47.67140000001291,
+      "first_byte_ms": 63.02249999998821,
+      "verified_output_ms": 2869.495000000029,
+      "last_ten_percent_ms": 952.3823000000107,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 214249472,
+        "private": 212746240,
+        "cpu": 7.75,
+        "threads": 88,
+        "handles": 1275,
+        "read_bytes": 22865114,
+        "write_bytes": 18912,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 7.546875,
+            "private": 203714560,
+            "rss": 174186496
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.109375,
+            "private": 3923968,
+            "rss": 16179200
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.078125,
+            "private": 3731456,
+            "rss": 17207296
+          }
+        ]
+      },
+      "peak": {
+        "rss": 248946688,
+        "private": 249868288,
+        "cpu": 7.75,
+        "threads": 109,
+        "handles": 1403,
+        "read_bytes": 22865114,
+        "write_bytes": 18912,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 7.546875,
+            "private": 203714560,
+            "rss": 174186496
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.109375,
+            "private": 3923968,
+            "rss": 16179200
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.078125,
+            "private": 3731456,
+            "rss": 17207296
+          }
+        ]
+      },
+      "after": {
+        "rss": 241725440,
+        "private": 236470272,
+        "cpu": 12.859375,
+        "threads": 93,
+        "handles": 1321,
+        "read_bytes": 23644501,
+        "write_bytes": 134635746,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.421875,
+            "private": 224559104,
+            "rss": 196571136
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.234375,
+            "private": 5345280,
+            "rss": 18444288
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.1875,
+            "private": 5189632,
+            "rss": 20033536
+          }
+        ]
+      },
+      "cpu_seconds": 5.109375,
+      "cpu_live_process_delta": 5.109375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 2796202,
+          "status": 206,
+          "sent": 2796203,
+          "started": 306.9613941
+        },
+        {
+          "start": 2796203,
+          "end": 5592405,
+          "status": 206,
+          "sent": 2796203,
+          "started": 306.9669696
+        },
+        {
+          "start": 5592406,
+          "end": 8388608,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.0768036
+        },
+        {
+          "start": 8388609,
+          "end": 11184811,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.0849046
+        },
+        {
+          "start": 11184812,
+          "end": 13981014,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.0890409
+        },
+        {
+          "start": 13981015,
+          "end": 16777217,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.2302735
+        },
+        {
+          "start": 16777218,
+          "end": 19573420,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.2374343
+        },
+        {
+          "start": 19573421,
+          "end": 22369623,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.248552
+        },
+        {
+          "start": 22369624,
+          "end": 25165826,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.2540105
+        },
+        {
+          "start": 25165827,
+          "end": 27962029,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.3980819
+        },
+        {
+          "start": 30758233,
+          "end": 33554435,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.412634
+        },
+        {
+          "start": 33554436,
+          "end": 36350638,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.4158639
+        },
+        {
+          "start": 27962030,
+          "end": 30758232,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.423734
+        },
+        {
+          "start": 36350639,
+          "end": 39146841,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.4304833
+        },
+        {
+          "start": 39146842,
+          "end": 41943044,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.5787975
+        },
+        {
+          "start": 44739248,
+          "end": 47535450,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.6315556
+        },
+        {
+          "start": 47535451,
+          "end": 50331653,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.6336223
+        },
+        {
+          "start": 53127857,
+          "end": 55924059,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.6515058
+        },
+        {
+          "start": 41943045,
+          "end": 44739247,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.6565437
+        },
+        {
+          "start": 50331654,
+          "end": 53127856,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.6641272
+        },
+        {
+          "start": 55924060,
+          "end": 58720262,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.723833
+        },
+        {
+          "start": 58720263,
+          "end": 61516465,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9268174
+        },
+        {
+          "start": 61516466,
+          "end": 64312668,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9335568
+        },
+        {
+          "start": 67108872,
+          "end": 69905074,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9415056
+        },
+        {
+          "start": 64312669,
+          "end": 67108871,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9524609
+        },
+        {
+          "start": 69905075,
+          "end": 72701277,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9681231
+        },
+        {
+          "start": 72701278,
+          "end": 75497480,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9706459
+        },
+        {
+          "start": 75497481,
+          "end": 78293683,
+          "status": 206,
+          "sent": 2796203,
+          "started": 307.9954981
+        },
+        {
+          "start": 78293684,
+          "end": 81089886,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.1019041
+        },
+        {
+          "start": 81089887,
+          "end": 83886089,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.2331926
+        },
+        {
+          "start": 83886090,
+          "end": 86682292,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.2333374
+        },
+        {
+          "start": 86682293,
+          "end": 89478495,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.2376381
+        },
+        {
+          "start": 89478496,
+          "end": 92274698,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.2415196
+        },
+        {
+          "start": 95070902,
+          "end": 97867104,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.2486396
+        },
+        {
+          "start": 100663308,
+          "end": 103459510,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.287225
+        },
+        {
+          "start": 97867105,
+          "end": 100663307,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.3157848
+        },
+        {
+          "start": 92274699,
+          "end": 95070901,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.3220001
+        },
+        {
+          "start": 103459511,
+          "end": 106255713,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.5312518
+        },
+        {
+          "start": 106255714,
+          "end": 109051916,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.5431084
+        },
+        {
+          "start": 109051917,
+          "end": 111848119,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.5493994
+        },
+        {
+          "start": 114644323,
+          "end": 117440525,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.55904
+        },
+        {
+          "start": 111848120,
+          "end": 114644322,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.565708
+        },
+        {
+          "start": 117440526,
+          "end": 120236728,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.7703335
+        },
+        {
+          "start": 120236729,
+          "end": 123032931,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.7792196
+        },
+        {
+          "start": 125829135,
+          "end": 128625337,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.7839898
+        },
+        {
+          "start": 131421541,
+          "end": 134217727,
+          "status": 206,
+          "sent": 2796187,
+          "started": 308.8164235
+        },
+        {
+          "start": 128625338,
+          "end": 131421540,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.8167112
+        },
+        {
+          "start": 123032932,
+          "end": 125829134,
+          "status": 206,
+          "sent": 2796203,
+          "started": 308.8200722
+        }
+      ],
+      "server_bytes_sent": 134217728,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 2,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 53.09820000002219,
+      "first_byte_ms": 119.11600000001954,
+      "verified_output_ms": 5397.601899999983,
+      "last_ten_percent_ms": 1013.5153999999602,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 245149696,
+        "private": 239616000,
+        "cpu": 13.359375,
+        "threads": 94,
+        "handles": 1324,
+        "read_bytes": 23653197,
+        "write_bytes": 134669211,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.890625,
+            "private": 227704832,
+            "rss": 200376320
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.234375,
+            "private": 5345280,
+            "rss": 18472960
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.21875,
+            "private": 5189632,
+            "rss": 19623936
+          }
+        ]
+      },
+      "peak": {
+        "rss": 272752640,
+        "private": 271958016,
+        "cpu": 13.359375,
+        "threads": 109,
+        "handles": 1406,
+        "read_bytes": 23653197,
+        "write_bytes": 134669211,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.890625,
+            "private": 227704832,
+            "rss": 200376320
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.234375,
+            "private": 5345280,
+            "rss": 18472960
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.21875,
+            "private": 5189632,
+            "rss": 19623936
+          }
+        ]
+      },
+      "after": {
+        "rss": 249561088,
+        "private": 241659904,
+        "cpu": 23.078125,
+        "threads": 93,
+        "handles": 1326,
+        "read_bytes": 23822767,
+        "write_bytes": 202563498,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 20.59375,
+            "private": 229142528,
+            "rss": 203640832
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 2.046875,
+            "private": 6135808,
+            "rss": 19066880
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.421875,
+            "private": 5005312,
+            "rss": 20176896
+          }
+        ]
+      },
+      "cpu_seconds": 9.71875,
+      "cpu_live_process_delta": 9.71875,
+      "requests": [
+        {
+          "start": 1398102,
+          "end": 2796203,
+          "status": 206,
+          "sent": 1398102,
+          "started": 310.3006453
+        },
+        {
+          "start": 0,
+          "end": 1398101,
+          "status": 206,
+          "sent": 1398102,
+          "started": 310.3015744
+        },
+        {
+          "start": 2796204,
+          "end": 4194305,
+          "status": 206,
+          "sent": 1398102,
+          "started": 310.7976077
+        },
+        {
+          "start": 5592408,
+          "end": 6990509,
+          "status": 206,
+          "sent": 1398102,
+          "started": 310.8135839
+        },
+        {
+          "start": 4194306,
+          "end": 5592407,
+          "status": 206,
+          "sent": 1398102,
+          "started": 310.8212914
+        },
+        {
+          "start": 11184816,
+          "end": 12582917,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.3356218
+        },
+        {
+          "start": 8388612,
+          "end": 9786713,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.3360095
+        },
+        {
+          "start": 6990510,
+          "end": 8388611,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.3371895
+        },
+        {
+          "start": 9786714,
+          "end": 11184815,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.3482323
+        },
+        {
+          "start": 15379122,
+          "end": 16777223,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.8784236
+        },
+        {
+          "start": 12582918,
+          "end": 13981019,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.8790437
+        },
+        {
+          "start": 13981020,
+          "end": 15379121,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.8808393
+        },
+        {
+          "start": 16777224,
+          "end": 18175325,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.8853287
+        },
+        {
+          "start": 18175326,
+          "end": 19573427,
+          "status": 206,
+          "sent": 1398102,
+          "started": 311.8893005
+        },
+        {
+          "start": 19573428,
+          "end": 20971529,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.4002575
+        },
+        {
+          "start": 22369632,
+          "end": 23767733,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.4012747
+        },
+        {
+          "start": 20971530,
+          "end": 22369631,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.4019304
+        },
+        {
+          "start": 25165836,
+          "end": 26563937,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.4057369
+        },
+        {
+          "start": 23767734,
+          "end": 25165835,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.4077637
+        },
+        {
+          "start": 26563938,
+          "end": 27962039,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.4107686
+        },
+        {
+          "start": 27962040,
+          "end": 29360141,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9497316
+        },
+        {
+          "start": 30758244,
+          "end": 32156345,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9506595
+        },
+        {
+          "start": 29360142,
+          "end": 30758243,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9534049
+        },
+        {
+          "start": 33554448,
+          "end": 34952549,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9586548
+        },
+        {
+          "start": 36350652,
+          "end": 37748753,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9660993
+        },
+        {
+          "start": 34952550,
+          "end": 36350651,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9687826
+        },
+        {
+          "start": 32156346,
+          "end": 33554447,
+          "status": 206,
+          "sent": 1398102,
+          "started": 312.9787509
+        },
+        {
+          "start": 37748754,
+          "end": 39146855,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6026095
+        },
+        {
+          "start": 39146856,
+          "end": 40544957,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6114131
+        },
+        {
+          "start": 41943060,
+          "end": 43341161,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6136598
+        },
+        {
+          "start": 44739264,
+          "end": 46137365,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6167256
+        },
+        {
+          "start": 47535468,
+          "end": 48933569,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6257726
+        },
+        {
+          "start": 43341162,
+          "end": 44739263,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6293315
+        },
+        {
+          "start": 40544958,
+          "end": 41943059,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6319735
+        },
+        {
+          "start": 46137366,
+          "end": 47535467,
+          "status": 206,
+          "sent": 1398102,
+          "started": 313.6688031
+        },
+        {
+          "start": 48933570,
+          "end": 50331671,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.1805647
+        },
+        {
+          "start": 54525978,
+          "end": 55924079,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.1909753
+        },
+        {
+          "start": 51729774,
+          "end": 53127875,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.1924424
+        },
+        {
+          "start": 58720284,
+          "end": 60118385,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.1941534
+        },
+        {
+          "start": 53127876,
+          "end": 54525977,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.1958188
+        },
+        {
+          "start": 50331672,
+          "end": 51729773,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.203169
+        },
+        {
+          "start": 55924080,
+          "end": 57322181,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.2046172
+        },
+        {
+          "start": 60118386,
+          "end": 61516487,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.2131308
+        },
+        {
+          "start": 57322182,
+          "end": 58720283,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.2179658
+        },
+        {
+          "start": 61516488,
+          "end": 62914589,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.7603998
+        },
+        {
+          "start": 62914590,
+          "end": 64312691,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.7631337
+        },
+        {
+          "start": 65710794,
+          "end": 67108863,
+          "status": 206,
+          "sent": 1398070,
+          "started": 314.7634954
+        },
+        {
+          "start": 64312692,
+          "end": 65710793,
+          "status": 206,
+          "sent": 1398102,
+          "started": 314.7636636
+        }
+      ],
+      "server_bytes_sent": 67108864,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "idm",
+      "round": 3,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 4.787599999986014,
+      "first_byte_ms": 644.600300000036,
+      "verified_output_ms": 3029.478299999994,
+      "last_ten_percent_ms": 1044.349499999953,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 45797376,
+        "private": 11923456,
+        "cpu": 0.875,
+        "threads": 20,
+        "handles": 824,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 0.8125,
+            "private": 8597504,
+            "rss": 34533376
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11264000
+          }
+        ]
+      },
+      "peak": {
+        "rss": 69021696,
+        "private": 20705280,
+        "cpu": 0.875,
+        "threads": 29,
+        "handles": 1194,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 0.8125,
+            "private": 8597504,
+            "rss": 34533376
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11264000
+          }
+        ]
+      },
+      "after": {
+        "rss": 51003392,
+        "private": 14409728,
+        "cpu": 2.421875,
+        "threads": 23,
+        "handles": 909,
+        "read_bytes": 135985526,
+        "write_bytes": 268283382,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 2.359375,
+            "private": 11083776,
+            "rss": 39735296
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11268096
+          }
+        ]
+      },
+      "cpu_seconds": 1.625,
+      "cpu_live_process_delta": 1.546875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 3670016,
+          "started": 329.741993
+        },
+        {
+          "start": 233600,
+          "end": 134217727,
+          "status": 206,
+          "sent": 38797312,
+          "started": 329.7987013
+        },
+        {
+          "start": 67237427,
+          "end": 134217727,
+          "status": 206,
+          "sent": 38666240,
+          "started": 329.8450812
+        },
+        {
+          "start": 100727577,
+          "end": 134217727,
+          "status": 206,
+          "sent": 33490151,
+          "started": 329.8509524
+        },
+        {
+          "start": 33846557,
+          "end": 67237490,
+          "status": 206,
+          "sent": 33390934,
+          "started": 329.9278996
+        }
+      ],
+      "server_bytes_sent": 148014653,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "idm",
+      "round": 3,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 2.3185000000012224,
+      "first_byte_ms": 610.2095999999619,
+      "verified_output_ms": 3999.0558999999735,
+      "last_ten_percent_ms": 766.5264999999977,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 51003392,
+        "private": 14409728,
+        "cpu": 2.421875,
+        "threads": 23,
+        "handles": 909,
+        "read_bytes": 135985526,
+        "write_bytes": 268283382,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 2.359375,
+            "private": 11083776,
+            "rss": 39735296
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11268096
+          }
+        ]
+      },
+      "peak": {
+        "rss": 71368704,
+        "private": 23351296,
+        "cpu": 2.421875,
+        "threads": 32,
+        "handles": 1267,
+        "read_bytes": 135985526,
+        "write_bytes": 268283382,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 2.359375,
+            "private": 11083776,
+            "rss": 39735296
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11268096
+          }
+        ]
+      },
+      "after": {
+        "rss": 52764672,
+        "private": 15532032,
+        "cpu": 3.421875,
+        "threads": 24,
+        "handles": 916,
+        "read_bytes": 191839589,
+        "write_bytes": 391301405,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 3.359375,
+            "private": 12206080,
+            "rss": 41496576
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11268096
+          }
+        ]
+      },
+      "cpu_seconds": 1.140625,
+      "cpu_live_process_delta": 1.0,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 11272192,
+          "started": 333.0881509
+        },
+        {
+          "start": 233600,
+          "end": 67108863,
+          "status": 206,
+          "sent": 0,
+          "started": 333.2394138
+        },
+        {
+          "start": 33677071,
+          "end": 67108863,
+          "status": 206,
+          "sent": 10747904,
+          "started": 333.2480551
+        },
+        {
+          "start": 50404730,
+          "end": 67108863,
+          "status": 206,
+          "sent": 10551296,
+          "started": 333.3639541
+        },
+        {
+          "start": 17189575,
+          "end": 33677134,
+          "status": 206,
+          "sent": 10354688,
+          "started": 333.3738825
+        },
+        {
+          "start": 60838700,
+          "end": 67108863,
+          "status": 206,
+          "sent": 6270164,
+          "started": 334.4564615
+        },
+        {
+          "start": 27509386,
+          "end": 33677134,
+          "status": 206,
+          "sent": 6167749,
+          "started": 334.4570626
+        },
+        {
+          "start": 44379108,
+          "end": 50404793,
+          "status": 206,
+          "sent": 6025686,
+          "started": 334.4601212
+        },
+        {
+          "start": 11260675,
+          "end": 17189638,
+          "status": 206,
+          "sent": 5928964,
+          "started": 334.4752925
+        },
+        {
+          "start": 66728565,
+          "end": 67108863,
+          "status": 206,
+          "sent": 0,
+          "started": 335.8610391
+        },
+        {
+          "start": 33411276,
+          "end": 33677134,
+          "status": 206,
+          "sent": 0,
+          "started": 335.8926635
+        },
+        {
+          "start": 66918714,
+          "end": 67108863,
+          "status": 206,
+          "sent": 0,
+          "started": 335.9268405
+        },
+        {
+          "start": 33544173,
+          "end": 33677134,
+          "status": 206,
+          "sent": 0,
+          "started": 335.9554537
+        }
+      ],
+      "server_bytes_sent": 67318643,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "hls",
+      "round": 3,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 930.4195000000277,
+      "first_byte_ms": 930.3192000000422,
+      "verified_output_ms": 4175.548300000002,
+      "last_ten_percent_ms": 1026.2553000000025,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 209850368,
+        "private": 260415488,
+        "cpu": 11.71875,
+        "threads": 85,
+        "handles": 1229,
+        "read_bytes": 23903304,
+        "write_bytes": 18787,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.1875,
+            "private": 3678208,
+            "rss": 15147008
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.25,
+            "private": 3727360,
+            "rss": 17195008
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.265625,
+            "private": 251633664,
+            "rss": 170823680
+          }
+        ]
+      },
+      "peak": {
+        "rss": 253726720,
+        "private": 292564992,
+        "cpu": 11.71875,
+        "threads": 110,
+        "handles": 1406,
+        "read_bytes": 23903304,
+        "write_bytes": 18787,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.1875,
+            "private": 3678208,
+            "rss": 15147008
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.25,
+            "private": 3727360,
+            "rss": 17195008
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.265625,
+            "private": 251633664,
+            "rss": 170823680
+          }
+        ]
+      },
+      "after": {
+        "rss": 248721408,
+        "private": 278532096,
+        "cpu": 16.46875,
+        "threads": 94,
+        "handles": 1327,
+        "read_bytes": 24688642,
+        "write_bytes": 134678550,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.25,
+            "private": 5591040,
+            "rss": 18579456
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.296875,
+            "private": 5201920,
+            "rss": 19996672
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 14.90625,
+            "private": 266362880,
+            "rss": 203460608
+          }
+        ]
+      },
+      "cpu_seconds": 4.75,
+      "cpu_live_process_delta": 4.75,
+      "requests": [
+        {
+          "start": 0,
+          "end": 2796202,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.101141
+        },
+        {
+          "start": 2796203,
+          "end": 5592405,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.1104551
+        },
+        {
+          "start": 5592406,
+          "end": 8388608,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.2213074
+        },
+        {
+          "start": 8388609,
+          "end": 11184811,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.2268974
+        },
+        {
+          "start": 11184812,
+          "end": 13981014,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.2298248
+        },
+        {
+          "start": 13981015,
+          "end": 16777217,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.3653856
+        },
+        {
+          "start": 16777218,
+          "end": 19573420,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.379389
+        },
+        {
+          "start": 22369624,
+          "end": 25165826,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.3819803
+        },
+        {
+          "start": 19573421,
+          "end": 22369623,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.3833992
+        },
+        {
+          "start": 25165827,
+          "end": 27962029,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.5282109
+        },
+        {
+          "start": 30758233,
+          "end": 33554435,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.5751765
+        },
+        {
+          "start": 27962030,
+          "end": 30758232,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.5753547
+        },
+        {
+          "start": 33554436,
+          "end": 36350638,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.580312
+        },
+        {
+          "start": 36350639,
+          "end": 39146841,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.5832409
+        },
+        {
+          "start": 39146842,
+          "end": 41943044,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.6043782
+        },
+        {
+          "start": 41943045,
+          "end": 44739247,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.7655691
+        },
+        {
+          "start": 44739248,
+          "end": 47535450,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.7737909
+        },
+        {
+          "start": 50331654,
+          "end": 53127856,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.7789615
+        },
+        {
+          "start": 55924060,
+          "end": 58720262,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.8211761
+        },
+        {
+          "start": 47535451,
+          "end": 50331653,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.8212835
+        },
+        {
+          "start": 53127857,
+          "end": 55924059,
+          "status": 206,
+          "sent": 2796203,
+          "started": 351.8215115
+        },
+        {
+          "start": 58720263,
+          "end": 61516465,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.0511559
+        },
+        {
+          "start": 61516466,
+          "end": 64312668,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.0582478
+        },
+        {
+          "start": 64312669,
+          "end": 67108871,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.0640319
+        },
+        {
+          "start": 67108872,
+          "end": 69905074,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.0761884
+        },
+        {
+          "start": 69905075,
+          "end": 72701277,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.2909373
+        },
+        {
+          "start": 78293684,
+          "end": 81089886,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.298387
+        },
+        {
+          "start": 81089887,
+          "end": 83886089,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.3088233
+        },
+        {
+          "start": 75497481,
+          "end": 78293683,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.3139364
+        },
+        {
+          "start": 72701278,
+          "end": 75497480,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.3144491
+        },
+        {
+          "start": 86682293,
+          "end": 89478495,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.5306545
+        },
+        {
+          "start": 83886090,
+          "end": 86682292,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.543122
+        },
+        {
+          "start": 95070902,
+          "end": 97867104,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.5433285
+        },
+        {
+          "start": 92274699,
+          "end": 95070901,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.5434704
+        },
+        {
+          "start": 89478496,
+          "end": 92274698,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.5490908
+        },
+        {
+          "start": 97867105,
+          "end": 100663307,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.5563711
+        },
+        {
+          "start": 100663308,
+          "end": 103459510,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.8988475
+        },
+        {
+          "start": 103459511,
+          "end": 106255713,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.9106688
+        },
+        {
+          "start": 106255714,
+          "end": 109051916,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.9402954
+        },
+        {
+          "start": 109051917,
+          "end": 111848119,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.9860175
+        },
+        {
+          "start": 111848120,
+          "end": 114644322,
+          "status": 206,
+          "sent": 2796203,
+          "started": 352.9916078
+        },
+        {
+          "start": 114644323,
+          "end": 117440525,
+          "status": 206,
+          "sent": 2796203,
+          "started": 353.238748
+        },
+        {
+          "start": 117440526,
+          "end": 120236728,
+          "status": 206,
+          "sent": 2796203,
+          "started": 353.2404691
+        },
+        {
+          "start": 120236729,
+          "end": 123032931,
+          "status": 206,
+          "sent": 2796203,
+          "started": 353.2426472
+        },
+        {
+          "start": 125829135,
+          "end": 128625337,
+          "status": 206,
+          "sent": 2796203,
+          "started": 353.2431033
+        },
+        {
+          "start": 123032932,
+          "end": 125829134,
+          "status": 206,
+          "sent": 2796203,
+          "started": 353.243792
+        },
+        {
+          "start": 131421541,
+          "end": 134217727,
+          "status": 206,
+          "sent": 2796187,
+          "started": 353.5307648
+        },
+        {
+          "start": 128625338,
+          "end": 131421540,
+          "status": 206,
+          "sent": 2796203,
+          "started": 353.5344836
+        }
+      ],
+      "server_bytes_sent": 134217728,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 3,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 73.03949999999304,
+      "first_byte_ms": 144.67769999998836,
+      "verified_output_ms": 5345.8052999999945,
+      "last_ten_percent_ms": 1127.5851999999986,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 249446400,
+        "private": 279126016,
+        "cpu": 17.015625,
+        "threads": 94,
+        "handles": 1328,
+        "read_bytes": 24697179,
+        "write_bytes": 134712020,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.28125,
+            "private": 5652480,
+            "rss": 18640896
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.3125,
+            "private": 5197824,
+            "rss": 19587072
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 15.40625,
+            "private": 266899456,
+            "rss": 204533760
+          }
+        ]
+      },
+      "peak": {
+        "rss": 276926464,
+        "private": 307388416,
+        "cpu": 17.015625,
+        "threads": 110,
+        "handles": 1421,
+        "read_bytes": 24697179,
+        "write_bytes": 134712020,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 1.28125,
+            "private": 5652480,
+            "rss": 18640896
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.3125,
+            "private": 5197824,
+            "rss": 19587072
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 15.40625,
+            "private": 266899456,
+            "rss": 204533760
+          }
+        ]
+      },
+      "after": {
+        "rss": 282533888,
+        "private": 300339200,
+        "cpu": 25.671875,
+        "threads": 94,
+        "handles": 1330,
+        "read_bytes": 24856816,
+        "write_bytes": 202560263,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 2.171875,
+            "private": 6234112,
+            "rss": 19255296
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.53125,
+            "private": 5021696,
+            "rss": 20193280
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 22.953125,
+            "private": 287707136,
+            "rss": 236400640
+          }
+        ]
+      },
+      "cpu_seconds": 8.65625,
+      "cpu_live_process_delta": 8.65625,
+      "requests": [
+        {
+          "start": 0,
+          "end": 1398101,
+          "status": 206,
+          "sent": 1398102,
+          "started": 354.9090162
+        },
+        {
+          "start": 1398102,
+          "end": 2796203,
+          "status": 206,
+          "sent": 1398102,
+          "started": 354.9123972
+        },
+        {
+          "start": 2796204,
+          "end": 4194305,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.3994659
+        },
+        {
+          "start": 5592408,
+          "end": 6990509,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.4011259
+        },
+        {
+          "start": 4194306,
+          "end": 5592407,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.4039212
+        },
+        {
+          "start": 6990510,
+          "end": 8388611,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.9405159
+        },
+        {
+          "start": 8388612,
+          "end": 9786713,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.9406595
+        },
+        {
+          "start": 11184816,
+          "end": 12582917,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.9408096
+        },
+        {
+          "start": 9786714,
+          "end": 11184815,
+          "status": 206,
+          "sent": 1398102,
+          "started": 355.9416671
+        },
+        {
+          "start": 12582918,
+          "end": 13981019,
+          "status": 206,
+          "sent": 1398102,
+          "started": 356.5650644
+        },
+        {
+          "start": 15379122,
+          "end": 16777223,
+          "status": 206,
+          "sent": 1398102,
+          "started": 356.5720248
+        },
+        {
+          "start": 18175326,
+          "end": 19573427,
+          "status": 206,
+          "sent": 1398102,
+          "started": 356.5765816
+        },
+        {
+          "start": 16777224,
+          "end": 18175325,
+          "status": 206,
+          "sent": 1398102,
+          "started": 356.5790341
+        },
+        {
+          "start": 13981020,
+          "end": 15379121,
+          "status": 206,
+          "sent": 1398102,
+          "started": 356.626995
+        },
+        {
+          "start": 19573428,
+          "end": 20971529,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.0919836
+        },
+        {
+          "start": 20971530,
+          "end": 22369631,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.0922498
+        },
+        {
+          "start": 23767734,
+          "end": 25165835,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.0928621
+        },
+        {
+          "start": 26563938,
+          "end": 27962039,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.0931353
+        },
+        {
+          "start": 25165836,
+          "end": 26563937,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.0933687
+        },
+        {
+          "start": 22369632,
+          "end": 23767733,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.0936101
+        },
+        {
+          "start": 27962040,
+          "end": 29360141,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.5928774
+        },
+        {
+          "start": 32156346,
+          "end": 33554447,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.5979645
+        },
+        {
+          "start": 30758244,
+          "end": 32156345,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.6060884
+        },
+        {
+          "start": 34952550,
+          "end": 36350651,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.6070239
+        },
+        {
+          "start": 33554448,
+          "end": 34952549,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.6081162
+        },
+        {
+          "start": 36350652,
+          "end": 37748753,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.6098433
+        },
+        {
+          "start": 29360142,
+          "end": 30758243,
+          "status": 206,
+          "sent": 1398102,
+          "started": 357.6149163
+        },
+        {
+          "start": 37748754,
+          "end": 39146855,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1067926
+        },
+        {
+          "start": 39146856,
+          "end": 40544957,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1086818
+        },
+        {
+          "start": 40544958,
+          "end": 41943059,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1118112
+        },
+        {
+          "start": 41943060,
+          "end": 43341161,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1201572
+        },
+        {
+          "start": 44739264,
+          "end": 46137365,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1232552
+        },
+        {
+          "start": 47535468,
+          "end": 48933569,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1247339
+        },
+        {
+          "start": 46137366,
+          "end": 47535467,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.129393
+        },
+        {
+          "start": 43341162,
+          "end": 44739263,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.1392681
+        },
+        {
+          "start": 48933570,
+          "end": 50331671,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6450421
+        },
+        {
+          "start": 54525978,
+          "end": 55924079,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6459015
+        },
+        {
+          "start": 53127876,
+          "end": 54525977,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6468761
+        },
+        {
+          "start": 57322182,
+          "end": 58720283,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6473691
+        },
+        {
+          "start": 51729774,
+          "end": 53127875,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6475689
+        },
+        {
+          "start": 55924080,
+          "end": 57322181,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6481415
+        },
+        {
+          "start": 60118386,
+          "end": 61516487,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6489785
+        },
+        {
+          "start": 50331672,
+          "end": 51729773,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6501051
+        },
+        {
+          "start": 58720284,
+          "end": 60118385,
+          "status": 206,
+          "sent": 1398102,
+          "started": 358.6511808
+        },
+        {
+          "start": 61516488,
+          "end": 62914589,
+          "status": 206,
+          "sent": 1398102,
+          "started": 359.1699651
+        },
+        {
+          "start": 62914590,
+          "end": 64312691,
+          "status": 206,
+          "sent": 1398102,
+          "started": 359.172168
+        },
+        {
+          "start": 64312692,
+          "end": 65710793,
+          "status": 206,
+          "sent": 1398102,
+          "started": 359.1744735
+        },
+        {
+          "start": 65710794,
+          "end": 67108863,
+          "status": 206,
+          "sent": 1398070,
+          "started": 359.1773455
+        }
+      ],
+      "server_bytes_sent": 67108864,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "ab",
+      "round": 3,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 623.1453999999985,
+      "first_byte_ms": 736.0254000000168,
+      "verified_output_ms": 4113.492500000007,
+      "last_ten_percent_ms": 2214.060399999994,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 234721280,
+        "private": 256843776,
+        "cpu": 20.0,
+        "threads": 63,
+        "handles": 789,
+        "read_bytes": 36342009,
+        "write_bytes": 315755,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 19.984375,
+            "private": 255397888,
+            "rss": 227926016
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "peak": {
+        "rss": 270811136,
+        "private": 299843584,
+        "cpu": 20.0,
+        "threads": 95,
+        "handles": 917,
+        "read_bytes": 36342009,
+        "write_bytes": 315755,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 19.984375,
+            "private": 255397888,
+            "rss": 227926016
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "after": {
+        "rss": 294772736,
+        "private": 315940864,
+        "cpu": 30.953125,
+        "threads": 87,
+        "handles": 883,
+        "read_bytes": 38796862,
+        "write_bytes": 134539354,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 30.9375,
+            "private": 314494976,
+            "rss": 287977472
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "cpu_seconds": 10.953125,
+      "cpu_live_process_delta": 10.953125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 255,
+          "status": 206,
+          "sent": 256,
+          "started": 379.1387695
+        },
+        {
+          "start": 33554432,
+          "end": 50331647,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.2369257
+        },
+        {
+          "start": 100663296,
+          "end": 117440511,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.2429907
+        },
+        {
+          "start": 117440512,
+          "end": 134217727,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.2580882
+        },
+        {
+          "start": 50331648,
+          "end": 67108863,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.2719756
+        },
+        {
+          "start": 83886080,
+          "end": 100663295,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.2751389
+        },
+        {
+          "start": 0,
+          "end": 16777215,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.2811403
+        },
+        {
+          "start": 16777216,
+          "end": 33554431,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.3018809
+        },
+        {
+          "start": 67108864,
+          "end": 83886079,
+          "status": 206,
+          "sent": 16777216,
+          "started": 379.305103
+        },
+        {
+          "start": 32505856,
+          "end": 33554431,
+          "status": 206,
+          "sent": 1048576,
+          "started": 381.1046655
+        },
+        {
+          "start": 49807360,
+          "end": 50331647,
+          "status": 206,
+          "sent": 524288,
+          "started": 381.1254696
+        }
+      ],
+      "server_bytes_sent": 135790848,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "ab",
+      "round": 3,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 39.94289999997136,
+      "first_byte_ms": 123.40969999996787,
+      "verified_output_ms": 4802.982799999995,
+      "last_ten_percent_ms": 1028.451700000005,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 285728768,
+        "private": 307589120,
+        "cpu": 30.96875,
+        "threads": 85,
+        "handles": 880,
+        "read_bytes": 38796862,
+        "write_bytes": 134539354,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 30.953125,
+            "private": 306143232,
+            "rss": 278933504
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "peak": {
+        "rss": 297148416,
+        "private": 318795776,
+        "cpu": 30.96875,
+        "threads": 96,
+        "handles": 934,
+        "read_bytes": 38796862,
+        "write_bytes": 134539354,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 30.953125,
+            "private": 306143232,
+            "rss": 278933504
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "after": {
+        "rss": 294305792,
+        "private": 320614400,
+        "cpu": 37.8125,
+        "threads": 87,
+        "handles": 896,
+        "read_bytes": 38883827,
+        "write_bytes": 201653968,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 37.796875,
+            "private": 319168512,
+            "rss": 287510528
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "cpu_seconds": 6.84375,
+      "cpu_live_process_delta": 6.84375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 255,
+          "status": 206,
+          "sent": 256,
+          "started": 383.0091
+        },
+        {
+          "start": 0,
+          "end": 8388607,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.129563
+        },
+        {
+          "start": 33554432,
+          "end": 41943039,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.1298275
+        },
+        {
+          "start": 16777216,
+          "end": 25165823,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.1327028
+        },
+        {
+          "start": 25165824,
+          "end": 33554431,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.1348436
+        },
+        {
+          "start": 50331648,
+          "end": 58720255,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.1357456
+        },
+        {
+          "start": 8388608,
+          "end": 16777215,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.1383813
+        },
+        {
+          "start": 41943040,
+          "end": 50331647,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.141819
+        },
+        {
+          "start": 58720256,
+          "end": 67108863,
+          "status": 206,
+          "sent": 8388608,
+          "started": 383.1446175
+        },
+        {
+          "start": 41418752,
+          "end": 41943039,
+          "status": 206,
+          "sent": 524288,
+          "started": 387.0298832
+        }
+      ],
+      "server_bytes_sent": 67633408,
+      "unique_server_bytes": 67108864
+    }
+  ],
+  "errors": [],
+  "installed_bytes": {
+    "hls": 469479396,
+    "ab": 172564357,
+    "idm": 26044102
+  },
+  "binaries": {
+    "hls": {
+      "path": "C:\\QAWork\\runtime\\HLSDownloader.exe",
+      "sha256": "841b23b44128b652efa457f733272faa06ba6a6ed803af41fd5550bbdc0e535d"
+    },
+    "ab": {
+      "path": "C:\\QAWork\\ABDownloadManager\\ABDownloadManager.exe",
+      "sha256": "843d936ded4952ff845e6c42720e394c7e6e1b997177b046f21cd5f1e89650b7"
+    },
+    "idm": {
+      "path": "C:\\Program Files (x86)\\Internet Download Manager\\IDMan.exe",
+      "sha256": "e3fc655a335e17a6fdd09a9b315291d0c8863180f0d801e5dd7433c9e56afbd8"
+    }
+  },
+  "idle": [
+    {
+      "product": "hls",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 229949440,
+        "private": 226115584,
+        "cpu": 7.25,
+        "threads": 80,
+        "handles": 1143,
+        "read_bytes": 21506280,
+        "write_bytes": 113754,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.109375,
+            "private": 2981888,
+            "rss": 12840960
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 6.921875,
+            "private": 217976832,
+            "rss": 193228800
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.1875,
+            "private": 3780608,
+            "rss": 17567744
+          }
+        ]
+      },
+      "after": {
+        "rss": 216522752,
+        "private": 210366464,
+        "cpu": 7.34375,
+        "threads": 88,
+        "handles": 1291,
+        "read_bytes": 21603949,
+        "write_bytes": 114242,
+        "pids": [
+          2012,
+          3192,
+          3404,
+          5464
+        ],
+        "processes": [
+          {
+            "pid": 2012,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.15625,
+            "private": 4087808,
+            "rss": 16498688
+          },
+          {
+            "pid": 3192,
+            "name": "HLSDownloader.exe",
+            "cpu": 6.96875,
+            "private": 201121792,
+            "rss": 176140288
+          },
+          {
+            "pid": 3404,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.03125,
+            "private": 1376256,
+            "rss": 6311936
+          },
+          {
+            "pid": 5464,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.1875,
+            "private": 3780608,
+            "rss": 17571840
+          }
+        ]
+      },
+      "cpu_seconds": 0.09375
+    },
+    {
+      "product": "ab",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 225837056,
+        "private": 253816832,
+        "cpu": 20.578125,
+        "threads": 61,
+        "handles": 752,
+        "read_bytes": 34230171,
+        "write_bytes": 283735,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 20.578125,
+            "private": 252370944,
+            "rss": 219402240
+          }
+        ]
+      },
+      "after": {
+        "rss": 231333888,
+        "private": 254713856,
+        "cpu": 23.15625,
+        "threads": 64,
+        "handles": 785,
+        "read_bytes": 35889087,
+        "write_bytes": 344957,
+        "pids": [
+          6748,
+          6852
+        ],
+        "processes": [
+          {
+            "pid": 6748,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.0,
+            "private": 1445888,
+            "rss": 6434816
+          },
+          {
+            "pid": 6852,
+            "name": "ABDownloadManager.exe",
+            "cpu": 23.15625,
+            "private": 253267968,
+            "rss": 224899072
+          }
+        ]
+      },
+      "cpu_seconds": 2.578125
+    },
+    {
+      "product": "idm",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 45576192,
+        "private": 12001280,
+        "cpu": 1.109375,
+        "threads": 20,
+        "handles": 797,
+        "read_bytes": 1286397,
+        "write_bytes": 8047,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11272192
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 0.984375,
+            "private": 8663040,
+            "rss": 34304000
+          }
+        ]
+      },
+      "after": {
+        "rss": 45580288,
+        "private": 12001280,
+        "cpu": 1.109375,
+        "threads": 20,
+        "handles": 797,
+        "read_bytes": 1286397,
+        "write_bytes": 8047,
+        "pids": [
+          6320,
+          6452
+        ],
+        "processes": [
+          {
+            "pid": 6320,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.125,
+            "private": 3338240,
+            "rss": 11272192
+          },
+          {
+            "pid": 6452,
+            "name": "IDMan.exe",
+            "cpu": 0.984375,
+            "private": 8663040,
+            "rss": 34308096
+          }
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "ab",
+      "round": 2,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 238624768,
+        "private": 267182080,
+        "cpu": 17.46875,
+        "threads": 65,
+        "handles": 791,
+        "read_bytes": 36336382,
+        "write_bytes": 315755,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 17.4375,
+            "private": 265740288,
+            "rss": 231821312
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "after": {
+        "rss": 234934272,
+        "private": 255275008,
+        "cpu": 17.5,
+        "threads": 65,
+        "handles": 791,
+        "read_bytes": 36339607,
+        "write_bytes": 315755,
+        "pids": [
+          5064,
+          5316
+        ],
+        "processes": [
+          {
+            "pid": 5064,
+            "name": "ABDownloadManager.exe",
+            "cpu": 17.46875,
+            "private": 253833216,
+            "rss": 228130816
+          },
+          {
+            "pid": 5316,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.03125,
+            "private": 1441792,
+            "rss": 6803456
+          }
+        ]
+      },
+      "cpu_seconds": 0.03125
+    },
+    {
+      "product": "idm",
+      "round": 2,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 45813760,
+        "private": 11825152,
+        "cpu": 1.015625,
+        "threads": 20,
+        "handles": 820,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 0.921875,
+            "private": 8654848,
+            "rss": 34631680
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11182080
+          }
+        ]
+      },
+      "after": {
+        "rss": 45817856,
+        "private": 11825152,
+        "cpu": 1.015625,
+        "threads": 20,
+        "handles": 820,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          4448,
+          5840
+        ],
+        "processes": [
+          {
+            "pid": 4448,
+            "name": "IDMan.exe",
+            "cpu": 0.921875,
+            "private": 8654848,
+            "rss": 34635776
+          },
+          {
+            "pid": 5840,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.09375,
+            "private": 3170304,
+            "rss": 11182080
+          }
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "hls",
+      "round": 2,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 209932288,
+        "private": 211005440,
+        "cpu": 7.75,
+        "threads": 80,
+        "handles": 1127,
+        "read_bytes": 22767444,
+        "write_bytes": 18423,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 7.546875,
+            "private": 203042816,
+            "rss": 173498368
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.109375,
+            "private": 2854912,
+            "rss": 12554240
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.078125,
+            "private": 3731456,
+            "rss": 17203200
+          }
+        ]
+      },
+      "after": {
+        "rss": 214249472,
+        "private": 212746240,
+        "cpu": 7.75,
+        "threads": 88,
+        "handles": 1275,
+        "read_bytes": 22865114,
+        "write_bytes": 18912,
+        "pids": [
+          3924,
+          5552,
+          6668,
+          6896
+        ],
+        "processes": [
+          {
+            "pid": 3924,
+            "name": "HLSDownloader.exe",
+            "cpu": 7.546875,
+            "private": 203714560,
+            "rss": 174186496
+          },
+          {
+            "pid": 5552,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.109375,
+            "private": 3923968,
+            "rss": 16179200
+          },
+          {
+            "pid": 6668,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6676480
+          },
+          {
+            "pid": 6896,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.078125,
+            "private": 3731456,
+            "rss": 17207296
+          }
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "idm",
+      "round": 3,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 45793280,
+        "private": 11923456,
+        "cpu": 0.875,
+        "threads": 20,
+        "handles": 824,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 0.8125,
+            "private": 8597504,
+            "rss": 34529280
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11264000
+          }
+        ]
+      },
+      "after": {
+        "rss": 45797376,
+        "private": 11923456,
+        "cpu": 0.875,
+        "threads": 20,
+        "handles": 824,
+        "read_bytes": 1810685,
+        "write_bytes": 8047,
+        "pids": [
+          1924,
+          6352
+        ],
+        "processes": [
+          {
+            "pid": 1924,
+            "name": "IDMan.exe",
+            "cpu": 0.8125,
+            "private": 8597504,
+            "rss": 34533376
+          },
+          {
+            "pid": 6352,
+            "name": "IDMIntegrator64.exe",
+            "cpu": 0.0625,
+            "private": 3325952,
+            "rss": 11264000
+          }
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "hls",
+      "round": 3,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 230617088,
+        "private": 279089152,
+        "cpu": 11.625,
+        "threads": 81,
+        "handles": 1130,
+        "read_bytes": 23805684,
+        "write_bytes": 18401,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.15625,
+            "private": 2863104,
+            "rss": 12558336
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.25,
+            "private": 3727360,
+            "rss": 17190912
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.203125,
+            "private": 271122432,
+            "rss": 194183168
+          }
+        ]
+      },
+      "after": {
+        "rss": 209850368,
+        "private": 260415488,
+        "cpu": 11.71875,
+        "threads": 85,
+        "handles": 1229,
+        "read_bytes": 23903304,
+        "write_bytes": 18787,
+        "pids": [
+          4456,
+          5216,
+          5624,
+          6408
+        ],
+        "processes": [
+          {
+            "pid": 4456,
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.1875,
+            "private": 3678208,
+            "rss": 15147008
+          },
+          {
+            "pid": 5216,
+            "name": "HLSDownloader.exe",
+            "cpu": 0.015625,
+            "private": 1376256,
+            "rss": 6684672
+          },
+          {
+            "pid": 5624,
+            "name": "HLSDownloaderPresenter.exe",
+            "cpu": 0.25,
+            "private": 3727360,
+            "rss": 17195008
+          },
+          {
+            "pid": 6408,
+            "name": "HLSDownloader.exe",
+            "cpu": 11.265625,
+            "private": 251633664,
+            "rss": 170823680
+          }
+        ]
+      },
+      "cpu_seconds": 0.09375
+    },
+    {
+      "product": "ab",
+      "round": 3,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 249376768,
+        "private": 272515072,
+        "cpu": 20.0,
+        "threads": 64,
+        "handles": 791,
+        "read_bytes": 36339469,
+        "write_bytes": 315755,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 19.984375,
+            "private": 271069184,
+            "rss": 242581504
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "after": {
+        "rss": 234721280,
+        "private": 256843776,
+        "cpu": 20.0,
+        "threads": 63,
+        "handles": 789,
+        "read_bytes": 36342009,
+        "write_bytes": 315755,
+        "pids": [
+          1392,
+          4372
+        ],
+        "processes": [
+          {
+            "pid": 1392,
+            "name": "ABDownloadManager.exe",
+            "cpu": 19.984375,
+            "private": 255397888,
+            "rss": 227926016
+          },
+          {
+            "pid": 4372,
+            "name": "ABDownloadManager.exe",
+            "cpu": 0.015625,
+            "private": 1445888,
+            "rss": 6795264
+          }
+        ]
+      },
+      "cpu_seconds": 0.0
+    }
+  ],
+  "passed": true
+}

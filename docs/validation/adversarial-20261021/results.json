@@ -1,0 +1,1715 @@
+{
+  "schema": 1,
+  "date": "2026-10-21",
+  "scope": "Windows Sandbox; production artifacts; no host installation, real cloud subtitle upload or physical casting receiver",
+  "components": {
+    "app/resources/HLSDownloaderEngine.exe": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+    "app/resources/HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+    "app/resources/HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa",
+    "app/resources/HLSDownloaderUpdater.exe": "77592ce99ab9dd989be2b8579cb1942d089bb54853703c8a847949b90068e0e5",
+    "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "f1ef05227fd820e5371ed769a9a38f8ed9a09244c4f70f31266b4136e193da86",
+    "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c",
+    "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "original_passed": false,
+      "file": "final-round-1/summary.json",
+      "sha256": "d1be9af07aa410504ca734bfd733d8d8047536b4895fcd225063d31c2b381c64",
+      "groups": [
+        {
+          "name": "media",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 33.078,
+          "scenario_count": 23
+        },
+        {
+          "name": "takeover",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 115.203,
+          "check_count": 39
+        },
+        {
+          "name": "subtitle-element",
+          "passed": false,
+          "exit_code": 1,
+          "elapsed_seconds": 65.984,
+          "error": "No result report was produced"
+        },
+        {
+          "name": "subtitle-prefetch",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 117.438,
+          "check_count": 23
+        },
+        {
+          "name": "http-boundaries",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 8.922,
+          "check_count": 13
+        },
+        {
+          "name": "http-stall",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 8.687,
+          "check_count": 6
+        },
+        {
+          "name": "http-throttle",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 6.219,
+          "check_count": 6
+        },
+        {
+          "name": "closed-diagnostics",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 5.906,
+          "check_count": 0
+        },
+        {
+          "name": "hls-segment-suffix",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 7.703,
+          "check_count": 9
+        },
+        {
+          "name": "file-extensions",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 11.578,
+          "check_count": 25
+        },
+        {
+          "name": "download-playback-cleanup",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 123.109,
+          "check_count": 27
+        },
+        {
+          "name": "player-overlay",
+          "passed": false,
+          "exit_code": 1,
+          "elapsed_seconds": 58.734,
+          "check_count": 0
+        },
+        {
+          "name": "player-fault-resource",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 32.438,
+          "check_count": 0
+        },
+        {
+          "name": "protocols",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 96.546,
+          "check_count": 16
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "original_passed": false,
+      "file": "final-round-2/summary.json",
+      "sha256": "818b952447b8321ab9c25591a2f4477f581cc001a01247aa9ee7e5a98a1a5be9",
+      "groups": [
+        {
+          "name": "media",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 35.828,
+          "scenario_count": 23
+        },
+        {
+          "name": "takeover",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 115.453,
+          "check_count": 39
+        },
+        {
+          "name": "subtitle-element",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 53.812,
+          "check_count": 15
+        },
+        {
+          "name": "subtitle-prefetch",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 111.484,
+          "check_count": 23
+        },
+        {
+          "name": "http-boundaries",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.234,
+          "check_count": 13
+        },
+        {
+          "name": "http-stall",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.531,
+          "check_count": 6
+        },
+        {
+          "name": "http-throttle",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 7.391,
+          "check_count": 6
+        },
+        {
+          "name": "closed-diagnostics",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 5.938,
+          "check_count": 0
+        },
+        {
+          "name": "hls-segment-suffix",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 12.047,
+          "check_count": 9
+        },
+        {
+          "name": "file-extensions",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 19.625,
+          "check_count": 25
+        },
+        {
+          "name": "download-playback-cleanup",
+          "passed": false,
+          "exit_code": 1,
+          "elapsed_seconds": 33.234,
+          "check_count": 4
+        },
+        {
+          "name": "player-overlay",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 37.891,
+          "check_count": 12
+        },
+        {
+          "name": "player-fault-resource",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 41.281,
+          "check_count": 0
+        },
+        {
+          "name": "protocols",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 97.688,
+          "check_count": 16
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "original_passed": true,
+      "file": "final-round-3/summary.json",
+      "sha256": "0d98f42671c1a8a20f867e41d7d4f5cf2a04e0523aa8c29ca5845cf0ecacfbb8",
+      "groups": [
+        {
+          "name": "media",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 35.516,
+          "scenario_count": 23
+        },
+        {
+          "name": "takeover",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 107.625,
+          "check_count": 39
+        },
+        {
+          "name": "subtitle-element",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 58.672,
+          "check_count": 15
+        },
+        {
+          "name": "subtitle-prefetch",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 120.438,
+          "check_count": 23
+        },
+        {
+          "name": "http-boundaries",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.891,
+          "check_count": 13
+        },
+        {
+          "name": "http-stall",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 10.766,
+          "check_count": 6
+        },
+        {
+          "name": "http-throttle",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 7.985,
+          "check_count": 6
+        },
+        {
+          "name": "closed-diagnostics",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 6.813,
+          "check_count": 0
+        },
+        {
+          "name": "hls-segment-suffix",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 11.953,
+          "check_count": 9
+        },
+        {
+          "name": "file-extensions",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 13.844,
+          "check_count": 25
+        },
+        {
+          "name": "download-playback-cleanup",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 128.812,
+          "check_count": 27
+        },
+        {
+          "name": "player-overlay",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 39.906,
+          "check_count": 12
+        },
+        {
+          "name": "player-fault-resource",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 43.781,
+          "check_count": 0
+        },
+        {
+          "name": "protocols",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 98.843,
+          "check_count": 16
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "original_passed": false,
+      "file": "final-round-4/summary.json",
+      "sha256": "77838a100d59ed6674b765cddbe3dbd906d020747cc1efd5ef8df3fe4736151f",
+      "groups": [
+        {
+          "name": "media",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 43.766,
+          "scenario_count": 23
+        },
+        {
+          "name": "takeover",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 106.063,
+          "check_count": 39
+        },
+        {
+          "name": "subtitle-element",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 55.625,
+          "check_count": 15
+        },
+        {
+          "name": "subtitle-prefetch",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 111.547,
+          "check_count": 23
+        },
+        {
+          "name": "http-boundaries",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.344,
+          "check_count": 13
+        },
+        {
+          "name": "http-stall",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.656,
+          "check_count": 6
+        },
+        {
+          "name": "http-throttle",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 7.0,
+          "check_count": 6
+        },
+        {
+          "name": "closed-diagnostics",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 6.672,
+          "check_count": 0
+        },
+        {
+          "name": "hls-segment-suffix",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.218,
+          "check_count": 9
+        },
+        {
+          "name": "file-extensions",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 13.422,
+          "check_count": 25
+        },
+        {
+          "name": "download-playback-cleanup",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 126.171,
+          "check_count": 27
+        },
+        {
+          "name": "player-overlay",
+          "passed": false,
+          "exit_code": 1,
+          "elapsed_seconds": 34.797,
+          "check_count": 10
+        },
+        {
+          "name": "player-fault-resource",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 39.938,
+          "check_count": 0
+        },
+        {
+          "name": "protocols",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 98.64,
+          "check_count": 16
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "original_passed": false,
+      "file": "final-round-5/summary.json",
+      "sha256": "58273ad64feaad31d4486551f50bf925e88242c10d8334538365529132770f5a",
+      "groups": [
+        {
+          "name": "media",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 44.563,
+          "scenario_count": 23
+        },
+        {
+          "name": "takeover",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 106.672,
+          "check_count": 39
+        },
+        {
+          "name": "subtitle-element",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 57.609,
+          "check_count": 15
+        },
+        {
+          "name": "subtitle-prefetch",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 113.75,
+          "check_count": 23
+        },
+        {
+          "name": "http-boundaries",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.781,
+          "check_count": 13
+        },
+        {
+          "name": "http-stall",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 10.516,
+          "check_count": 6
+        },
+        {
+          "name": "http-throttle",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 9.016,
+          "check_count": 6
+        },
+        {
+          "name": "closed-diagnostics",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 6.016,
+          "check_count": 0
+        },
+        {
+          "name": "hls-segment-suffix",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 12.156,
+          "check_count": 9
+        },
+        {
+          "name": "file-extensions",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 14.328,
+          "check_count": 25
+        },
+        {
+          "name": "download-playback-cleanup",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 119.985,
+          "check_count": 27
+        },
+        {
+          "name": "player-overlay",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 34.594,
+          "check_count": 12
+        },
+        {
+          "name": "player-fault-resource",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 40.344,
+          "check_count": 0
+        },
+        {
+          "name": "workbench",
+          "passed": false,
+          "exit_code": 1,
+          "elapsed_seconds": 7.344,
+          "check_count": 0
+        },
+        {
+          "name": "protocols",
+          "passed": true,
+          "exit_code": 0,
+          "elapsed_seconds": 97.781,
+          "check_count": 16
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "file": "subtitle-element-retest.json",
+      "sha256": "44dd7846d95d9dab27ee791dcdc0c38642ef4c4a46b3740f68d4a653cc411716",
+      "passed": true,
+      "checks": [
+        "production popup",
+        "global switch broadcast",
+        "site disable and page override",
+        "real browser audio + AudioWorklet",
+        "real Native Host PCM forwarding",
+        "subtitle render",
+        "seek reset",
+        "rate change preserves original-speed audio timeline",
+        "time offset",
+        "provider failure and retry",
+        "reset rejection and retry",
+        "disable hides cached navigation and reenable restores audio",
+        "language change clears old cues",
+        "stop capture",
+        "removed player clears subtitle UI"
+      ],
+      "error": null
+    },
+    {
+      "file": "player-overlay-retest.json",
+      "sha256": "0d8bc72fdf4d1edc90a86b99e438154f342cae1256821fdcca8ec2e520eff5fb",
+      "passed": true,
+      "checks": [
+        "close tooltip paints beside the button in the header, away from native video",
+        "main-window overlay starts real playback and pause button pauses it",
+        "K and Space toggle the real playback session",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "focused volume keys change volume without triggering global seek",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "error": null
+    },
+    {
+      "file": "player-overlay-round4-retest.json",
+      "sha256": "2260c106d55975aa3799e5c1163ac52e8d6c24e0b4adeb58328d06a612693dcf",
+      "passed": true,
+      "checks": [
+        "close tooltip paints beside the button in the header, away from native video",
+        "main-window overlay starts real playback and pause button pauses it",
+        "K and Space toggle the real playback session",
+        "resume and video-surface click update real pause state",
+        "forward/back buttons and timeline drag seek the actual decoder",
+        "focused volume keys change volume without triggering global seek",
+        "volume and mute controls change mpv volume/mute",
+        "rate, alternate audio/subtitle selection and subtitle-off affect real tracks",
+        "hovering the preview preserves paused playback position",
+        "main fullscreen enters and Escape restores the overlay",
+        "PiP preserves session, moves by title drag, plays/pauses and returns to main",
+        "close button and Escape release playback; reopening works"
+      ],
+      "error": null
+    },
+    {
+      "file": "subtitle-audio-decode.json",
+      "sha256": "988401dc54d1917794b07f9035c90880e688804a045e713895ec7a55d2d9b2ae",
+      "passed": true,
+      "checks": [],
+      "error": null,
+      "stdout": "\nrunning 1 test\ntest subtitle_audio_source::tests::decode_disguised_hls_audio ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 623 filtered out; finished in 0.70s\n\n"
+    },
+    {
+      "file": "download-playback-round2-retest.json",
+      "sha256": "a037deaa4353c8efcbe041cbc36185ff31fb0a50ae4ad64168c7deade377f963",
+      "passed": true,
+      "checks": [
+        "ts: pause preserves cache and resume restores playable download",
+        "ts: thumbnail leaves playback position, pause and speed unchanged",
+        "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+        "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+        "fmp4: pause preserves cache and resume restores playable download",
+        "fmp4: thumbnail leaves playback position, pause and speed unchanged",
+        "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+        "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+        "aes: pause preserves cache and resume restores playable download",
+        "aes: thumbnail leaves playback position, pause and speed unchanged",
+        "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+        "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+        "external: pause preserves cache and resume restores playable download",
+        "external: thumbnail leaves playback position, pause and speed unchanged",
+        "external: unfinished download decodes, exposes full duration and seeks to 80%",
+        "external: same-window final switch; complete decode; cache removed; delete preserves output",
+        "dash: pause preserves cache and resume restores playable download",
+        "dash: thumbnail leaves playback position, pause and speed unchanged",
+        "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+        "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+        "http: pause preserves cache and resume restores playable download",
+        "http: thumbnail leaves playback position, pause and speed unchanged",
+        "http: unfinished download decodes, exposes full duration and seeks to 80%",
+        "http: same-window final switch; complete decode; cache removed; delete preserves output",
+        "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+        "closing playback during download stays closed after completion and allows cleanup",
+        "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output"
+      ],
+      "error": null
+    },
+    {
+      "file": "installed-package.json",
+      "sha256": "82a75895b7e63564c219a3b1f06401fded96d533d3496f2ebe1bee722548e028",
+      "passed": false,
+      "checks": [
+        "MSI staged on VM local disk with matching SHA256",
+        "MSI installs at requested path containing spaces",
+        "installed payload hashes match the tested components and delivery archives",
+        "installed extension ZIPs are valid; unpacked copies match when present",
+        "default download directory matches Windows Known Folder",
+        "real public MDN video downloads into the default folder with identical bytes",
+        "installed UI opens visibly and connects to the installed Core",
+        "measured installed runtime idle CPU and memory"
+      ],
+      "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\scripts\\smoke_v7_installed_footprint.py\", line 225, in run\n    assert code in (0, 3010) and query(product) == -1, f'Uninstall failed: {code}'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Uninstall failed: 1603\n"
+    },
+    {
+      "file": "upgrade/summary.json",
+      "sha256": "0cf024d990e9edfd23e694d7582753a368c1e37bcf9a8e38d7d53b64650347c5",
+      "passed": false,
+      "checks": [
+        "old same-version package installed at selected path",
+        "real transfer paused with a persisted checkpoint",
+        "old UI and Core kept running before the upgrade"
+      ],
+      "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\validation-20261021\\upgrade-acceptance.py\", line 55, in <module>\n    assert code in (0,3010),code\n           ^^^^^^^^^^^^^^^^\nAssertionError: 1603\n"
+    },
+    {
+      "file": "installed-package-fixed.json",
+      "sha256": "9b8da9541aa0a01ff1adf64bfaa207ba5d76532a82437bcf232e5ab5e43f4455",
+      "passed": true,
+      "checks": [
+        "MSI staged on VM local disk with matching SHA256",
+        "MSI installs at requested path containing spaces",
+        "installed payload hashes match the tested components and delivery archives",
+        "installed extension ZIPs are valid; unpacked copies match when present",
+        "default download directory matches Windows Known Folder",
+        "real public MDN video downloads into the default folder with identical bytes",
+        "installed UI opens visibly and connects to the installed Core",
+        "measured installed runtime idle CPU and memory",
+        "MSI uninstalls and removes its product registration"
+      ],
+      "error": null
+    },
+    {
+      "file": "upgrade-fixed/summary.json",
+      "sha256": "a037b96cf2b5248a634c9df88715f71a92a5db3606206b49698e417fc5787037",
+      "passed": true,
+      "checks": [
+        "old same-version package installed at selected path",
+        "real transfer paused with a persisted checkpoint",
+        "old UI and Core kept running before the upgrade",
+        "same-version upgrade replaces only the old MSI product registration",
+        "upgrade retained the selected path and installed every expected component",
+        "old paused task resumes to identical SHA256 and completed cache is removed",
+        "uninstall removes product registration and application while retaining user output"
+      ],
+      "error": null
+    },
+    {
+      "file": "installed-package-final.json",
+      "sha256": "6fb111164d4309c9ba7eb5b118d4e124563506456897673082e0ad65aacab33c",
+      "passed": true,
+      "checks": [
+        "MSI staged on VM local disk with matching SHA256",
+        "MSI installs at requested path containing spaces",
+        "installed payload hashes match the tested components and delivery archives",
+        "installed extension ZIPs are valid; unpacked copies match when present",
+        "default download directory matches Windows Known Folder",
+        "real public MDN video downloads into the default folder with identical bytes",
+        "installed UI opens visibly and connects to the installed Core",
+        "measured installed runtime idle CPU and memory",
+        "MSI uninstalls and removes its product registration"
+      ],
+      "error": null
+    },
+    {
+      "file": "upgrade-final/summary.json",
+      "sha256": "05c1c5f17aa748c61e05e5410486f9f1039cfa631ecf06b53d2d0d976a7b9cb7",
+      "passed": true,
+      "checks": [
+        "old same-version package installed at selected path",
+        "real transfer paused with a persisted checkpoint",
+        "old UI and Core kept running before the upgrade",
+        "same-version upgrade replaces only the old MSI product registration",
+        "upgrade retained the selected path and installed every expected component",
+        "old paused task resumes to identical SHA256 and completed cache is removed",
+        "uninstall removes product registration and application while retaining user output"
+      ],
+      "error": null
+    }
+  ],
+  "public_media": [
+    {
+      "browser": "edge",
+      "file": "extra-browser/edge-public-media.json",
+      "sha256": "4a704c1d2a59b891bf4b11a87047123d5283040e98138f74afccc42545d2c1a1",
+      "cases": [
+        {
+          "name": "hls-js",
+          "passed": true,
+          "video_states": [
+            {
+              "readyState": 4,
+              "networkState": 2,
+              "currentTime": 0.295506,
+              "error": ""
+            }
+          ]
+        },
+        {
+          "name": "dash-js",
+          "passed": false,
+          "video_states": [
+            {
+              "readyState": 0,
+              "networkState": 0,
+              "currentTime": 0,
+              "error": ""
+            }
+          ]
+        },
+        {
+          "name": "mdn-video",
+          "passed": true,
+          "video_states": [
+            {
+              "readyState": 4,
+              "networkState": 1,
+              "currentTime": 0.153537,
+              "error": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "browser": "firefox",
+      "file": "extra-browser/firefox-public-media.json",
+      "sha256": "2fb2e14e0a85761bd3cb852c50dd754f7ad4396885598696e05e765f95cc52a2",
+      "cases": [
+        {
+          "name": "hls-js",
+          "passed": true,
+          "video_states": [
+            {
+              "readyState": 4,
+              "networkState": 2,
+              "currentTime": 0.247341,
+              "error": ""
+            }
+          ]
+        },
+        {
+          "name": "dash-js",
+          "passed": false,
+          "video_states": [
+            {
+              "readyState": 0,
+              "networkState": 0,
+              "currentTime": 0,
+              "error": ""
+            }
+          ]
+        },
+        {
+          "name": "mdn-video",
+          "passed": true,
+          "video_states": [
+            {
+              "readyState": 4,
+              "networkState": 1,
+              "currentTime": 0.114496,
+              "error": ""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "extra_browser": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "workbench-retest",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/workbench-retest.json",
+        "sha256": "a3b12ddb7e760303841ffae8b02269edb1f5be0ad21e911d8cdbe6df1739d73d",
+        "checks": [],
+        "error": "Missing pointer feedback: {\"control\": \"toolbar.\\u5168\\u90e8\\u5f00\\u59cb\", \"label\": \"main-light\", \"bounds\": [228, 53, 334, 98], \"selected_segment\": false, \"hover_changed_pixels\": 1115, \"press_changed_pixels\": 0, \"image\": \"feedback-002.png\"}"
+      },
+      {
+        "name": "edge-media",
+        "passed": true,
+        "exit_code": 0,
+        "file": "extra-browser/edge-media.json",
+        "sha256": "2c3832e6189ba5fafc65fd778f94ec1c13c51ed4767594b52a7abb89ff33e7bb",
+        "scenario_count": 23
+      },
+      {
+        "name": "edge-takeover",
+        "passed": true,
+        "exit_code": 0,
+        "file": "extra-browser/edge-takeover.json",
+        "sha256": "24d311f6d23bd10aeb79ded6622b15f0e16c12d62c35e29ffde0955db7509009",
+        "checks": [
+          "one-resolved-handoff-small",
+          "small-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-stream",
+          "stream-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-ordinary",
+          "ordinary-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-quick",
+          "quick-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-image",
+          "image-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-json",
+          "json-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-generic",
+          "generic-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-post",
+          "post-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "urlencoded-post-not-replayed",
+          "multipart-accept-single-post-desktop-sha256",
+          "multipart-reject-single-post-browser-sha256",
+          "one-resolved-handoff-generated_blob",
+          "generated_blob-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "one-resolved-handoff-generated_data",
+          "generated_data-accepted-desktop-task-single-file-sha256-no-browser-copy",
+          "generated-blob-rejection-keeps-browser-file-sha256",
+          "generated-blob-alt-bypasses-takeover-browser-file-sha256",
+          "generated-data-excluded-bypasses-takeover-browser-file-sha256",
+          "takeover-disabled-browser-complete-sha256",
+          "site-excluded-browser-complete-sha256",
+          "real-takeover-pauses-before-desktop-confirmation",
+          "real-takeover-accepted-single-complete-file-sha256",
+          "one-resolved-handoff-accept",
+          "real-desktop-rejection-browser-resumes-sha256",
+          "one-resolved-handoff-reject",
+          "real-accepted-desktop-failure-browser-fallback-sha256",
+          "one-resolved-handoff-fallback",
+          "actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256"
+        ],
+        "error": null
+      },
+      {
+        "name": "edge-interactions",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/edge-interactions.json",
+        "sha256": "a0659916076e2d8aa36f7fefd1ab3acb57369dcd76466a01c38670d5a3135410",
+        "checks": [
+          "real webpage hover card visible and inside viewport",
+          "local overlay click -> actual Native Host/Core -> completed and SHA256",
+          "overlay more, pin/unpin and collapse buttons",
+          "real drag and hover card at top-left",
+          "real drag and hover card at bottom-right",
+          "resize repositions dragged controls and hover card without unintended download",
+          "actual edge page zoom 100% hover bounds and clickable controls",
+          "actual edge page zoom 150% hover bounds and clickable controls",
+          "actual edge page zoom 200% hover bounds and clickable controls",
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示"
+        ],
+        "error": "Message: element not interactable"
+      },
+      {
+        "name": "firefox-interactions",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/firefox-interactions.json",
+        "sha256": "9cb397bd8cde3f17e40114085ae82c9cdf7a5b93ca81357b7a950ae0a81e037a",
+        "checks": [
+          "real webpage hover card visible and inside viewport",
+          "local overlay click -> actual Native Host/Core -> completed and SHA256",
+          "overlay more, pin/unpin and collapse buttons",
+          "real drag and hover card at top-left",
+          "real drag and hover card at bottom-right",
+          "resize repositions dragged controls and hover card without unintended download",
+          "actual firefox page zoom 100% hover bounds and clickable controls",
+          "actual firefox page zoom 150% hover bounds and clickable controls",
+          "actual firefox page zoom 200% hover bounds and clickable controls",
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示"
+        ],
+        "error": "Message: Element <button class=\"copy-link\" type=\"button\"> could not be scrolled into view; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#elementnotinteractableexception"
+      },
+      {
+        "name": "edge-public-media",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/edge-public-media.json",
+        "sha256": "4a704c1d2a59b891bf4b11a87047123d5283040e98138f74afccc42545d2c1a1",
+        "checks": [],
+        "error": null
+      },
+      {
+        "name": "firefox-public-media",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/firefox-public-media.json",
+        "sha256": "2fb2e14e0a85761bd3cb852c50dd754f7ad4396885598696e05e765f95cc52a2",
+        "checks": [],
+        "error": null
+      },
+      {
+        "name": "edge-supplied-site",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/edge-supplied-site.json",
+        "sha256": "99762144f077fbaa7cb001c39358f13a5ede5e6c372d867956bdc2c1a8977b0e",
+        "checks": [],
+        "error": null
+      },
+      {
+        "name": "firefox-supplied-site",
+        "passed": false,
+        "exit_code": 1,
+        "file": "extra-browser/firefox-supplied-site.json",
+        "sha256": "700f41afa0b25a06873c26e86c388a144bde701b42064326acc63a22415566c4",
+        "checks": [],
+        "error": null
+      }
+    ]
+  },
+  "workbench_final": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "workbench-final",
+        "passed": false,
+        "exit_code": 1,
+        "file": "workbench-final/workbench-final.json",
+        "sha256": "0246f5c8d0b4349e06050b92b2c7e466321f3fef1245019ae03ff3f43401622d",
+        "checks": [],
+        "error": "Disabled toolbar control shows press feedback: toolbar.全部开始"
+      },
+      {
+        "name": "workbench-functional",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-functional.json",
+        "sha256": "06c19c6a70388f725e6d2d40527394790b12cd9f38c30458131dafa6de7dfb72",
+        "checks": [
+          "invalid URL blocks both Enter and clicking the disabled submit button",
+          "new-task invalid input, disabled submit, analyze, actual 32MiB download and SHA256",
+          "real task row click selects downloaded task",
+          "real task right-click exposes legal actions",
+          "Escape dismisses task menu without clearing selection",
+          "task details tab: 概览",
+          "task details tab: 连接",
+          "task details tab: 速度",
+          "task details tab: 日志",
+          "all-start, all-pause, selected-task resume, checkpoint and SHA256",
+          "batch blocks invalid input, then downloads both corrected links",
+          "harvest size filter: ≥ 1 MB",
+          "harvest size filter: ≥ 10 MB",
+          "harvest size filter: 全部大小",
+          "page harvest, size probing, category selection, select/deselect and selected download",
+          "queue manager creates and saves real queue",
+          "selected task moves into saved queue",
+          "test task count"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-extras",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-extras.json",
+        "sha256": "87296a21dbcc29e730da7a246424b5323d3ef566259f06c619e5266362cab940",
+        "checks": [
+          "main more-menu opens and closes: 通知中心",
+          "main more-menu opens and closes: 关于 HLS Downloader",
+          "prepared three downloaded files for remaining interactions",
+          "search matches filename and empty result then restores test-only view",
+          "name, size, status sort directions persist through actual table header clicks",
+          "select-all respects search and destructive confirmation cancel preserves tasks",
+          "local video opens in the workbench overlay and closes using its own close button",
+          "settings save persists changed option; original restored in cleanup",
+          "confirmed delete removes task and preserves completed file"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-torrent",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-torrent.json",
+        "sha256": "9bb9499a3cf1048e0f92a1a23d39d472cbcd47b5371310e265afecf6556c5e88",
+        "checks": [
+          "real new-task torrent probe, deselect-all disabled submit, select two files, peer transfer and selected-only publication"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-drop",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-drop.json",
+        "sha256": "17dd00b6f6f8f7daf364119dbd62322578af4c4b9bf1f8dffc68418447ee6e38",
+        "checks": [
+          "real cross-process native file drag imports UTF8 URL list and downloads exact bytes"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-files",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-files.json",
+        "sha256": "21c9c95baef6c67a44329017dbc65925ea49049a90d351eb30522796c53232f7",
+        "checks": [
+          "real system chooser selects file: 导出任务列表",
+          "real system chooser selects file: 导入任务 JSON、种子、Metalink 或 URL 列表",
+          "actual export chooser saves selected task; delete preserves file; import chooser recreates task and downloads matching bytes",
+          "imported output SHA256",
+          "maximize, restore, minimize and restore visible workbench",
+          "narrow window preserves essential buttons and Escape cancels modal"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-dialogs",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-dialogs.json",
+        "sha256": "4569ed312222e597f3c2874805b52d1b28596081eeef68e972387216a644d499",
+        "checks": [
+          "real system chooser opens and cancels: 选择下载保存目录",
+          "real system chooser opens and cancels: 导入任务 JSON、种子、Metalink 或 URL 列表",
+          "real system chooser opens and cancels: 导出任务列表",
+          "maximize, restore, minimize and restore visible workbench",
+          "narrow window preserves essential buttons and Escape cancels modal"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-hover",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-hover.json",
+        "sha256": "cb73213e00e03cef931c7e1b01e03f876fd1bfc443a63b1111b9d64d37a9d4ed",
+        "checks": [
+          "real-pointer-hover-enter-and-leave-without-color-flash"
+        ],
+        "error": null
+      },
+      {
+        "name": "workbench-magnet",
+        "passed": true,
+        "exit_code": 0,
+        "file": "workbench-final/workbench-magnet.json",
+        "sha256": "2dad9049dfe7e7f83184e2b41a48be6823cb780ade163345d62f54e580d8c3ee",
+        "checks": [
+          "torrent shows metadata loading; close remains responsive; late result does not reopen selection or create task",
+          "invalid torrent preserves parse error in notification history and leaves loading state",
+          "real new-task magnet probe, deselect-all disabled submit, select two files, peer transfer and selected-only publication"
+        ],
+        "error": null
+      },
+      {
+        "name": "edge-interactions-final",
+        "passed": false,
+        "exit_code": 1,
+        "file": "workbench-final/edge-interactions-final.json",
+        "sha256": "043f33f68afd35a12e252b29dcb92441694df565b292f4c5b6f9209541d64b24",
+        "checks": [
+          "real webpage hover card visible and inside viewport",
+          "local overlay click -> actual Native Host/Core -> completed and SHA256",
+          "overlay more, pin/unpin and collapse buttons",
+          "real drag and hover card at top-left",
+          "real drag and hover card at bottom-right",
+          "resize repositions dragged controls and hover card without unintended download",
+          "actual edge page zoom 100% hover bounds and clickable controls",
+          "actual edge page zoom 150% hover bounds and clickable controls",
+          "actual edge page zoom 200% hover bounds and clickable controls",
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示"
+        ],
+        "error": "Message: stale element reference: stale element not found in the current frame"
+      },
+      {
+        "name": "firefox-interactions-final",
+        "passed": false,
+        "exit_code": 1,
+        "file": "workbench-final/firefox-interactions-final.json",
+        "sha256": "1b32da155047a420419dee3aef9bce01d9db09e2492f46bb3aa4e3e4e41079f6",
+        "checks": [
+          "real webpage hover card visible and inside viewport",
+          "local overlay click -> actual Native Host/Core -> completed and SHA256",
+          "overlay more, pin/unpin and collapse buttons",
+          "real drag and hover card at top-left",
+          "real drag and hover card at bottom-right",
+          "resize repositions dragged controls and hover card without unintended download",
+          "actual firefox page zoom 100% hover bounds and clickable controls",
+          "actual firefox page zoom 150% hover bounds and clickable controls",
+          "actual firefox page zoom 200% hover bounds and clickable controls",
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示",
+          "popup rescan and copy-link buttons",
+          "popup download button -> actual local video -> completed and SHA256",
+          "confirmed download has a stable check icon and no busy animation"
+        ],
+        "error": "Message: Unable to locate element: select[aria-label=\"来源语言\"]; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#nosuchelementexception"
+      }
+    ]
+  },
+  "ui_final": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "workbench-main",
+        "passed": true,
+        "exit_code": 0,
+        "file": "ui-final/workbench-main.json",
+        "sha256": "559af1b4f6efeb6f6386777fedb18cc75c348840ffc8e47288d70e5397269faf",
+        "checks": [
+          "all toolbar controls: light-theme bounds, hover, press",
+          "sidebar click: 进行中",
+          "sidebar click: 排队中",
+          "sidebar click: 已暂停",
+          "sidebar click: 已完成",
+          "sidebar click: 失败",
+          "sidebar click: 全部",
+          "sidebar click: 媒体",
+          "sidebar click: 程序",
+          "sidebar click: 压缩包",
+          "sidebar click: 其他",
+          "sidebar click: 全部",
+          "refresh keeps workbench connected",
+          "all toolbar controls: dark-theme feedback, theme restored",
+          "pointer feedback: newtask-基本",
+          "pointer feedback: newtask-连接",
+          "pointer feedback: newtask-请求",
+          "request method click: POST",
+          "request method click: HEAD",
+          "request method click: GET",
+          "pointer feedback: newtask-计划",
+          "completion draft option: 睡眠",
+          "completion draft option: 休眠",
+          "completion draft option: 关机",
+          "completion draft option: 无",
+          "new-task cancel removes dialog",
+          "pointer feedback: dialog-批量添加",
+          "dialog open / cancel: 批量添加",
+          "pointer feedback: dialog-页面抓取",
+          "dialog open / cancel: 页面抓取",
+          "pointer feedback: dialog-浏览器插件",
+          "dialog open / cancel: 浏览器插件",
+          "queue-manager draft action: 上移队列",
+          "queue-manager draft action: 下移队列",
+          "queue-manager draft action: 删除队列",
+          "pointer feedback: settings-通用",
+          "settings switch toggles and restores: 通用/自动分类目录",
+          "settings switch toggles and restores: 通用/监视剪贴板",
+          "settings switch toggles and restores: 通用/恢复未完成任务",
+          "settings switch toggles and restores: 通用/开机启动",
+          "settings switch toggles and restores: 通用/完成提示音",
+          "settings switch toggles and restores: 通用/下载进度窗口",
+          "settings switch toggles and restores: 通用/完成通知",
+          "pointer feedback: settings-下载",
+          "settings switch toggles and restores: 下载/默认允许重复",
+          "settings switch toggles and restores: 下载/保留过程文件",
+          "pointer feedback: settings-计划",
+          "settings switch toggles and restores: 计划/启用定时限速",
+          "settings switch toggles and restores: 计划/队列自动开始",
+          "settings switch toggles and restores: 计划/队列自动停止",
+          "settings choice: 计划/无",
+          "pointer feedback: settings-网络",
+          "empty site rule disables save",
+          "pointer feedback: settings-媒体",
+          "settings switch toggles and restores: 媒体/下载外挂字幕",
+          "settings switch toggles and restores: 媒体/跳过广告片段",
+          "pointer feedback: settings-BT",
+          "settings switch toggles and restores: BT/监视新种子",
+          "settings switch toggles and restores: BT/启用 DHT 节点发现",
+          "pointer feedback: settings-安全",
+          "settings switch toggles and restores: 安全/完成后病毒扫描",
+          "settings switch toggles and restores: 安全/发现威胁时标记失败",
+          "pointer feedback: settings-浏览器",
+          "settings switch toggles and restores: 浏览器/接管浏览器下载",
+          "pointer feedback: settings-外观",
+          "settings switch toggles and restores: 外观/深色模式",
+          "settings switch toggles and restores: 外观/减弱动画",
+          "settings cancel preserves existing configuration"
+        ],
+        "error": null
+      },
+      {
+        "name": "edge-popup",
+        "passed": false,
+        "exit_code": 1,
+        "file": "ui-final/edge-popup.json",
+        "sha256": "b4fe4fa31f49a37b08dc11cdffc9683852e22c16888e34a07d94c42a728511b0",
+        "checks": [
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示"
+        ],
+        "error": "Message: stale element reference: stale element not found in the current frame"
+      },
+      {
+        "name": "firefox-popup",
+        "passed": false,
+        "exit_code": 1,
+        "file": "ui-final/firefox-popup.json",
+        "sha256": "08831a214e3255d9ea8da53913a225217c9d13fe6881df1695fdf45639d31472",
+        "checks": [
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示",
+          "popup rescan and copy-link buttons",
+          "popup download button -> actual local video -> completed and SHA256",
+          "confirmed download has a stable check icon and no busy animation"
+        ],
+        "error": "You may not select a disabled option"
+      }
+    ]
+  },
+  "popup_final": {
+    "passed": true,
+    "cases": [
+      {
+        "name": "edge-popup",
+        "passed": true,
+        "exit_code": 0,
+        "file": "popup-final/edge-popup.json",
+        "sha256": "9ddcc8053450168aaf60b11e8e9cf815e3e8658ddaf3722192a93db1f0a0ed20",
+        "checks": [
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示",
+          "popup rescan and copy-link buttons",
+          "popup download button -> actual local video -> completed and SHA256",
+          "confirmed download has a stable check icon and no busy animation",
+          "subtitle popup select and restore: 本站字幕翻译",
+          "subtitle popup select and restore: 本页字幕翻译",
+          "subtitle configuration stays in desktop; popup exposes only page/site controls and desktop guidance",
+          "popup open desktop button",
+          "popup close button closes its window and keeps webpage open"
+        ],
+        "error": null
+      },
+      {
+        "name": "firefox-popup",
+        "passed": true,
+        "exit_code": 0,
+        "file": "popup-final/firefox-popup.json",
+        "sha256": "95c35db3738367200c4bb6a46aad02a6be92238013acab12c0ac8ba9931ec178",
+        "checks": [
+          "popup actually connected to installed Native Host/Core",
+          "popup theme button cycles through automatic/light/dark",
+          "popup toggle and restore: 自动接管",
+          "popup toggle and restore: 本站 Cookie",
+          "popup toggle and restore: 本站提示",
+          "popup rescan and copy-link buttons",
+          "popup download button -> actual local video -> completed and SHA256",
+          "confirmed download has a stable check icon and no busy animation",
+          "subtitle popup select and restore: 本站字幕翻译",
+          "subtitle popup select and restore: 本页字幕翻译",
+          "subtitle configuration stays in desktop; popup exposes only page/site controls and desktop guidance",
+          "popup open desktop button",
+          "popup close button closes its window and keeps webpage open"
+        ],
+        "error": null
+      }
+    ]
+  },
+  "subtitle_settings_final": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "subtitle-settings",
+        "passed": false,
+        "exit_code": 1,
+        "file": "subtitle-settings-final/subtitle-settings.json",
+        "sha256": "5894de14a8d65add9d37bfe3e0b9aa58d4e5ec7bdd59e0ad69986720cd15dee2",
+        "checks": [],
+        "error": "Missing pointer feedback: {\"control\": \"settings.choice.dashscope\", \"label\": \"settings-\\u5b57\\u5e55\\u7ffb\\u8bd1\", \"bounds\": [428, 252, 843, 295], \"selected_segment\": false, \"hover_changed_pixels\": 0, \"press_changed_pixels\": 2887, \"image\": \"feedback-001.png\"}"
+      }
+    ]
+  },
+  "subtitle_settings_retest": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "subtitle-settings",
+        "passed": false,
+        "exit_code": 1,
+        "file": "subtitle-settings-retest/subtitle-settings.json",
+        "sha256": "7557b3d834bd0b66ea85e15129e034f8b7fa3622f7ecdd3d044fb1035ae3a32a",
+        "checks": [],
+        "error": "Missing pointer feedback: {\"control\": \"settings.choice.cn-beijing\", \"label\": \"settings-\\u5b57\\u5e55\\u7ffb\\u8bd1\", \"bounds\": [428, 422, 843, 465], \"selected_segment\": false, \"hover_changed_pixels\": 0, \"press_changed_pixels\": 2482, \"image\": \"feedback-003.png\"}"
+      }
+    ]
+  },
+  "subtitle_settings_region_retest": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "subtitle-settings",
+        "passed": false,
+        "exit_code": 1,
+        "file": "subtitle-settings-region-retest/subtitle-settings.json",
+        "sha256": "f8b6f27bf8cad447eb1a2dde48be1f1e34502de508c86bbaafc2b6bab6dca0ce",
+        "checks": [],
+        "error": "Missing pointer feedback: {\"control\": \"dialog.secondary.\\u81ea\\u52a8\\u8bc6\\u522b\", \"label\": \"settings-\\u5b57\\u5e55\\u7ffb\\u8bd1\", \"bounds\": [424, 606, 519, 649], \"selected_segment\": false, \"hover_changed_pixels\": 0, \"press_changed_pixels\": 0, \"image\": \"feedback-005.png\"}"
+      }
+    ]
+  },
+  "subtitle_settings_visible_retest": {
+    "passed": false,
+    "cases": [
+      {
+        "name": "subtitle-settings",
+        "passed": false,
+        "exit_code": 1,
+        "file": "subtitle-settings-visible-retest/subtitle-settings.json",
+        "sha256": "cdd992136fe610b7f62dd7c686096d58688c329f9e6bb9d7c483e7e7674bada6",
+        "checks": [],
+        "error": "Settings control remains clipped: dialog.secondary.取消"
+      }
+    ]
+  },
+  "subtitle_settings_footer_retest": {
+    "passed": true,
+    "cases": [
+      {
+        "name": "subtitle-settings",
+        "passed": true,
+        "exit_code": 0,
+        "file": "subtitle-settings-footer-retest/subtitle-settings.json",
+        "sha256": "604bf576f606b8a52869404bd753eb4e63705fff3d8cf6a6aca5a9abbe54f8b6",
+        "checks": [
+          "pointer feedback: settings-字幕翻译",
+          "settings switch toggles and restores: 字幕翻译/启用网页字幕翻译",
+          "settings switch toggles and restores: 字幕翻译/显示原文",
+          "settings switch toggles and restores: 字幕翻译/同步字幕",
+          "pointer feedback: settings-BT",
+          "settings switch toggles and restores: BT/监视新种子",
+          "settings switch toggles and restores: BT/启用 DHT 节点发现",
+          "pointer feedback: settings-安全",
+          "settings switch toggles and restores: 安全/完成后病毒扫描",
+          "settings switch toggles and restores: 安全/发现威胁时标记失败",
+          "pointer feedback: settings-浏览器",
+          "settings switch toggles and restores: 浏览器/接管浏览器下载",
+          "pointer feedback: settings-外观",
+          "settings switch toggles and restores: 外观/深色模式",
+          "settings switch toggles and restores: 外观/减弱动画",
+          "settings cancel preserves existing configuration"
+        ],
+        "error": null
+      }
+    ]
+  },
+  "supplied_site": {
+    "passed": false,
+    "status": "blocked",
+    "requested_host": "missav.ai",
+    "requested_path_sha256": "562cc93f3b552111111e79892d49b28fa37c0b722a341a956d596543683ffdcd",
+    "observation": "Visible Firefox page remained on Cloudflare security verification before a player was exposed. No verification action was attempted.",
+    "observed_at": "2026-10-21T17:45:30+08:00"
+  },
+  "dash_without_extension": [
+    {
+      "browser": "edge",
+      "passed": false,
+      "file": "dash-without-extension-edge.json",
+      "sha256": "d4cacde2cdd548bdc9d54b9ea6f48d1a386eb4c62de117366faf25694ed25a29",
+      "cases": [
+        {
+          "name": "dash-js",
+          "passed": false,
+          "videos": [
+            {
+              "currentTime": 0,
+              "error": "",
+              "manifest": "",
+              "networkState": 0,
+              "parentStyle": {
+                "className": "sample-video-wrapper",
+                "display": "block",
+                "opacity": "1",
+                "tag": "DIV",
+                "visibility": "visible",
+                "zIndex": "auto"
+              },
+              "paused": false,
+              "readyState": 0,
+              "rect": {
+                "height": 360,
+                "width": 640,
+                "x": 16,
+                "y": 33.609375
+              },
+              "src": "",
+              "style": {
+                "display": "block",
+                "opacity": "1",
+                "visibility": "visible",
+                "zIndex": "auto"
+              },
+              "videoHeight": 0,
+              "videoWidth": 0
+            }
+          ],
+          "browser_console_errors": [
+            {
+              "level": "SEVERE",
+              "message": "https://reference.dashif.org/favicon.ico - Failed to load resource: the server responded with a status of 404 (Not Found)",
+              "source": "network",
+              "timestamp": 1792598720209
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "browser": "firefox",
+      "passed": false,
+      "file": "dash-without-extension-firefox.json",
+      "sha256": "364c823f770505f6405f25d601d37a21ba03ca5d46c0c8cef5a9b57dc88bbc91",
+      "cases": [
+        {
+          "name": "dash-js",
+          "passed": false,
+          "videos": [
+            {
+              "currentTime": 0,
+              "error": "",
+              "manifest": "",
+              "networkState": 0,
+              "parentStyle": {
+                "className": "sample-video-wrapper",
+                "display": "block",
+                "opacity": "1",
+                "tag": "DIV",
+                "visibility": "visible",
+                "zIndex": "auto"
+              },
+              "paused": false,
+              "readyState": 0,
+              "rect": {
+                "height": 360,
+                "width": 640,
+                "x": 56,
+                "y": 127.5
+              },
+              "src": "",
+              "style": {
+                "display": "block",
+                "opacity": "1",
+                "visibility": "visible",
+                "zIndex": "auto"
+              },
+              "videoHeight": 0,
+              "videoWidth": 0
+            }
+          ],
+          "browser_console_errors": []
+        }
+      ]
+    }
+  ],
+  "core_regression": {
+    "passed": 620,
+    "failed": 0,
+    "ignored": 4,
+    "seconds": 53.19,
+    "file": "core-final-unit.log",
+    "sha256": "e523d05d97d04821cf3022a000a8e5555e09ee6adb1fd14419d3f9b4fa4e8efb"
+  },
+  "real_merge_regression": {
+    "exit_code": 0,
+    "file": "real-merge-unit.log",
+    "sha256": "ad61128e9d161fca17c3f1b7bb47e95275df139a7e703a553a604a4c4bfb1ea8"
+  },
+  "pipe_before_regression": {
+    "exit_code": 101,
+    "file": "pipe-before.log",
+    "sha256": "16693408649bdfa28029d80cfbb2a1eabea242c00cbcd9ee15db7332b3a8d3d7"
+  },
+  "control_response": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "slow-single: responsive control, resume hash and cache cleanup",
+        "control_seconds": 0.04699999999996862,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "slow-parallel: responsive control, resume hash and cache cleanup",
+        "control_seconds": 0.03100000000000591,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "quota-pause: responsive control, resume hash and cache cleanup",
+        "control_seconds": 0.09399999999999409,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "quota-disable: responsive control, resume hash and cache cleanup",
+        "control_seconds": 0.0,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      },
+      {
+        "name": "slow-delete: delete stops throttled worker and removes cache",
+        "control_seconds": 0.07800000000003138
+      },
+      {
+        "name": "slow-hls: delete stops throttled worker and removes cache",
+        "control_seconds": 0.09399999999999409
+      }
+    ],
+    "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe"
+  },
+  "delivery": [
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 329554,
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Extension-Source.zip",
+      "bytes": 370660,
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox.zip",
+      "bytes": 329533,
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Windows-x64.msi",
+      "bytes": 203472896,
+      "sha256": "0b8335a339cf4650955b76d4ba30e883d6b1f6b4fcc0b9e4456b36ad5cb92a97"
+    }
+  ],
+  "performance": {
+    "passed": true,
+    "scope": "loopback default-settings transfer and whole-product process resources; not UI response or public Internet",
+    "errors": [],
+    "initial_attempt": {
+      "passed": false,
+      "errors": [
+        {
+          "product": "idm",
+          "round": 1,
+          "error": "TimeoutError('idm fast: 0/134217728; files=[]')"
+        },
+        {
+          "product": "idm",
+          "round": 2,
+          "error": "TimeoutError('idm fast: 0/134217728; files=[]')"
+        },
+        {
+          "product": "idm",
+          "round": 3,
+          "error": "TimeoutError('idm fast: 0/134217728; files=[]')"
+        }
+      ],
+      "file": "product-comparison/comparison-clean.json",
+      "sha256": "9311f731a642c8782ec4284b787469098d556979975b86bae1d8a01c16253211"
+    },
+    "installed_bytes": {
+      "hls": 469479396,
+      "ab": 172564357,
+      "idm": 26044102
+    },
+    "binaries": {
+      "hls": {
+        "path": "C:\\QAWork\\runtime\\HLSDownloader.exe",
+        "sha256": "841b23b44128b652efa457f733272faa06ba6a6ed803af41fd5550bbdc0e535d"
+      },
+      "ab": {
+        "path": "C:\\QAWork\\ABDownloadManager\\ABDownloadManager.exe",
+        "sha256": "843d936ded4952ff845e6c42720e394c7e6e1b997177b046f21cd5f1e89650b7"
+      },
+      "idm": {
+        "path": "C:\\Program Files (x86)\\Internet Download Manager\\IDMan.exe",
+        "sha256": "e3fc655a335e17a6fdd09a9b315291d0c8863180f0d801e5dd7433c9e56afbd8"
+      }
+    },
+    "sample_count": 18,
+    "medians": [
+      {
+        "product": "hls",
+        "scenario": "fast",
+        "count": 3,
+        "verified_output_seconds": 3.818106,
+        "sampled_cpu_seconds": 5.109375,
+        "peak_private_mib": 238.29296875
+      },
+      {
+        "product": "hls",
+        "scenario": "limited",
+        "count": 3,
+        "verified_output_seconds": 5.397601899999983,
+        "sampled_cpu_seconds": 9.6875,
+        "peak_private_mib": 270.3359375
+      },
+      {
+        "product": "ab",
+        "scenario": "fast",
+        "count": 3,
+        "verified_output_seconds": 4.192576499999973,
+        "sampled_cpu_seconds": 13.921875,
+        "peak_private_mib": 286.29296875
+      },
+      {
+        "product": "ab",
+        "scenario": "limited",
+        "count": 3,
+        "verified_output_seconds": 3.0534605000000004,
+        "sampled_cpu_seconds": 6.84375,
+        "peak_private_mib": 304.02734375
+      },
+      {
+        "product": "idm",
+        "scenario": "fast",
+        "count": 3,
+        "verified_output_seconds": 3.029478299999994,
+        "sampled_cpu_seconds": 1.625,
+        "peak_private_mib": 19.87109375
+      },
+      {
+        "product": "idm",
+        "scenario": "limited",
+        "count": 3,
+        "verified_output_seconds": 4.045003500000007,
+        "sampled_cpu_seconds": 1.09375,
+        "peak_private_mib": 21.09765625
+      }
+    ]
+  }
+}

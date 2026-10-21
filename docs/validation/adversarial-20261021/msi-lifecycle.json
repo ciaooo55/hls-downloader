@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\firefox-response\\shared\\validation-20261021\\delivery\\HLSDownloader-7.0.3-Windows-x64.msi",
+  "original_product_code": "{E819BBAB-0C20-4DED-9D1A-C2D9B53B8EF5}",
+  "verified_product_code": "{2C9F6EFA-0158-47CB-9BDD-86C9D7729312}",
+  "original_package_code": "{1ECAE2F4-CD63-41DD-A255-72621A712DD7}",
+  "verified_package_code": "{7E603235-E170-4E00-BD70-3F3B2C8EED5D}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "EF1CD8233ACD3435281BDF7160CB9541E7ED929226C2A5BA562B222ACC036AAB",
+  "sha256_after": "0B8335A339CF4650955B76D4BA30E883D6B1F6B4FCC0B9E4456B36AD5CB92A97"
+}
