@@ -22,12 +22,21 @@ def main() -> int:
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--throttle-only", action="store_true")
     args = parser.parse_args()
     assert os.environ.get("HLS_VM_ACCEPTANCE") == "1", "Windows Sandbox only"
     args.root.mkdir(parents=True, exist_ok=False)
     downloads = args.root / "downloads"
     body = bytes(range(256)) * (8 * 1024 * 1024 // 256)
     prefix_size = 128 * 1024
+    media_body = b""
+    if args.throttle_only:
+        media = args.root / "source.ts"
+        subprocess.run([str(args.engine.parent / "ffmpeg.exe"), "-nostdin", "-v", "error", "-y",
+                        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-t", "3",
+                        "-c:v", "mpeg2video", "-f", "mpegts", str(media)], check=True, timeout=30,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        media_body = media.read_bytes()
     gates: dict[str, threading.Event] = {}
     requests: list[dict] = []
     report = {"passed": False, "checks": [], "engine_sha256": hashlib.sha256(args.engine.read_bytes()).hexdigest()}
@@ -52,7 +61,9 @@ def main() -> int:
             self.end_headers()
 
         def do_GET(self):
-            start, end = 0, len(body) - 1
+            payload = (b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:3,\nsource.ts\n#EXT-X-ENDLIST\n"
+                       if self.path.endswith(".m3u8") else media_body if self.path.endswith(".ts") else body)
+            start, end = 0, len(payload) - 1
             requested = self.headers.get("Range")
             if requested:
                 first, last = requested.removeprefix("bytes=").split("-", 1)
@@ -63,15 +74,15 @@ def main() -> int:
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("ETag", '"stalled-http-fixture"')
             if requested:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
             self.end_headers()
             try:
                 split = min(start + prefix_size, end + 1)
-                self.wfile.write(body[start:split])
+                self.wfile.write(payload[start:split])
                 self.wfile.flush()
                 if split <= end:
                     gates[self.path].wait(90)
-                    self.wfile.write(body[split:end + 1])
+                    self.wfile.write(payload[split:end + 1])
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
@@ -111,7 +122,7 @@ def main() -> int:
         def action(tid, value):
             return command({"kind": "task_action", "task_id": tid, "action": value})
 
-        for name, connections in [("single", 1), ("parallel", 4), ("delete", 4), ("gap", 1)]:
+        for name, connections in ([] if args.throttle_only else [("single", 1), ("parallel", 4), ("delete", 4), ("gap", 1)]):
             path = "/" + name
             gates[path] = threading.Event()
             created = command({"kind": "create_task", "spec": {
@@ -163,6 +174,77 @@ def main() -> int:
                 report["checks"].append({"name": name + ": complete, SHA-256 verified, cache removed",
                                          "sha256": hashlib.sha256(output.read_bytes()).hexdigest()})
             gates[path].set()
+        if args.throttle_only:
+            for name, connections, quota in [("slow-single", 1, False), ("slow-parallel", 4, False),
+                                               ("quota-pause", 1, True), ("quota-disable", 4, True)]:
+                path = "/" + name
+                gates[path] = threading.Event()
+                gates[path].set()
+                response = send(ipc, {"type": "store_settings", "request_id": 1, "values": {
+                    "download_hourly_quota_mib": 1 if quota else 0}})
+                assert response.get("type") != "error", response
+                created = command({"kind": "create_task", "spec": {
+                    "url": f"http://127.0.0.1:{server.server_port}{path}", "resource_kind": "file",
+                    "filename": name + ".bin", "concurrency": connections,
+                    "speed_limit_kib": 0 if quota else 1, "proxy": "hls-downloader://direct-proxy"}})
+                tid = next(e["event"]["snapshot"]["task_id"] for e in created["events"]
+                           if e["event"]["kind"] == "task_created")
+                action(tid, "start")
+                wait(lambda: any(r["path"] == path for r in requests), name + ": no transfer")
+                if quota and name == "quota-pause":
+                    wait(lambda: task(tid)["downloaded_bytes"] >= 1024 * 1024, "quota was not reached")
+                time.sleep(.35)
+                started = time.monotonic()
+                if name == "quota-disable":
+                    response = send(ipc, {"type": "store_settings", "request_id": 1, "values": {
+                        "download_hourly_quota_mib": 0}})
+                    assert response.get("type") != "error", response
+                else:
+                    action(tid, "pause")
+                    wait(lambda: task(tid)["status"] == "paused" and task(tid)["active_workers"] == 0,
+                         name + ": throttled worker did not stop", 3)
+                    assert (downloads / ".hls-tasks" / tid).is_dir(), "pause lost resumable cache"
+                elapsed = time.monotonic() - started
+                if name != "quota-disable":
+                    action(tid, "resume")
+                    assert time.monotonic() - started < 3, name + ": resume waited for a throttled worker"
+                if name.startswith("slow"):
+                    action(tid, "speed:0")
+                send(ipc, {"type": "store_settings", "request_id": 1, "values": {"download_hourly_quota_mib": 0}})
+                wait(lambda: task(tid)["status"] in {"completed", "failed"}, name + ": not finished", 15)
+                assert task(tid)["status"] == "completed", task(tid)
+                output = Path(task(tid)["output_path"])
+                assert output.read_bytes() == body, name + ": resumed output differs"
+                wait(lambda: task(tid)["active_workers"] == 0 and not (downloads / ".hls-tasks" / tid).exists(),
+                     name + ": cache retained")
+                report["checks"].append({"name": name + ": responsive control, resume hash and cache cleanup",
+                                         "control_seconds": elapsed, "sha256": hashlib.sha256(body).hexdigest()})
+            for name, kind in [("slow-delete", "file"), ("slow-hls", "hls")]:
+                path = "/" + name + ("/index.m3u8" if kind == "hls" else "")
+                for key in (path, "/slow-hls/source.ts"):
+                    gates[key] = threading.Event()
+                    gates[key].set()
+                created = command({"kind": "create_task", "spec": {
+                    "url": f"http://127.0.0.1:{server.server_port}{path}", "resource_kind": kind,
+                    "filename": name + (".mp4" if kind == "hls" else ".bin"), "concurrency": 2,
+                    "speed_limit_kib": 1, "proxy": "hls-downloader://direct-proxy"}})
+                tid = next(e["event"]["snapshot"]["task_id"] for e in created["events"]
+                           if e["event"]["kind"] == "task_created")
+                action(tid, "start")
+                wait(lambda: any(r["path"] == ("/slow-hls/source.ts" if kind == "hls" else path)
+                                 for r in requests), name + ": no body request", 15)
+                time.sleep(.35)
+                cache = downloads / ".hls-tasks" / tid
+                assert cache.is_dir(), cache
+                started = time.monotonic()
+                action(tid, "delete")
+                elapsed = time.monotonic() - started
+                assert elapsed < 3, (name, elapsed)
+                assert all(t["task_id"] != tid for t in tasks())
+                assert not cache.exists(), cache
+                assert not (downloads / (name + (".mp4" if kind == "hls" else ".bin"))).exists()
+                report["checks"].append({"name": name + ": delete stops throttled worker and removes cache",
+                                         "control_seconds": elapsed})
         report["passed"] = True
     except Exception:
         report["error"] = traceback.format_exc()

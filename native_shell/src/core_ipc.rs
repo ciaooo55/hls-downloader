@@ -816,39 +816,45 @@ impl NamedPipeClient {
     pub fn connect(name: &str, timeout_ms: u32) -> Result<Self, String> {
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
-        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE};
         use windows_sys::Win32::Storage::FileSystem::{
             CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
             OPEN_EXISTING,
         };
         use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
         let wide_name = wide(name);
-        if unsafe { WaitNamedPipeW(wide_name.as_ptr(), timeout_ms) } == 0 {
-            return Err(format!(
-                "WaitNamedPipeW failed: {}",
-                std::io::Error::last_os_error()
-            ));
+        let started = std::time::Instant::now();
+        loop {
+            let handle = unsafe {
+                CreateFileW(
+                    wide_name.as_ptr(),
+                    FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+                    0,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle != INVALID_HANDLE_VALUE {
+                return Ok(Self {
+                    stream: unsafe { File::from_raw_handle(handle as _) },
+                });
+            }
+            let error = std::io::Error::last_os_error();
+            let remaining = timeout_ms
+                .saturating_sub(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
+            if error.raw_os_error() != Some(ERROR_PIPE_BUSY as i32) || remaining == 0 {
+                return Err(format!("CreateFileW pipe failed: {error}"));
+            }
+            // WaitNamedPipe 不预留实例；其他客户端可能抢先打开，必须在同一总时限内重试。
+            if unsafe { WaitNamedPipeW(wide_name.as_ptr(), remaining) } == 0 {
+                return Err(format!(
+                    "WaitNamedPipeW failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
         }
-        let handle = unsafe {
-            CreateFileW(
-                wide_name.as_ptr(),
-                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
-                0,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                std::ptr::null_mut(),
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(format!(
-                "CreateFileW pipe failed: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(Self {
-            stream: unsafe { File::from_raw_handle(handle as _) },
-        })
     }
 
     pub fn into_file(self) -> std::fs::File {
@@ -1707,8 +1713,9 @@ mod tests {
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-            let mut client = client
-                .unwrap_or_else(|| panic!("serve_loop_with_ready connection {round} never appeared"));
+            let mut client = client.unwrap_or_else(|| {
+                panic!("serve_loop_with_ready connection {round} never appeared")
+            });
             let payload = b"1234";
             let mut frame = (payload.len() as u32).to_le_bytes().to_vec();
             frame.extend_from_slice(payload);
@@ -1729,5 +1736,57 @@ mod tests {
         }
 
         stop.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn competing_pipe_clients_connect_within_their_deadline() {
+        let name = format!(r"\\.\pipe\HLSDownloader.contention.{}", std::process::id());
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|_| CorePipeResponse::Hello {
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
+                pid: 0,
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_stop = Arc::clone(&stop);
+        let server_name = name.clone();
+        let server = thread::spawn(move || {
+            NamedPipeServer::new(server_name).serve_loop_with_ready(server_stop, handler, ready_tx)
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let clients: Vec<_> = (0..16)
+            .map(|_| {
+                let name = name.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let mut errors = Vec::new();
+                    for _ in 0..8 {
+                        barrier.wait();
+                        let result = NamedPipeClient::connect(&name, 2_000)
+                            .and_then(|mut client| client.request(&hello_request()));
+                        if let Err(error) = result {
+                            errors.push(error);
+                        }
+                    }
+                    errors
+                })
+            })
+            .collect();
+        let errors: Vec<_> = clients
+            .into_iter()
+            .flat_map(|client| client.join().unwrap())
+            .collect();
+        stop.store(true, Ordering::SeqCst);
+        server.join().unwrap().unwrap();
+        assert!(
+            errors.is_empty(),
+            "competing connections failed: {errors:?}"
+        );
     }
 }

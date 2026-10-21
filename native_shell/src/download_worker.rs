@@ -4515,6 +4515,7 @@ fn task_throttle_context(
         queue_limit_kib: profile.speed_limit_kib,
         task_id: task_id.to_string(),
         task_limit_kib: u64::from(spec.speed_limit_kib),
+        control: TaskPaths::for_task(task_id, spec)?.control,
     })
 }
 

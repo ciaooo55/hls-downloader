@@ -430,11 +430,15 @@ fn transfer_from_session(
         if count == 0 {
             break;
         }
+        crate::net_policy::consume(count, || match read_control(control).as_str() {
+            "cancel" => Err("canceled".to_string()),
+            "pause" => Err("paused".to_string()),
+            _ => Ok(()),
+        })?;
         local
             .write_all(&buf[..count])
             .map_err(|error| error.to_string())?;
         written += count as u64;
-        crate::net_policy::consume(count);
         crate::http_engine::write_progress(&progress, written, total, 0.0, "downloading");
     }
     local.flush().map_err(|error| error.to_string())?;

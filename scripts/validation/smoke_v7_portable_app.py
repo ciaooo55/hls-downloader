@@ -35,9 +35,18 @@ class Pipe:
         self.kernel.PeekNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
                                              wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        self.handle = self.kernel.CreateFileW(pipe_name, 0xc0000000, 0, None, 3, 0, None)
-        if self.handle == ctypes.c_void_p(-1).value:
-            raise ctypes.WinError(ctypes.get_last_error())
+        self.kernel.WaitNamedPipeW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD]
+        deadline = time.monotonic() + 2
+        while True:
+            self.handle = self.kernel.CreateFileW(pipe_name, 0xc0000000, 0, None, 3, 0, None)
+            if self.handle != ctypes.c_void_p(-1).value:
+                break
+            error = ctypes.get_last_error()
+            if error != 231 or time.monotonic() >= deadline:
+                raise ctypes.WinError(error)
+            remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
+            if not self.kernel.WaitNamedPipeW(pipe_name, remaining_ms):
+                raise ctypes.WinError(ctypes.get_last_error())
 
     def read(self, size):
         data = bytearray()

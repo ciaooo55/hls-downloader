@@ -18,6 +18,7 @@ mod sys_time {
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -60,6 +61,7 @@ pub struct ThrottleContext {
     pub queue_limit_kib: u64,
     pub task_id: String,
     pub task_limit_kib: u64,
+    pub control: PathBuf,
 }
 
 fn budget() -> &'static Mutex<BudgetState> {
@@ -470,14 +472,18 @@ pub fn with_throttle_context<T>(context: Option<ThrottleContext>, work: impl FnO
     work()
 }
 
-fn consume_bucket(scope: Option<&str>, nbytes: usize) {
+fn consume_bucket<E>(
+    scope: Option<&str>,
+    nbytes: usize,
+    check: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     let mut remaining = nbytes as f64;
     if remaining <= 0.0 {
-        return;
+        return Ok(());
     }
     loop {
         let Ok(mut state) = throttle().lock() else {
-            return;
+            return Ok(());
         };
         if scope == Some("global") {
             refresh_global_limit_at(&mut state, chrono_minutes_now());
@@ -490,7 +496,7 @@ fn consume_bucket(scope: Option<&str>, nbytes: usize) {
             None => &mut state.legacy,
         };
         if bucket.limit_bps <= 0.0 {
-            return;
+            return Ok(());
         }
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
@@ -502,46 +508,60 @@ fn consume_bucket(scope: Option<&str>, nbytes: usize) {
             remaining -= take;
         }
         if remaining <= 0.0 {
-            return;
+            return Ok(());
         }
         let wait = Duration::from_secs_f64(
             (remaining.min(bucket.limit_bps) / bucket.limit_bps).max(0.001),
         );
         drop(state);
-        std::thread::sleep(wait);
+        check()?;
+        std::thread::sleep(wait.min(Duration::from_millis(50)));
     }
 }
 
-fn consume_hourly_quota(nbytes: usize) {
+fn consume_hourly_quota<E>(
+    nbytes: usize,
+    check: &mut impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     let mut remaining = nbytes as u64;
     while remaining > 0 {
         let Ok(mut state) = throttle().lock() else {
-            return;
+            return Ok(());
         };
         if state.hourly.limit_bytes == 0 {
-            return;
+            return Ok(());
         }
         let (reserved, wait) = state
             .hourly
             .reserve(Instant::now(), remaining, HOURLY_QUOTA_WINDOW);
         remaining = remaining.saturating_sub(reserved);
         if remaining == 0 {
-            return;
+            return Ok(());
         }
         drop(state);
-        std::thread::sleep(wait.max(Duration::from_millis(1)));
+        check()?;
+        std::thread::sleep(wait.clamp(Duration::from_millis(1), Duration::from_millis(50)));
     }
+    Ok(())
 }
 
-pub fn consume(nbytes: usize) {
+// 仅在限速/配额实际等待时轮询控制；无上限的热路径不增加控制文件 I/O。
+pub fn consume<E>(nbytes: usize, mut check: impl FnMut() -> Result<(), E>) -> Result<(), E> {
     let Some(context) = current_throttle_context() else {
-        consume_bucket(None, nbytes);
-        return;
+        return consume_bucket(None, nbytes, &mut check);
     };
-    consume_bucket(Some("global"), nbytes);
-    consume_bucket(Some(&format!("queue:{}", context.queue_id)), nbytes);
-    consume_bucket(Some(&format!("task:{}", context.task_id)), nbytes);
-    consume_hourly_quota(nbytes);
+    consume_bucket(Some("global"), nbytes, &mut check)?;
+    consume_bucket(
+        Some(&format!("queue:{}", context.queue_id)),
+        nbytes,
+        &mut check,
+    )?;
+    consume_bucket(
+        Some(&format!("task:{}", context.task_id)),
+        nbytes,
+        &mut check,
+    )?;
+    consume_hourly_quota(nbytes, &mut check)
 }
 
 pub fn schedule_window_active(start: &str, end: &str) -> bool {
@@ -878,8 +898,28 @@ mod tests {
     fn throttle_unlimited_does_not_sleep() {
         configure_limit_kib(0);
         let started = Instant::now();
-        consume(1024 * 1024);
+        consume(1024 * 1024, || -> Result<(), ()> {
+            panic!("unlimited transfer must not poll control")
+        })
+        .unwrap();
         assert!(started.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn throttle_wait_can_stop_and_recheck_live_configuration() {
+        let scope = "fixture:interruptible-wait";
+        configure_scoped_limit(scope, 1);
+        assert_eq!(
+            consume_bucket(Some(scope), 64 * 1024, &mut || Err("paused")),
+            Err("paused")
+        );
+        consume_bucket(Some(scope), 64 * 1024, &mut || {
+            // 同步回调可取得限速锁，且解除限速后不再等待剩余字节。
+            configure_scoped_limit(scope, 0);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+        clear_scoped_limit(scope);
     }
 
     #[test]
@@ -895,6 +935,7 @@ mod tests {
             queue_limit_kib: 1024,
             task_id: "one".into(),
             task_limit_kib: 512,
+            control: PathBuf::new(),
         };
         let second = ThrottleContext {
             task_id: "two".into(),
@@ -931,7 +972,7 @@ mod tests {
                 let barrier = std::sync::Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    consume_bucket(Some(scope), 32 * 1024);
+                    consume_bucket(Some(scope), 32 * 1024, &mut || Ok::<(), ()>(())).unwrap();
                 })
             })
             .collect();

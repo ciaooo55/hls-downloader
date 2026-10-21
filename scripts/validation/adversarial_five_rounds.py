@@ -120,6 +120,8 @@ def run(args):
     case('subtitle-prefetch', 'smoke_extension_subtitles.py', [*subtitle_args, '--capture', 'prefetch'], 240)
     case('http-boundaries', 'smoke_v7_http_boundaries.py', ['--engine', engine], 300)
     case('http-stall', 'smoke_v7_http_stall.py', ['--engine', engine, '--root', work / 'http-stall'], 180)
+    case('http-throttle', 'smoke_v7_http_stall.py', [
+        '--engine', engine, '--root', work / 'http-throttle', '--throttle-only'], 180)
     case('closed-diagnostics', 'smoke_v7_closed_diagnostics.py', ['--engine', engine], 120)
     case('hls-segment-suffix', 'smoke_v7_hls_segment_suffix.py', ['--engine', engine, '--tools', resources], 300)
     case('file-extensions', 'smoke_v7_file_extensions.py', ['--runtime', args.runtime], 240)
@@ -148,7 +150,7 @@ def run(args):
     # LAN sharing intentionally opens an external listener and may prompt Windows.
     # Run it after UI acceptance; each round uses a fresh Sandbox.
     case('protocols', 'smoke_v7_protocol_features.py', ['--engine', engine, '--no-firewall-rule'], 600)
-    expected_checks = 14 if args.round == 5 else 13
+    expected_checks = 15 if args.round == 5 else 14
     result['passed'] = not result.get('fixture_error') and len(result['checks']) == expected_checks and all(c['passed'] for c in result['checks'])
     save()
     return 0 if result['passed'] else 1

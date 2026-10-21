@@ -281,6 +281,13 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
                     if count == 0 {
                         break;
                     }
+                    crate::net_policy::consume(count, || {
+                        if stop_reader_worker.load(std::sync::atomic::Ordering::Acquire) {
+                            Err("stopped".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    })?;
                     file.write_all(&buf[..count])
                         .map_err(|error| error.to_string())?;
                     downloaded += count as u64;
@@ -291,7 +298,6 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
                         0.0,
                         "downloading",
                     );
-                    crate::net_policy::consume(count);
                 }
                 file.flush().map_err(|error| error.to_string())?;
                 Ok(downloaded)

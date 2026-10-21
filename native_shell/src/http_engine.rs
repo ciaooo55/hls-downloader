@@ -805,6 +805,11 @@ fn fetch_bytes_with_transport(
     fs::create_dir_all(&dir).map_err(|err| EngineError::Failed(err.to_string()))?;
     let control = dir.join("control");
     fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
+    // 子请求继承下载任务的控制文件；不得把父任务的暂停状态重写成 run。
+    let control = crate::net_policy::current_throttle_context()
+        .map(|context| context.control)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(control);
     let job = Job {
         url: url.to_string(),
         headers: headers.clone(),
@@ -837,7 +842,7 @@ fn fetch_bytes_with_transport(
         reader
             .read_to_end(&mut body)
             .map_err(|err| EngineError::Failed(err.to_string()))?;
-        crate::net_policy::consume(body.len());
+        crate::net_policy::consume(body.len(), || check_control(&job.control))?;
         Ok((status, body))
     })();
     let _ = fs::remove_dir_all(dir);
@@ -881,6 +886,10 @@ fn fetch_bytes_range_with_transport(
     let result = (|| {
         let control = dir.join("control");
         fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
+        let control = crate::net_policy::current_throttle_context()
+            .map(|context| context.control)
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(control);
         let job = Job {
             url: url.to_string(),
             headers: headers.clone(),
@@ -937,7 +946,7 @@ fn fetch_bytes_range_with_transport(
                 body.len()
             )));
         }
-        crate::net_policy::consume(body.len());
+        crate::net_policy::consume(body.len(), || check_control(&job.control))?;
         Ok(body)
     })();
     let _ = fs::remove_dir_all(dir);
@@ -1046,7 +1055,7 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
         if count == 0 {
             break;
         }
-        crate::net_policy::consume(count);
+        crate::net_policy::consume(count, || check_control(&job.control))?;
         file.write_all(&buffer[..count])
             .map_err(|err| EngineError::Failed(err.to_string()))?;
         downloaded += count as u64;
@@ -1800,7 +1809,14 @@ fn fetch_range(
             let remain = current_stop.saturating_add(1).saturating_sub(cursor) as usize;
             let take = count.min(remain);
             if take > 0 {
-                crate::net_policy::consume(take);
+                if let Err(error) = crate::net_policy::consume(take, || check_control(&job.control)) {
+                    persist_range_progress(job, file, completed, start, cursor)?;
+                    return Err(match error {
+                        EngineError::Pause => EngineErrorCode::Pause,
+                        EngineError::Cancel => EngineErrorCode::Cancel,
+                        other => EngineErrorCode::Failed(other.to_string()),
+                    });
+                }
             }
             if take > 0 && file.write_all(&buffer[..take]).is_err() {
                 return Err(EngineErrorCode::Failed("write failed".into()));

@@ -1565,6 +1565,7 @@ fn download_from_peer_ex_with_telemetry(
             if crate::crypto_lite::sha1(&piece) != *hash {
                 return Err(format!("piece {index} hash mismatch"));
             }
+            crate::net_policy::consume(piece.len(), || check_torrent_control(control))?;
             file.seek(SeekFrom::Start(start))
                 .map_err(|error| error.to_string())?;
             file.write_all(&piece).map_err(|error| error.to_string())?;
@@ -1578,7 +1579,6 @@ fn download_from_peer_ex_with_telemetry(
                 0.0,
                 "downloading",
             );
-            crate::net_policy::consume(piece.len());
         }
     }
     telemetry.seed_count =
