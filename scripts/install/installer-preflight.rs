@@ -2,7 +2,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 fn main() -> ExitCode {
@@ -34,15 +34,19 @@ fn prepare_install() -> Result<(), String> {
         .as_nanos();
     let script =
         std::env::temp_dir().join(format!("HLSInstaller-{}-{nonce}.ps1", std::process::id()));
+    let diagnostic = script.with_extension("log");
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&script)
         .map_err(|error| format!("无法创建临时停机脚本: {error}"))?;
-    // Windows PowerShell 5.1 需要 BOM 才能正确读取中文。
+    // Windows PowerShell 5.1 需要且只能有一个 BOM；源脚本本身也可能带 BOM。
+    // 重复 BOM 会让 param 不再位于脚本起始处，导致升级和卸载在解析阶段失败。
+    let source = include_bytes!("shutdown-running.ps1");
+    let source = source.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(source);
     let written = file
         .write_all(b"\xEF\xBB\xBF")
-        .and_then(|_| file.write_all(include_bytes!("shutdown-running.ps1")));
+        .and_then(|_| file.write_all(source));
     drop(file);
     let result = (|| {
         written.map_err(|error| error.to_string())?;
@@ -50,6 +54,17 @@ fn prepare_install() -> Result<(), String> {
         let mut command = Command::new(
             PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
         );
+        // MSI 的窗口型助手没有可见控制台，失败时保留停机脚本的真实原因。
+        let log = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&diagnostic)
+            .map_err(|error| error.to_string())?;
+        command
+            .stdout(Stdio::from(
+                log.try_clone().map_err(|error| error.to_string())?,
+            ))
+            .stderr(Stdio::from(log));
         command
             .args([
                 "-NoProfile",
@@ -83,5 +98,8 @@ fn prepare_install() -> Result<(), String> {
         }
     })();
     let _ = std::fs::remove_file(script);
+    if result.is_ok() {
+        let _ = std::fs::remove_file(diagnostic);
+    }
     result
 }
