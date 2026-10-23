@@ -1,0 +1,159 @@
+{
+  "passed": true,
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+  "checks": [
+    {
+      "name": "real FTP password login, pause, REST resume and SHA256",
+      "passed": true,
+      "actual": {
+        "paused_bytes": 4194304,
+        "bytes": 8388608,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "real SFTP password login, pinned host key, pause, offset resume and SHA256",
+      "passed": true,
+      "actual": {
+        "paused_bytes": 1834917,
+        "bytes": 8388608,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "cURL import -> actual authenticated POST with Cookie and exact body",
+      "passed": true,
+      "actual": {
+        "bytes": 8388608,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+        "secrets_absent_from_snapshot": true
+      }
+    },
+    {
+      "name": "checksum match completes; mismatch fails without publishing corrupt file",
+      "passed": true,
+      "actual": {
+        "correct_verified": true,
+        "incorrect_failed": "checksum mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, got 7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "export JSON -> delete record -> import, preserving configuration and future schedule",
+      "passed": true,
+      "actual": {
+        "configuration_preserved": true,
+        "runtime_state_not_imported": true,
+        "future_schedule_prevents_transfer": true
+      }
+    },
+    {
+      "name": "scheduling and rate: near-term schedule waits then downloads with SHA256",
+      "passed": true,
+      "actual": {
+        "scheduled_start_at": "2026-10-23T06:32:36Z",
+        "pre_due_status": "queued",
+        "pre_due_downloaded_bytes": 0,
+        "pre_due_http_requests": 0,
+        "post_due_status": "completed",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "scheduling and rate: measured per-task KiB limit then unlimited completion",
+      "passed": true,
+      "actual": {
+        "limit_kib": 64,
+        "observation_seconds": 3.875,
+        "observed_downloaded_delta": 262144,
+        "allowed_delta_bytes": 778240,
+        "paused_bytes": 524288,
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "expired signed URL -> visible failure -> refresh URL and resume same task",
+      "passed": true,
+      "actual": {
+        "same_task_id": "task-10",
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "exceptions HTTP 403 visible classified failure and same-task recovery",
+      "passed": true,
+      "actual": {
+        "error_code": "HTTP_403",
+        "hint": "访问凭据或短效签名可能已过期，请回到原网页刷新后重新发送资源",
+        "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "exceptions HTTP 404 visible classified failure and same-task recovery",
+      "passed": true,
+      "actual": {
+        "error_code": "HTTP_404",
+        "hint": "资源地址已失效或文件已被移动，请回到来源页面重新识别",
+        "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "exceptions HTTP 200 login HTML is rejected as media without false success",
+      "passed": true,
+      "actual": {
+        "error": "服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试",
+        "media_file_not_published": true
+      }
+    },
+    {
+      "name": "exceptions invalid save directory fails clearly and valid directory recovers",
+      "passed": true,
+      "actual": {
+        "failure": {
+          "type": "error",
+          "request_id": 2,
+          "code": "core_command_failed",
+          "message": "下载目录必须位于默认下载根目录内"
+        },
+        "blocking_file_preserved": true,
+        "valid_directory_recovers": true
+      }
+    },
+    {
+      "name": "exceptions interrupted response fails without corrupt output then retry completes same task",
+      "passed": true,
+      "actual": {
+        "failure": "range 32768-2097151 made no progress after 5 attempts: range response ended without data",
+        "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+        "same_task_id": "task-15"
+      }
+    },
+    {
+      "name": "exceptions offline endpoint refusal is visible and recovered after link refresh",
+      "passed": true,
+      "actual": {
+        "failure": "WinHttpSendRequest 12029",
+        "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "exceptions real default HTTP response timeout and same-task recovery",
+      "passed": true,
+      "actual": {
+        "failure": "WinHttpReceiveResponse 12002",
+        "hint": "查看任务日志确认失败位置，修正网络或站点设置后重试",
+        "recovered_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "LAN share actual published address serves correct Range; stop revokes address",
+      "passed": true,
+      "actual": {
+        "lan_url": "http://172.18.104.156:52568/media/m82f9de9946148c2782e35cb4d60aab32/file.bin",
+        "range_bytes_match": true,
+        "stop_revokes_url": true
+      }
+    }
+  ],
+  "sftp_host_key_persisted": true,
+  "isolated_process_stopped": true
+}

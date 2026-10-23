@@ -444,6 +444,8 @@ fn load_completed_ranges(job: &Job) -> Option<Vec<(u64, u64)>> {
     if !checkpoint_matches(job, &value) {
         return None;
     }
+    // 必须在 set_len 预分配之前校验；补长后的零字节不能充当已下载数据。
+    let output_len = fs::metadata(&job.output).ok()?.len();
     let items = value.get("ranges").and_then(|item| item.as_array())?;
     let ranges: Vec<(u64, u64)> = items
         .iter()
@@ -456,7 +458,7 @@ fn load_completed_ranges(job: &Job) -> Option<Vec<(u64, u64)>> {
     if job.total == 0
         || ranges
             .iter()
-            .any(|(start, end)| *start >= job.total || *end >= job.total)
+            .any(|(start, end)| *start >= job.total || *end >= job.total || *end >= output_len)
     {
         return None;
     }
@@ -657,7 +659,13 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     for (index, url) in urls.into_iter().enumerate() {
         let mut attempt = job.clone();
         attempt.url = url;
-        if !post && !attempt.sequential && (attempt.total == 0 || index > 0) {
+        if !post
+            && !attempt.sequential
+            && (attempt.total == 0
+                || index > 0
+                || (strong_etag(&attempt.etag).is_empty()
+                    && attempt.last_modified.trim().is_empty()))
+        {
             match probe_resource(&attempt) {
                 Ok(probe) => {
                     if let Some((len, etag)) = &identity {
@@ -683,7 +691,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                             attempt.total = total;
                         }
                     }
-                    if attempt.etag.is_empty() {
+                    if strong_etag(&attempt.etag).is_empty() {
                         attempt.etag = probe.etag;
                     }
                     if attempt.last_modified.is_empty() {
@@ -1147,7 +1155,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     }
     // 只有"从零开始"的下载才能把 200 解释成服务器不支持 Range：此时没有任何已保留片段，
     // 续传偏移也为 0，整包 body 可以安全地作为完整资源重新下载。
-    let fresh_start = !output_existed && loaded.is_empty() && job.resume_from == 0;
+    // 失效检查点的残留文件不会复用，也属于从零开始；文件存在本身不代表有效断点。
+    let fresh_start = loaded.is_empty() && job.resume_from == 0;
     let workers = workers.min(pending.len());
     let scheduler = Arc::new(RangeScheduler::new(pending, workers));
     let downloaded = Arc::new(AtomicU64::new(already));
@@ -1809,7 +1818,8 @@ fn fetch_range(
             let remain = current_stop.saturating_add(1).saturating_sub(cursor) as usize;
             let take = count.min(remain);
             if take > 0 {
-                if let Err(error) = crate::net_policy::consume(take, || check_control(&job.control)) {
+                if let Err(error) = crate::net_policy::consume(take, || check_control(&job.control))
+                {
                     persist_range_progress(job, file, completed, start, cursor)?;
                     return Err(match error {
                         EngineError::Pause => EngineErrorCode::Pause,
@@ -3547,8 +3557,14 @@ mod tests {
         let scheduler = RangeScheduler::new(
             vec![
                 WorkRange { start: 0, end: 99 },
-                WorkRange { start: 200, end: 299 },
-                WorkRange { start: 100, end: 199 },
+                WorkRange {
+                    start: 200,
+                    end: 299,
+                },
+                WorkRange {
+                    start: 100,
+                    end: 199,
+                },
             ],
             2,
         );
@@ -4305,10 +4321,10 @@ mod tests {
                     } else {
                         end_text.parse().unwrap()
                     };
-                    let slice = &body[start..=end.min(body.len() - 1)];
+                    let actual_end = end.min(body.len() - 1);
+                    let slice = &body[start..=actual_end];
                     let header = format!(
-                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len() - 1,
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{actual_end}/{}\r\nContent-Length: {}\r\nETag: \"native-test\"\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
                         body.len(),
                         slice.len()
                     );
@@ -4808,6 +4824,63 @@ mod tests {
     }
 
     #[test]
+    fn truncated_checkpoint_downloads_missing_data_instead_of_publishing_zeroes() {
+        let body: &'static [u8] = Box::leak(
+            (0..70 * 1024)
+                .map(|index| (index % 251 + 1) as u8)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let url = serve_recording_ranges(body, Arc::clone(&seen));
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
+        fs::write(&job.output, &body[..16 * 1024]).unwrap();
+        save_completed_ranges(&job, &[(0, job.total - 1)]).unwrap();
+
+        run_job(&job).unwrap();
+
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        assert!(!seen.lock().unwrap().is_empty());
+        assert!(!completed_ranges_path(&job).exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn known_size_without_strong_validator_probes_before_reusing_checkpoint() {
+        let body: &'static [u8] = Box::leak(vec![42; 70 * 1024].into_boxed_slice());
+        for etag in ["", "W/\"native-test\""] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let url = serve_recording_ranges(body, Arc::clone(&seen));
+            let (mut job, dir) = temp_job(&url, false, body.len() as u64, 2);
+            let prefix = 64 * 1024;
+            fs::write(&job.output, &body[..prefix]).unwrap();
+            save_completed_ranges(&job, &[(0, prefix as u64 - 1)]).unwrap();
+            job.etag = etag.to_string();
+
+            run_job(&job).unwrap();
+
+            assert_eq!(fs::read(&job.output).unwrap(), body);
+            let ranges = seen.lock().unwrap();
+            assert_eq!(ranges.first().map(String::as_str), Some("bytes=0-0"));
+            let transferred: usize = ranges
+                .iter()
+                .map(|range| {
+                    let (start, end) = range
+                        .strip_prefix("bytes=")
+                        .unwrap()
+                        .split_once('-')
+                        .unwrap();
+                    end.parse::<usize>().unwrap() - start.parse::<usize>().unwrap() + 1
+                })
+                .sum();
+            assert_eq!(transferred, 1 + body.len() - prefix);
+            assert!(!completed_ranges_path(&job).exists());
+            drop(ranges);
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
     fn completed_checkpoint_is_removed_without_network_work() {
         let body: &'static [u8] = b"already-complete-payload";
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -5009,6 +5082,21 @@ mod tests {
     }
 
     #[test]
+    fn invalid_checkpoint_restarts_sequentially_when_server_ignores_range() {
+        let body: &'static [u8] = b"range-less-server-payload-0123456789";
+        let url = serve_full_body_ignoring_range_without_etag(body);
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 2);
+        fs::write(&job.output, b"stale-prefix").unwrap();
+        save_completed_ranges(&job, &[(0, job.total - 1)]).unwrap();
+
+        run_job(&job).unwrap();
+
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        assert!(!completed_ranges_path(&job).exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn partial_download_still_fails_when_server_ignores_range() {
         // 已有保留片段时，200 整包无法按续传偏移拼接，必须继续失败而不是污染文件。
         let body: &'static [u8] = b"range-less-server-payload-0123456789";
@@ -5018,7 +5106,7 @@ mod tests {
         fs::write(
             completed_ranges_path(&job),
             format!(
-                r#"{{"version":2,"resource_key":"{}","total":{},"ranges":[[0,7]]}}"#,
+                r#"{{"version":2,"resource_key":"{}","etag":"\"native-test\"","total":{},"ranges":[[0,7]]}}"#,
                 job.resource_key, job.total
             ),
         )

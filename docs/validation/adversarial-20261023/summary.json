@@ -1,0 +1,148 @@
+{
+  "passed": true,
+  "source_commit": "00cd089e7f643dab3ec1847ce8a69a8c5864b614",
+  "source_patch_sha256": "dbd243da2ca767a78583ebdcf950ed96740c862840b1d34a506a3abb79158e94",
+  "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221",
+  "checks": [
+    {
+      "name": "firefox-takeover",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 119.234
+    },
+    {
+      "name": "workbench-functional",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 342.187
+    },
+    {
+      "name": "workbench-destructive",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 128.516
+    },
+    {
+      "name": "workbench-magnet",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 51.64
+    },
+    {
+      "name": "download-playback-cleanup",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 124.672
+    },
+    {
+      "name": "msi-FailureRollback",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 94.5
+    },
+    {
+      "name": "msi-Upgrade",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 80.422
+    },
+    {
+      "name": "rust-hls_native_shell-100fa787ddcb0e38",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 43.235
+    },
+    {
+      "name": "rust-HLSDownloaderNativeHost-9c9eaa7aa6a3668d",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.078
+    },
+    {
+      "name": "rust-HLSDownloaderUpdater-d650a078cb4ab8a2",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.078
+    },
+    {
+      "name": "rust-hls_downloader_engine-70877aa55e95a35a",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.062
+    },
+    {
+      "name": "rust-cast_simulated_lan_device-da520f09b06c79b6",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 14.656
+    },
+    {
+      "name": "rust-concurrent_dispatch-db6187f708bb7e0d",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.156
+    },
+    {
+      "name": "rust-handoff_restore_order-810953e98fd7452a",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.078
+    },
+    {
+      "name": "local-ftps",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 13.625
+    },
+    {
+      "name": "installer",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 105.437
+    },
+    {
+      "name": "download-playback-vgpu",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 148.656
+    }
+  ],
+  "resume_rounds": [
+    {
+      "name": "resume-faults-verified-1.json",
+      "passed": true,
+      "checks": 5,
+      "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221"
+    },
+    {
+      "name": "resume-faults-verified-2.json",
+      "passed": true,
+      "checks": 5,
+      "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221"
+    },
+    {
+      "name": "resume-faults-verified-3.json",
+      "passed": true,
+      "checks": 5,
+      "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221"
+    },
+    {
+      "name": "resume-faults-verified-4.json",
+      "passed": true,
+      "checks": 5,
+      "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221"
+    },
+    {
+      "name": "resume-faults-verified-5.json",
+      "passed": true,
+      "checks": 5,
+      "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221"
+    }
+  ],
+  "superseded_result": "final-summary.json installer step failed in pre-install fixture; corrected scheduling and retested in verified-summary.json",
+  "limitations": [
+    "Paid cloud subtitle provider and physical casting/TVBox receivers not tested",
+    "Five rounds apply to resume/log fault injection, not five complete GUI matrices",
+    "Unsigned candidate built from baseline plus source.patch; the matching source and validation evidence are retained in a local main commit; no push/release performed"
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "passed": false,
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+  "checks": [
+    {
+      "name": "valid checkpoint skips durable prefix",
+      "passed": true,
+      "status": "completed",
+      "error": null,
+      "requests": [
+        {
+          "path": "/valid",
+          "range": "bytes=262144-524287",
+          "bytes": 262144,
+          "if_range": "\"resume-fixture\""
+        },
+        {
+          "path": "/valid",
+          "range": "bytes=524288-786431",
+          "bytes": 262144,
+          "if_range": "\"resume-fixture\""
+        },
+        {
+          "path": "/valid",
+          "range": "bytes=786432-1048575",
+          "bytes": 262144,
+          "if_range": "\"resume-fixture\""
+        }
+      ],
+      "downloaded_bytes": 1048576,
+      "expected_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f",
+      "actual_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f"
+    },
+    {
+      "name": "truncated local file never publishes corrupt completion",
+      "passed": false,
+      "status": "completed",
+      "error": null,
+      "requests": [],
+      "downloaded_bytes": 1048576,
+      "expected_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f",
+      "actual_sha256": "48ae18314aeb24c740d04f4b812c9dc10e20da237c29f20f168c4dd7a5c211e3",
+      "failure": "task completed with corrupted bytes after truncation",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAWork\\source\\scripts\\validation\\resume_faults.py\", line 67, in case\n    assert record['actual_sha256']==record['expected_sha256'],'task completed with corrupted bytes after truncation'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: task completed with corrupted bytes after truncation\n"
+    },
+    {
+      "name": "known size without supplied validator reuses verified prefix",
+      "passed": false,
+      "status": "completed",
+      "error": null,
+      "requests": [
+        {
+          "path": "/missing-validator",
+          "range": "bytes=0-262143",
+          "bytes": 262144,
+          "if_range": null
+        },
+        {
+          "path": "/missing-validator",
+          "range": "bytes=262144-524287",
+          "bytes": 262144,
+          "if_range": null
+        },
+        {
+          "path": "/missing-validator",
+          "range": "bytes=524288-786431",
+          "bytes": 262144,
+          "if_range": null
+        },
+        {
+          "path": "/missing-validator",
+          "range": "bytes=786432-1048575",
+          "bytes": 262144,
+          "if_range": null
+        }
+      ],
+      "downloaded_bytes": 1048576,
+      "expected_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f",
+      "actual_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f",
+      "failure": "downloaded already checkpointed prefix again",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAWork\\source\\scripts\\validation\\resume_faults.py\", line 70, in case\n    assert transfers and all(int(r['range'][6:].split('-')[0])>=prefix for r in transfers),'downloaded already checkpointed prefix again'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: downloaded already checkpointed prefix again\n"
+    },
+    {
+      "name": "invalid checkpoint can restart when server ignores Range",
+      "passed": true,
+      "status": "completed",
+      "error": null,
+      "requests": [
+        {
+          "path": "/no-range",
+          "range": "bytes=0-262143",
+          "bytes": 1048576,
+          "if_range": "\"resume-fixture\""
+        },
+        {
+          "path": "/no-range",
+          "range": "",
+          "bytes": 1048576,
+          "if_range": null
+        }
+      ],
+      "downloaded_bytes": 1048576,
+      "expected_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f",
+      "actual_sha256": "c482a43e59f95545decbab807782c877d1f4c47470437a28053cdb5438a94d6f"
+    },
+    {
+      "name": "task log retains at most 500 recent records",
+      "passed": false,
+      "count": 153
+    }
+  ]
+}

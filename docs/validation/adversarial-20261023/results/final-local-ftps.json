@@ -1,0 +1,31 @@
+{
+  "passed": true,
+  "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221",
+  "checks": [
+    {
+      "name": "local FTPS explicit/implicit TLS, REST resume and SHA256",
+      "passed": true,
+      "actual": {
+        "modes": [
+          "explicit",
+          "implicit"
+        ],
+        "bytes": 80000,
+        "sha256": "09164749480446bde1b0de9b9fc701e9c24edb417d7cf18ecef61802fb22929e",
+        "resume_checkpoints": [
+          {
+            "mode": "explicit",
+            "paused_bytes": 16384
+          },
+          {
+            "mode": "implicit",
+            "paused_bytes": 16384
+          }
+        ],
+        "server_certificate_subject": "localhost"
+      }
+    }
+  ],
+  "sftp_host_key_persisted": false,
+  "isolated_process_stopped": true
+}

@@ -1,0 +1,12 @@
+
+running 7 tests
+test tests::helper_gate_reads_the_msi_argument_without_changing_argument_order ... ok
+test tests::primary_and_rollover_signers_are_accepted_but_unrelated_signer_is_rejected ... ok
+test tests::primary_signer_still_requires_a_valid_local_trust_contract ... ok
+test tests::signer_trust_rejects_malformed_duplicate_or_unexplained_rollovers ... ok
+test tests::signer_trust_rejects_unknown_contract_values ... ok
+test tests::signer_trust_requires_a_formal_primary_identity ... ok
+test tests::windows_signer_extraction_rejects_unsigned_payload ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

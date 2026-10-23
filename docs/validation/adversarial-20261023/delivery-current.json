@@ -1,0 +1,43 @@
+{
+  "source_commit": "00cd089e7f643dab3ec1847ce8a69a8c5864b614",
+  "source_patch_sha256": "dbd243da2ca767a78583ebdcf950ed96740c862840b1d34a506a3abb79158e94",
+  "directory": "最新-20261023",
+  "assets": [
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 777,
+      "sha256": "dbb0561339150eed1243adbe4cd2ce7e52ed210e21a972f77e4a096561bc3af8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261023-未签名.msi",
+      "bytes": 203427840,
+      "sha256": "4c7a1a7b4b9152f93383f9c7f47c3d77c7c231f7f913edc63c4037305702caa9"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 329554,
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 370660,
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329533,
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    },
+    {
+      "name": "source.patch",
+      "bytes": 15196,
+      "sha256": "dbd243da2ca767a78583ebdcf950ed96740c862840b1d34a506a3abb79158e94"
+    }
+  ],
+  "unsigned": true,
+  "git_worktree_clean": false,
+  "release_ready": false,
+  "installer_acceptance": true,
+  "upgrade_acceptance": true,
+  "validation_report": "A:\\Ubuntu\\测试\\hls-downloader\\docs\\validation\\adversarial-20261023\\README.md"
+}

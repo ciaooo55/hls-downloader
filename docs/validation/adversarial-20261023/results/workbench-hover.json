@@ -1,0 +1,1374 @@
+{
+  "passed": true,
+  "runtime": "C:\\QAWork\\runtime",
+  "checks": [
+    {
+      "name": "real-pointer-hover-enter-and-leave-without-color-flash",
+      "actual": 4
+    }
+  ],
+  "controls": {
+    "hover-light/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-light/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-light/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-light/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "hover-light/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "hover-light/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "hover-light/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/深色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "hover-light/全部, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/已完成, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-light/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "hover-light/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-light/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/压缩包, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "hover-light/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "hover-light/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": false
+    },
+    "hover-light/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-light/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "hover-light/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-light/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-dark/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-dark/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-dark/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "hover-dark/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "hover-dark/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "hover-dark/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/浅色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/全部, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/已完成, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-dark/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "hover-dark/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-dark/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/压缩包, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "hover-dark/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "hover-dark/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": false
+    },
+    "hover-dark/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "hover-dark/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "hover-dark/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "hover-dark/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "main-final/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/浅色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已完成, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "main-final/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/压缩包, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "main-final/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "main-final/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": false
+    },
+    "main-final/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    }
+  },
+  "feedback": [],
+  "test_script_sha256": "e443aea599b3c090b860f7931d9bbd9f9fbc6e1fe8f394be4c16c109c5fa9e29",
+  "components": {
+    "app\\HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "f1ef05227fd820e5371ed769a9a38f8ed9a09244c4f70f31266b4136e193da86",
+    "app\\resources\\HLSDownloaderEngine.exe": "e476cd6ef9a60dd1db33eb0fa92cad32b8dca15bba34774e99e8bdc20f97f9bc"
+  },
+  "window": {
+    "x": 0,
+    "y": 0,
+    "width": 1214,
+    "height": 567,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.25,
+    "scaleY": 1.25,
+    "deviceX": 0,
+    "deviceY": 0,
+    "deviceWidth": 1518,
+    "deviceHeight": 709
+  },
+  "start_at": "hover",
+  "hover_transitions": [
+    {
+      "control": "sidebar.status.进行中",
+      "dark": false,
+      "samples": [
+        {
+          "time": 0.0,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        },
+        {
+          "time": 0.0001932999998643936,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        },
+        {
+          "time": 0.07464049999998679,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        },
+        {
+          "time": 0.1863037999999051,
+          "rgb": [
+            237.0,
+            241.0,
+            246.0
+          ]
+        },
+        {
+          "time": 0.2819801999999072,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.4642859000000499,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.5000045000001592,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.553551200000129,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.6254416000001584,
+          "rgb": [
+            233.0,
+            238.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.7587401000000682,
+          "rgb": [
+            253.0,
+            253.0,
+            254.0
+          ]
+        }
+      ],
+      "max_channel_overshoot": 0.0,
+      "image": "report-hover-timeline-00.png"
+    },
+    {
+      "control": "toolbar.设置",
+      "dark": false,
+      "samples": [
+        {
+          "time": 0.0,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        },
+        {
+          "time": 0.00016819999996187107,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        },
+        {
+          "time": 0.08233919999997852,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        },
+        {
+          "time": 0.1616055999998025,
+          "rgb": [
+            233.0,
+            238.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.3026034999998046,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.501138200000014,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.5000030999999581,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.5702367999999751,
+          "rgb": [
+            232.0,
+            237.0,
+            243.0
+          ]
+        },
+        {
+          "time": 0.6589112999999998,
+          "rgb": [
+            245.0,
+            247.0,
+            250.0
+          ]
+        },
+        {
+          "time": 0.7626901999999518,
+          "rgb": [
+            255.0,
+            255.0,
+            255.0
+          ]
+        }
+      ],
+      "max_channel_overshoot": 0.0,
+      "image": "report-hover-timeline-01.png"
+    },
+    {
+      "control": "sidebar.status.进行中",
+      "dark": true,
+      "samples": [
+        {
+          "time": 0.0,
+          "rgb": [
+            28.0,
+            31.0,
+            35.0
+          ]
+        },
+        {
+          "time": 0.00020360000007713097,
+          "rgb": [
+            28.0,
+            31.0,
+            35.0
+          ]
+        },
+        {
+          "time": 0.11077539999996588,
+          "rgb": [
+            28.0,
+            31.0,
+            36.0
+          ]
+        },
+        {
+          "time": 0.21179589999997006,
+          "rgb": [
+            41.0,
+            46.0,
+            51.0
+          ]
+        },
+        {
+          "time": 0.422384700000066,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.5000047999999424,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.5764167999998335,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.6401029999999537,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.7374697000000197,
+          "rgb": [
+            37.0,
+            41.0,
+            46.0
+          ]
+        }
+      ],
+      "max_channel_overshoot": 0.0,
+      "image": "report-hover-timeline-02.png"
+    },
+    {
+      "control": "toolbar.设置",
+      "dark": true,
+      "samples": [
+        {
+          "time": 0.0,
+          "rgb": [
+            28.0,
+            31.0,
+            35.0
+          ]
+        },
+        {
+          "time": 0.00011790000007749768,
+          "rgb": [
+            28.0,
+            31.0,
+            35.0
+          ]
+        },
+        {
+          "time": 0.0836415000001125,
+          "rgb": [
+            34.0,
+            38.0,
+            42.0
+          ]
+        },
+        {
+          "time": 0.18550329999993664,
+          "rgb": [
+            42.0,
+            47.0,
+            52.0
+          ]
+        },
+        {
+          "time": 0.3054420000000846,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.47990470000013374,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.5000022000001536,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.5746982000000571,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.6233451000000514,
+          "rgb": [
+            43.0,
+            48.0,
+            53.0
+          ]
+        },
+        {
+          "time": 0.7133124000001771,
+          "rgb": [
+            30.0,
+            33.0,
+            37.0
+          ]
+        }
+      ],
+      "max_channel_overshoot": 0.0,
+      "image": "report-hover-timeline-03.png"
+    }
+  ],
+  "normal_runtime_restored": true
+}

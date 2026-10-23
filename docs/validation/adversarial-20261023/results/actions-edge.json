@@ -1,0 +1,1428 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "real webpage hover card visible and inside viewport",
+      "actual": {
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "border": "rgb(199, 208, 220)",
+        "color": "rgb(15, 23, 42)",
+        "disabled": null,
+        "group": "video-action-group hover-open",
+        "height": 122.6875,
+        "hovered": false,
+        "label": null,
+        "outline": "rgb(15, 23, 42)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 4px 8px 0px",
+        "text": "stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+        "title": "",
+        "transform": "matrix(1, 0, 0, 1, 0, 0)",
+        "width": 292,
+        "x": 446,
+        "y": 54
+      }
+    },
+    {
+      "name": "local overlay click -> actual Native Host/Core -> completed and SHA256",
+      "actual": {
+        "bytes": 81694,
+        "sha256": "a4e137e0fbb2078725870e7a70bdd4b1734fc3bf286bb1188b70d0384808ffb7"
+      }
+    },
+    {
+      "name": "overlay more, pin/unpin and collapse buttons",
+      "actual": true
+    },
+    {
+      "name": "real drag and hover card at top-left",
+      "actual": {
+        "viewports": {
+          "child": {
+            "devicePixelRatio": 1,
+            "height": 520,
+            "width": 760
+          },
+          "frame": {
+            "height": 520,
+            "left": 10,
+            "scaleX": 1,
+            "scaleY": 1,
+            "top": 10,
+            "visibleChild": {
+              "bottom": 418,
+              "left": 0,
+              "right": 732,
+              "top": 0
+            },
+            "width": 760
+          },
+          "top": {
+            "devicePixelRatio": 1,
+            "height": 428,
+            "width": 742
+          }
+        },
+        "action_viewport": {
+          "devicePixelRatio": 1,
+          "height": 428,
+          "width": 742
+        },
+        "w3c_start": {
+          "x": 506,
+          "y": 43
+        },
+        "w3c_target": {
+          "x": 69,
+          "y": 43
+        },
+        "iframe_local_target": {
+          "x": 59,
+          "y": 33
+        },
+        "group_before": {
+          "active": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgb(0, 0, 0)",
+          "color": "rgb(0, 0, 0)",
+          "disabled": null,
+          "group": "video-action-group",
+          "height": 34,
+          "hovered": false,
+          "label": null,
+          "outline": "rgb(0, 0, 0)",
+          "shadow": "none",
+          "text": "下载视频⋯stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+          "title": "",
+          "transform": "none",
+          "width": 137,
+          "x": 446,
+          "y": 16
+        },
+        "group_after": {
+          "active": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgb(0, 0, 0)",
+          "color": "rgb(0, 0, 0)",
+          "disabled": null,
+          "group": "video-action-group hover-open",
+          "height": 34,
+          "hovered": true,
+          "label": null,
+          "outline": "rgb(0, 0, 0)",
+          "shadow": "none",
+          "text": "下载视频⋯stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+          "title": "",
+          "transform": "none",
+          "width": 137,
+          "x": 9,
+          "y": 16
+        },
+        "card": {
+          "active": false,
+          "background": "rgb(255, 255, 255)",
+          "border": "rgb(199, 208, 220)",
+          "color": "rgb(15, 23, 42)",
+          "disabled": null,
+          "group": "video-action-group hover-open",
+          "height": 122.6875,
+          "hovered": false,
+          "label": null,
+          "outline": "rgb(15, 23, 42)",
+          "shadow": "rgba(15, 23, 42, 0.12) 0px 4px 8px 0px",
+          "text": "stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+          "title": "",
+          "transform": "matrix(1, 0, 0, 1, 0, 0)",
+          "width": 292,
+          "x": 9,
+          "y": 54
+        }
+      }
+    },
+    {
+      "name": "real drag and hover card at bottom-right",
+      "actual": {
+        "viewports": {
+          "child": {
+            "devicePixelRatio": 1,
+            "height": 520,
+            "width": 760
+          },
+          "frame": {
+            "height": 520,
+            "left": 10,
+            "scaleX": 1,
+            "scaleY": 1,
+            "top": 10,
+            "visibleChild": {
+              "bottom": 418,
+              "left": 0,
+              "right": 732,
+              "top": 0
+            },
+            "width": 760
+          },
+          "top": {
+            "devicePixelRatio": 1,
+            "height": 428,
+            "width": 742
+          }
+        },
+        "action_viewport": {
+          "devicePixelRatio": 1,
+          "height": 428,
+          "width": 742
+        },
+        "w3c_start": {
+          "x": 68,
+          "y": 42
+        },
+        "w3c_target": {
+          "x": 683,
+          "y": 395
+        },
+        "iframe_local_target": {
+          "x": 673,
+          "y": 385
+        },
+        "group_before": {
+          "active": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgb(0, 0, 0)",
+          "color": "rgb(0, 0, 0)",
+          "disabled": null,
+          "group": "video-action-group hover-open",
+          "height": 34,
+          "hovered": true,
+          "label": null,
+          "outline": "rgb(0, 0, 0)",
+          "shadow": "none",
+          "text": "下载视频⋯stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+          "title": "",
+          "transform": "none",
+          "width": 137,
+          "x": 9,
+          "y": 16
+        },
+        "group_after": {
+          "active": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgb(0, 0, 0)",
+          "color": "rgb(0, 0, 0)",
+          "disabled": null,
+          "group": "video-action-group",
+          "height": 34,
+          "hovered": false,
+          "label": null,
+          "outline": "rgb(0, 0, 0)",
+          "shadow": "none",
+          "text": "下载视频⋯stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+          "title": "",
+          "transform": "none",
+          "width": 137,
+          "x": 530,
+          "y": 369
+        },
+        "card": {
+          "active": false,
+          "background": "rgb(255, 255, 255)",
+          "border": "rgb(199, 208, 220)",
+          "color": "rgb(15, 23, 42)",
+          "disabled": null,
+          "group": "video-action-group hover-open",
+          "height": 122.6875,
+          "hovered": false,
+          "label": null,
+          "outline": "rgb(15, 23, 42)",
+          "shadow": "rgba(15, 23, 42, 0.12) 0px 4px 8px 0px",
+          "text": "stream.mp4已匹配当前播放媒体文件79.8 KBlocalhost/stream.mp4下载投屏TVBox",
+          "title": "",
+          "transform": "matrix(1, 0, 0, 1, 0, 0)",
+          "width": 292,
+          "x": 460,
+          "y": 242.3125
+        }
+      }
+    },
+    {
+      "name": "resize repositions dragged controls and hover card without unintended download",
+      "actual": true
+    },
+    {
+      "name": "actual edge page zoom 100% hover bounds and clickable controls",
+      "actual": true
+    },
+    {
+      "name": "actual edge page zoom 150% hover bounds and clickable controls",
+      "actual": true
+    },
+    {
+      "name": "actual edge page zoom 200% hover bounds and clickable controls",
+      "actual": true
+    },
+    {
+      "name": "popup actually connected to installed Native Host/Core",
+      "actual": true
+    },
+    {
+      "name": "popup theme button cycles through automatic/light/dark",
+      "actual": true
+    },
+    {
+      "name": "popup toggle and restore: 自动接管",
+      "actual": true
+    },
+    {
+      "name": "popup toggle and restore: 本站 Cookie",
+      "actual": true
+    },
+    {
+      "name": "popup toggle and restore: 本站提示",
+      "actual": true
+    },
+    {
+      "name": "popup rescan and copy-link buttons",
+      "actual": true
+    },
+    {
+      "name": "popup download button -> actual local video -> completed and SHA256",
+      "actual": true
+    },
+    {
+      "name": "confirmed download has a stable check icon and no busy animation",
+      "actual": true
+    },
+    {
+      "name": "subtitle popup select and restore: 本站字幕翻译",
+      "actual": true
+    },
+    {
+      "name": "subtitle popup select and restore: 本页字幕翻译",
+      "actual": true
+    },
+    {
+      "name": "subtitle configuration stays in desktop; popup exposes only page/site controls and desktop guidance",
+      "actual": true
+    },
+    {
+      "name": "popup open desktop button",
+      "actual": true
+    },
+    {
+      "name": "popup close button closes its window and keeps webpage open",
+      "actual": true
+    }
+  ],
+  "buttons": [
+    {
+      "context": "public video download",
+      "rest": {
+        "active": false,
+        "background": "rgb(37, 99, 235)",
+        "border": "color(srgb 0.145098 0.388235 0.921569 / 0.6)",
+        "color": "rgb(255, 255, 255)",
+        "disabled": false,
+        "group": "video-action-group",
+        "height": 34,
+        "hovered": false,
+        "label": "下载当前视频",
+        "outline": "rgb(255, 255, 255)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 3px 8px 0px",
+        "text": "下载视频",
+        "title": "",
+        "transform": "none",
+        "width": 99,
+        "x": 446,
+        "y": 16
+      },
+      "hover": {
+        "active": false,
+        "background": "rgb(29, 78, 216)",
+        "border": "color(srgb 0.145098 0.388235 0.921569 / 0.6)",
+        "color": "rgb(255, 255, 255)",
+        "disabled": false,
+        "group": "video-action-group hover-open",
+        "height": 34,
+        "hovered": true,
+        "label": "下载当前视频",
+        "outline": "rgb(255, 255, 255)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 5px 14px 0px",
+        "text": "下载视频",
+        "title": "",
+        "transform": "matrix(1, 0, 0, 1, 0, -1)",
+        "width": 99,
+        "x": 446,
+        "y": 15
+      },
+      "press": {
+        "active": true,
+        "background": "rgb(29, 78, 216)",
+        "border": "color(srgb 0.145098 0.388235 0.921569 / 0.6)",
+        "color": "rgb(255, 255, 255)",
+        "disabled": false,
+        "group": "video-action-group hover-open dragging",
+        "height": 34,
+        "hovered": true,
+        "label": "下载当前视频",
+        "outline": "rgb(255, 255, 255)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 2px 6px 0px",
+        "text": "下载视频",
+        "title": "",
+        "transform": "none",
+        "width": 99,
+        "x": 446,
+        "y": 16
+      },
+      "hover_changes": [
+        "background",
+        "transform",
+        "shadow"
+      ],
+      "press_changes": [
+        "transform",
+        "shadow"
+      ]
+    },
+    {
+      "context": "public video more",
+      "rest": {
+        "active": false,
+        "background": "rgb(255, 255, 255)",
+        "border": "rgb(199, 208, 220)",
+        "color": "rgb(37, 99, 235)",
+        "disabled": false,
+        "group": "video-action-group",
+        "height": 34,
+        "hovered": false,
+        "label": "更多操作：投屏或推送当前媒体链接",
+        "outline": "rgb(37, 99, 235)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 3px 8px 0px",
+        "text": "⋯",
+        "title": "更多操作：投屏或推送当前媒体链接",
+        "transform": "none",
+        "width": 34,
+        "x": 549,
+        "y": 16
+      },
+      "hover": {
+        "active": false,
+        "background": "rgb(245, 247, 250)",
+        "border": "rgb(199, 208, 220)",
+        "color": "rgb(37, 99, 235)",
+        "disabled": false,
+        "group": "video-action-group hover-open",
+        "height": 34,
+        "hovered": true,
+        "label": "更多操作：投屏或推送当前媒体链接",
+        "outline": "rgb(37, 99, 235)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 3px 8px 0px",
+        "text": "⋯",
+        "title": "更多操作：投屏或推送当前媒体链接",
+        "transform": "matrix(1, 0, 0, 1, 0, -1)",
+        "width": 34,
+        "x": 549,
+        "y": 15
+      },
+      "press": {
+        "active": true,
+        "background": "rgb(245, 247, 250)",
+        "border": "rgb(199, 208, 220)",
+        "color": "rgb(37, 99, 235)",
+        "disabled": false,
+        "group": "video-action-group hover-open",
+        "height": 31.279998779296875,
+        "hovered": true,
+        "label": "更多操作：投屏或推送当前媒体链接",
+        "outline": "rgb(37, 99, 235)",
+        "shadow": "rgba(15, 23, 42, 0.12) 0px 3px 8px 0px",
+        "text": "⋯",
+        "title": "更多操作：投屏或推送当前媒体链接",
+        "transform": "matrix(0.92, 0, 0, 0.92, 0, 0)",
+        "width": 31.280029296875,
+        "x": 550.3599853515625,
+        "y": 17.360000610351562
+      },
+      "hover_changes": [
+        "background",
+        "transform"
+      ],
+      "press_changes": [
+        "transform"
+      ]
+    },
+    {
+      "context": "expanded overlay .pin",
+      "rest": {
+        "active": false,
+        "background": "color(srgb 0.760863 0.852471 0.824471)",
+        "border": "rgb(22, 101, 52)",
+        "color": "rgb(22, 101, 52)",
+        "disabled": false,
+        "group": null,
+        "height": 27,
+        "hovered": false,
+        "label": null,
+        "outline": "rgb(22, 101, 52)",
+        "shadow": "none",
+        "text": "已固定",
+        "title": "固定展开",
+        "transform": "none",
+        "width": 49,
+        "x": 559,
+        "y": 18
+      },
+      "hover": {
+        "active": false,
+        "background": "color(srgb 0.802745 0.853647 0.948549)",
+        "border": "rgb(22, 101, 52)",
+        "color": "rgb(22, 101, 52)",
+        "disabled": false,
+        "group": null,
+        "height": 27,
+        "hovered": true,
+        "label": null,
+        "outline": "rgb(22, 101, 52)",
+        "shadow": "none",
+        "text": "已固定",
+        "title": "固定展开",
+        "transform": "none",
+        "width": 49,
+        "x": 559,
+        "y": 18
+      },
+      "press": {
+        "active": true,
+        "background": "color(srgb 0.802745 0.853647 0.948549)",
+        "border": "rgb(22, 101, 52)",
+        "color": "rgb(22, 101, 52)",
+        "disabled": false,
+        "group": null,
+        "height": 25.37999725341797,
+        "hovered": true,
+        "label": null,
+        "outline": "rgb(22, 101, 52)",
+        "shadow": "none",
+        "text": "已固定",
+        "title": "固定展开",
+        "transform": "matrix(0.94, 0, 0, 0.94, 0, 0)",
+        "width": 46.06005859375,
+        "x": 560.469970703125,
+        "y": 18.810001373291016
+      },
+      "hover_changes": [
+        "background"
+      ],
+      "press_changes": [
+        "transform"
+      ]
+    },
+    {
+      "context": "expanded overlay .close",
+      "rest": {
+        "active": false,
+        "background": "rgb(232, 237, 243)",
+        "border": "rgb(15, 23, 42)",
+        "color": "rgb(15, 23, 42)",
+        "disabled": false,
+        "group": null,
+        "height": 27,
+        "hovered": false,
+        "label": "折叠",
+        "outline": "rgb(15, 23, 42)",
+        "shadow": "none",
+        "text": "×",
+        "title": "折叠",
+        "transform": "none",
+        "width": 27,
+        "x": 612,
+        "y": 18
+      },
+      "hover": {
+        "active": false,
+        "background": "color(srgb 0.802745 0.853647 0.948549)",
+        "border": "rgb(15, 23, 42)",
+        "color": "rgb(15, 23, 42)",
+        "disabled": false,
+        "group": null,
+        "height": 27,
+        "hovered": true,
+        "label": "折叠",
+        "outline": "rgb(15, 23, 42)",
+        "shadow": "none",
+        "text": "×",
+        "title": "折叠",
+        "transform": "none",
+        "width": 27,
+        "x": 612,
+        "y": 18
+      },
+      "press": {
+        "active": true,
+        "background": "color(srgb 0.802745 0.853647 0.948549)",
+        "border": "rgb(15, 23, 42)",
+        "color": "rgb(15, 23, 42)",
+        "disabled": false,
+        "group": null,
+        "height": 25.37999725341797,
+        "hovered": true,
+        "label": "折叠",
+        "outline": "rgb(15, 23, 42)",
+        "shadow": "none",
+        "text": "×",
+        "title": "折叠",
+        "transform": "matrix(0.94, 0, 0, 0.94, 0, 0)",
+        "width": 25.3800048828125,
+        "x": 612.8099975585938,
+        "y": 18.810001373291016
+      },
+      "hover_changes": [
+        "background"
+      ],
+      "press_changes": [
+        "transform"
+      ]
+    }
+  ],
+  "engine_sha256": "e476cd6ef9a60dd1db33eb0fa92cad32b8dca15bba34774e99e8bdc20f97f9bc",
+  "extension_sha256": {
+    "assets/popup-DC57h4ym.css": "e11e822fbe5799c01e2ec4e6b64e7675a090fccf529b243f7178378f4aba3e01",
+    "background.js": "0d5666d992b6608358fe117c3a2d2e9ba7914fe36076487a94f981578f03773a",
+    "chunks/browser-B79nNR8W.js": "12aa04600ac873160020284ae059cf62b327909650443a869b640aa8751723f3",
+    "chunks/popup-BWxwZTLQ.js": "0f81febe4d84be9fd2e329042eb8e45aa7d3075ddf5887ac2e9c768a085c372f",
+    "chunks/subtitle-offscreen-Duzk67A_.js": "432d9513966c9bf90bab812c455bd35425780b41cee53d5a5a445e6e6691c4e0",
+    "content-scripts/content.js": "51a6d970ec28541cd7ef23931382ca16a60a342dfa5407b630867bf86c0af4db",
+    "content-scripts/hooks.js": "27a9c018efa36148fc580fedabeda73eb39b61dddaa594c83bc2b922ce16cd25",
+    "content-scripts/takeover.js": "2e0c6f7190be3c94027c188581b3780b3f246bc14f842ee0fab446cf6d6c42ab",
+    "icon-128.png": "5991f1403df9c450ba8f5570fd56ddb656574031a7fd7f6c3f2bbd85c5f00d07",
+    "icon-16.png": "b4906aa8ab960137af047b3b49566371a120e0f8adb0e63dfab0f9ffb9efb3c3",
+    "icon-32.png": "a564ada11118fc44c0f405e3ef1205c1849cd0ba962c5038f1778733ea6496a5",
+    "icon-48.png": "d93bac888b9f536980ae16980ac148a4261b2b931a92d296cdcd45521fecb659",
+    "icon.png": "af829691e49e19f4d5f351b117b0a2b3a3c3053f0aa928e17170f9bd49d49235",
+    "manifest.json": "b4669363a0c32ba90ced1269802206364397e9d7a0f4e636fc4190b1bee1d91f",
+    "popup.html": "5327f3faefc185d952ae9ec9db42c2931ae51d9d105ba6a228b14d1f48b973d8",
+    "subtitle-offscreen.html": "bb3645d48bf0123b660c92e4dfa3a81b280b42a6f6fe6ac6bb150cd90d504460",
+    "subtitle-pcm.js": "05aa65fa0d01cf8431830d968d12ec396719245315eabd6a14a87b00f7c9d36c"
+  },
+  "page": "http://localhost:50757/index.html",
+  "zoom_diagnostics": [
+    {
+      "context": "100% download hover",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 579.5,
+        "y": 385
+      },
+      "childHit": {
+        "className": "download-label",
+        "id": "",
+        "tag": "SPAN"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": 10,
+          "y": 10
+        },
+        "mappedTargetCenter": {
+          "x": 589.5,
+          "y": 395
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 428,
+          "width": 742
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": 8,
+          "y": 8
+        },
+        "visibleIntersection": {
+          "bottom": 428,
+          "height": 418,
+          "left": 10,
+          "right": 742,
+          "top": 10,
+          "width": 732
+        }
+      },
+      "target": {
+        "height": 34,
+        "width": 99,
+        "x": 530,
+        "y": 368
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "100% more click",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 650,
+        "y": 386
+      },
+      "childHit": {
+        "className": "video-more",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": 10,
+          "y": 10
+        },
+        "mappedTargetCenter": {
+          "x": 660,
+          "y": 396
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 428,
+          "width": 742
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": 8,
+          "y": 8
+        },
+        "visibleIntersection": {
+          "bottom": 428,
+          "height": 418,
+          "left": 10,
+          "right": 742,
+          "top": 10,
+          "width": 732
+        }
+      },
+      "target": {
+        "height": 34,
+        "width": 34,
+        "x": 633,
+        "y": 369
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "100% close click",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 625.5,
+        "y": 31.5
+      },
+      "childHit": {
+        "className": "close",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": 10,
+          "y": 10
+        },
+        "mappedTargetCenter": {
+          "x": 635.5,
+          "y": 41.5
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 428,
+          "width": 742
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": 8,
+          "y": 8
+        },
+        "visibleIntersection": {
+          "bottom": 428,
+          "height": 418,
+          "left": 10,
+          "right": 742,
+          "top": 10,
+          "width": 732
+        }
+      },
+      "target": {
+        "height": 27,
+        "width": 27,
+        "x": 612,
+        "y": 18
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "150% download hover",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 428.1666679382324,
+        "y": 310.66668701171875
+      },
+      "childHit": {
+        "className": "download-label",
+        "id": "",
+        "tag": "SPAN"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -86,
+          "y": -50.66666793823242
+        },
+        "mappedTargetCenter": {
+          "x": 342.1666679382324,
+          "y": 260.0000190734863
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 285,
+          "width": 495
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -88,
+          "y": -52.66666793823242
+        },
+        "visibleIntersection": {
+          "bottom": 285,
+          "height": 285,
+          "left": 0,
+          "right": 495,
+          "top": 0,
+          "width": 495
+        }
+      },
+      "target": {
+        "height": 34,
+        "width": 98.33333587646484,
+        "x": 379,
+        "y": 293.66668701171875
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "150% more click",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 498.3333435058594,
+        "y": 310.66668701171875
+      },
+      "childHit": {
+        "className": "video-more",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -86,
+          "y": -50.66666793823242
+        },
+        "mappedTargetCenter": {
+          "x": 412.3333435058594,
+          "y": 260.0000190734863
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 285,
+          "width": 495
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -88,
+          "y": -52.66666793823242
+        },
+        "visibleIntersection": {
+          "bottom": 285,
+          "height": 285,
+          "left": 0,
+          "right": 495,
+          "top": 0,
+          "width": 495
+        }
+      },
+      "target": {
+        "height": 34,
+        "width": 34,
+        "x": 481.3333435058594,
+        "y": 293.66668701171875
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "150% close click",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 625.8333740234375,
+        "y": 31.166667938232422
+      },
+      "childHit": {
+        "className": "close",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": false,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -86,
+          "y": -50.66666793823242
+        },
+        "mappedTargetCenter": {
+          "x": 539.8333740234375,
+          "y": -19.5
+        },
+        "parentHit": null,
+        "parentHitIsFrame": false,
+        "parentViewport": {
+          "height": 285,
+          "width": 495
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -88,
+          "y": -52.66666793823242
+        },
+        "visibleIntersection": {
+          "bottom": 285,
+          "height": 285,
+          "left": 0,
+          "right": 495,
+          "top": 0,
+          "width": 495
+        }
+      },
+      "target": {
+        "height": 27,
+        "width": 27,
+        "x": 612.3333740234375,
+        "y": 17.666667938232422
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "150% close click",
+      "stage": "after-parent-frame-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 625.8333740234375,
+        "y": 31.166667938232422
+      },
+      "childHit": {
+        "className": "close",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -277.3333435058594,
+          "y": 10
+        },
+        "mappedTargetCenter": {
+          "x": 348.5000305175781,
+          "y": 41.16666793823242
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 285,
+          "width": 495
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -279.3333435058594,
+          "y": 8
+        },
+        "visibleIntersection": {
+          "bottom": 285,
+          "height": 275,
+          "left": 0,
+          "right": 482.6666564941406,
+          "top": 10,
+          "width": 482.6666564941406
+        }
+      },
+      "target": {
+        "height": 27,
+        "width": 27,
+        "x": 612.3333740234375,
+        "y": 17.666667938232422
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "200% download hover",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 365,
+        "y": 274
+      },
+      "childHit": {
+        "className": "download-label",
+        "id": "",
+        "tag": "SPAN"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -146.5,
+          "y": -85
+        },
+        "mappedTargetCenter": {
+          "x": 218.5,
+          "y": 189
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 214,
+          "width": 371
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -148.5,
+          "y": -87
+        },
+        "visibleIntersection": {
+          "bottom": 214,
+          "height": 214,
+          "left": 0,
+          "right": 371,
+          "top": 0,
+          "width": 371
+        }
+      },
+      "target": {
+        "height": 34,
+        "width": 99,
+        "x": 315.5,
+        "y": 257
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "200% more click",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 435.5,
+        "y": 274
+      },
+      "childHit": {
+        "className": "video-more",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -146.5,
+          "y": -85
+        },
+        "mappedTargetCenter": {
+          "x": 289,
+          "y": 189
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 214,
+          "width": 371
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -148.5,
+          "y": -87
+        },
+        "visibleIntersection": {
+          "bottom": 214,
+          "height": 214,
+          "left": 0,
+          "right": 371,
+          "top": 0,
+          "width": 371
+        }
+      },
+      "target": {
+        "height": 34,
+        "width": 34,
+        "x": 418.5,
+        "y": 257
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "200% close click",
+      "stage": "after-video-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 625.5,
+        "y": 31.5
+      },
+      "childHit": {
+        "className": "close",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": false,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -146.5,
+          "y": -85
+        },
+        "mappedTargetCenter": {
+          "x": 479,
+          "y": -53.5
+        },
+        "parentHit": null,
+        "parentHitIsFrame": false,
+        "parentViewport": {
+          "height": 214,
+          "width": 371
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -148.5,
+          "y": -87
+        },
+        "visibleIntersection": {
+          "bottom": 214,
+          "height": 214,
+          "left": 0,
+          "right": 371,
+          "top": 0,
+          "width": 371
+        }
+      },
+      "target": {
+        "height": 27,
+        "width": 27,
+        "x": 612,
+        "y": 18
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    },
+    {
+      "context": "200% close click",
+      "stage": "after-parent-frame-scroll",
+      "childCenter": {
+        "insideViewport": true,
+        "x": 625.5,
+        "y": 31.5
+      },
+      "childHit": {
+        "className": "close",
+        "id": "",
+        "tag": "BUTTON"
+      },
+      "childHitIsTarget": true,
+      "childViewport": {
+        "height": 520,
+        "width": 760
+      },
+      "documentHit": {
+        "className": "",
+        "id": "",
+        "tag": "HLS-DOWNLOADER-MEDIA-PANEL"
+      },
+      "parentFrame": {
+        "centerInVisibleIntersection": true,
+        "contentRect": {
+          "height": 520,
+          "width": 760,
+          "x": -398.5,
+          "y": 10
+        },
+        "mappedTargetCenter": {
+          "x": 227,
+          "y": 41.5
+        },
+        "parentHit": {
+          "className": "",
+          "id": "",
+          "tag": "IFRAME"
+        },
+        "parentHitIsFrame": true,
+        "parentViewport": {
+          "height": 214,
+          "width": 371
+        },
+        "readable": true,
+        "rect": {
+          "height": 524,
+          "width": 764,
+          "x": -400.5,
+          "y": 8
+        },
+        "visibleIntersection": {
+          "bottom": 214,
+          "height": 204,
+          "left": 0,
+          "right": 361.5,
+          "top": 10,
+          "width": 361.5
+        }
+      },
+      "target": {
+        "height": 27,
+        "width": 27,
+        "x": 612,
+        "y": 18
+      },
+      "targetVisible": true,
+      "video": {
+        "height": 360,
+        "width": 640,
+        "x": 8,
+        "y": 8
+      }
+    }
+  ],
+  "original_tasks_preserved": true
+}

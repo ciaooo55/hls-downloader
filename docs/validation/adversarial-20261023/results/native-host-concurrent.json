@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "host_sha256": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+  "engine_sha256": "34717ce1713682580a26ec6b8abd5f2f24f008d8ff39162df12eb3302db81c3a",
+  "staged_binaries_flushed": true,
+  "stage_volume": "C:",
+  "stage_root": "C:\\Users\\WDAGUtilityAccount\\AppData\\Local\\Temp",
+  "cold_first_response_ms": 176.58,
+  "two_response_total_ms": 221.92,
+  "threshold_ms": 1500,
+  "passed": true,
+  "migration_skipped": false,
+  "diagnostics": [],
+  "diagnostics_by_host": [
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    []
+  ],
+  "core_spawn_attempts": 0,
+  "concurrent_hosts": 8,
+  "resident_engine_count": 1,
+  "host_first_response_ms": [
+    174.95,
+    172.9,
+    170.52,
+    175.76,
+    171.12,
+    176.58,
+    169.13,
+    174.07
+  ]
+}

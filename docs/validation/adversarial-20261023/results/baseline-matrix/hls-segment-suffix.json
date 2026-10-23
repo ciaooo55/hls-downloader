@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "checks": [
+    "jpeg: MP4 full decode; failed merge preserves segments; retry reuses and then cleans segments",
+    "png: full decode; renamed output still resolves; existing output preserved; cache cleaned",
+    "bin: MP4 format, audio/video, full decode and cache cleanup",
+    "ended live HLS: full decode and cache cleanup",
+    "HLS direct WebVTT subtitles copied beside output before subtitle cache cleanup",
+    "HLS extensionless segmented WebVTT merged with timestamp maps; same-language tracks preserved as separate VTT/SRT sidecars and cache cleaned",
+    "keep_temp_files=true preserves media segments",
+    "DASH: custom work directory; full decode; video/audio fragments and merged intermediates cleaned",
+    "invalid media fails at merging, exposes stderr and retains segments"
+  ],
+  "script_sha256": "8fd55eb3485cba2ac063d3b851a43e8669d5d19966f6d6b64bbf76995db86a82",
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe"
+}

@@ -1,0 +1,181 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "expected_extension": ".aac",
+      "filename": "extension-f482100c85174f70b03710388b599590.aac",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".flac",
+      "filename": "extension-87ebffc43a4642c9bb0a9d5519524748.flac",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".m4a",
+      "filename": "extension-0e97ccb3c962430ab010c416db732e02.m4a",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".mp3",
+      "filename": "extension-df85e9aeb3ca4c53b92ee47935022dee.mp3",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".ogg",
+      "filename": "extension-0279b382de1e4d2fb77d71c53e5bf237.ogg",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".wav",
+      "filename": "extension-89acd5d8a24d410f898e5486ac6f03f5.wav",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".gif",
+      "filename": "extension-b0c81feae5924f90922e3f7b62668702.gif",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".jpg",
+      "filename": "extension-27e7498f4a684760b7325421a1ec7eae.jpg",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".pdf",
+      "filename": "extension-f06133d84c754fa182193ddf2bff4faf.pdf",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".png",
+      "filename": "extension-ec1518aa4cd64be88c2d08ed4aef7b72.png",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".webp",
+      "filename": "extension-255d457b553349feb21b986349089ca0.webp",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".mkv",
+      "filename": "extension-261634969aa54c41b0a1b55e786f60e5.mkv",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".mov",
+      "filename": "extension-91fd12a30e104e00aa1dddebb6a28e0d.mov",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".mp4",
+      "filename": "extension-a35c8dba70424ef9ab00315483d42be1.mp4",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".webm",
+      "filename": "extension-b6b3a51903c14b3c86f445f39271952d.webm",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".zip",
+      "filename": "extension-51e027a1fbc34f2e8b23774bc9debae4.zip",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".docx",
+      "filename": "extension-2be26d2bc87040778bdefcd470562570.docx",
+      "response_mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".xlsx",
+      "filename": "extension-8e5d280b858a43eb8ca99790f3bcbc52.xlsx",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".json",
+      "filename": "extension-ccec026d856a4f05b46929641520d055.json",
+      "response_mime": "application/json; charset=utf-8",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".csv",
+      "filename": "extension-03dcd2963a3849288b01595cde7136f0.csv",
+      "response_mime": "text/csv",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".txt",
+      "filename": "extension-8812b6a84e804261b7d7e167afaf556b.txt",
+      "response_mime": "application/octet-stream",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".mp4",
+      "filename": "extension-4c91277856f1425d9234f420be440d84.mp4",
+      "response_mime": "image/png",
+      "transport": "direct",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".xlsx",
+      "filename": "extension-d91a4a16d22a494fb3cdc08c27044b11.xlsx",
+      "response_mime": "application/octet-stream",
+      "transport": "system",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".json",
+      "filename": "extension-6bff6623378d490fb10224ba70b9efc1.json",
+      "response_mime": "application/json; charset=utf-8",
+      "transport": "system",
+      "hash_preserved": true
+    },
+    {
+      "expected_extension": ".txt",
+      "filename": "extension-11371c82d6a6486f81424b5f0e1676c1.txt",
+      "response_mime": "application/octet-stream",
+      "transport": "system",
+      "hash_preserved": true
+    }
+  ],
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe"
+}

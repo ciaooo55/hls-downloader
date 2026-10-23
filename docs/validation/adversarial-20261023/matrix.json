@@ -1,0 +1,335 @@
+{
+  "round": 5,
+  "passed": true,
+  "checks": [
+    {
+      "name": "media",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_media.py",
+        "--browser",
+        "firefox",
+        "--extension",
+        "C:\\QAWork\\extension",
+        "--browser-binary",
+        "C:\\QAFirefox\\firefox.exe",
+        "--driver",
+        "C:\\QAInput\\geckodriver.exe",
+        "--ffmpeg",
+        "C:\\QAWork\\runtime\\app\\resources\\ffmpeg.exe",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\media.json"
+      ],
+      "exit_code": 0,
+      "scenario_count": 23,
+      "elapsed_seconds": 76.157,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "takeover",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_firefox_response_takeover.py",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--extension",
+        "C:\\QAWork\\extension",
+        "--binary",
+        "C:\\QAFirefox\\firefox.exe",
+        "--driver",
+        "C:\\QAInput\\geckodriver.exe",
+        "--public",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\takeover.json"
+      ],
+      "exit_code": 0,
+      "check_count": 39,
+      "elapsed_seconds": 118.766,
+      "retained_runtime_processes": [
+        {
+          "pid": 2032,
+          "name": "HLSDownloaderEngine.exe"
+        },
+        {
+          "pid": 4476,
+          "name": "HLSDownloaderPresenter.exe"
+        }
+      ]
+    },
+    {
+      "name": "subtitle-element",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_subtitles.py",
+        "--browser",
+        "firefox",
+        "--extension",
+        "C:\\QAWork\\extension",
+        "--host",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderNativeHost.exe",
+        "--browser-binary",
+        "C:\\QAFirefox\\firefox.exe",
+        "--firefox-driver",
+        "C:\\QAInput\\geckodriver.exe",
+        "--player-dom",
+        "document",
+        "--capture",
+        "element",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\subtitle-element.json"
+      ],
+      "exit_code": 0,
+      "check_count": 15,
+      "elapsed_seconds": 95.438,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "subtitle-prefetch",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_subtitles.py",
+        "--browser",
+        "firefox",
+        "--extension",
+        "C:\\QAWork\\extension",
+        "--host",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderNativeHost.exe",
+        "--browser-binary",
+        "C:\\QAFirefox\\firefox.exe",
+        "--firefox-driver",
+        "C:\\QAInput\\geckodriver.exe",
+        "--player-dom",
+        "document",
+        "--capture",
+        "prefetch",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\subtitle-prefetch.json"
+      ],
+      "exit_code": 0,
+      "check_count": 23,
+      "elapsed_seconds": 156.656,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "http-boundaries",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_http_boundaries.py",
+        "--engine",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\http-boundaries.json"
+      ],
+      "exit_code": 0,
+      "check_count": 13,
+      "elapsed_seconds": 8.703,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "http-stall",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_http_stall.py",
+        "--engine",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--root",
+        "C:\\QAWork\\adversarial-round-5\\http-stall",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\http-stall.json"
+      ],
+      "exit_code": 0,
+      "check_count": 6,
+      "elapsed_seconds": 10.469,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "http-throttle",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_http_stall.py",
+        "--engine",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--root",
+        "C:\\QAWork\\adversarial-round-5\\http-throttle",
+        "--throttle-only",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\http-throttle.json"
+      ],
+      "exit_code": 0,
+      "check_count": 6,
+      "elapsed_seconds": 8.734,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "closed-diagnostics",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_closed_diagnostics.py",
+        "--engine",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\closed-diagnostics.json"
+      ],
+      "exit_code": 0,
+      "check_count": 0,
+      "elapsed_seconds": 8.906,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "hls-segment-suffix",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_hls_segment_suffix.py",
+        "--engine",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--tools",
+        "C:\\QAWork\\runtime\\app\\resources",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\hls-segment-suffix.json"
+      ],
+      "exit_code": 0,
+      "check_count": 9,
+      "elapsed_seconds": 11.031,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "file-extensions",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_file_extensions.py",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\file-extensions.json"
+      ],
+      "exit_code": 0,
+      "check_count": 25,
+      "elapsed_seconds": 13.547,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "download-playback-cleanup",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_download_playback.py",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\download-playback-cleanup.json"
+      ],
+      "exit_code": 0,
+      "check_count": 27,
+      "elapsed_seconds": 147.937,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "player-overlay",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_player_overlay.py",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--media",
+        "C:\\QAWork\\adversarial-round-5\\multitrack.mkv",
+        "--ui-scale",
+        "1.0",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\player-overlay.json"
+      ],
+      "exit_code": 0,
+      "check_count": 12,
+      "elapsed_seconds": 33.578,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "player-fault-resource",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_resource_boundaries.py",
+        "--baseline",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--candidate",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--media",
+        "C:\\QAWork\\adversarial-round-5\\multitrack.mkv",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\player-fault-resource.json"
+      ],
+      "exit_code": 0,
+      "check_count": 0,
+      "elapsed_seconds": 35.297,
+      "retained_runtime_processes": []
+    },
+    {
+      "name": "workbench",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_workbench_interactions.py",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\workbench.json"
+      ],
+      "exit_code": 0,
+      "check_count": 72,
+      "elapsed_seconds": 372.422,
+      "retained_runtime_processes": [
+        {
+          "pid": 2500,
+          "name": "HLSDownloader.exe"
+        },
+        {
+          "pid": 5332,
+          "name": "HLSDownloaderPresenter.exe"
+        },
+        {
+          "pid": 5448,
+          "name": "HLSDownloader.exe"
+        },
+        {
+          "pid": 5988,
+          "name": "HLSDownloaderEngine.exe"
+        }
+      ]
+    },
+    {
+      "name": "protocols",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_v7_protocol_features.py",
+        "--engine",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderEngine.exe",
+        "--no-firewall-rule",
+        "--report",
+        "C:\\QAReports\\reports\\matrix\\protocols.json"
+      ],
+      "exit_code": 0,
+      "check_count": 16,
+      "elapsed_seconds": 99.844,
+      "retained_runtime_processes": []
+    }
+  ],
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+  "background_sha256": "64adb41345e21b82f8d8148edf47d0c947c71564955fb11b3c4d526325e155de",
+  "limitations": [
+    "fixture subtitle provider; no cloud quality claim",
+    "no physical casting/TVBox receiver",
+    "UI test API does not prove native mouse hit testing",
+    "Chromium browser takeover is not covered by Firefox acceptance"
+  ]
+}

@@ -1,0 +1,203 @@
+{
+    "schema":  1,
+    "scenario":  "Upgrade",
+    "status":  "passed",
+    "source_commit":  "00cd089+reviewed-patch",
+    "source_tree":  "candidate-with-source.patch",
+    "candidate_manifest_sha256":  "77a2fd43599b381d8fcb54217b6bcc8deb5988dc33c3d7a84fe965baacead175",
+    "candidate_msi_sha256":  "4c7a1a7b4b9152f93383f9c7f47c3d77c7c231f7f913edc63c4037305702caa9",
+    "restart_scope":  "application-process-only",
+    "system_reboot":  false,
+    "install_dir":  "C:\\QAWork\\source\\.tool-cache\\test-tmp\\msi-lifecycle-upgrade",
+    "candidate_version":  "7.0.3",
+    "candidate_manifest":  "C:\\QAWork\\candidate-manifest.json",
+    "candidate_msi":  "C:\\QAWork\\candidate.msi",
+    "old_msi":  "C:\\QAWork\\old.msi",
+    "old_msi_sha256":  "ea95c189aadab604ca665b4d3ea9ec12bfee41cfb703f98245abd5b74f955333",
+    "started_at":  "2026-10-23T09:32:34.9338717Z",
+    "finished_at":  "2026-10-23T09:33:51.5137734Z",
+    "steps":  [
+                  {
+                      "name":  "candidate-msi-exists",
+                      "passed":  true,
+                      "actual":  "C:\\QAWork\\candidate.msi"
+                  },
+                  {
+                      "name":  "candidate-manifest-sha256",
+                      "passed":  true,
+                      "actual":  "4c7a1a7b4b9152f93383f9c7f47c3d77c7c231f7f913edc63c4037305702caa9"
+                  },
+                  {
+                      "name":  "old-msi-sha256",
+                      "passed":  true,
+                      "actual":  "ea95c189aadab604ca665b4d3ea9ec12bfee41cfb703f98245abd5b74f955333"
+                  },
+                  {
+                      "name":  "old-msi-version",
+                      "passed":  true,
+                      "actual":  "7.0.3"
+                  },
+                  {
+                      "name":  "candidate-manifest-version",
+                      "passed":  true,
+                      "actual":  "7.0.3"
+                  },
+                  {
+                      "name":  "candidate-msi-version",
+                      "passed":  true,
+                      "actual":  "7.0.3"
+                  },
+                  {
+                      "name":  "candidate-version-newer-than-baseline",
+                      "passed":  true,
+                      "actual":  "7.0.3 \u003e 7.0.0"
+                  },
+                  {
+                      "name":  "upgrade-code-match",
+                      "passed":  true,
+                      "actual":  "{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}"
+                  },
+                  {
+                      "name":  "candidate-product-code-is-new",
+                      "passed":  true,
+                      "actual":  "{EEF6EA4C-001F-4118-9827-A6651ABA2B9F}"
+                  },
+                  {
+                      "name":  "install-old-exit",
+                      "passed":  true,
+                      "actual":  0
+                  },
+                  {
+                      "name":  "old-product-registered",
+                      "passed":  true,
+                      "actual":  {
+                                     "product_code":  "{068401CA-B970-47BB-BD84-B5EF23E46D7B}",
+                                     "version":  "7.0.3"
+                                 }
+                  },
+                  {
+                      "name":  "real-task-checkpoint-created",
+                      "passed":  true,
+                      "actual":  {
+                                     "schema":  1,
+                                     "mode":  "create-pause",
+                                     "task_id":  "task-1",
+                                     "status":  "paused",
+                                     "downloaded_bytes":  524288,
+                                     "active_workers":  0,
+                                     "data_db":  "C:\\QAWork\\source\\artifacts\\v7-productization\\msi-lifecycle\\upgrade-checkpoint\\data\\data.db",
+                                     "data_db_sha256":  "da63a52bdf62b3fc863995d79f497584be3ba97c1de4c55d1d301afbafab6cfc",
+                                     "engine_pid":  1008,
+                                     "file_sha256":  null,
+                                     "expected_sha256":  null
+                                 }
+                  },
+                  {
+                      "name":  "checkpointed-process-shutdown",
+                      "passed":  true,
+                      "actual":  0
+                  },
+                  {
+                      "name":  "old-engine-process-ended",
+                      "passed":  true,
+                      "actual":  3576
+                  },
+                  {
+                      "name":  "old-presenter-process-ended",
+                      "passed":  true,
+                      "actual":  3356
+                  },
+                  {
+                      "name":  "upgrade-exit",
+                      "passed":  true,
+                      "actual":  0
+                  },
+                  {
+                      "name":  "product-upgraded",
+                      "passed":  true,
+                      "actual":  {
+                                     "product_code":  "{EEF6EA4C-001F-4118-9827-A6651ABA2B9F}",
+                                     "version":  "7.0.3"
+                                 }
+                  },
+                  {
+                      "name":  "old-application-process-ended",
+                      "passed":  true,
+                      "actual":  6936
+                  },
+                  {
+                      "name":  "application-process-restarted",
+                      "passed":  true,
+                      "actual":  {
+                                     "launcher_pid":  6480,
+                                     "engine_pid":  6812,
+                                     "presenter_pid":  5068
+                                 }
+                  },
+                  {
+                      "name":  "task-restored-and-resumed",
+                      "passed":  true,
+                      "actual":  {
+                                     "schema":  1,
+                                     "mode":  "verify-resume",
+                                     "task_id":  "task-1",
+                                     "status":  "completed",
+                                     "downloaded_bytes":  33554432,
+                                     "active_workers":  0,
+                                     "data_db":  "C:\\QAWork\\source\\artifacts\\v7-productization\\msi-lifecycle\\upgrade-checkpoint\\data\\data.db",
+                                     "data_db_sha256":  "da63a52bdf62b3fc863995d79f497584be3ba97c1de4c55d1d301afbafab6cfc",
+                                     "engine_pid":  6196,
+                                     "file_sha256":  "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0",
+                                     "expected_sha256":  "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0"
+                                 }
+                  },
+                  {
+                      "name":  "resumed-file-sha256",
+                      "passed":  true,
+                      "actual":  {
+                                     "schema":  1,
+                                     "mode":  "verify-resume",
+                                     "task_id":  "task-1",
+                                     "status":  "completed",
+                                     "downloaded_bytes":  33554432,
+                                     "active_workers":  0,
+                                     "data_db":  "C:\\QAWork\\source\\artifacts\\v7-productization\\msi-lifecycle\\upgrade-checkpoint\\data\\data.db",
+                                     "data_db_sha256":  "da63a52bdf62b3fc863995d79f497584be3ba97c1de4c55d1d301afbafab6cfc",
+                                     "engine_pid":  6196,
+                                     "file_sha256":  "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0",
+                                     "expected_sha256":  "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0"
+                                 }
+                  },
+                  {
+                      "name":  "registration-present",
+                      "passed":  true,
+                      "actual":  [
+                                     "HKEY_CURRENT_USER\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+                                     "HKEY_CURRENT_USER\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+                                     "HKEY_CURRENT_USER\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+                                     "HKEY_CURRENT_USER\\Software\\Chromium\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+                                     "HKEY_CURRENT_USER\\Software\\Vivaldi\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+                                     "HKEY_CURRENT_USER\\Software\\Opera Software\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+                                     "HKEY_CURRENT_USER\\Software\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader"
+                                 ]
+                  },
+                  {
+                      "name":  "shortcuts-present",
+                      "passed":  true,
+                      "actual":  [
+                                     "C:\\Users\\WDAGUtilityAccount\\Desktop\\HLSDownloader.lnk",
+                                     "C:\\Users\\WDAGUtilityAccount\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\HLS Downloader\\HLSDownloader.lnk"
+                                 ]
+                  },
+                  {
+                      "name":  "uninstall-exit",
+                      "passed":  true,
+                      "actual":  0
+                  },
+                  {
+                      "name":  "product-unregistered",
+                      "passed":  true,
+                      "actual":  "{EEF6EA4C-001F-4118-9827-A6651ABA2B9F}"
+                  }
+              ]
+}

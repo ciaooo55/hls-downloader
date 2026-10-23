@@ -1,0 +1,113 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "firefox-takeover",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 119.234
+    },
+    {
+      "name": "workbench-functional",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 342.187
+    },
+    {
+      "name": "workbench-destructive",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 128.516
+    },
+    {
+      "name": "workbench-magnet",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 51.64
+    },
+    {
+      "name": "download-playback-cleanup",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 124.672
+    },
+    {
+      "name": "installer",
+      "passed": false,
+      "exit_code": 1,
+      "error": "[Errno 2] No such file or directory: 'C:\\\\QAReports\\\\reports\\\\final\\\\installer\\\\report.json'",
+      "elapsed_seconds": 7.859
+    },
+    {
+      "name": "msi-FailureRollback",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 94.5
+    },
+    {
+      "name": "msi-Upgrade",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 80.422
+    },
+    {
+      "name": "rust-hls_native_shell-100fa787ddcb0e38",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 43.235
+    },
+    {
+      "name": "rust-HLSDownloaderNativeHost-9c9eaa7aa6a3668d",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.078
+    },
+    {
+      "name": "rust-HLSDownloaderUpdater-d650a078cb4ab8a2",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.078
+    },
+    {
+      "name": "rust-hls_downloader_engine-70877aa55e95a35a",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.062
+    },
+    {
+      "name": "rust-cast_simulated_lan_device-da520f09b06c79b6",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 14.656
+    },
+    {
+      "name": "rust-concurrent_dispatch-db6187f708bb7e0d",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.156
+    },
+    {
+      "name": "rust-handoff_restore_order-810953e98fd7452a",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 0.078
+    },
+    {
+      "name": "local-ftps",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 13.625
+    }
+  ],
+  "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221",
+  "test_binary_sha256": {
+    "hls_native_shell-100fa787ddcb0e38.exe": "262e79a400f2a439befd68d762ab86ac834231fc9b487183df16ce1f6a6c6be9",
+    "HLSDownloaderNativeHost-9c9eaa7aa6a3668d.exe": "dee6a38169df9188d0a269d6fa6b72328dc31e99abd1a6fb734a2bf6dd061795",
+    "HLSDownloaderUpdater-d650a078cb4ab8a2.exe": "6a7733a3e948d97710100d11405dafcb1d05185b2c7286d7b42d58442f90ac9a",
+    "hls_downloader_engine-70877aa55e95a35a.exe": "717bfaa06a695fe1b72df81302713aff6f9e03159cd2a0502cf2fe77f16b5c45",
+    "cast_simulated_lan_device-da520f09b06c79b6.exe": "e5140c0458a8c1a5e40607fbae21fa34cbd1bdf3fffb769f1d046957d064d17b",
+    "concurrent_dispatch-db6187f708bb7e0d.exe": "c98e4267874d032ead181d199ef8cb5b2fedbc02521ddc3995406ac1f1c8d3de",
+    "handoff_restore_order-810953e98fd7452a.exe": "9a327eafbde0ca39e5fc3972c3e30be864779ae0776b8ddb1680f34143a4a065"
+  },
+  "finished": true
+}

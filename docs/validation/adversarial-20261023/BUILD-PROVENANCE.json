@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "source_commit": "00cd089e7f643dab3ec1847ce8a69a8c5864b614",
+  "source_tree": "b8b6ed9c07b824c8c71cac372f1feaa554e9bc73",
+  "source_branch": "main",
+  "git_worktree_clean": false,
+  "source_patch_sha256": "dbd243da2ca767a78583ebdcf950ed96740c862840b1d34a506a3abb79158e94",
+  "package_tier": "candidate",
+  "release_ready": false,
+  "generated_at_utc": "2026-10-23T09:15:30.0429126Z",
+  "base_msi_sha256": "0b8335a339cf4650955b76d4ba30e883d6b1f6b4fcc0b9e4456b36ad5cb92a97",
+  "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221",
+  "validation_scope": "HTTP resume integrity candidate; base UI, host, updater and extensions reused; Sandbox validation results recorded separately."
+}

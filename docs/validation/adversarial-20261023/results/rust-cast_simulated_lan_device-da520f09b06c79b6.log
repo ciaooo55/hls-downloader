@@ -1,0 +1,13 @@
+
+running 8 tests
+test a_device_without_av_transport_is_not_a_cast_target ... ok
+test a_host_on_this_machines_own_subnet_is_accepted ... ok
+test a_non_lan_control_url_is_rejected_before_any_socket_work ... ok
+test a_simulated_lan_device_can_be_discovered_from_ssdp_and_description ... ok
+test play_on_device_sends_real_soap_actions_and_remembers_the_session ... ok
+test pushing_to_an_unknown_device_asks_the_user_to_scan_first ... ok
+test simulated_device_survives_a_second_scan_round ... ok
+test ssdp_location_parsing_accepts_only_http_urls ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.58s
+

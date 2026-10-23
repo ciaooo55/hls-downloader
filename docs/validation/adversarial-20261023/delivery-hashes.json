@@ -1,0 +1,22 @@
+[
+  {
+    "Name": "HLSDownloader-7.0.3-main-2965534-未签名.msi",
+    "Expected": "0b8335a339cf4650955b76d4ba30e883d6b1f6b4fcc0b9e4456b36ad5cb92a97",
+    "Actual": "0b8335a339cf4650955b76d4ba30e883d6b1f6b4fcc0b9e4456b36ad5cb92a97"
+  },
+  {
+    "Name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+    "Expected": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c",
+    "Actual": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+  },
+  {
+    "Name": "HLSDownloader-7.0.3-Chromium.zip",
+    "Expected": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18",
+    "Actual": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+  },
+  {
+    "Name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+    "Expected": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8",
+    "Actual": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+  }
+]

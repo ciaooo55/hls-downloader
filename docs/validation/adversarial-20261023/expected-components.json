@@ -1,0 +1,9 @@
+{
+  "app/resources/HLSDownloaderEngine.exe": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221",
+  "app/resources/HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+  "app/resources/HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa",
+  "app/resources/HLSDownloaderUpdater.exe": "77592ce99ab9dd989be2b8579cb1942d089bb54853703c8a847949b90068e0e5",
+  "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "f1ef05227fd820e5371ed769a9a38f8ed9a09244c4f70f31266b4136e193da86",
+  "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c",
+  "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+}

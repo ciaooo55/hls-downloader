@@ -1,0 +1,93 @@
+{
+  "generated_targets": [
+    "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache",
+    "A:\\Ubuntu\\测试\\hls-downloader\\desktop_ui\\.gradle",
+    "A:\\Ubuntu\\测试\\hls-downloader\\desktop_ui\\.kotlin",
+    "A:\\Ubuntu\\测试\\hls-downloader\\desktop_ui\\build",
+    "A:\\Ubuntu\\测试\\hls-downloader\\extension\\.output",
+    "A:\\Ubuntu\\测试\\hls-downloader\\extension\\.wxt",
+    "A:\\Ubuntu\\测试\\hls-downloader\\extension\\node_modules",
+    "A:\\Ubuntu\\测试\\hls-downloader\\artifacts"
+  ],
+  "obsolete_delivery": [
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\交付清单.json",
+      "bytes": 1040,
+      "sha256": "09d240cf038fdc5355584bed6acfa9904e224421e08563863ba2caab7476cc15"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\验收说明.txt",
+      "bytes": 951,
+      "sha256": "e16a8e2d59dd9375ca8b6615ff99ec0bc139ae70143f1f6d0828fbb76f1e19b1"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 329554,
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 370660,
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329533,
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\HLSDownloader-7.0.3-main-2965534-未签名.msi",
+      "bytes": 203472896,
+      "sha256": "0b8335a339cf4650955b76d4ba30e883d6b1f6b4fcc0b9e4456b36ad5cb92a97"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-2965534\\SHA256SUMS.txt",
+      "bytes": 435,
+      "sha256": "6d84112bcbf7378d077aec7a9a50dee18796df2ff38cf6fdef0a29cba526ac5f"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 326357,
+      "sha256": "21055b8fc74d0a1337d218a1400c17ffe5228f732a65601173e6396dedc96f51"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 279555,
+      "sha256": "976f0be403baa907ec6e5a2087b870eb5de0fb506ecf6f89df9297cc9d5b3859"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 326335,
+      "sha256": "558251c43164f86eeffb92f868a92445aa50627e8bc85184c60aa38c7a8f7341"
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-b832d2a\\HLSDownloader-7.0.3-main-b832d2a-未签名.msi",
+      "bytes": 203436032,
+      "sha256": "ea95c189aadab604ca665b4d3ea9ec12bfee41cfb703f98245abd5b74f955333"
+    }
+  ],
+  "preserved": [
+    "outputs/private-user-backup",
+    "Git repository",
+    "All source and validation evidence",
+    "Desktop/最新-20261023",
+    "User downloads and other projects"
+  ],
+  "status": "completed",
+  "rejection": "exec_command automatic approval rejected deletion: blocked by policy; no detailed reason supplied",
+  "completed_at_utc": "2026-10-23T10:06:42.1898375Z",
+  "additional_residue": [
+    {
+      "path": "native_shell/downloads/.hls-tasks/task-1/control",
+      "bytes": 5,
+      "content": "pause",
+      "status": "deletion_blocked_by_policy"
+    },
+    {
+      "path": "native_shell/site-cache/.hls-tasks/task-1/control",
+      "bytes": 3,
+      "content": "run",
+      "status": "deletion_blocked_by_policy"
+    }
+  ]
+}

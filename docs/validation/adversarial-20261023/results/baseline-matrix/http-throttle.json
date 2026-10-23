@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "slow-single: responsive control, resume hash and cache cleanup",
+      "control_seconds": 0.047000000000025466,
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "slow-parallel: responsive control, resume hash and cache cleanup",
+      "control_seconds": 0.031000000000062755,
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "quota-pause: responsive control, resume hash and cache cleanup",
+      "control_seconds": 0.07799999999997453,
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "quota-disable: responsive control, resume hash and cache cleanup",
+      "control_seconds": 0.0,
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "slow-delete: delete stops throttled worker and removes cache",
+      "control_seconds": 0.1409999999999627
+    },
+    {
+      "name": "slow-hls: delete stops throttled worker and removes cache",
+      "control_seconds": 0.125
+    }
+  ],
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe"
+}

@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "engine_sha256": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+  "settings_response_type": "settings",
+  "snapshot_response_type": "snapshot",
+  "http_failure_reported_without_poisoning": true,
+  "download_after_failure_verified": true
+}

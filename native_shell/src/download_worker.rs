@@ -2821,7 +2821,8 @@ impl CoreCoordinator {
                         .unwrap_or(0);
                     if u64::from(attempt) <= max && max > 0 {
                         let (downloaded, total) = current_progress(&core, &task_id);
-                        let _ = mark_progress(&core, &task_id, downloaded, total, "waiting", "queued");
+                        let _ =
+                            mark_progress(&core, &task_id, downloaded, total, "waiting", "queued");
                     }
                 } else if status != "paused" {
                     if let Ok(mut map) = retries.lock() {
@@ -6967,27 +6968,47 @@ mod tests {
         let _ = fs::remove_dir_all(post_paths.task_dir());
     }
 
-    #[test]
-    fn coordinator_runs_http_task_and_atomically_publishes_output() {
-        let body: &'static [u8] = b"v6-core-http-fixture";
+    fn serve_http_fixture(body: &'static [u8]) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
+            while let Ok((stream, _)) = listener.accept() {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut request = String::new();
                 reader.read_line(&mut request).unwrap();
+                let mut range = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (start, end) = value.trim().split_once('-').unwrap();
+                        range = Some((
+                            start.parse::<usize>().unwrap(),
+                            end.parse::<usize>().unwrap(),
+                        ));
+                    }
+                }
+                let (start, end) = range.unwrap_or((0, body.len() - 1));
+                let end = end.min(body.len() - 1);
                 let mut stream = reader.into_inner();
                 let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len() - 1,
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
                     body.len(),
-                    body.len()
+                    end - start + 1
                 );
-                stream.write_all(header.as_bytes()).unwrap();
-                stream.write_all(body).unwrap();
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body[start..=end]);
             }
         });
+        address
+    }
+
+    #[test]
+    fn coordinator_runs_http_task_and_atomically_publishes_output() {
+        let body: &'static [u8] = b"v6-core-http-fixture";
+        let address = serve_http_fixture(body);
 
         let download_dir = std::env::temp_dir().join(format!(
             "hls-v6-worker-{}-{}",
@@ -7071,24 +7092,7 @@ mod tests {
     #[test]
     fn a_scan_that_cannot_run_never_publishes_the_download() {
         let body: &'static [u8] = b"v6-core-http-fixture";
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let address = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request = String::new();
-                reader.read_line(&mut request).unwrap();
-                let mut stream = reader.into_inner();
-                let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len() - 1,
-                    body.len(),
-                    body.len()
-                );
-                stream.write_all(header.as_bytes()).unwrap();
-                stream.write_all(body).unwrap();
-            }
-        });
+        let address = serve_http_fixture(body);
 
         let download_dir = std::env::temp_dir().join(format!(
             "hls-v6-av-gate-{}-{}",
@@ -7193,24 +7197,7 @@ mod tests {
     #[test]
     fn refreshed_url_resumes_paused_task_and_publishes_new_response() {
         let body: &'static [u8] = b"refreshed-signed-url";
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request = String::new();
-                reader.read_line(&mut request).unwrap();
-                let mut stream = reader.into_inner();
-                let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len() - 1,
-                    body.len(),
-                    body.len()
-                );
-                stream.write_all(header.as_bytes()).unwrap();
-                stream.write_all(body).unwrap();
-            }
-        });
+        let address = serve_http_fixture(body);
 
         let download_dir = std::env::temp_dir().join(format!(
             "hls-v7-refresh-{}-{}",

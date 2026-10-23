@@ -1,0 +1,43 @@
+{
+  "passed": true,
+  "scope": "provided baseline and candidate binaries; same VM/fixture; identities recorded below",
+  "sha256": {
+    "baseline": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe",
+    "candidate": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe"
+  },
+  "baseline": {
+    "tasks": 1000,
+    "event_ring_warmup": 4100,
+    "commits": 1000,
+    "progress_pattern": "changing",
+    "p50_ms": 0.835,
+    "p95_ms": 2.15,
+    "max_ms": 120.764,
+    "elapsed_seconds": 1.365,
+    "cpu_seconds": 0.469,
+    "cpu_one_core_percent": 34.344,
+    "rss_start_mib": 33.762,
+    "rss_end_mib": 34.992
+  },
+  "candidate": {
+    "tasks": 1000,
+    "event_ring_warmup": 4100,
+    "commits": 1000,
+    "progress_pattern": "changing",
+    "p50_ms": 0.906,
+    "p95_ms": 2.564,
+    "max_ms": 120.798,
+    "elapsed_seconds": 1.472,
+    "cpu_seconds": 0.797,
+    "cpu_one_core_percent": 54.124,
+    "rss_start_mib": 34.742,
+    "rss_end_mib": 35.527
+  },
+  "suspended_player": {
+    "timeout_seconds": 10.04,
+    "concurrent_snapshot_ms": 0.538,
+    "old_pid": 4256,
+    "replacement_pid": 4556,
+    "passed": true
+  }
+}

@@ -1,0 +1,552 @@
+{
+  "passed": true,
+  "runtime": "C:\\QAWork\\runtime",
+  "checks": [
+    {
+      "name": "main more-menu opens and closes: 通知中心",
+      "actual": true
+    },
+    {
+      "name": "main more-menu opens and closes: 关于 HLS Downloader",
+      "actual": true
+    },
+    {
+      "name": "prepared three downloaded files for remaining interactions",
+      "actual": true
+    },
+    {
+      "name": "search matches filename and empty result then restores test-only view",
+      "actual": true
+    },
+    {
+      "name": "name, size, status sort directions persist through actual table header clicks",
+      "actual": true
+    },
+    {
+      "name": "select-all respects search and destructive confirmation cancel preserves tasks",
+      "actual": true
+    },
+    {
+      "name": "local video opens in the workbench overlay and closes using its own close button",
+      "actual": true
+    },
+    {
+      "name": "settings save persists changed option; original restored in cleanup",
+      "actual": true
+    },
+    {
+      "name": "confirmed delete removes task and preserves completed file",
+      "actual": true
+    }
+  ],
+  "controls": {
+    "main/通知中心": {
+      "clicked": true
+    },
+    "more-通知中心/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "more-通知中心/关闭": {
+      "role": "push button",
+      "bounds": [
+        1015,
+        426,
+        71,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "more-通知中心/关于 HLS Downloader": {
+      "clicked": true
+    },
+    "more-关于 HLS Downloader/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "more-关于 HLS Downloader/关闭": {
+      "role": "push button",
+      "bounds": [
+        959,
+        504,
+        71,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "more-关于 HLS Downloader/打开日志文件夹": {
+      "role": "push button",
+      "bounds": [
+        720,
+        504,
+        144,
+        42
+      ],
+      "enabled": true
+    },
+    "more-关于 HLS Downloader/项目主页": {
+      "role": "push button",
+      "bounds": [
+        864,
+        504,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "more-关于 HLS Downloader/搜索任务": {
+      "clicked": true
+    },
+    "more-关于 HLS Downloader/取消": {
+      "clicked": true
+    },
+    "more-关于 HLS Downloader/完成提示音": {
+      "clicked": true
+    },
+    "more-关于 HLS Downloader/保存设置": {
+      "clicked": true
+    },
+    "more-关于 HLS Downloader/确认删除": {
+      "clicked": true
+    },
+    "main-final/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        151,
+        20
+      ],
+      "enabled": true
+    },
+    "main-final/清除搜索": {
+      "role": "push button",
+      "bounds": [
+        1327,
+        54,
+        42,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/深色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部, 2": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已完成, 2": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "main-final/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/媒体, 1": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/压缩包, 1": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "main-final/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "main-final/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1456,
+        282,
+        34,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/降序": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/extras-149191d207ba47ba99069b361173a0c5.mkv，HTTP .mkv，已完成，进度 100%，大小 156.5 KB": {
+      "role": "label",
+      "bounds": [
+        242,
+        207,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 extras-149191d207ba47ba99069b361173a0c5.mkv": {
+      "role": "check box",
+      "bounds": [
+        257,
+        227,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/播放：extras-149191d207ba47ba99069b361173a0c5.mkv": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        217,
+        42,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/extras-149191d207ba47ba99069b361173a0c5.zip，HTTP .zip，已完成，进度 100%，大小 32.0 KB": {
+      "role": "label",
+      "bounds": [
+        242,
+        272,
+        1261,
+        62
+      ],
+      "enabled": true
+    },
+    "main-final/选择 extras-149191d207ba47ba99069b361173a0c5.zip": {
+      "role": "check box",
+      "bounds": [
+        257,
+        292,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/打开所在位置：extras-149191d207ba47ba99069b361173a0c5.zip": {
+      "role": "push button",
+      "bounds": [
+        1412,
+        282,
+        42,
+        42
+      ],
+      "enabled": true
+    }
+  },
+  "feedback": [],
+  "test_script_sha256": "e443aea599b3c090b860f7931d9bbd9f9fbc6e1fe8f394be4c16c109c5fa9e29",
+  "components": {
+    "app\\HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "f1ef05227fd820e5371ed769a9a38f8ed9a09244c4f70f31266b4136e193da86",
+    "app\\resources\\HLSDownloaderEngine.exe": "e476cd6ef9a60dd1db33eb0fa92cad32b8dca15bba34774e99e8bdc20f97f9bc"
+  },
+  "window": {
+    "x": 0,
+    "y": 0,
+    "width": 1214,
+    "height": 567,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.25,
+    "scaleY": 1.25,
+    "deviceX": 0,
+    "deviceY": 0,
+    "deviceWidth": 1518,
+    "deviceHeight": 709
+  },
+  "start_at": "extras",
+  "normal_runtime_restored": true
+}

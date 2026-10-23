@@ -1,0 +1,9 @@
+   Compiling hls-native-shell v7.0.3 (A:\Ubuntu\测试\hls-downloader\native_shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 01s
+  Executable unittests src\lib.rs (.tool-cache/build-cache/cargo-target\debug\deps\hls_native_shell-100fa787ddcb0e38.exe)
+  Executable unittests src\bin\hls_downloader_native_host.rs (.tool-cache/build-cache/cargo-target\debug\deps\HLSDownloaderNativeHost-9c9eaa7aa6a3668d.exe)
+  Executable unittests src\bin\hls_downloader_updater.rs (.tool-cache/build-cache/cargo-target\debug\deps\HLSDownloaderUpdater-d650a078cb4ab8a2.exe)
+  Executable unittests src\bin\hls_downloader_engine.rs (.tool-cache/build-cache/cargo-target\debug\deps\hls_downloader_engine-70877aa55e95a35a.exe)
+  Executable tests\cast_simulated_lan_device.rs (.tool-cache/build-cache/cargo-target\debug\deps\cast_simulated_lan_device-da520f09b06c79b6.exe)
+  Executable tests\concurrent_dispatch.rs (.tool-cache/build-cache/cargo-target\debug\deps\concurrent_dispatch-db6187f708bb7e0d.exe)
+  Executable tests\handoff_restore_order.rs (.tool-cache/build-cache/cargo-target\debug\deps\handoff_restore_order-810953e98fd7452a.exe)

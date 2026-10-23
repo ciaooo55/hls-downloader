@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "installer",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 105.437
+    },
+    {
+      "name": "download-playback-vgpu",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 148.656
+    }
+  ],
+  "engine_sha256": "4a3753309aba0f051278c7950133c196fb4d08ff8cc0fe67f8ffc855206a8221",
+  "vgpu": "enabled",
+  "finished": true
+}

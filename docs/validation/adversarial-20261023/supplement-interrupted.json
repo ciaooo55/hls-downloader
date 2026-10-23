@@ -1,0 +1,123 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "ffmpeg-pause-cancel",
+      "passed": true,
+      "command": [
+        "C:\\QAWork\\hls_native_shell-100fa787ddcb0e38.exe",
+        "real_ffmpeg_pause_and_cancel_reap_the_child",
+        "--ignored"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.094
+    },
+    {
+      "name": "ffmpeg-audio-decode",
+      "passed": true,
+      "command": [
+        "C:\\QAWork\\hls_native_shell-100fa787ddcb0e38.exe",
+        "decode_disguised_hls_audio",
+        "--ignored"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.719
+    },
+    {
+      "name": "desktop-unit",
+      "passed": false,
+      "command": [
+        "C:\\QAJDK\\bin\\java.exe",
+        "@C:\\QAWork\\junit.args"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 51.5
+    },
+    {
+      "name": "actions-firefox",
+      "passed": false,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_interactions.py",
+        "--browser",
+        "firefox",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--extension",
+        "C:\\QAWork\\extension",
+        "--driver",
+        "C:\\QAInput\\geckodriver.exe",
+        "--actions-only",
+        "--report",
+        "C:\\QAReports\\reports\\supplement\\actions-firefox\\report.json"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 7.109
+    },
+    {
+      "name": "actions-edge",
+      "passed": false,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_interactions.py",
+        "--browser",
+        "edge",
+        "--runtime",
+        "C:\\QAWork\\runtime",
+        "--extension",
+        "C:\\QAWork\\chrome-mv3",
+        "--driver",
+        "C:\\QAInput\\validation-20261021\\edgedriver\\msedgedriver.exe",
+        "--actions-only",
+        "--report",
+        "C:\\QAReports\\reports\\supplement\\actions-edge\\report.json"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 116.5
+    },
+    {
+      "name": "media-edge",
+      "passed": true,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_media.py",
+        "--browser",
+        "edge",
+        "--extension",
+        "C:\\QAWork\\chrome-mv3",
+        "--driver",
+        "C:\\QAInput\\validation-20261021\\edgedriver\\msedgedriver.exe",
+        "--ffmpeg",
+        "C:\\QAWork\\runtime\\app\\resources\\ffmpeg.exe",
+        "--report",
+        "C:\\QAReports\\reports\\supplement\\media-edge\\report.json"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 95.688
+    },
+    {
+      "name": "subtitle-shadow",
+      "passed": false,
+      "command": [
+        "C:\\QAPython\\python.exe",
+        "C:\\QAWork\\source\\scripts\\validation\\smoke_extension_subtitles.py",
+        "--browser",
+        "firefox",
+        "--extension",
+        "C:\\QAWork\\extension",
+        "--host",
+        "C:\\QAWork\\runtime\\app\\resources\\HLSDownloaderNativeHost.exe",
+        "--browser-binary",
+        "C:\\QAFirefox\\firefox.exe",
+        "--firefox-driver",
+        "C:\\QAInput\\geckodriver.exe",
+        "--player-dom",
+        "nested-shadow",
+        "--capture",
+        "element",
+        "--report",
+        "C:\\QAReports\\reports\\supplement\\subtitle-shadow\\report.json"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5646 @@
+{
+  "passed": true,
+  "runtime": "C:\\QAWork\\runtime",
+  "checks": [
+    {
+      "name": "all toolbar controls: light-theme bounds, hover, press",
+      "actual": true
+    },
+    {
+      "name": "sidebar click: 进行中",
+      "actual": {
+        "activeFilter": "进行中",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 排队中",
+      "actual": {
+        "activeFilter": "排队中",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 已暂停",
+      "actual": {
+        "activeFilter": "已暂停",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 已完成",
+      "actual": {
+        "activeFilter": "已完成",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 失败",
+      "actual": {
+        "activeFilter": "失败",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 全部",
+      "actual": {
+        "activeFilter": "全部",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 媒体",
+      "actual": {
+        "activeFilter": "全部",
+        "activeCategory": "媒体",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 程序",
+      "actual": {
+        "activeFilter": "全部",
+        "activeCategory": "程序",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 压缩包",
+      "actual": {
+        "activeFilter": "全部",
+        "activeCategory": "压缩包",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 其他",
+      "actual": {
+        "activeFilter": "全部",
+        "activeCategory": "其他",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "sidebar click: 全部",
+      "actual": {
+        "activeFilter": "全部",
+        "activeCategory": "",
+        "activeQueueId": ""
+      }
+    },
+    {
+      "name": "refresh keeps workbench connected",
+      "actual": "下载引擎 · 已连接"
+    },
+    {
+      "name": "all toolbar controls: dark-theme feedback, theme restored",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: newtask-基本",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: newtask-连接",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: newtask-请求",
+      "actual": true
+    },
+    {
+      "name": "request method click: POST",
+      "actual": true
+    },
+    {
+      "name": "request method click: HEAD",
+      "actual": true
+    },
+    {
+      "name": "request method click: GET",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: newtask-计划",
+      "actual": true
+    },
+    {
+      "name": "completion draft option: 睡眠",
+      "actual": true
+    },
+    {
+      "name": "completion draft option: 休眠",
+      "actual": true
+    },
+    {
+      "name": "completion draft option: 关机",
+      "actual": true
+    },
+    {
+      "name": "completion draft option: 无",
+      "actual": true
+    },
+    {
+      "name": "new-task cancel removes dialog",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: dialog-批量添加",
+      "actual": true
+    },
+    {
+      "name": "dialog open / cancel: 批量添加",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: dialog-页面抓取",
+      "actual": true
+    },
+    {
+      "name": "dialog open / cancel: 页面抓取",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: dialog-浏览器插件",
+      "actual": true
+    },
+    {
+      "name": "dialog open / cancel: 浏览器插件",
+      "actual": true
+    },
+    {
+      "name": "queue-manager draft action: 上移队列",
+      "actual": true
+    },
+    {
+      "name": "queue-manager draft action: 下移队列",
+      "actual": true
+    },
+    {
+      "name": "queue-manager draft action: 删除队列",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-通用",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/自动分类目录",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/监视剪贴板",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/恢复未完成任务",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/开机启动",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/完成提示音",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/下载进度窗口",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 通用/完成通知",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-下载",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 下载/默认允许重复",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 下载/保留过程文件",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-计划",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 计划/启用定时限速",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 计划/队列自动开始",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 计划/队列自动停止",
+      "actual": true
+    },
+    {
+      "name": "settings choice: 计划/无",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-网络",
+      "actual": true
+    },
+    {
+      "name": "empty site rule disables save",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-媒体",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 媒体/下载外挂字幕",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 媒体/跳过广告片段",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-字幕翻译",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 字幕翻译/启用网页字幕翻译",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 字幕翻译/显示原文",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 字幕翻译/同步字幕",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-BT",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: BT/监视新种子",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: BT/启用 DHT 节点发现",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-安全",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 安全/完成后病毒扫描",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 安全/发现威胁时标记失败",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-浏览器",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 浏览器/接管浏览器下载",
+      "actual": true
+    },
+    {
+      "name": "pointer feedback: settings-外观",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 外观/深色模式",
+      "actual": true
+    },
+    {
+      "name": "settings switch toggles and restores: 外观/减弱动画",
+      "actual": true
+    },
+    {
+      "name": "settings cancel preserves existing configuration",
+      "actual": true
+    }
+  ],
+  "controls": {
+    "main-light/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-light/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-light/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-light/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-light/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-light/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "main-light/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/深色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/全部, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/已完成, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "main-light/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "main-light/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "main-light/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/压缩包, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": false
+    },
+    "main-light/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-light/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-light/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "main-light/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-dark/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-dark/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-dark/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-dark/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-dark/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-dark/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "main-dark/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/浅色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "main-dark/全部, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/已完成, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "main-dark/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "main-dark/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "main-dark/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/压缩包, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "main-dark/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "main-dark/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": false
+    },
+    "main-dark/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "main-dark/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-dark/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-dark/基本": {
+      "clicked": true
+    },
+    "newtask-基本/": {
+      "role": "text",
+      "bounds": [
+        320,
+        461,
+        772,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-基本/关闭": {
+      "role": "push button",
+      "bounds": [
+        1171,
+        84,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "newtask-基本/基本": {
+      "role": "push button",
+      "bounds": [
+        311,
+        174,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-基本/连接": {
+      "role": "push button",
+      "bounds": [
+        535,
+        174,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-基本/请求": {
+      "role": "push button",
+      "bounds": [
+        759,
+        174,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-基本/计划": {
+      "role": "push button",
+      "bounds": [
+        982,
+        174,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-基本/粘贴链接、磁力链接或浏览器“复制为 cURL”": {
+      "role": "text",
+      "bounds": [
+        320,
+        276,
+        877,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-基本/选择目录": {
+      "role": "push button",
+      "bounds": [
+        1116,
+        451,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-基本/允许重复任务": {
+      "role": "check box",
+      "bounds": [
+        1166,
+        511,
+        45,
+        25
+      ],
+      "enabled": true
+    },
+    "newtask-基本/取消": {
+      "role": "push button",
+      "bounds": [
+        950,
+        582,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-基本/分析资源": {
+      "role": "push button",
+      "bounds": [
+        1012,
+        582,
+        95,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-基本/创建下载": {
+      "role": "push button",
+      "bounds": [
+        1107,
+        582,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-连接/": {
+      "role": "text",
+      "bounds": [
+        320,
+        399,
+        877,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-连接/关闭": {
+      "role": "push button",
+      "bounds": [
+        1171,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "newtask-连接/基本": {
+      "role": "push button",
+      "bounds": [
+        311,
+        132,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-连接/连接": {
+      "role": "push button",
+      "bounds": [
+        535,
+        132,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-连接/请求": {
+      "role": "push button",
+      "bounds": [
+        759,
+        132,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-连接/计划": {
+      "role": "push button",
+      "bounds": [
+        982,
+        132,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-连接/sha256:...": {
+      "role": "text",
+      "bounds": [
+        320,
+        481,
+        877,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-连接/https://mirror.example.com/file.bin": {
+      "role": "text",
+      "bounds": [
+        320,
+        562,
+        877,
+        27
+      ],
+      "enabled": true
+    },
+    "newtask-连接/取消": {
+      "role": "push button",
+      "bounds": [
+        950,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-连接/分析资源": {
+      "role": "push button",
+      "bounds": [
+        1012,
+        622,
+        95,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-连接/创建下载": {
+      "role": "push button",
+      "bounds": [
+        1107,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-请求/": {
+      "role": "text",
+      "bounds": [
+        320,
+        407,
+        419,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-请求/关闭": {
+      "role": "push button",
+      "bounds": [
+        1171,
+        45,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "newtask-请求/基本": {
+      "role": "push button",
+      "bounds": [
+        311,
+        135,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-请求/连接": {
+      "role": "push button",
+      "bounds": [
+        535,
+        135,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-请求/请求": {
+      "role": "push button",
+      "bounds": [
+        759,
+        135,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-请求/计划": {
+      "role": "push button",
+      "bounds": [
+        982,
+        135,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-请求/GET": {
+      "role": "push button",
+      "bounds": [
+        311,
+        230,
+        297,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-请求/POST": {
+      "role": "push button",
+      "bounds": [
+        609,
+        230,
+        299,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-请求/HEAD": {
+      "role": "push button",
+      "bounds": [
+        907,
+        230,
+        299,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-请求/下载引擎加密保存": {
+      "role": "password text",
+      "bounds": [
+        777,
+        407,
+        420,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-请求/Authorization: Bearer ...\nX-Playback-Token: ...": {
+      "role": "text",
+      "bounds": [
+        320,
+        489,
+        877,
+        66
+      ],
+      "enabled": true
+    },
+    "newtask-请求/取消": {
+      "role": "push button",
+      "bounds": [
+        950,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-请求/分析资源": {
+      "role": "push button",
+      "bounds": [
+        1012,
+        622,
+        95,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-请求/创建下载": {
+      "role": "push button",
+      "bounds": [
+        1107,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-计划/": {
+      "role": "text",
+      "bounds": [
+        320,
+        392,
+        877,
+        22
+      ],
+      "enabled": true
+    },
+    "newtask-计划/关闭": {
+      "role": "push button",
+      "bounds": [
+        1171,
+        119,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "newtask-计划/基本": {
+      "role": "push button",
+      "bounds": [
+        311,
+        209,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-计划/连接": {
+      "role": "push button",
+      "bounds": [
+        535,
+        209,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-计划/请求": {
+      "role": "push button",
+      "bounds": [
+        759,
+        209,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-计划/计划": {
+      "role": "push button",
+      "bounds": [
+        982,
+        209,
+        224,
+        42
+      ],
+      "enabled": true
+    },
+    "newtask-计划/无": {
+      "role": "push button",
+      "bounds": [
+        311,
+        467,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-计划/睡眠": {
+      "role": "push button",
+      "bounds": [
+        535,
+        467,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-计划/休眠": {
+      "role": "push button",
+      "bounds": [
+        759,
+        467,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-计划/关机": {
+      "role": "push button",
+      "bounds": [
+        982,
+        467,
+        224,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-计划/取消": {
+      "role": "push button",
+      "bounds": [
+        950,
+        547,
+        62,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "newtask-计划/分析资源": {
+      "role": "push button",
+      "bounds": [
+        1012,
+        547,
+        95,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-计划/创建下载": {
+      "role": "push button",
+      "bounds": [
+        1107,
+        547,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "newtask-计划/工具": {
+      "clicked": true
+    },
+    "newtask-计划/批量添加": {
+      "clicked": true
+    },
+    "dialog-批量添加/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "dialog-批量添加/关闭": {
+      "role": "push button",
+      "bounds": [
+        1084,
+        134,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "dialog-批量添加/https://example.com/file.zip": {
+      "role": "text",
+      "bounds": [
+        407,
+        257,
+        702,
+        154
+      ],
+      "enabled": true
+    },
+    "dialog-批量添加/取消": {
+      "role": "push button",
+      "bounds": [
+        922,
+        532,
+        62,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "dialog-批量添加/添加 0 条链接": {
+      "role": "push button",
+      "bounds": [
+        986,
+        532,
+        137,
+        42
+      ],
+      "enabled": false
+    },
+    "dialog-批量添加/工具": {
+      "clicked": true
+    },
+    "dialog-批量添加/页面抓取": {
+      "clicked": true
+    },
+    "dialog-页面抓取/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "dialog-页面抓取/关闭": {
+      "role": "push button",
+      "bounds": [
+        1084,
+        166,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "dialog-页面抓取/https://example.com/files/": {
+      "role": "text",
+      "bounds": [
+        407,
+        289,
+        702,
+        22
+      ],
+      "enabled": true
+    },
+    "dialog-页面抓取/留空时使用上面的网页地址": {
+      "role": "text",
+      "bounds": [
+        407,
+        405,
+        702,
+        22
+      ],
+      "enabled": true
+    },
+    "dialog-页面抓取/取消": {
+      "role": "push button",
+      "bounds": [
+        925,
+        500,
+        62,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "dialog-页面抓取/抓取本页链接": {
+      "role": "push button",
+      "bounds": [
+        987,
+        500,
+        136,
+        42
+      ],
+      "enabled": false
+    },
+    "dialog-页面抓取/工具": {
+      "clicked": true
+    },
+    "dialog-页面抓取/浏览器插件": {
+      "clicked": true
+    },
+    "dialog-浏览器插件/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "dialog-浏览器插件/关闭": {
+      "role": "push button",
+      "bounds": [
+        1084,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "dialog-浏览器插件/安装或重载 Chromium 插件": {
+      "role": "push button",
+      "bounds": [
+        411,
+        410,
+        259,
+        42
+      ],
+      "enabled": true
+    },
+    "dialog-浏览器插件/在 Firefox Add-ons 安装": {
+      "role": "push button",
+      "bounds": [
+        411,
+        551,
+        204,
+        40
+      ],
+      "enabled": true
+    },
+    "dialog-浏览器插件/完成": {
+      "role": "push button",
+      "bounds": [
+        1052,
+        622,
+        71,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "dialog-浏览器插件/管理队列": {
+      "clicked": true
+    },
+    "queue-manager/": {
+      "role": "text",
+      "bounds": [
+        602,
+        384,
+        609,
+        22
+      ],
+      "enabled": true
+    },
+    "queue-manager/关闭": {
+      "role": "push button",
+      "bounds": [
+        1184,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "queue-manager/新建队列": {
+      "role": "push button",
+      "bounds": [
+        512,
+        129,
+        37,
+        37
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "queue-manager/默认队列, 优先级 0 · 并发 3 · 不限速": {
+      "role": "label",
+      "bounds": [
+        295,
+        172,
+        255,
+        62
+      ],
+      "enabled": true
+    },
+    "queue-manager/上移队列": {
+      "role": "push button",
+      "bounds": [
+        295,
+        547,
+        42,
+        42
+      ],
+      "enabled": false,
+      "clicked": true
+    },
+    "queue-manager/下移队列": {
+      "role": "push button",
+      "bounds": [
+        401,
+        547,
+        42,
+        42
+      ],
+      "enabled": false,
+      "clicked": true
+    },
+    "queue-manager/删除队列": {
+      "role": "push button",
+      "bounds": [
+        507,
+        547,
+        42,
+        42
+      ],
+      "enabled": false,
+      "clicked": true
+    },
+    "queue-manager/启用队列": {
+      "role": "check box",
+      "bounds": [
+        1179,
+        226,
+        45,
+        25
+      ],
+      "enabled": true
+    },
+    "queue-manager/启用时间表": {
+      "role": "check box",
+      "bounds": [
+        1179,
+        457,
+        45,
+        25
+      ],
+      "enabled": true
+    },
+    "queue-manager/无": {
+      "role": "push button",
+      "bounds": [
+        592,
+        537,
+        156,
+        42
+      ],
+      "enabled": true
+    },
+    "queue-manager/睡眠": {
+      "role": "push button",
+      "bounds": [
+        749,
+        537,
+        157,
+        42
+      ],
+      "enabled": true
+    },
+    "queue-manager/休眠": {
+      "role": "push button",
+      "bounds": [
+        906,
+        537,
+        157,
+        42
+      ],
+      "enabled": true
+    },
+    "queue-manager/关机": {
+      "role": "push button",
+      "bounds": [
+        1062,
+        537,
+        157,
+        42
+      ],
+      "enabled": true
+    },
+    "queue-manager/取消": {
+      "role": "push button",
+      "bounds": [
+        1057,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "queue-manager/保存队列": {
+      "role": "push button",
+      "bounds": [
+        1121,
+        622,
+        102,
+        42
+      ],
+      "enabled": true
+    },
+    "queue-manager/设置": {
+      "clicked": true
+    },
+    "settings-通用/通用": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/": {
+      "role": "text",
+      "bounds": [
+        437,
+        285,
+        707,
+        22
+      ],
+      "enabled": true
+    },
+    "settings-通用/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-通用/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-通用/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-通用/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-通用/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-通用/选择目录": {
+      "role": "push button",
+      "bounds": [
+        1167,
+        275,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-通用/自动分类目录": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        346,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/监视剪贴板": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        402,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/恢复未完成任务": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        457,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/开机启动": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        514,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/完成提示音": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        570,
+        45,
+        21
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/下载进度窗口": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        626,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/完成通知": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        682,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-通用/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-通用/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-下载/下载": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/": {
+      "role": "text",
+      "bounds": [
+        437,
+        612,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-下载/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-下载/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-下载/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-下载/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-下载/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-下载/自动重命名": {
+      "role": "push button",
+      "bounds": [
+        427,
+        687,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-下载/覆盖": {
+      "role": "push button",
+      "bounds": [
+        704,
+        687,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-下载/跳过": {
+      "role": "push button",
+      "bounds": [
+        981,
+        687,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-下载/默认允许重复": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        762,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-下载/保留过程文件": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        817,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-下载/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-下载/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-计划/计划": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/": {
+      "role": "text",
+      "bounds": [
+        437,
+        699,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-计划/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-计划/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-计划/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/启用定时限速": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        182,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-计划/队列自动开始": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        484,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-计划/队列自动停止": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        622,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-计划/一": {
+      "role": "push button",
+      "bounds": [
+        424,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/二": {
+      "role": "push button",
+      "bounds": [
+        544,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/三": {
+      "role": "push button",
+      "bounds": [
+        664,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/四": {
+      "role": "push button",
+      "bounds": [
+        784,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/五": {
+      "role": "push button",
+      "bounds": [
+        905,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/六": {
+      "role": "push button",
+      "bounds": [
+        1026,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/日": {
+      "role": "push button",
+      "bounds": [
+        1147,
+        770,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/无": {
+      "role": "push button",
+      "bounds": [
+        427,
+        877,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-计划/睡眠": {
+      "role": "push button",
+      "bounds": [
+        635,
+        877,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/休眠": {
+      "role": "push button",
+      "bounds": [
+        842,
+        877,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/关机": {
+      "role": "push button",
+      "bounds": [
+        1050,
+        877,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-计划/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-计划/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-网络/网络": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/": {
+      "role": "text",
+      "bounds": [
+        437,
+        899,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-网络/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-网络/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-网络/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-网络/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-网络/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-网络/直连": {
+      "role": "push button",
+      "bounds": [
+        427,
+        281,
+        276,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-网络/系统代理": {
+      "role": "push button",
+      "bounds": [
+        704,
+        281,
+        277,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-网络/手动代理": {
+      "role": "push button",
+      "bounds": [
+        981,
+        281,
+        277,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-网络/例如 sessionid=…": {
+      "role": "password text",
+      "bounds": [
+        437,
+        676,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-网络/添加规则": {
+      "role": "push button",
+      "bounds": [
+        1150,
+        944,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-网络/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-网络/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/": {
+      "role": "text",
+      "bounds": [
+        861,
+        684,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/直连": {
+      "role": "push button",
+      "bounds": [
+        642,
+        757,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/系统代理": {
+      "role": "push button",
+      "bounds": [
+        842,
+        757,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/手动代理": {
+      "role": "push button",
+      "bounds": [
+        1044,
+        757,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/例如 sessionid=…": {
+      "role": "password text",
+      "bounds": [
+        437,
+        260,
+        812,
+        22
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/添加规则": {
+      "role": "push button",
+      "bounds": [
+        1150,
+        527,
+        112,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/停用站点规则": {
+      "role": "check box",
+      "bounds": [
+        437,
+        602,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/example.com": {
+      "role": "text",
+      "bounds": [
+        505,
+        602,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/规则上移": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        592,
+        0,
+        0
+      ],
+      "enabled": false
+    },
+    "settings-site-rule/规则下移": {
+      "role": "push button",
+      "bounds": [
+        1162,
+        592,
+        0,
+        0
+      ],
+      "enabled": false
+    },
+    "settings-site-rule/删除站点规则": {
+      "role": "push button",
+      "bounds": [
+        1206,
+        592,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/跟随全局": {
+      "role": "push button",
+      "bounds": [
+        441,
+        757,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/请求身份、目录与登录信息": {
+      "role": "push button",
+      "bounds": [
+        437,
+        816,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-site-rule/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "settings-媒体/媒体": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/": {
+      "role": "text",
+      "bounds": [
+        437,
+        285,
+        812,
+        22
+      ],
+      "enabled": true
+    },
+    "settings-媒体/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-媒体/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-媒体/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-媒体/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-媒体/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-媒体/下载外挂字幕": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        346,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-媒体/跳过广告片段": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        402,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-媒体/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-媒体/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "settings-字幕翻译/字幕翻译": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/": {
+      "role": "text",
+      "bounds": [
+        437,
+        889,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/启用网页字幕翻译": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        182,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-字幕翻译/阿里云百炼": {
+      "role": "push button",
+      "bounds": [
+        427,
+        252,
+        415,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/QwenCloud": {
+      "role": "push button",
+      "bounds": [
+        842,
+        252,
+        415,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/北京": {
+      "role": "push button",
+      "bounds": [
+        427,
+        422,
+        415,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/新加坡": {
+      "role": "push button",
+      "bounds": [
+        842,
+        422,
+        415,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/请输入当前服务的 API Key": {
+      "role": "password text",
+      "bounds": [
+        437,
+        517,
+        812,
+        22
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/自动识别": {
+      "role": "push button",
+      "bounds": [
+        424,
+        606,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/中文": {
+      "role": "push button",
+      "bounds": [
+        424,
+        686,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/显示原文": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        756,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-字幕翻译/同步字幕": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        812,
+        0,
+        0
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-字幕翻译/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-字幕翻译/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "settings-BT/BT": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        389,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/": {
+      "role": "text",
+      "bounds": [
+        437,
+        422,
+        812,
+        22
+      ],
+      "enabled": true
+    },
+    "settings-BT/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-BT/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        129,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        181,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        232,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        285,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        337,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        441,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        492,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-BT/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        545,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-BT/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        597,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-BT/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        649,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-BT/选择目录": {
+      "role": "push button",
+      "bounds": [
+        1167,
+        192,
+        95,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-BT/监视新种子": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        264,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-BT/启用 DHT 节点发现": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        484,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-BT/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-BT/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "settings-安全/安全": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        542,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/": {
+      "role": "text",
+      "bounds": [
+        437,
+        259,
+        812,
+        57
+      ],
+      "enabled": true
+    },
+    "settings-安全/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-安全/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        127,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-安全/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        179,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        231,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        282,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        335,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        387,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        439,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        491,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-安全/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        595,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-安全/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        647,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-安全/完成后病毒扫描": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        182,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-安全/发现威胁时标记失败": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        355,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-安全/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-安全/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "settings-浏览器/浏览器": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        491,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/": {
+      "role": "text",
+      "bounds": [
+        437,
+        341,
+        812,
+        22
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        22,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        75,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        127,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        179,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        231,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        282,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        335,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        387,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        439,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/外观": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        542,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/接管浏览器下载": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        182,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-浏览器/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true
+    },
+    "settings-浏览器/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "settings-外观/外观": {
+      "clicked": true,
+      "role": "page tab",
+      "bounds": [
+        232,
+        542,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/": {
+      "role": "unknown",
+      "bounds": [
+        0,
+        0,
+        1517,
+        709
+      ],
+      "enabled": true
+    },
+    "settings-外观/关闭": {
+      "role": "push button",
+      "bounds": [
+        1246,
+        42,
+        40,
+        40
+      ],
+      "enabled": true
+    },
+    "settings-外观/通用": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        22,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-外观/下载": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        75,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "settings-外观/计划": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        127,
+        157,
+        46
+      ],
+      "enabled": true
+    },
+    "settings-外观/网络": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        179,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/媒体": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        231,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/BT": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        282,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/字幕翻译": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        335,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/投屏与推送": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        387,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/安全": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        439,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/浏览器": {
+      "role": "page tab",
+      "bounds": [
+        232,
+        491,
+        157,
+        47
+      ],
+      "enabled": true
+    },
+    "settings-外观/深色模式": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        182,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-外观/减弱动画": {
+      "role": "check box",
+      "bounds": [
+        1217,
+        237,
+        45,
+        25
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-外观/取消": {
+      "role": "push button",
+      "bounds": [
+        1120,
+        622,
+        62,
+        42
+      ],
+      "enabled": true,
+      "clicked": true
+    },
+    "settings-外观/保存设置": {
+      "role": "push button",
+      "bounds": [
+        1182,
+        622,
+        102,
+        42
+      ],
+      "enabled": false
+    },
+    "main-final/最小化": {
+      "role": "push button",
+      "bounds": [
+        1350,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/最大化": {
+      "role": "push button",
+      "bounds": [
+        1406,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/关闭": {
+      "role": "push button",
+      "bounds": [
+        1462,
+        0,
+        56,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/新建": {
+      "role": "push button",
+      "bounds": [
+        19,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/粘贴链接": {
+      "role": "push button",
+      "bounds": [
+        105,
+        52,
+        106,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部开始": {
+      "role": "push button",
+      "bounds": [
+        227,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/全部暂停": {
+      "role": "push button",
+      "bounds": [
+        336,
+        52,
+        106,
+        45
+      ],
+      "enabled": false
+    },
+    "main-final/工具": {
+      "role": "push button",
+      "bounds": [
+        444,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/搜索任务": {
+      "role": "text",
+      "bounds": [
+        1177,
+        66,
+        181,
+        20
+      ],
+      "enabled": true
+    },
+    "main-final/设置": {
+      "role": "push button",
+      "bounds": [
+        1377,
+        52,
+        76,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/深色模式": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        52,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/全部, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        154,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进行中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        199,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/排队中, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        244,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已暂停, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        289,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/已完成, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        334,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/失败, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        379,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/展开队列": {
+      "role": "push button",
+      "bounds": [
+        11,
+        439,
+        177,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/管理队列": {
+      "role": "push button",
+      "bounds": [
+        187,
+        444,
+        32,
+        32
+      ],
+      "enabled": true
+    },
+    "main-final/收起分类": {
+      "role": "push button",
+      "bounds": [
+        11,
+        497,
+        210,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/媒体, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        540,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/程序, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        585,
+        210,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/压缩包, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        630,
+        210,
+        30
+      ],
+      "enabled": true
+    },
+    "main-final/其他, 0": {
+      "role": "page tab",
+      "bounds": [
+        11,
+        675,
+        0,
+        0
+      ],
+      "enabled": true
+    },
+    "main-final/清理已完成": {
+      "role": "push button",
+      "bounds": [
+        1262,
+        112,
+        119,
+        42
+      ],
+      "enabled": false
+    },
+    "main-final/刷新": {
+      "role": "push button",
+      "bounds": [
+        1381,
+        112,
+        74,
+        42
+      ],
+      "enabled": true
+    },
+    "main-final/更多操作": {
+      "role": "push button",
+      "bounds": [
+        1455,
+        112,
+        45,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/选择全部任务": {
+      "role": "check box",
+      "bounds": [
+        257,
+        172,
+        22,
+        22
+      ],
+      "enabled": true
+    },
+    "main-final/名称": {
+      "role": "label",
+      "bounds": [
+        290,
+        161,
+        497,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/进度": {
+      "role": "label",
+      "bounds": [
+        787,
+        161,
+        225,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/状态": {
+      "role": "label",
+      "bounds": [
+        1012,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/速度": {
+      "role": "label",
+      "bounds": [
+        1150,
+        161,
+        125,
+        45
+      ],
+      "enabled": true
+    },
+    "main-final/大小": {
+      "role": "label",
+      "bounds": [
+        1275,
+        161,
+        137,
+        45
+      ],
+      "enabled": true
+    }
+  },
+  "feedback": [
+    {
+      "control": "toolbar.新建",
+      "label": "main-light",
+      "bounds": [
+        19,
+        53,
+        95,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2056,
+      "press_changed_pixels": 2071,
+      "enabled": true,
+      "image": "feedback-000.png"
+    },
+    {
+      "control": "toolbar.粘贴链接",
+      "label": "main-light",
+      "bounds": [
+        105,
+        53,
+        211,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2924,
+      "press_changed_pixels": 2896,
+      "enabled": true,
+      "image": "feedback-001.png"
+    },
+    {
+      "control": "toolbar.全部开始",
+      "label": "main-light",
+      "bounds": [
+        228,
+        53,
+        334,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1115,
+      "enabled": false,
+      "image": "feedback-002.png"
+    },
+    {
+      "control": "toolbar.全部暂停",
+      "label": "main-light",
+      "bounds": [
+        336,
+        53,
+        442,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 0,
+      "enabled": false,
+      "image": "feedback-003.png"
+    },
+    {
+      "control": "toolbar.工具",
+      "label": "main-light",
+      "bounds": [
+        444,
+        53,
+        520,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2101,
+      "press_changed_pixels": 2090,
+      "enabled": true,
+      "image": "feedback-004.png"
+    },
+    {
+      "control": "toolbar.设置",
+      "label": "main-light",
+      "bounds": [
+        1378,
+        53,
+        1454,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2083,
+      "press_changed_pixels": 2078,
+      "enabled": true,
+      "image": "feedback-005.png"
+    },
+    {
+      "control": "toolbar.深色模式",
+      "label": "main-light",
+      "bounds": [
+        1455,
+        53,
+        1500,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1222,
+      "press_changed_pixels": 1235,
+      "enabled": true,
+      "image": "feedback-006.png"
+    },
+    {
+      "control": "toolbar.更多操作",
+      "label": "main-light",
+      "bounds": [
+        1455,
+        112,
+        1500,
+        157
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1265,
+      "press_changed_pixels": 1265,
+      "enabled": true,
+      "image": "feedback-007.png"
+    },
+    {
+      "control": "toolbar.新建",
+      "label": "main-dark",
+      "bounds": [
+        19,
+        53,
+        95,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2075,
+      "press_changed_pixels": 2084,
+      "enabled": true,
+      "image": "feedback-008.png"
+    },
+    {
+      "control": "toolbar.粘贴链接",
+      "label": "main-dark",
+      "bounds": [
+        105,
+        53,
+        211,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2877,
+      "press_changed_pixels": 2899,
+      "enabled": true,
+      "image": "feedback-009.png"
+    },
+    {
+      "control": "toolbar.全部开始",
+      "label": "main-dark",
+      "bounds": [
+        228,
+        53,
+        334,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 877,
+      "press_changed_pixels": 0,
+      "enabled": false,
+      "image": "feedback-010.png"
+    },
+    {
+      "control": "toolbar.全部暂停",
+      "label": "main-dark",
+      "bounds": [
+        336,
+        53,
+        442,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 0,
+      "enabled": false,
+      "image": "feedback-011.png"
+    },
+    {
+      "control": "toolbar.工具",
+      "label": "main-dark",
+      "bounds": [
+        444,
+        53,
+        520,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2083,
+      "press_changed_pixels": 2067,
+      "enabled": true,
+      "image": "feedback-012.png"
+    },
+    {
+      "control": "toolbar.设置",
+      "label": "main-dark",
+      "bounds": [
+        1378,
+        53,
+        1454,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2072,
+      "press_changed_pixels": 2075,
+      "enabled": true,
+      "image": "feedback-013.png"
+    },
+    {
+      "control": "toolbar.更多操作",
+      "label": "main-dark",
+      "bounds": [
+        1455,
+        112,
+        1500,
+        157
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1263,
+      "press_changed_pixels": 1263,
+      "enabled": true,
+      "image": "feedback-014.png"
+    },
+    {
+      "control": "toolbar.浅色模式",
+      "label": "main-dark",
+      "bounds": [
+        1455,
+        53,
+        1500,
+        98
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1236,
+      "press_changed_pixels": 1232,
+      "enabled": true,
+      "image": "feedback-015.png"
+    },
+    {
+      "control": "newtask.tab.基本",
+      "label": "newtask-基本",
+      "bounds": [
+        311,
+        174,
+        535,
+        217
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1993,
+      "image": "feedback-016.png"
+    },
+    {
+      "control": "newtask.tab.连接",
+      "label": "newtask-基本",
+      "bounds": [
+        535,
+        174,
+        759,
+        217
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6042,
+      "press_changed_pixels": 6056,
+      "image": "feedback-017.png"
+    },
+    {
+      "control": "newtask.tab.请求",
+      "label": "newtask-基本",
+      "bounds": [
+        759,
+        174,
+        983,
+        217
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6043,
+      "press_changed_pixels": 6045,
+      "image": "feedback-018.png"
+    },
+    {
+      "control": "newtask.tab.计划",
+      "label": "newtask-基本",
+      "bounds": [
+        983,
+        174,
+        1207,
+        217
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6054,
+      "press_changed_pixels": 6049,
+      "image": "feedback-019.png"
+    },
+    {
+      "control": "dialog.secondary.选择目录",
+      "label": "newtask-基本",
+      "bounds": [
+        1116,
+        451,
+        1211,
+        494
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2528,
+      "press_changed_pixels": 2488,
+      "image": "feedback-020.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "newtask-基本",
+      "bounds": [
+        950,
+        583,
+        1013,
+        626
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1672,
+      "image": "feedback-021.png"
+    },
+    {
+      "control": "newtask.tab.基本",
+      "label": "newtask-连接",
+      "bounds": [
+        311,
+        133,
+        535,
+        176
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6045,
+      "press_changed_pixels": 6044,
+      "image": "feedback-022.png"
+    },
+    {
+      "control": "newtask.tab.连接",
+      "label": "newtask-连接",
+      "bounds": [
+        535,
+        133,
+        759,
+        176
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1733,
+      "image": "feedback-023.png"
+    },
+    {
+      "control": "newtask.tab.请求",
+      "label": "newtask-连接",
+      "bounds": [
+        759,
+        133,
+        983,
+        176
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6044,
+      "press_changed_pixels": 6050,
+      "image": "feedback-024.png"
+    },
+    {
+      "control": "newtask.tab.计划",
+      "label": "newtask-连接",
+      "bounds": [
+        983,
+        133,
+        1207,
+        176
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6051,
+      "press_changed_pixels": 6048,
+      "image": "feedback-025.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "newtask-连接",
+      "bounds": [
+        950,
+        623,
+        1013,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1670,
+      "image": "feedback-026.png"
+    },
+    {
+      "control": "newtask.tab.基本",
+      "label": "newtask-请求",
+      "bounds": [
+        311,
+        135,
+        535,
+        178
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 5859,
+      "press_changed_pixels": 5889,
+      "image": "feedback-027.png"
+    },
+    {
+      "control": "newtask.tab.连接",
+      "label": "newtask-请求",
+      "bounds": [
+        535,
+        135,
+        759,
+        178
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 5857,
+      "press_changed_pixels": 5877,
+      "image": "feedback-028.png"
+    },
+    {
+      "control": "newtask.tab.请求",
+      "label": "newtask-请求",
+      "bounds": [
+        759,
+        135,
+        983,
+        178
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1540,
+      "image": "feedback-029.png"
+    },
+    {
+      "control": "newtask.tab.计划",
+      "label": "newtask-请求",
+      "bounds": [
+        983,
+        135,
+        1207,
+        178
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 5881,
+      "press_changed_pixels": 5887,
+      "image": "feedback-030.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "newtask-请求",
+      "bounds": [
+        950,
+        622,
+        1013,
+        665
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1673,
+      "press_changed_pixels": 1665,
+      "image": "feedback-031.png"
+    },
+    {
+      "control": "newtask.method.GET",
+      "label": "newtask-请求",
+      "bounds": [
+        311,
+        230,
+        609,
+        273
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1862,
+      "image": "feedback-032.png"
+    },
+    {
+      "control": "newtask.method.POST",
+      "label": "newtask-请求",
+      "bounds": [
+        609,
+        230,
+        908,
+        273
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 8095,
+      "press_changed_pixels": 8086,
+      "image": "feedback-033.png"
+    },
+    {
+      "control": "newtask.method.HEAD",
+      "label": "newtask-请求",
+      "bounds": [
+        908,
+        230,
+        1207,
+        273
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 8082,
+      "press_changed_pixels": 8093,
+      "image": "feedback-034.png"
+    },
+    {
+      "control": "newtask.tab.基本",
+      "label": "newtask-计划",
+      "bounds": [
+        311,
+        209,
+        535,
+        252
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6046,
+      "press_changed_pixels": 6061,
+      "image": "feedback-035.png"
+    },
+    {
+      "control": "newtask.tab.连接",
+      "label": "newtask-计划",
+      "bounds": [
+        535,
+        209,
+        759,
+        252
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6042,
+      "press_changed_pixels": 6058,
+      "image": "feedback-036.png"
+    },
+    {
+      "control": "newtask.tab.请求",
+      "label": "newtask-计划",
+      "bounds": [
+        759,
+        209,
+        983,
+        252
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 6042,
+      "press_changed_pixels": 6053,
+      "image": "feedback-037.png"
+    },
+    {
+      "control": "newtask.tab.计划",
+      "label": "newtask-计划",
+      "bounds": [
+        983,
+        209,
+        1207,
+        252
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1714,
+      "image": "feedback-038.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "newtask-计划",
+      "bounds": [
+        950,
+        547,
+        1013,
+        590
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1674,
+      "press_changed_pixels": 1663,
+      "image": "feedback-039.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "dialog-批量添加",
+      "bounds": [
+        923,
+        532,
+        986,
+        575
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1699,
+      "press_changed_pixels": 1695,
+      "image": "feedback-040.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "dialog-页面抓取",
+      "bounds": [
+        925,
+        500,
+        988,
+        543
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1668,
+      "press_changed_pixels": 1665,
+      "image": "feedback-041.png"
+    },
+    {
+      "control": "dialog.secondary.选择目录",
+      "label": "settings-通用",
+      "bounds": [
+        1167,
+        275,
+        1262,
+        318
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2511,
+      "press_changed_pixels": 2475,
+      "image": "feedback-042.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-通用",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-043.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-下载",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-044.png"
+    },
+    {
+      "control": "settings.choice.rename",
+      "label": "settings-下载",
+      "bounds": [
+        428,
+        480,
+        704,
+        523
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1884,
+      "image": "feedback-045.png"
+    },
+    {
+      "control": "settings.choice.overwrite",
+      "label": "settings-下载",
+      "bounds": [
+        704,
+        480,
+        981,
+        523
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 7499,
+      "press_changed_pixels": 7513,
+      "image": "feedback-046.png"
+    },
+    {
+      "control": "settings.choice.skip",
+      "label": "settings-下载",
+      "bounds": [
+        981,
+        480,
+        1258,
+        523
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 7472,
+      "press_changed_pixels": 7490,
+      "image": "feedback-047.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-计划",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-048.png"
+    },
+    {
+      "control": "settings.day.1",
+      "label": "settings-计划",
+      "bounds": [
+        424,
+        375,
+        538,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 728,
+      "image": "feedback-049.png"
+    },
+    {
+      "control": "settings.day.2",
+      "label": "settings-计划",
+      "bounds": [
+        544,
+        375,
+        658,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 757,
+      "image": "feedback-050.png"
+    },
+    {
+      "control": "settings.day.3",
+      "label": "settings-计划",
+      "bounds": [
+        664,
+        375,
+        778,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 762,
+      "image": "feedback-051.png"
+    },
+    {
+      "control": "settings.day.4",
+      "label": "settings-计划",
+      "bounds": [
+        784,
+        375,
+        899,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 811,
+      "image": "feedback-052.png"
+    },
+    {
+      "control": "settings.day.5",
+      "label": "settings-计划",
+      "bounds": [
+        905,
+        375,
+        1020,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 791,
+      "image": "feedback-053.png"
+    },
+    {
+      "control": "settings.day.6",
+      "label": "settings-计划",
+      "bounds": [
+        1026,
+        375,
+        1141,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 767,
+      "image": "feedback-054.png"
+    },
+    {
+      "control": "settings.day.7",
+      "label": "settings-计划",
+      "bounds": [
+        1147,
+        375,
+        1262,
+        418
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 752,
+      "image": "feedback-055.png"
+    },
+    {
+      "control": "settings.choice.none",
+      "label": "settings-计划",
+      "bounds": [
+        428,
+        482,
+        635,
+        525
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1321,
+      "image": "feedback-056.png"
+    },
+    {
+      "control": "settings.choice.sleep",
+      "label": "settings-计划",
+      "bounds": [
+        635,
+        482,
+        842,
+        525
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 5566,
+      "press_changed_pixels": 5590,
+      "image": "feedback-057.png"
+    },
+    {
+      "control": "settings.choice.hibernate",
+      "label": "settings-计划",
+      "bounds": [
+        842,
+        482,
+        1050,
+        525
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 5613,
+      "press_changed_pixels": 5650,
+      "image": "feedback-058.png"
+    },
+    {
+      "control": "settings.choice.shutdown",
+      "label": "settings-计划",
+      "bounds": [
+        1050,
+        482,
+        1258,
+        525
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 5614,
+      "press_changed_pixels": 5616,
+      "image": "feedback-059.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-网络",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-060.png"
+    },
+    {
+      "control": "settings.choice.direct",
+      "label": "settings-网络",
+      "bounds": [
+        428,
+        281,
+        704,
+        324
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 7460,
+      "press_changed_pixels": 7474,
+      "image": "feedback-061.png"
+    },
+    {
+      "control": "settings.choice.system",
+      "label": "settings-网络",
+      "bounds": [
+        704,
+        281,
+        981,
+        324
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 1867,
+      "image": "feedback-062.png"
+    },
+    {
+      "control": "settings.choice.manual",
+      "label": "settings-网络",
+      "bounds": [
+        981,
+        281,
+        1258,
+        324
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 7476,
+      "press_changed_pixels": 7489,
+      "image": "feedback-063.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-媒体",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-064.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-065.png"
+    },
+    {
+      "control": "settings.choice.dashscope",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        428,
+        252,
+        843,
+        295
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 2887,
+      "image": "feedback-066.png"
+    },
+    {
+      "control": "settings.choice.qwencloud",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        843,
+        252,
+        1258,
+        295
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 11233,
+      "press_changed_pixels": 11259,
+      "image": "feedback-067.png"
+    },
+    {
+      "control": "settings.choice.cn-beijing",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        428,
+        422,
+        843,
+        465
+      ],
+      "selected_segment": true,
+      "hover_changed_pixels": 0,
+      "press_changed_pixels": 2482,
+      "image": "feedback-068.png"
+    },
+    {
+      "control": "settings.choice.ap-southeast-1",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        843,
+        422,
+        1258,
+        465
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 11246,
+      "press_changed_pixels": 11262,
+      "image": "feedback-069.png"
+    },
+    {
+      "control": "dialog.secondary.自动识别",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        424,
+        398,
+        519,
+        441
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2556,
+      "press_changed_pixels": 2532,
+      "image": "feedback-070.png"
+    },
+    {
+      "control": "dialog.secondary.中文",
+      "label": "settings-字幕翻译",
+      "bounds": [
+        424,
+        478,
+        487,
+        521
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1680,
+      "press_changed_pixels": 1667,
+      "image": "feedback-071.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-BT",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-072.png"
+    },
+    {
+      "control": "dialog.secondary.选择目录",
+      "label": "settings-BT",
+      "bounds": [
+        1167,
+        193,
+        1262,
+        236
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 2523,
+      "press_changed_pixels": 2463,
+      "image": "feedback-073.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-安全",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-074.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-浏览器",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-075.png"
+    },
+    {
+      "control": "dialog.secondary.取消",
+      "label": "settings-外观",
+      "bounds": [
+        1120,
+        623,
+        1183,
+        666
+      ],
+      "selected_segment": false,
+      "hover_changed_pixels": 1675,
+      "press_changed_pixels": 1669,
+      "image": "feedback-076.png"
+    }
+  ],
+  "test_script_sha256": "e443aea599b3c090b860f7931d9bbd9f9fbc6e1fe8f394be4c16c109c5fa9e29",
+  "components": {
+    "app\\HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "f1ef05227fd820e5371ed769a9a38f8ed9a09244c4f70f31266b4136e193da86",
+    "app\\resources\\HLSDownloaderEngine.exe": "371066167c540054956eba2a283306ae5ed31a68443e3042b06f5e01c667a1fe"
+  },
+  "window": {
+    "x": 0,
+    "y": 0,
+    "width": 1214,
+    "height": 567,
+    "active": true,
+    "showing": true,
+    "iconCount": 1,
+    "iconWidth": 192,
+    "iconHeight": 192,
+    "scaleX": 1.25,
+    "scaleY": 1.25,
+    "deviceX": 0,
+    "deviceY": 0,
+    "deviceWidth": 1518,
+    "deviceHeight": 709
+  },
+  "start_at": "main",
+  "normal_runtime_restored": true
+}
