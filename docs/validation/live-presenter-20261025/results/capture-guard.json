@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "cases": {
+    "repaint-light-final/complete-1.png": {
+      "pixels": 103250,
+      "content_pixels": 11655,
+      "nonblank": true
+    },
+    "repaint-dark-final/complete-1.png": {
+      "pixels": 103250,
+      "content_pixels": 11625,
+      "nonblank": true
+    },
+    "blank-capture-rejected/root-installer.png": {
+      "pixels": 688338,
+      "content_pixels": 0,
+      "nonblank": false
+    },
+    "blank-capture-rejected/root-installer.paint.png": {
+      "pixels": 1076262,
+      "content_pixels": 0,
+      "nonblank": false
+    }
+  }
+}

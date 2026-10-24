@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\live-presenter-20261024\\delivery\\HLSDownloader-7.0.3-20261025-未签名.msi",
+  "original_product_code": "{23E8E507-4FA7-4B95-9808-4367D9D08D4B}",
+  "verified_product_code": "{A492826E-5C48-4252-9466-93EB7E7789D2}",
+  "original_package_code": "{CE1A1718-0F8B-4440-82E2-ED0AF7005394}",
+  "verified_package_code": "{A5A75408-0252-47B3-A7DB-7DBE9DEBAD35}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "BBE6341DA63866569AE9B4CF9238DA7C116BDE029DD86A8338D3B47C182FE53C",
+  "sha256_after": "5117F6287AF6EF9B370F008A949B610CB594CD5875314B54618EE9495C66A061"
+}

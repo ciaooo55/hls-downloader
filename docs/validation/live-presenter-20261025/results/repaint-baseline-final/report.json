@@ -1,0 +1,60 @@
+{
+  "passed": false,
+  "samples": [
+    {
+      "name": "confirm-0",
+      "size": [
+        650,
+        500
+      ],
+      "dpi": 120,
+      "footer_accent_pixels": 5512
+    },
+    {
+      "name": "progress-0",
+      "size": [
+        413,
+        280
+      ],
+      "dpi": 120,
+      "footer_accent_pixels": 0
+    },
+    {
+      "name": "complete-0",
+      "size": [
+        413,
+        250
+      ],
+      "dpi": 120,
+      "footer_accent_pixels": 3014
+    },
+    {
+      "name": "confirm-1",
+      "size": [
+        650,
+        500
+      ],
+      "dpi": 120,
+      "footer_accent_pixels": 5512
+    },
+    {
+      "name": "progress-1",
+      "size": [
+        413,
+        280
+      ],
+      "dpi": 120,
+      "footer_accent_pixels": 0
+    },
+    {
+      "name": "complete-1",
+      "size": [
+        413,
+        250
+      ],
+      "dpi": 120,
+      "footer_accent_pixels": 0
+    }
+  ],
+  "error": "AssertionError: 下载完成: primary footer control is missing"
+}

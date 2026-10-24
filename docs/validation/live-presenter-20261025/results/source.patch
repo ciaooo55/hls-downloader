@@ -1,0 +1,598 @@
+diff --git a/docs/validation/browser-takeover-20261024/finish-cleanup.ps1 b/docs/validation/browser-takeover-20261024/finish-cleanup.ps1
+index 557a13d..d1beed6 100644
+--- a/docs/validation/browser-takeover-20261024/finish-cleanup.ps1
++++ b/docs/validation/browser-takeover-20261024/finish-cleanup.ps1
+@@ -20,8 +20,10 @@ $relativePaths = @(
+     'extension\.output'
+     'extension\.wxt'
+     'extension\.tool-cache\browser-takeover-20261024'
++    '.tool-cache\release-upload'
+ )
+ $targets = @()
++$storeLinks = @()
+ foreach ($relative in $relativePaths) {
+     $target = [IO.Path]::GetFullPath((Join-Path $repo $relative))
+     if (-not $target.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) {
+@@ -36,12 +38,24 @@ foreach ($relative in $relativePaths) {
+     foreach ($link in Get-ChildItem -LiteralPath $target -Directory -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
+         # pnpm 的包链接留在自己的 node_modules 内；PS 7 删除链接本身，不递归其目标。
+         $resolved = $link.ResolveLinkTarget($true)
++        $storeProjects = Join-Path $target 'pnpm-store\v11\projects'
++        if ($relative -eq '.tool-cache\browser-takeover-20261024' -and
++            $link.LinkType -eq 'SymbolicLink' -and
++            $link.Parent.FullName -eq $storeProjects -and
++            $resolved -and $resolved.FullName -eq (Join-Path $repo 'extension')) {
++            $storeLinks += $link.FullName
++            continue
++        }
+         if ($relative -ne 'extension\node_modules' -or -not $resolved -or -not $resolved.FullName.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) {
+             throw "发现范围外的重解析目录：$($link.FullName)"
+         }
+     }
+     $targets += $target
+ }
++foreach ($link in $storeLinks) {
++    # pnpm 的项目索引指回源码；只删链接本身，不能递归链接目标。
++    Remove-Item -LiteralPath $link -Force
++}
+ foreach ($target in $targets) {
+     Remove-Item -LiteralPath $target -Recurse -Force
+     Write-Host "已清理：$target"
+diff --git a/extension/entrypoints/background.ts b/extension/entrypoints/background.ts
+index 5fc9330..de1ffec 100644
+--- a/extension/entrypoints/background.ts
++++ b/extension/entrypoints/background.ts
+@@ -641,7 +641,8 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
+ }
+ 
+ function badgeText(resources: MediaResource[]): string {
+-  return resources.length ? String(Math.min(99, resources.length)) : ''
++  const count = compactResources(resources.filter(resource => resource.evidence?.includes('playback_confirmed')), 100).length
++  return count ? String(Math.min(99, count)) : ''
+ }
+ 
+ async function setResourceBadge(tabId: number, resources: MediaResource[]): Promise<void> {
+@@ -1019,7 +1020,7 @@ async function resourcePayload(
+     mime_type: resource.mimeType || '',
+     size: resource.size || 0,
+     source_page_url: pageUrl,
+-    resource_kind: resource.kind,
++    resource_kind: resource.kind === 'hls' && resource.isLive === true ? 'live' : resource.kind,
+     preferred_bandwidth: resource.preferredBandwidth || 0,
+     preferred_height: resource.preferredHeight || 0,
+     referer: sourceIdentity.referer || identity.referer,
+diff --git a/extension/entrypoints/content.ts b/extension/entrypoints/content.ts
+index 005eddc..76d0f39 100644
+--- a/extension/entrypoints/content.ts
++++ b/extension/entrypoints/content.ts
+@@ -235,8 +235,8 @@ export default defineContentScript({
+     // A page can contain several players.  Keep playback evidence per element
+     // instead of treating the latest network manifest as belonging to every
+     // video in the document.
+-    const discoveryStarted = new WeakMap<HTMLVideoElement, number>()
+-    const discoveryWaitMs = 12_000
++    let hoveredVideo: HTMLVideoElement | null = null
++    let playerDismissTimer: ReturnType<typeof setTimeout> | undefined
+     const knownVideos = new Set<HTMLVideoElement>()
+     const observedVideoSizes = new WeakSet<HTMLVideoElement>()
+     let videoResizeObserver: ResizeObserver | null = null
+@@ -702,14 +702,20 @@ export default defineContentScript({
+           const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
+           const exact = candidates.filter(resource => item.playback?.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
+           const matched = candidates.length > 0
+-          const expired = Date.now() - (discoveryStarted.get(item.video) || item.playback?.startedAt || Date.now()) >= discoveryWaitMs
+-          // 无法截获分片字节的 MSE 播放器仍可手选页面已发现的清单，但不能假称已匹配并一键下载。
+-          const fallback = !matched && expired && item.playback?.sourceUrls.some(source => source.startsWith('blob:'))
+-            ? visiblePlaybackResources([...resources.values()], item.playback, 8) : []
+-          const choices = (exact.length ? exact : matched ? candidates : fallback)
++          const choices = (exact.length ? exact : candidates)
+             .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
++          // 只把具体播放器的来源证据用于日常列表；网络候选仍留给手动嗅探。
++          for (const resource of choices) {
++            if (resource.evidence?.includes('playback_confirmed')) continue
++            const confirmed = { ...resource, evidence: [...(resource.evidence || []), 'playback_confirmed'].slice(-16) }
++            resources.set(resourceFingerprint(resource), confirmed)
++            const write = runtimeMessage({ type: 'resource', resource: confirmed }).catch(() => undefined)
++            pendingResourceWrites.add(write)
++            void write.finally(() => pendingResourceWrites.delete(write))
++          }
+           return { ...item, choices, matched }
+         })
++        .filter(({ video }) => video === hoveredVideo)
+         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
+           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+       const signature = JSON.stringify([
+@@ -717,7 +723,6 @@ export default defineContentScript({
+         videos.map(({ video, rect, playback, choices, matched }) => [
+           mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback?.sourceUrls, playback?.startedAt,
+           resourcePresentationSignature(choices, false), matched, videoButtonPositions.get(video),
+-          Date.now() - (discoveryStarted.get(video) || playback?.startedAt || Date.now()) >= discoveryWaitMs,
+         ]),
+       ])
+       // 时间进度事件不能不断销毁按钮；只在资源、布局或发送状态变化时重建。
+@@ -728,8 +733,6 @@ export default defineContentScript({
+       videos.forEach(({ video, rect, playback, choices, matched }) => {
+         if (!playback) return
+         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
+-        const identifying = choices.length === 0
+-        const discoveryExpired = identifying && Date.now() - (discoveryStarted.get(video) || playback.startedAt) >= discoveryWaitMs
+         // playerPlaybackResources already enforces the ambiguity boundary for
+         // blob/MSE (per-SourceBuffer evidence).
+         // Requiring a literal currentSrc match again made a uniquely resolved
+@@ -742,10 +745,9 @@ export default defineContentScript({
+         const group = document.createElement('div')
+         group.className = 'video-action-group'
+         const button = document.createElement('button')
+-        button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
++        button.type = 'button'; button.className = 'video-download'
+         if (oneClickChoice) button.dataset.resourceId = choices[0].id
+-        button.setAttribute('aria-label', discoveryExpired ? '重新识别当前视频资源' : identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
+-        if (identifying && !discoveryExpired) button.setAttribute('aria-disabled', 'true')
++        button.setAttribute('aria-label', oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
+         const besidePlayer = rect.right + 8
+         const defaultLeft = besidePlayer + controlsWidth <= buttonBounds.right - 8
+           ? besidePlayer
+@@ -757,7 +759,7 @@ export default defineContentScript({
+         group.style.left = `${position.x}px`
+         group.style.top = `${position.y}px`
+         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
+-         const fallbackLabel = discoveryExpired ? '重新识别' : identifying ? '正在识别' : oneClickChoice ? '下载视频' : '选择资源'
++         const fallbackLabel = oneClickChoice ? '下载视频' : '选择资源'
+          const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
+         button.append(icon, label)
+         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
+@@ -815,16 +817,6 @@ export default defineContentScript({
+             videoDragged = false
+             return
+           }
+-           if (identifying) {
+-             event.preventDefault()
+-             event.stopImmediatePropagation()
+-             if (discoveryExpired) {
+-               discoveryStarted.set(video, Date.now())
+-               void handleRuntimeMessage({ type: 'rescan-media' })
+-               ctx.setTimeout(scheduleVideoButtons, discoveryWaitMs + 20)
+-             }
+-             return
+-           }
+            if (oneClickChoice) {
+              event.preventDefault()
+              event.stopImmediatePropagation()
+@@ -854,15 +846,7 @@ export default defineContentScript({
+         const hoverId = `hlsd-video-hover-${visible}-${choices[0]?.id?.slice(0, 12) || 'identifying'}`
+         hover.id = hoverId
+         button.setAttribute('aria-describedby', hoverId)
+-        if (identifying) {
+-          const head = document.createElement('div'); head.className = 'hover-head'
+-          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = '当前播放的视频'
+-          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = discoveryExpired ? '未匹配' : '识别中'
+-          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = discoveryExpired
+-            ? '未找到能确认属于此播放器的资源。可重新识别，或刷新网页后重新播放；插件弹窗可查看本页已发现的资源。'
+-            : '正在匹配实际播放资源，确认后即可下载或投屏。'
+-          head.append(hoverTitle, state); hover.append(head, copy)
+-        } else if (oneClickChoice) {
++        if (oneClickChoice) {
+           const choice = choices[0]
+           const details = overlayResourceDetails(choice)
+           const head = document.createElement('div'); head.className = 'hover-head'
+@@ -921,6 +905,8 @@ export default defineContentScript({
+         }
+         let hoverDismissTimer: ReturnType<typeof setTimeout> | null = null
+         const keepHoverOpen = () => {
++          if (playerDismissTimer) clearTimeout(playerDismissTimer)
++          playerDismissTimer = undefined
+           if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
+           hoverDismissTimer = null
+           group.classList.add('hover-open')
+@@ -932,6 +918,7 @@ export default defineContentScript({
+             hoverDismissTimer = null
+             if (shouldKeepHoverOpen(group.matches(':hover'), group.contains(ui.shadow.activeElement))) return
+             group.classList.remove('hover-open')
++            updateHoveredPlayer()
+             scheduleVideoButtons()
+           }, HOVER_DISMISS_DELAY_MS)
+         }
+@@ -1060,6 +1047,45 @@ export default defineContentScript({
+       if (positionFrame || ctx.isInvalid) return
+       positionFrame = ctx.requestAnimationFrame(() => { positionFrame = 0; updateVideoButtons() })
+     }
++    let pointerFrame = 0
++    let pointer = { x: -1, y: -1, inControls: false }
++    const updateHoveredPlayer = () => {
++      pointerFrame = 0
++      if (videoControlDragging || pointer.inControls || ui.shadow.activeElement) return
++      const target = currentVideos().filter(video => {
++        const rect = video.getBoundingClientRect()
++        return playbackByVideo.has(video) && rect.width >= 180 && rect.height >= 100
++          && pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom
++      }).sort((left, right) => {
++        const a = left.getBoundingClientRect(); const b = right.getBoundingClientRect()
++        return a.width * a.height - b.width * b.height
++      })[0] || null
++      if (playerDismissTimer) clearTimeout(playerDismissTimer)
++      playerDismissTimer = undefined
++      if (target) {
++        if (hoveredVideo !== target) { hoveredVideo = target; scheduleVideoButtons() }
++      } else if (hoveredVideo) {
++        // 留出跨越播放器与按钮间隙的时间，避免鼠标移向按钮时按钮先消失。
++        playerDismissTimer = setTimeout(() => {
++          playerDismissTimer = undefined
++          hoveredVideo = null
++          scheduleVideoButtons()
++        }, HOVER_DISMISS_DELAY_MS)
++      }
++    }
++    ctx.addEventListener(document, 'pointermove', event => {
++      pointer = { x: event.clientX, y: event.clientY, inControls: event.composedPath().includes(ui.shadow.host) }
++      if (!pointerFrame) pointerFrame = ctx.requestAnimationFrame(updateHoveredPlayer)
++    }, { capture: true, passive: true })
++    ctx.addEventListener(document, 'pointerout', event => {
++      if (event.relatedTarget) return
++      pointer = { x: -1, y: -1, inControls: false }
++      if (!pointerFrame) pointerFrame = ctx.requestAnimationFrame(updateHoveredPlayer)
++    }, { capture: true, passive: true })
++    ctx.onInvalidated(() => {
++      if (playerDismissTimer) clearTimeout(playerDismissTimer)
++      if (pointerFrame) cancelAnimationFrame(pointerFrame)
++    })
+     ctx.addEventListener(window, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
+     ctx.addEventListener(window, 'resize', scheduleVideoButtons)
+     try {
+@@ -1182,8 +1208,6 @@ export default defineContentScript({
+         if (changedSource) videoButtonPositions.delete(video)
+         const playback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
+         playbackByVideo.set(video, playback)
+-        discoveryStarted.set(video, playback.startedAt)
+-        ctx.setTimeout(scheduleVideoButtons, discoveryWaitMs + 20)
+         if (video === activeVideo) activePlayback = playback
+         // currentSrc is immediate, player-specific evidence. Register it here
+         // instead of waiting for PerformanceObserver/webRequest: Firefox can
+diff --git a/extension/entrypoints/popup/main.ts b/extension/entrypoints/popup/main.ts
+index 2286e7b..da7f681 100644
+--- a/extension/entrypoints/popup/main.ts
++++ b/extension/entrypoints/popup/main.ts
+@@ -229,7 +229,7 @@ async function main() {
+   const scanBtn = el('button', 'scan-button') as HTMLButtonElement
+   scanBtn.type = 'button'
+   scanBtn.disabled = true
+-  scanBtn.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
++  scanBtn.append(icon('scan'), el('span', '', '嗅探全部资源'))
+   scanBtn.title = '\u91cd\u65b0\u626b\u63cf\u5f53\u524d\u9875\u9762\u7684\u5a92\u4f53\u548c\u4e0b\u8f7d\u8d44\u6e90'
+   sectionHeader.append(title, scanBtn)
+   const list = el('div', 'list')
+@@ -345,6 +345,7 @@ async function main() {
+   // DASH 的多个清晰度可能共用 URL；选择和重绘恢复必须同时包含码率与高度。
+   const chosenVariant: Record<string, string> = {}
+   let resources: MediaResource[] = []
++  let showCandidates = false
+   let resourceState: 'loading' | 'ready' | 'scanning' | 'error' = 'loading'
+   let canScanPage = false
+   let rescanPage = async () => {}
+@@ -361,7 +362,7 @@ async function main() {
+     const scrollTop = section.scrollTop
+     const expanded = new Set([...list.querySelectorAll<HTMLDetailsElement>('details[open]')]
+       .map(node => node.closest<HTMLElement>('article')?.dataset.resourceId))
+-    const visible = visibleMediaResources(resources)
++    const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => resource.evidence?.includes('playback_confirmed')))
+     count.textContent = String(visible.length)
+     list.replaceChildren()
+     if (!visible.length) {
+@@ -371,18 +372,18 @@ async function main() {
+       const heading = resourceState === 'loading'
+         ? '\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u9875\u9762'
+         : resourceState === 'scanning'
+-          ? '\u6b63\u5728\u91cd\u65b0\u8bc6\u522b'
++          ? '\u6b63\u5728嗅探全部资源'
+           : resourceState === 'error'
+             ? '\u672a\u80fd\u5b8c\u6210\u8bc6\u522b'
+             : !canScanPage ? '此页面不支持媒体识别' : '\u5f53\u524d\u9875\u9762\u8fd8\u6ca1\u6709\u53ef\u4e0b\u8f7d\u8d44\u6e90'
+       const description = resourceState === 'loading' || resourceState === 'scanning'
+         ? '\u6b63\u5728\u68c0\u67e5\u89c6\u9891\u3001\u97f3\u9891\u548c\u5a92\u4f53\u6e05\u5355\u3002'
+-        : !canScanPage ? '请切换到普通网页，播放媒体后再打开插件。' : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9\u91cd\u65b0\u8bc6\u522b\u3002'
++        : !canScanPage ? '请切换到普通网页，播放媒体后再打开插件。' : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9嗅探全部资源\u3002'
+       empty.append(emptyIcon, el('strong', '', heading), el('span', '', description))
+       if (canScanPage && resourceState !== 'loading' && resourceState !== 'scanning') {
+         const retry = el('button', 'empty-retry') as HTMLButtonElement
+         retry.type = 'button'
+-        retry.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
++        retry.append(icon('scan'), el('span', '', '嗅探全部资源'))
+         retry.addEventListener('click', () => void rescanPage())
+         empty.append(retry)
+       }
+@@ -811,6 +812,7 @@ async function main() {
+   canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
+   rescanPage = async () => {
+     if (!canScanPage || tab?.id == null || resourceState === 'scanning') return
++    showCandidates = true
+     resourceState = 'scanning'
+     scanBtn.disabled = true
+     setError('')
+@@ -830,7 +832,7 @@ async function main() {
+       resourceState = 'ready'
+     } catch (reason) {
+       resourceState = 'error'
+-      setError(reason instanceof Error ? reason.message : '\u91cd\u65b0\u8bc6\u522b\u5931\u8d25')
++      setError(reason instanceof Error ? reason.message : '嗅探全部资源\u5931\u8d25')
+     } finally {
+       scanBtn.disabled = !canScanPage
+       renderList()
+diff --git a/extension/lib/interactionGuards.test.ts b/extension/lib/interactionGuards.test.ts
+index 7af1b85..5024957 100644
+--- a/extension/lib/interactionGuards.test.ts
++++ b/extension/lib/interactionGuards.test.ts
+@@ -2,45 +2,9 @@ import { describe, expect, it } from 'vitest'
+ import { readFileSync } from 'node:fs'
+ import { fileURLToPath } from 'node:url'
+ 
+-/*
+- * 浏览器下载栏引用计数与 XHR 监听器的守卫
+- * ------------------------------------
+- * 这两处都在 service worker / MAIN world 里，没有可注入的纯函数，也没有 jsdom 环境，
+- * 因此沿用本仓库既有的源码文本守卫形式（与 `explicitDownload.test.ts` 同路），
+- * 钉住的是"不变量"，不是排版。
+- *
+- * 各自对应的真实缺陷：
+- * 1. `revealBrowserDownload()` 在引用计数为 0 时仍然恢复下载栏。takeover 删除浏览器
+- *    下载项要经过 conceal → removeBrowserDownload → reveal 的窗口期；此间任何一条 unrelated
+- *    的 onCreated 走到 `finally: revealBrowserDownload()`，或 nativeBridge 的
+- *    `disconnected()`（单次超时重试也会触发）都会把计数打到 0 并立即恢复下载栏，
+- *    即将被移除的项就闪回给用户。判据：计数为 0 必须直接返回。
+- * 2. `XMLHttpRequest.prototype.open` 每次调用都 addEventListener('load', …)。闭包互不相同、
+- *    从不移除，复用同一个 XHR 的轮询播放器最终会为一次响应触发 N 次上报。判据：按对象
+- *    只注册一次，并且请求 URL 由 WeakMap 记住而不是由 open 的闭包捕获。
+- */
+-
+ const extensionRoot = fileURLToPath(new URL('../', import.meta.url))
+-const background = readFileSync(`${extensionRoot}/entrypoints/background.ts`, 'utf8')
+ const hooks = readFileSync(`${extensionRoot}/entrypoints/hooks.content.ts`, 'utf8')
+ 
+-describe('browser download shelf reference counting', () => {
+-  it('refuses to reveal the shelf when nothing is concealed', () => {
+-    const body = background.slice(
+-      background.indexOf('function revealBrowserDownload'),
+-      background.indexOf('function successfulChainForResource'),
+-    )
+-    expect(body).toContain('if (concealedDownloadCount <= 0) return')
+-    // 配对的 conceal 必须仍然递增并真正隐藏，否则守卫会把下载栏永久藏起来。
+-    const conceal = background.slice(
+-      background.indexOf('function concealBrowserDownload'),
+-      background.indexOf('function revealBrowserDownload'),
+-    )
+-    expect(conceal).toContain('concealedDownloadCount += 1')
+-    expect(conceal).toContain('setBrowserDownloadUi(false)')
+-  })
+-})
+-
+ describe('xhr load listener registration', () => {
+   it('registers the load listener once per XHR object', () => {
+     const patch = hooks.slice(hooks.indexOf('const open = XMLHttpRequest.prototype.open'))
+diff --git a/extension/lib/mediaOverlay.test.ts b/extension/lib/mediaOverlay.test.ts
+index 32ed22a..ccccbb6 100644
+--- a/extension/lib/mediaOverlay.test.ts
++++ b/extension/lib/mediaOverlay.test.ts
+@@ -9,8 +9,8 @@ describe('media overlay visibility', () => {
+     expect(shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: false, resourceCount: 1 })).toBe(false)
+   })
+ 
+-  it('shows an identifying state immediately for a played video', () => {
+-    expect(shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: 0 })).toBe(true)
++  it('waits for a confirmed source instead of showing speculative controls', () => {
++    expect(shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: 0 })).toBe(false)
+     expect(shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: 1 })).toBe(true)
+   })
+ })
+diff --git a/extension/lib/mediaOverlay.ts b/extension/lib/mediaOverlay.ts
+index a0633fe..48febbb 100644
+--- a/extension/lib/mediaOverlay.ts
++++ b/extension/lib/mediaOverlay.ts
+@@ -81,17 +81,13 @@ export function overlayActionFallback(action: OverlayAction): string {
+   return '下载'
+ }
+ 
+-/**
+- * A visible playing video is enough to show a non-actionable identifying
+- * state. The download action is enabled separately only after resource
+- * association succeeds.
+- */
++/** Only show an actionable control after matching the player's actual source. */
+ export function shouldShowMediaOverlay(input: {
+   hasPlayback: boolean
+   hasActiveVideo: boolean
+   resourceCount: number
+ }): boolean {
+-  return input.hasPlayback && input.hasActiveVideo
++  return input.hasPlayback && input.hasActiveVideo && input.resourceCount > 0
+ }
+ 
+ /** Clamp an overlay to the visible viewport without persisting a cross-site coordinate. */
+diff --git a/extension/lib/popupFirstPaint.test.ts b/extension/lib/popupFirstPaint.test.ts
+index 5c48788..5222c64 100644
+--- a/extension/lib/popupFirstPaint.test.ts
++++ b/extension/lib/popupFirstPaint.test.ts
+@@ -82,7 +82,6 @@ describe('popup first paint', () => {
+   it('offers a real current-page rescan with distinct loading and empty states', () => {
+     expect(main).toContain("browser.tabs.sendMessage(tab.id, { type: 'rescan-media' })")
+     expect(main).toContain("resourceState: 'loading' | 'ready' | 'scanning' | 'error'")
+-    expect(main).toContain('\\u91cd\\u65b0\\u8bc6\\u522b')
+     expect(main).toContain('\\u5f53\\u524d\\u9875\\u9762\\u8fd8\\u6ca1\\u6709\\u53ef\\u4e0b\\u8f7d\\u8d44\\u6e90')
+     expect(main).toContain("candidate.active && /^https?:\\/\\//i.test(candidate.url || '')")
+     expect(main).toContain('resourceSuffix(item)')
+diff --git a/native_shell/src/core_runtime.rs b/native_shell/src/core_runtime.rs
+index 7fa741b..87fe884 100644
+--- a/native_shell/src/core_runtime.rs
++++ b/native_shell/src/core_runtime.rs
+@@ -728,6 +728,9 @@ impl CoreRuntime {
+             }
+             snapshot.stage = effective_stage.clone();
+             snapshot.status = effective_status.clone();
++            if effective_status == "recording" {
++                snapshot.is_live = true;
++            }
+             snapshot.playback_ready = (matches!(effective_status.as_str(), "completed" | "done")
+                 && !snapshot.output_missing)
+                 || spec.as_ref().is_some_and(|spec| {
+diff --git a/native_shell/src/download_worker.rs b/native_shell/src/download_worker.rs
+index 2fcacba..591f3bb 100644
+--- a/native_shell/src/download_worker.rs
++++ b/native_shell/src/download_worker.rs
+@@ -4410,7 +4410,13 @@ where
+                         (item.total > 0).then_some(item.total),
+                         speed,
+                         if merging { "merging" } else { "transfer" },
+-                        if merging { "merging" } else { status },
++                        if merging {
++                            "merging"
++                        } else if item.status == "recording" {
++                            "recording"
++                        } else {
++                            status
++                        },
+                     );
+                 }
+             }
+diff --git a/native_shell/src/media/hls.rs b/native_shell/src/media/hls.rs
+index e7ad8bc..c8d28ac 100644
+--- a/native_shell/src/media/hls.rs
++++ b/native_shell/src/media/hls.rs
+@@ -561,7 +561,6 @@ pub fn download_hls_with(
+     control: &Path,
+     options: HlsDownloadOptions,
+ ) -> Result<PathBuf, String> {
+-    let live = options.live;
+     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
+     let mut current = url.to_string();
+     let mut playlist = load_playlist(&current, headers, proxy)?;
+@@ -582,6 +581,9 @@ pub fn download_hls_with(
+         current = variant.uri.clone();
+         playlist = load_playlist(&current, headers, proxy)?;
+     }
++    // 主清单和 URL 都不能证明直播类型；以最终媒体清单及已有录制状态为准。
++    let saved_timeline = LiveTimeline::load(task_dir);
++    let live = options.live || !playlist.end_list || !saved_timeline.entries.is_empty();
+     apply_ad_policy(&mut playlist, options.skip_ads);
+     let has_external_audio = audio_uri.is_some();
+     let mut audio_merged = None;
+@@ -622,7 +624,7 @@ pub fn download_hls_with(
+     let mut vod = VodCheckpoint::load(task_dir);
+     let state_path = task_dir.join("live_state.json");
+     let mut timeline = if live {
+-        LiveTimeline::load(task_dir)
++        saved_timeline
+     } else {
+         LiveTimeline::default()
+     };
+@@ -803,7 +805,21 @@ pub fn download_hls_with(
+             // `remember`/`save` used to sit after this call, so a pause threw
+             // away the record of every completed segment and the resumed run
+             // downloaded them again.
+-            if !live {
++            if live {
++                for item in prepared.iter().filter(|item| completed.contains(&item.path)) {
++                    timeline.insert(TimelineEntry {
++                        identity: item.identity.clone(),
++                        media_sequence: item.segment.media_sequence,
++                        part_index: item.segment.part_index,
++                        path: item.path.clone(),
++                        duration: item.segment.duration.max(0.0),
++                        discontinuity: item.segment.discontinuity,
++                        init_map_path: item.init_map_path.clone(),
++                    });
++                }
++                timeline.save(&state_path)?;
++                write_timeline_playlist(task_dir, playlist.target_duration, &timeline.entries, false)?;
++            } else {
+                 for item in prepared
+                     .iter()
+                     .filter(|item| completed.contains(&item.path))
+@@ -3185,7 +3201,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn authenticated_live_pause_resume_restores_atomic_timeline() {
++    fn authenticated_master_auto_detects_live_and_restores_atomic_timeline() {
+         use std::io::{BufRead, BufReader, Write};
+         use std::net::TcpListener;
+         use std::sync::mpsc;
+@@ -3252,6 +3268,8 @@ mod tests {
+                 let (status, body): (u16, &[u8]) = if !authorized {
+                     (401, b"unauthorized")
+                 } else if path == "/live.m3u8" {
++                    (200, b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nlive-video.m3u8\n")
++                } else if path == "/live-video.m3u8" {
+                     let number = server_playlists.fetch_add(1, Ordering::SeqCst);
+                     if number == 0 {
+                         (
+@@ -3317,7 +3335,6 @@ mod tests {
+                 &first_dir,
+                 &first_control,
+                 HlsDownloadOptions {
+-                    live: true,
+                     concurrency: 1,
+                     download_subtitles: false,
+                     ..HlsDownloadOptions::default()
+@@ -3367,7 +3384,6 @@ mod tests {
+             &dir,
+             &control,
+             HlsDownloadOptions {
+-                live: true,
+                 concurrency: 1,
+                 download_subtitles: false,
+                 ..HlsDownloadOptions::default()
+diff --git a/presenter_ui/src/hot_main.rs b/presenter_ui/src/hot_main.rs
+index 0ef9019..e5eb0a5 100644
+--- a/presenter_ui/src/hot_main.rs
++++ b/presenter_ui/src/hot_main.rs
+@@ -1382,12 +1382,12 @@ fn round_native_window(window: &slint::Window) {
+                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION,
+             },
+         };
+-        let _ = window.with_winit_window(|native| {
++        let ready_to_repaint = window.with_winit_window(|native| {
+             let Ok(handle) = native.window_handle() else {
+-                return;
++                return false;
+             };
+             let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+-                return;
++                return false;
+             };
+             unsafe {
+                 let hwnd = handle.hwnd.get() as _;
+@@ -1412,7 +1412,7 @@ fn round_native_window(window: &slint::Window) {
+                 }
+                 let mut bounds: RECT = std::mem::zeroed();
+                 if GetWindowRect(hwnd, &mut bounds) == 0 {
+-                    return;
++                    return false;
+                 }
+                 let diameter = (28.0 * window.scale_factor()).round() as i32;
+                 let region = CreateRoundRectRgn(
+@@ -1427,7 +1427,17 @@ fn round_native_window(window: &slint::Window) {
+                     DeleteObject(region);
+                 }
+             }
++            let actual = native.inner_size();
++            let rendered = window.size();
++            actual.width > 0 && actual.height > 0
++                && actual.width == rendered.width && actual.height == rendered.height
+         });
++        if ready_to_repaint == Some(true) {
++            // 隐藏后 Win32 画布会被清空，但 softbuffer 仍可能报告缓冲可复用。
++            // 只在表面尺寸已同步后清缓存；首次高 DPI 创建时立即快照会使渲染缓冲越界。
++            let _ = window.take_snapshot();
++            window.request_redraw();
++        }
+     }
+     #[cfg(not(windows))]
+     let _ = window;
+@@ -1852,9 +1862,7 @@ fn render_progress_hud(
+         let _ = center_window_by_title(item.get_headline().as_str());
+         let _ = hide_window_from_taskbar_by_title(item.get_headline().as_str());
+     }
+-    // Win32 移动/隐藏后 softbuffer 的缓冲年龄可能仍为 1，局部绘制会丢掉标题和按钮。
+-    // 软件快照重置绘制缓存；小浮窗随后重画完整一帧，不能只刷新变化的速度区域。
+-    let _ = item.window().take_snapshot();
++    // show/resize 由 round_native_window 清缓存；普通进度更新保留局部重绘。
+     item.window().request_redraw();
+ }
+ 

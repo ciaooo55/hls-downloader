@@ -20,8 +20,10 @@ $relativePaths = @(
     'extension\.output'
     'extension\.wxt'
     'extension\.tool-cache\browser-takeover-20261024'
+    '.tool-cache\release-upload'
 )
 $targets = @()
+$storeLinks = @()
 foreach ($relative in $relativePaths) {
     $target = [IO.Path]::GetFullPath((Join-Path $repo $relative))
     if (-not $target.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) {
@@ -36,11 +38,23 @@ foreach ($relative in $relativePaths) {
     foreach ($link in Get-ChildItem -LiteralPath $target -Directory -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
         # pnpm 的包链接留在自己的 node_modules 内；PS 7 删除链接本身，不递归其目标。
         $resolved = $link.ResolveLinkTarget($true)
+        $storeProjects = Join-Path $target 'pnpm-store\v11\projects'
+        if ($relative -eq '.tool-cache\browser-takeover-20261024' -and
+            $link.LinkType -eq 'SymbolicLink' -and
+            $link.Parent.FullName -eq $storeProjects -and
+            $resolved -and $resolved.FullName -eq (Join-Path $repo 'extension')) {
+            $storeLinks += $link.FullName
+            continue
+        }
         if ($relative -ne 'extension\node_modules' -or -not $resolved -or -not $resolved.FullName.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) {
             throw "发现范围外的重解析目录：$($link.FullName)"
         }
     }
     $targets += $target
+}
+foreach ($link in $storeLinks) {
+    # pnpm 的项目索引指回源码；只删链接本身，不能递归链接目标。
+    Remove-Item -LiteralPath $link -Force
 }
 foreach ($target in $targets) {
     Remove-Item -LiteralPath $target -Recurse -Force

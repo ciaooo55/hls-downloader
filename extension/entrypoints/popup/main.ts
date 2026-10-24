@@ -229,7 +229,7 @@ async function main() {
   const scanBtn = el('button', 'scan-button') as HTMLButtonElement
   scanBtn.type = 'button'
   scanBtn.disabled = true
-  scanBtn.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
+  scanBtn.append(icon('scan'), el('span', '', '嗅探全部资源'))
   scanBtn.title = '\u91cd\u65b0\u626b\u63cf\u5f53\u524d\u9875\u9762\u7684\u5a92\u4f53\u548c\u4e0b\u8f7d\u8d44\u6e90'
   sectionHeader.append(title, scanBtn)
   const list = el('div', 'list')
@@ -345,6 +345,7 @@ async function main() {
   // DASH 的多个清晰度可能共用 URL；选择和重绘恢复必须同时包含码率与高度。
   const chosenVariant: Record<string, string> = {}
   let resources: MediaResource[] = []
+  let showCandidates = false
   let resourceState: 'loading' | 'ready' | 'scanning' | 'error' = 'loading'
   let canScanPage = false
   let rescanPage = async () => {}
@@ -361,7 +362,7 @@ async function main() {
     const scrollTop = section.scrollTop
     const expanded = new Set([...list.querySelectorAll<HTMLDetailsElement>('details[open]')]
       .map(node => node.closest<HTMLElement>('article')?.dataset.resourceId))
-    const visible = visibleMediaResources(resources)
+    const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => resource.evidence?.includes('playback_confirmed')))
     count.textContent = String(visible.length)
     list.replaceChildren()
     if (!visible.length) {
@@ -371,18 +372,18 @@ async function main() {
       const heading = resourceState === 'loading'
         ? '\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u9875\u9762'
         : resourceState === 'scanning'
-          ? '\u6b63\u5728\u91cd\u65b0\u8bc6\u522b'
+          ? '\u6b63\u5728嗅探全部资源'
           : resourceState === 'error'
             ? '\u672a\u80fd\u5b8c\u6210\u8bc6\u522b'
             : !canScanPage ? '此页面不支持媒体识别' : '\u5f53\u524d\u9875\u9762\u8fd8\u6ca1\u6709\u53ef\u4e0b\u8f7d\u8d44\u6e90'
       const description = resourceState === 'loading' || resourceState === 'scanning'
         ? '\u6b63\u5728\u68c0\u67e5\u89c6\u9891\u3001\u97f3\u9891\u548c\u5a92\u4f53\u6e05\u5355\u3002'
-        : !canScanPage ? '请切换到普通网页，播放媒体后再打开插件。' : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9\u91cd\u65b0\u8bc6\u522b\u3002'
+        : !canScanPage ? '请切换到普通网页，播放媒体后再打开插件。' : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9嗅探全部资源\u3002'
       empty.append(emptyIcon, el('strong', '', heading), el('span', '', description))
       if (canScanPage && resourceState !== 'loading' && resourceState !== 'scanning') {
         const retry = el('button', 'empty-retry') as HTMLButtonElement
         retry.type = 'button'
-        retry.append(icon('scan'), el('span', '', '\u91cd\u65b0\u8bc6\u522b'))
+        retry.append(icon('scan'), el('span', '', '嗅探全部资源'))
         retry.addEventListener('click', () => void rescanPage())
         empty.append(retry)
       }
@@ -811,6 +812,7 @@ async function main() {
   canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
   rescanPage = async () => {
     if (!canScanPage || tab?.id == null || resourceState === 'scanning') return
+    showCandidates = true
     resourceState = 'scanning'
     scanBtn.disabled = true
     setError('')
@@ -830,7 +832,7 @@ async function main() {
       resourceState = 'ready'
     } catch (reason) {
       resourceState = 'error'
-      setError(reason instanceof Error ? reason.message : '\u91cd\u65b0\u8bc6\u522b\u5931\u8d25')
+      setError(reason instanceof Error ? reason.message : '嗅探全部资源\u5931\u8d25')
     } finally {
       scanBtn.disabled = !canScanPage
       renderList()

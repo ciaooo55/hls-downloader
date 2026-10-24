@@ -1,0 +1,26 @@
+{
+  "task_sandbox_closed": true,
+  "cleanup_executed": false,
+  "automatic_approval_result": "blocked by policy; no specific reason provided",
+  "remaining_task_generated": [
+    ".tool-cache/live-presenter-20261024",
+    "extension/node_modules",
+    "extension/.output",
+    "extension/.wxt"
+  ],
+  "manual_script": "docs/validation/live-presenter-20261025/finish-cleanup.ps1",
+  "preserved_user_backup": {
+    "path": "outputs/private-user-backup/uninstall-20261021",
+    "files": 17,
+    "bytes": 4600017
+  },
+  "prior_blocked_paths_not_retried": [
+    "native_shell/downloads/.hls-tasks/task-1/control",
+    "native_shell/site-cache/.hls-tasks/task-1/control",
+    "docs/validation/download-coverage-20261024/results/edge-stderr.log",
+    "docs/validation/download-coverage-20261024/results/firefox-stderr.log",
+    "docs/validation/download-coverage-20261024/results/installer-stderr.log",
+    "docs/validation/interleaved-playback-20261024/results/first-attempt/dash-tests.stderr.log"
+  ],
+  "host_installation_touched": false
+}

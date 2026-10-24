@@ -4410,7 +4410,13 @@ where
                         (item.total > 0).then_some(item.total),
                         speed,
                         if merging { "merging" } else { "transfer" },
-                        if merging { "merging" } else { status },
+                        if merging {
+                            "merging"
+                        } else if item.status == "recording" {
+                            "recording"
+                        } else {
+                            status
+                        },
                     );
                 }
             }

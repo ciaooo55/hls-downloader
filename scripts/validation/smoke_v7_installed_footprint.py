@@ -5,6 +5,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import uuid
 import zipfile
 
 import psutil
+from PIL import Image
 
 from msi_checkpoint_fixture import connect, send, wait_task
 from smoke_v7_download_playback import wait
@@ -48,14 +50,14 @@ def free_port():
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    install = Path(r'C:\QAWork\Custom Install Path\HLSDownloader')
+    product = json.loads(args.manifest.read_text(encoding='utf-8-sig'))['product_code']
+    install = Path(r'C:\QAWork\Custom Install Path') / ('HLSDownloader-' + uuid.uuid4().hex[:8])
     assert not install.exists(), 'Fresh custom installation required'
     report = {'passed': False, 'checks': [], 'msi_sha256': hashlib.sha256(args.msi.read_bytes()).hexdigest()}
     processes = []
     installed = False
-    product = json.loads(args.manifest.read_text(encoding='utf-8-sig'))['product_code']
     stage = Path(r'C:\QAWork') / ('installer-' + product.strip('{}'))
-    stage.mkdir(exist_ok=True)
+    stage.mkdir(parents=True, exist_ok=True)
     local_msi = stage/'package.msi'
     # Windows Installer 服务不共享桌面用户的沙盒映射，安装文件和日志先落在虚拟机本地。
     shutil.copyfile(args.msi, local_msi)
@@ -194,8 +196,23 @@ def run(args):
                     return None
             window = wait(ready, 'Installed UI not visibly connected', 120)
             report['ui_visible_connected_seconds'] = time.monotonic()-started
-            args.report.with_suffix('.png').write_bytes(ui('screenshot', True))
-            record('installed UI opens visibly and connects to the installed Core', window)
+            screen = ui('screenshot', True)
+            paint = ui('screenshot?mode=paint', True)
+            args.report.with_suffix('.png').write_bytes(screen)
+            args.report.with_suffix('.paint.png').write_bytes(paint)
+            def nonblank(data):
+                with Image.open(io.BytesIO(data)) as image:
+                    # Resampling a flat canvas's rounded corners creates many
+                    # colors without proving that any application content drew.
+                    rgb = image.convert('RGB')
+                    pixels = rgb.width * rgb.height
+                    colors = rgb.getcolors(pixels)
+                    counts = sorted((count for count, _ in colors), reverse=True)
+                    return pixels - sum(counts[:2]) > max(500, pixels * .005)
+            report['ui_capture'] = {'screen_nonblank': nonblank(screen), 'paint_nonblank': nonblank(paint)}
+            assert any(report['ui_capture'].values()), 'UI reports showing but both screen and paint captures are blank'
+            record('installed UI reports showing, connects to Core and produces a nonblank render',
+                   {'window': window, 'capture': report['ui_capture']})
             time.sleep(3)
 
 

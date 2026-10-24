@@ -81,17 +81,13 @@ export function overlayActionFallback(action: OverlayAction): string {
   return '下载'
 }
 
-/**
- * A visible playing video is enough to show a non-actionable identifying
- * state. The download action is enabled separately only after resource
- * association succeeds.
- */
+/** Only show an actionable control after matching the player's actual source. */
 export function shouldShowMediaOverlay(input: {
   hasPlayback: boolean
   hasActiveVideo: boolean
   resourceCount: number
 }): boolean {
-  return input.hasPlayback && input.hasActiveVideo
+  return input.hasPlayback && input.hasActiveVideo && input.resourceCount > 0
 }
 
 /** Clamp an overlay to the visible viewport without persisting a cross-site coordinate. */

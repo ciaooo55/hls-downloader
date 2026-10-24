@@ -1,0 +1,13 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+
+ Test Files  51 passed (51)
+      Tests  397 passed (397)
+   Start at  00:42:01
+   Duration  4.74s (transform 45%, import 23%, tests 22%, worker 9%)
+
+  Transform  transforming modules took 4.25s · 45% of tracked time, re-done on every run
+             persist transforms across runs with fsModuleCache: true
+             learn more: https://vitest.dev/guide/improving-performance#caching-between-reruns
+

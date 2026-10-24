@@ -1,0 +1,164 @@
+{
+  "passed": false,
+  "browser": "firefox",
+  "cases": [],
+  "error": "direct: overlay stayed after leaving player",
+  "state": {
+    "marker": "1",
+    "frameMarkers": [
+      "1"
+    ],
+    "labels": [
+      "下载视频"
+    ],
+    "resourceIds": [
+      "325a8cd8e266a6303519b0635c7a72c1"
+    ],
+    "moreButtons": [
+      "更多操作：投屏或推送当前媒体链接"
+    ],
+    "panelActions": [
+      "下载",
+      "TVBox",
+      "投屏"
+    ],
+    "videos": [
+      {
+        "currentTime": 3.211424,
+        "error": "",
+        "manifest": "",
+        "networkState": 1,
+        "parentStyle": {
+          "className": "",
+          "display": "block",
+          "opacity": "1",
+          "tag": "DIV",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "paused": false,
+        "readyState": 4,
+        "rect": {
+          "height": 360,
+          "width": 640,
+          "x": 20,
+          "y": 84.86666870117188
+        },
+        "src": "http://127.0.0.1:58320/stream.mp4?player=direct",
+        "style": {
+          "display": "block",
+          "opacity": "1",
+          "visibility": "visible",
+          "zIndex": "auto"
+        },
+        "videoHeight": 360,
+        "videoWidth": 640
+      }
+    ],
+    "frameStates": [
+      {
+        "activationMarkerLimitation": "The content script sets marker 1 both before awaiting activation and after UI initialization; marker 1 alone does not prove activation completed.",
+        "labels": [
+          "下载视频"
+        ],
+        "marker": "1",
+        "mediaOwnership": [],
+        "moreButtons": [
+          "更多操作：投屏或推送当前媒体链接"
+        ],
+        "panelActions": [
+          "下载",
+          "TVBox",
+          "投屏"
+        ],
+        "panelResources": [
+          "Extension media smokeMEDIA · 78.3 KB · 127.0.0.1:58320127.0.0.1/stream.mp4下载TVBox投屏"
+        ],
+        "resourceIds": [
+          "325a8cd8e266a6303519b0635c7a72c1"
+        ],
+        "runtimeErrors": [],
+        "uiHost": {
+          "hitAtWrapCenter": null,
+          "panel": {
+            "display": "none",
+            "opacity": "1",
+            "overflow": "hidden",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible"
+          },
+          "parent": "BODY",
+          "rect": {
+            "height": 0,
+            "width": 0,
+            "x": 20,
+            "y": 444.8666687011719
+          },
+          "shadowChildren": 2,
+          "shadowRoot": true,
+          "style": {
+            "display": "inline",
+            "opacity": "1",
+            "position": "static",
+            "visibility": "visible",
+            "zIndex": "auto"
+          },
+          "tag": "HLS-DOWNLOADER-MEDIA-PANEL",
+          "wrap": {
+            "className": "wrap",
+            "display": "none",
+            "opacity": "1",
+            "position": "fixed",
+            "rect": {
+              "height": 0,
+              "width": 0,
+              "x": 0,
+              "y": 0
+            },
+            "visibility": "visible",
+            "zIndex": "2147483647"
+          }
+        },
+        "videos": [
+          {
+            "currentTime": 3.211424,
+            "error": "",
+            "manifest": "",
+            "networkState": 1,
+            "parentStyle": {
+              "className": "",
+              "display": "block",
+              "opacity": "1",
+              "tag": "DIV",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "paused": false,
+            "readyState": 4,
+            "rect": {
+              "height": 360,
+              "width": 640,
+              "x": 20,
+              "y": 84.86666870117188
+            },
+            "src": "http://127.0.0.1:58320/stream.mp4?player=direct",
+            "style": {
+              "display": "block",
+              "opacity": "1",
+              "visibility": "visible",
+              "zIndex": "auto"
+            },
+            "videoHeight": 360,
+            "videoWidth": 640
+          }
+        ],
+        "framePath": []
+      }
+    ]
+  }
+}

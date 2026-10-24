@@ -1,0 +1,65 @@
+{
+  "source_baseline_commit": "298907d952d6e6eb22a3818c0d94229266d0dd4c",
+  "source_patch_sha256": "703f6cf987b8947e15e51533da4af4a3f9ba48044269eb99baadec4f0919fa51",
+  "unsigned": true,
+  "release_ready": false,
+  "package_tier": "candidate",
+  "host_install_performed": false,
+  "github_release_assets_updated": false,
+  "directory": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-20261025",
+  "validation_report": "docs/validation/live-presenter-20261025/README.md",
+  "validation": {
+    "plugin_regressions": 397,
+    "hls_regressions": 26,
+    "edge_hover_scenarios": 13,
+    "firefox_hover_scenarios": 13,
+    "presenter_surfaces": 18,
+    "installer_core_only": true,
+    "installed_ui_visual_acceptance": false,
+    "source_archives_match_tracked_extension": true,
+    "provenance_matches_production_sources": true
+  },
+  "known_limits": [
+    "Specified live-site HTTP 403 not closed: real recording blocked by automatic approval",
+    "Final installed main UI capture not accepted: sandbox minimized; blank images rejected",
+    "Native mouse button acceptance not executed: computer-use pipe unavailable",
+    "No full-feature/cloud/device rerun; Chromium attachment API limits unchanged"
+  ],
+  "assets": [
+    {
+      "name": "验收说明.txt",
+      "bytes": 1851,
+      "sha256": "e2ac515728b2008799605ebe396ce78c258467bce173d646ac3f77abcabfcb23"
+    },
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 1845,
+      "sha256": "39f9cd86265c64a64a2665c18576528887c6b402a7fdc64a0582ca63b01cd97f"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261025-未签名.msi",
+      "bytes": 203444224,
+      "sha256": "fe515695c9813ada92894f909e7cba5abacf48a34ab63600f1cd101f8c9e8eda"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-插件完整源码.zip",
+      "bytes": 362332,
+      "sha256": "c734993f64b2522b09e9e94bd52c973f45187d80fcd3096e3bdc1ede7e707694"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 330059,
+      "sha256": "22cc3b1f5940fb4c8f46d2639ccb3634781d0bd1820bb078949f0d2ebdbea7f3"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 362332,
+      "sha256": "c734993f64b2522b09e9e94bd52c973f45187d80fcd3096e3bdc1ede7e707694"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329389,
+      "sha256": "dc91cf574f7859c9b2521ec570cc196fd414ac69956a0be6dfaa55021968f63e"
+    }
+  ]
+}

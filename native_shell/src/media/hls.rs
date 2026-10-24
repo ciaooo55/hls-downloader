@@ -561,7 +561,6 @@ pub fn download_hls_with(
     control: &Path,
     options: HlsDownloadOptions,
 ) -> Result<PathBuf, String> {
-    let live = options.live;
     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
     let mut current = url.to_string();
     let mut playlist = load_playlist(&current, headers, proxy)?;
@@ -582,6 +581,9 @@ pub fn download_hls_with(
         current = variant.uri.clone();
         playlist = load_playlist(&current, headers, proxy)?;
     }
+    // 主清单和 URL 都不能证明直播类型；以最终媒体清单及已有录制状态为准。
+    let saved_timeline = LiveTimeline::load(task_dir);
+    let live = options.live || !playlist.end_list || !saved_timeline.entries.is_empty();
     apply_ad_policy(&mut playlist, options.skip_ads);
     let has_external_audio = audio_uri.is_some();
     let mut audio_merged = None;
@@ -622,7 +624,7 @@ pub fn download_hls_with(
     let mut vod = VodCheckpoint::load(task_dir);
     let state_path = task_dir.join("live_state.json");
     let mut timeline = if live {
-        LiveTimeline::load(task_dir)
+        saved_timeline
     } else {
         LiveTimeline::default()
     };
@@ -803,7 +805,21 @@ pub fn download_hls_with(
             // `remember`/`save` used to sit after this call, so a pause threw
             // away the record of every completed segment and the resumed run
             // downloaded them again.
-            if !live {
+            if live {
+                for item in prepared.iter().filter(|item| completed.contains(&item.path)) {
+                    timeline.insert(TimelineEntry {
+                        identity: item.identity.clone(),
+                        media_sequence: item.segment.media_sequence,
+                        part_index: item.segment.part_index,
+                        path: item.path.clone(),
+                        duration: item.segment.duration.max(0.0),
+                        discontinuity: item.segment.discontinuity,
+                        init_map_path: item.init_map_path.clone(),
+                    });
+                }
+                timeline.save(&state_path)?;
+                write_timeline_playlist(task_dir, playlist.target_duration, &timeline.entries, false)?;
+            } else {
                 for item in prepared
                     .iter()
                     .filter(|item| completed.contains(&item.path))
@@ -3185,7 +3201,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_live_pause_resume_restores_atomic_timeline() {
+    fn authenticated_master_auto_detects_live_and_restores_atomic_timeline() {
         use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
         use std::sync::mpsc;
@@ -3252,6 +3268,8 @@ mod tests {
                 let (status, body): (u16, &[u8]) = if !authorized {
                     (401, b"unauthorized")
                 } else if path == "/live.m3u8" {
+                    (200, b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nlive-video.m3u8\n")
+                } else if path == "/live-video.m3u8" {
                     let number = server_playlists.fetch_add(1, Ordering::SeqCst);
                     if number == 0 {
                         (
@@ -3317,7 +3335,6 @@ mod tests {
                 &first_dir,
                 &first_control,
                 HlsDownloadOptions {
-                    live: true,
                     concurrency: 1,
                     download_subtitles: false,
                     ..HlsDownloadOptions::default()
@@ -3367,7 +3384,6 @@ mod tests {
             &dir,
             &control,
             HlsDownloadOptions {
-                live: true,
                 concurrency: 1,
                 download_subtitles: false,
                 ..HlsDownloadOptions::default()

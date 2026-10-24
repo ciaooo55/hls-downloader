@@ -641,7 +641,8 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
 }
 
 function badgeText(resources: MediaResource[]): string {
-  return resources.length ? String(Math.min(99, resources.length)) : ''
+  const count = compactResources(resources.filter(resource => resource.evidence?.includes('playback_confirmed')), 100).length
+  return count ? String(Math.min(99, count)) : ''
 }
 
 async function setResourceBadge(tabId: number, resources: MediaResource[]): Promise<void> {
@@ -1019,7 +1020,7 @@ async function resourcePayload(
     mime_type: resource.mimeType || '',
     size: resource.size || 0,
     source_page_url: pageUrl,
-    resource_kind: resource.kind,
+    resource_kind: resource.kind === 'hls' && resource.isLive === true ? 'live' : resource.kind,
     preferred_bandwidth: resource.preferredBandwidth || 0,
     preferred_height: resource.preferredHeight || 0,
     referer: sourceIdentity.referer || identity.referer,

@@ -1,0 +1,21 @@
+{
+  "page_host": "www.privatecams.com",
+  "browser_manifest_status_counts": [
+    {
+      "Name": "200",
+      "Count": 59
+    }
+  ],
+  "videos": [
+    {
+      "error": 0,
+      "hasSource": true,
+      "paused": false,
+      "ready": 4,
+      "time": 26.917025
+    }
+  ],
+  "active_recording_test_executed": false,
+  "automatic_approval_result": "blocked by policy; no specific reason provided",
+  "captured_urls_or_credentials_saved": false
+}

@@ -728,6 +728,9 @@ impl CoreRuntime {
             }
             snapshot.stage = effective_stage.clone();
             snapshot.status = effective_status.clone();
+            if effective_status == "recording" {
+                snapshot.is_live = true;
+            }
             snapshot.playback_ready = (matches!(effective_status.as_str(), "completed" | "done")
                 && !snapshot.output_missing)
                 || spec.as_ref().is_some_and(|spec| {

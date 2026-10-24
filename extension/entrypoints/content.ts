@@ -235,8 +235,8 @@ export default defineContentScript({
     // A page can contain several players.  Keep playback evidence per element
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
-    const discoveryStarted = new WeakMap<HTMLVideoElement, number>()
-    const discoveryWaitMs = 12_000
+    let hoveredVideo: HTMLVideoElement | null = null
+    let playerDismissTimer: ReturnType<typeof setTimeout> | undefined
     const knownVideos = new Set<HTMLVideoElement>()
     const observedVideoSizes = new WeakSet<HTMLVideoElement>()
     let videoResizeObserver: ResizeObserver | null = null
@@ -702,14 +702,20 @@ export default defineContentScript({
           const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
           const exact = candidates.filter(resource => item.playback?.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
           const matched = candidates.length > 0
-          const expired = Date.now() - (discoveryStarted.get(item.video) || item.playback?.startedAt || Date.now()) >= discoveryWaitMs
-          // 无法截获分片字节的 MSE 播放器仍可手选页面已发现的清单，但不能假称已匹配并一键下载。
-          const fallback = !matched && expired && item.playback?.sourceUrls.some(source => source.startsWith('blob:'))
-            ? visiblePlaybackResources([...resources.values()], item.playback, 8) : []
-          const choices = (exact.length ? exact : matched ? candidates : fallback)
+          const choices = (exact.length ? exact : candidates)
             .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
+          // 只把具体播放器的来源证据用于日常列表；网络候选仍留给手动嗅探。
+          for (const resource of choices) {
+            if (resource.evidence?.includes('playback_confirmed')) continue
+            const confirmed = { ...resource, evidence: [...(resource.evidence || []), 'playback_confirmed'].slice(-16) }
+            resources.set(resourceFingerprint(resource), confirmed)
+            const write = runtimeMessage({ type: 'resource', resource: confirmed }).catch(() => undefined)
+            pendingResourceWrites.add(write)
+            void write.finally(() => pendingResourceWrites.delete(write))
+          }
           return { ...item, choices, matched }
         })
+        .filter(({ video }) => video === hoveredVideo)
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
@@ -717,7 +723,6 @@ export default defineContentScript({
         videos.map(({ video, rect, playback, choices, matched }) => [
           mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback?.sourceUrls, playback?.startedAt,
           resourcePresentationSignature(choices, false), matched, videoButtonPositions.get(video),
-          Date.now() - (discoveryStarted.get(video) || playback?.startedAt || Date.now()) >= discoveryWaitMs,
         ]),
       ])
       // 时间进度事件不能不断销毁按钮；只在资源、布局或发送状态变化时重建。
@@ -728,8 +733,6 @@ export default defineContentScript({
       videos.forEach(({ video, rect, playback, choices, matched }) => {
         if (!playback) return
         if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
-        const identifying = choices.length === 0
-        const discoveryExpired = identifying && Date.now() - (discoveryStarted.get(video) || playback.startedAt) >= discoveryWaitMs
         // playerPlaybackResources already enforces the ambiguity boundary for
         // blob/MSE (per-SourceBuffer evidence).
         // Requiring a literal currentSrc match again made a uniquely resolved
@@ -742,10 +745,9 @@ export default defineContentScript({
         const group = document.createElement('div')
         group.className = 'video-action-group'
         const button = document.createElement('button')
-        button.type = 'button'; button.className = `video-download${identifying ? ' identifying' : ''}`
+        button.type = 'button'; button.className = 'video-download'
         if (oneClickChoice) button.dataset.resourceId = choices[0].id
-        button.setAttribute('aria-label', discoveryExpired ? '重新识别当前视频资源' : identifying ? '正在识别当前播放的视频资源' : oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
-        if (identifying && !discoveryExpired) button.setAttribute('aria-disabled', 'true')
+        button.setAttribute('aria-label', oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
         const besidePlayer = rect.right + 8
         const defaultLeft = besidePlayer + controlsWidth <= buttonBounds.right - 8
           ? besidePlayer
@@ -757,7 +759,7 @@ export default defineContentScript({
         group.style.left = `${position.x}px`
         group.style.top = `${position.y}px`
         const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-         const fallbackLabel = discoveryExpired ? '重新识别' : identifying ? '正在识别' : oneClickChoice ? '下载视频' : '选择资源'
+         const fallbackLabel = oneClickChoice ? '下载视频' : '选择资源'
          const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
         button.append(icon, label)
         if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
@@ -815,16 +817,6 @@ export default defineContentScript({
             videoDragged = false
             return
           }
-           if (identifying) {
-             event.preventDefault()
-             event.stopImmediatePropagation()
-             if (discoveryExpired) {
-               discoveryStarted.set(video, Date.now())
-               void handleRuntimeMessage({ type: 'rescan-media' })
-               ctx.setTimeout(scheduleVideoButtons, discoveryWaitMs + 20)
-             }
-             return
-           }
            if (oneClickChoice) {
              event.preventDefault()
              event.stopImmediatePropagation()
@@ -854,15 +846,7 @@ export default defineContentScript({
         const hoverId = `hlsd-video-hover-${visible}-${choices[0]?.id?.slice(0, 12) || 'identifying'}`
         hover.id = hoverId
         button.setAttribute('aria-describedby', hoverId)
-        if (identifying) {
-          const head = document.createElement('div'); head.className = 'hover-head'
-          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = '当前播放的视频'
-          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = discoveryExpired ? '未匹配' : '识别中'
-          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = discoveryExpired
-            ? '未找到能确认属于此播放器的资源。可重新识别，或刷新网页后重新播放；插件弹窗可查看本页已发现的资源。'
-            : '正在匹配实际播放资源，确认后即可下载或投屏。'
-          head.append(hoverTitle, state); hover.append(head, copy)
-        } else if (oneClickChoice) {
+        if (oneClickChoice) {
           const choice = choices[0]
           const details = overlayResourceDetails(choice)
           const head = document.createElement('div'); head.className = 'hover-head'
@@ -921,6 +905,8 @@ export default defineContentScript({
         }
         let hoverDismissTimer: ReturnType<typeof setTimeout> | null = null
         const keepHoverOpen = () => {
+          if (playerDismissTimer) clearTimeout(playerDismissTimer)
+          playerDismissTimer = undefined
           if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
           hoverDismissTimer = null
           group.classList.add('hover-open')
@@ -932,6 +918,7 @@ export default defineContentScript({
             hoverDismissTimer = null
             if (shouldKeepHoverOpen(group.matches(':hover'), group.contains(ui.shadow.activeElement))) return
             group.classList.remove('hover-open')
+            updateHoveredPlayer()
             scheduleVideoButtons()
           }, HOVER_DISMISS_DELAY_MS)
         }
@@ -1060,6 +1047,45 @@ export default defineContentScript({
       if (positionFrame || ctx.isInvalid) return
       positionFrame = ctx.requestAnimationFrame(() => { positionFrame = 0; updateVideoButtons() })
     }
+    let pointerFrame = 0
+    let pointer = { x: -1, y: -1, inControls: false }
+    const updateHoveredPlayer = () => {
+      pointerFrame = 0
+      if (videoControlDragging || pointer.inControls || ui.shadow.activeElement) return
+      const target = currentVideos().filter(video => {
+        const rect = video.getBoundingClientRect()
+        return playbackByVideo.has(video) && rect.width >= 180 && rect.height >= 100
+          && pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom
+      }).sort((left, right) => {
+        const a = left.getBoundingClientRect(); const b = right.getBoundingClientRect()
+        return a.width * a.height - b.width * b.height
+      })[0] || null
+      if (playerDismissTimer) clearTimeout(playerDismissTimer)
+      playerDismissTimer = undefined
+      if (target) {
+        if (hoveredVideo !== target) { hoveredVideo = target; scheduleVideoButtons() }
+      } else if (hoveredVideo) {
+        // 留出跨越播放器与按钮间隙的时间，避免鼠标移向按钮时按钮先消失。
+        playerDismissTimer = setTimeout(() => {
+          playerDismissTimer = undefined
+          hoveredVideo = null
+          scheduleVideoButtons()
+        }, HOVER_DISMISS_DELAY_MS)
+      }
+    }
+    ctx.addEventListener(document, 'pointermove', event => {
+      pointer = { x: event.clientX, y: event.clientY, inControls: event.composedPath().includes(ui.shadow.host) }
+      if (!pointerFrame) pointerFrame = ctx.requestAnimationFrame(updateHoveredPlayer)
+    }, { capture: true, passive: true })
+    ctx.addEventListener(document, 'pointerout', event => {
+      if (event.relatedTarget) return
+      pointer = { x: -1, y: -1, inControls: false }
+      if (!pointerFrame) pointerFrame = ctx.requestAnimationFrame(updateHoveredPlayer)
+    }, { capture: true, passive: true })
+    ctx.onInvalidated(() => {
+      if (playerDismissTimer) clearTimeout(playerDismissTimer)
+      if (pointerFrame) cancelAnimationFrame(pointerFrame)
+    })
     ctx.addEventListener(window, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
     ctx.addEventListener(window, 'resize', scheduleVideoButtons)
     try {
@@ -1182,8 +1208,6 @@ export default defineContentScript({
         if (changedSource) videoButtonPositions.delete(video)
         const playback = { sourceUrls, startedAt: Date.now(), mseResourceUrls }
         playbackByVideo.set(video, playback)
-        discoveryStarted.set(video, playback.startedAt)
-        ctx.setTimeout(scheduleVideoButtons, discoveryWaitMs + 20)
         if (video === activeVideo) activePlayback = playback
         // currentSrc is immediate, player-specific evidence. Register it here
         // instead of waiting for PerformanceObserver/webRequest: Firefox can

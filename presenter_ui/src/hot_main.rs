@@ -1382,12 +1382,12 @@ fn round_native_window(window: &slint::Window) {
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION,
             },
         };
-        let _ = window.with_winit_window(|native| {
+        let ready_to_repaint = window.with_winit_window(|native| {
             let Ok(handle) = native.window_handle() else {
-                return;
+                return false;
             };
             let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-                return;
+                return false;
             };
             unsafe {
                 let hwnd = handle.hwnd.get() as _;
@@ -1412,7 +1412,7 @@ fn round_native_window(window: &slint::Window) {
                 }
                 let mut bounds: RECT = std::mem::zeroed();
                 if GetWindowRect(hwnd, &mut bounds) == 0 {
-                    return;
+                    return false;
                 }
                 let diameter = (28.0 * window.scale_factor()).round() as i32;
                 let region = CreateRoundRectRgn(
@@ -1427,7 +1427,17 @@ fn round_native_window(window: &slint::Window) {
                     DeleteObject(region);
                 }
             }
+            let actual = native.inner_size();
+            let rendered = window.size();
+            actual.width > 0 && actual.height > 0
+                && actual.width == rendered.width && actual.height == rendered.height
         });
+        if ready_to_repaint == Some(true) {
+            // 隐藏后 Win32 画布会被清空，但 softbuffer 仍可能报告缓冲可复用。
+            // 只在表面尺寸已同步后清缓存；首次高 DPI 创建时立即快照会使渲染缓冲越界。
+            let _ = window.take_snapshot();
+            window.request_redraw();
+        }
     }
     #[cfg(not(windows))]
     let _ = window;
@@ -1852,9 +1862,7 @@ fn render_progress_hud(
         let _ = center_window_by_title(item.get_headline().as_str());
         let _ = hide_window_from_taskbar_by_title(item.get_headline().as_str());
     }
-    // Win32 移动/隐藏后 softbuffer 的缓冲年龄可能仍为 1，局部绘制会丢掉标题和按钮。
-    // 软件快照重置绘制缓存；小浮窗随后重画完整一帧，不能只刷新变化的速度区域。
-    let _ = item.window().take_snapshot();
+    // show/resize 由 round_native_window 清缓存；普通进度更新保留局部重绘。
     item.window().request_redraw();
 }
 

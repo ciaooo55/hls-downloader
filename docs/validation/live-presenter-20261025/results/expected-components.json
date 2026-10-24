@@ -1,0 +1,8 @@
+{
+  "app/resources/HLSDownloaderEngine.exe": "d4e33065fd2974a4a0599d0e7f315fe4511e7c06765d387cf8a59c6185cbcfda",
+  "app/resources/HLSDownloaderNativeHost.exe": "f02df70de095b78736ee03f552b945b9556c37ef3fc727d046d91ec8e38d4de3",
+  "app/resources/HLSDownloaderPresenter.exe": "064975ffef02eaf040c833622833c03d9bb6bc326d200f94b25a1f4553ada020",
+  "app/resources/BUILD-PROVENANCE.json": "39f9cd86265c64a64a2665c18576528887c6b402a7fdc64a0582ca63b01cd97f",
+  "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "22cc3b1f5940fb4c8f46d2639ccb3634781d0bd1820bb078949f0d2ebdbea7f3",
+  "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "dc91cf574f7859c9b2521ec570cc196fd414ac69956a0be6dfaa55021968f63e"
+}
