@@ -8,7 +8,7 @@
   "release_source_commit": "3d0699dddca8ab7a2ee29b35f714e6fbf7ca7206",
   "product_source_commit": "4de9a580477b0873fecb7b1861d948170d21aa42",
   "assets_verified": true,
-  "old_v7_release_and_tag_removed": null,
+  "old_v7_release_and_tag_removed": "v7.0.3-r13",
   "assets": [
     {
       "name": "BUILD-PROVENANCE.json",
@@ -55,5 +55,10 @@
       "bytes": 1701,
       "sha256": "6feb6ef186a2280485ee2b81130d40fbe3fe58c9bdbaa31ac4c198f025e2715f"
     }
+  ],
+  "v7_release_count": 1,
+  "old_endpoints_verified_absent": [
+    "releases/tags/v7.0.3-r13",
+    "git/ref/tags/v7.0.3-r13"
   ]
 }
