@@ -969,6 +969,8 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                     let mut options = vec![
                         ("keep-open", "yes".to_string()),
                         ("idle", "yes".into()),
+                        // mpv 默认软件解码；只尝试其安全列表，设备/格式不支持时仍自动软件解码。
+                        ("hwdec", "auto-safe".into()),
                         (
                             "demuxer-lavf-o",
                             "allowed_extensions=ALL,extension_picky=0".into(),

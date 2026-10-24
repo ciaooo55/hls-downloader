@@ -73,9 +73,8 @@ def run(args):
             raise RuntimeError(f"Default real Host takeover unavailable: {ping}")
         report["extension_id"] = extension_id
         record("default-takeover-enabled-for-all-sizes")
-        if args.browser == 'firefox':
-            driver.execute_script('window.takeoverDownloadEvents=[]; chrome.downloads.onCreated.addListener('
-                                  'item=>window.takeoverDownloadEvents.push({id:item.id,url:item.url}));')
+        driver.execute_script('window.takeoverDownloadEvents=[]; chrome.downloads.onCreated.addListener('
+                              'item=>window.takeoverDownloadEvents.push({id:item.id,url:item.url}));')
         driver.switch_to.window(page)
         link.click()
         wait(lambda: presenter_window(runtime=args.runtime), "Public browser download did not reach desktop confirmation", 25)
@@ -87,6 +86,12 @@ def run(args):
             events = driver.execute_script('return window.takeoverDownloadEvents')
             assert not items and not events, {'items': items, 'created_events': events}
             record('Firefox-never-created-a-browser-download-before-confirmation', True)
+        else:
+            items = _download_items(driver, inspector)
+            # 确认窗口出现后不能继续并行传输；存在下载项也必须如实记录，不能靠隐藏 UI 判通过。
+            assert items and all(item.get('paused') for item in items), {'items': items}
+            record('Chromium-browser-transfer-paused-before-confirmation', {
+                'items': items, 'created_events': driver.execute_script('return window.takeoverDownloadEvents')})
         click_download_confirmation(runtime=args.runtime, evidence_path=args.report.with_name("accept.json"))
 
         def completed():
@@ -111,9 +116,11 @@ def run(args):
                 events = driver.execute_script('return window.takeoverDownloadEvents')
                 assert not events, {'created_events': events}
                 return {"items": items, 'created_events': events} if not items else None
-            return {"items": items} if not any(item.get("exists") for item in items) else None
+            # exists=false 也可能只是浏览器尚未写完，不能证明已取消并清除接管项。
+            return {"items": items} if not items else None
 
-        record("browser-keeps-no-second-file", wait(no_browser_copy, "Browser kept a duplicate downloaded file", 20))
+        record("browser-keeps-no-download-item-after-takeover",
+               wait(no_browser_copy, "Browser kept a download item after takeover", 20))
         driver.switch_to.window(page)
         driver.save_screenshot(str(args.report.with_suffix(".png")))
         report["passed"] = True

@@ -71,3 +71,15 @@ Core 默认忽略的四项是扫描超时子进程夹具、真实 FFmpeg 暂停�
 前次直接删除命令被自动审批拒绝（`blocked by policy`，未提供原因）。用户继续授权后，执行了带完整成品哈希、旧目录内容和 Git 跟踪检查的限定路径脚本，已清理 `.tool-cache`、插件依赖、Gradle/构建输出等约 17 GiB 生成物及两个旧桌面交付目录。具体范围、旧文件哈希及完成状态见 `cleanup.json`。
 
 一次性收尾脚本执行成功后已移除。另有两个原有目录 `native_shell/downloads`、`native_shell/site-cache` 各仅含一个 `.hls-tasks/task-1/control` 文件（`pause` 5 字节和 `run` 3 字节），补充删除再次被自动审批拒绝，仅返回 `blocked by policy`，未操作这两个目录。`outputs/private-user-backup` 内约 4.4 MiB 原有任务/设置/注册表卸载备份保留，用户下载、其他项目及注册表均未操作。
+
+## 2026-10-24 续查：源码已改，主动验证待确认
+
+`93e5cd4` 已正常推送到 GitHub `main`，未改写历史。以上验收数据和桌面包仍对应该次交付，不代表下述改动已验收。
+
+- 播放器原来未设置 `hwdec`，沿用 mpv 默认的软件解码。现设置 `hwdec=auto-safe`，只尝试 mpv 安全列表中的硬件解码方式，不支持时仍由 mpv 回退软件解码。没有更换渲染器、减少画质或引入依赖。此改动不等于修复禁用 GPU 时 WARP 软件渲染的高 CPU；需分别测量解码和渲染路径。依据为[打包时固定的 mpv 版本文档](https://github.com/mpv-player/mpv/blob/7b8915bc1d/DOCS/man/options.rst)。
+- 公开下载验收对 Chromium 原来只检查 `exists=false`，可能把尚未生成成品的活动/暂停下载项误判为已清除。现要求确认前浏览器下载暂停，记录真实下载项和创建事件，接管完成后匹配下载项为空。Firefox 仍要求从未创建浏览器下载项。新断言尚未运行。
+- Chromium 当前使用 MV3，在 `onCreated` 后暂停交接；[Chrome 官方文档](https://developer.chrome.com/docs/extensions/reference/api/webRequest)明确普通 MV3 扩展不能使用 `webRequestBlocking`。该路径不能宣称与 Firefox 一样在浏览器创建下载项前阻断。
+
+本轮仅进行了源码、调用关系、官方资料和 Git 差异的静态检查。尚未恢复依赖、编译、运行测试或沙盒验收，未替换桌面安装包，也未发布新的 GitHub 交付包。已向用户请求本轮主动验证确认。
+
+两个旧控制文件的内容和目录范围已再次核实，限定删除仍被自动审批拒绝（`blocked by policy`，无具体原因），文件保留；未采用其他方式绕过。
