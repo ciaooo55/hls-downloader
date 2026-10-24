@@ -1,0 +1,8 @@
+{
+  "app/resources/HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+  "app/resources/libmpv-2.dll": "f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea",
+  "app/resources/HLSDownloaderEngine.exe": "39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48",
+  "app/resources/HLSDownloaderUpdater.exe": "77592ce99ab9dd989be2b8579cb1942d089bb54853703c8a847949b90068e0e5",
+  "app/resources/HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa",
+  "app/resources/ffmpeg.exe": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98"
+}

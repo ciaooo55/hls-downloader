@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "source_commit": "be7f646e2e4439560b0d3531c96d859f945dfd76",
+  "source_tree": "da7648bdbaee9953e04a107e76671ce19df2dc81",
+  "source_branch": "main",
+  "git_worktree_clean": false,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "generated_at_utc": "2026-10-24T08:10:43.0019884Z",
+  "base_msi_sha256": "4c7a1a7b4b9152f93383f9c7f47c3d77c7c231f7f913edc63c4037305702caa9",
+  "engine_sha256": "39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48",
+  "validation_scope": "Safe hardware decoder selection candidate. UI, Host, Updater, media libraries and extension binaries reused unchanged from the previously accepted MSI; current Sandbox validation pending."
+}

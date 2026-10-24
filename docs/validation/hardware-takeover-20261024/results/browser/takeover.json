@@ -1,0 +1,1083 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "headed": false,
+  "real_native_host": true,
+  "checks": [
+    {
+      "name": "one-resolved-handoff-small",
+      "actual": {
+        "id": "handoff-1a16d0703ea-2",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "small-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-1",
+        "size": 65536,
+        "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-stream",
+      "actual": {
+        "id": "handoff-1a16d07149b-4",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "stream-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-2",
+        "size": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938",
+        "browser_download_absent": true,
+        "no_content_length": true
+      }
+    },
+    {
+      "name": "one-resolved-handoff-ordinary",
+      "actual": {
+        "id": "handoff-1a16d072994-6",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "ordinary-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-3",
+        "size": 65536,
+        "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-quick",
+      "actual": {
+        "id": "handoff-1a16d073400-8",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "quick-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-4",
+        "size": 1024,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-image",
+      "actual": {
+        "id": "handoff-1a16d073e2a-a",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "image-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-5",
+        "size": 68,
+        "sha256": "6af484b8a73288a07fec730818a6de8bebce88aa915b52f66a8769bfb865f434",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-json",
+      "actual": {
+        "id": "handoff-1a16d07487c-c",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "json-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-6",
+        "size": 32,
+        "sha256": "8cc6d67e9c047e92fa51eadb250504c11471cec93c4864cb2e66a96ae0b2361f",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-generic",
+      "actual": {
+        "id": "handoff-1a16d075440-e",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "generic-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-7",
+        "size": 65536,
+        "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-post",
+      "actual": {
+        "id": "handoff-1a16d075fe7-f",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "post-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-8",
+        "size": 65536,
+        "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "urlencoded-post-not-replayed",
+      "actual": {
+        "task_id": "task-8",
+        "post_requests": 1
+      }
+    },
+    {
+      "name": "multipart-accept-single-post-desktop-sha256",
+      "actual": {
+        "handoff_id": "handoff-1a16d07699d-10",
+        "status": "accepted",
+        "size": 65536,
+        "task_id": "task-9",
+        "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+        "post_requests": 1,
+        "browser_download_absent": true,
+        "desktop_tasks_unchanged": false
+      }
+    },
+    {
+      "name": "multipart-reject-single-post-browser-sha256",
+      "actual": {
+        "handoff_id": "handoff-1a16d0772a0-11",
+        "status": "rejected",
+        "size": 65536,
+        "task_id": null,
+        "sha256": "7daca2095d0438260fa849183dfc67faa459fdf4936e1bc91eec6b281b27e4c2",
+        "post_requests": 1,
+        "browser_download_absent": false,
+        "desktop_tasks_unchanged": true
+      }
+    },
+    {
+      "name": "one-resolved-handoff-generated_blob",
+      "actual": {
+        "id": "handoff-1a16d0779c4-12",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "generated_blob-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-10",
+        "size": 50,
+        "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "one-resolved-handoff-generated_data",
+      "actual": {
+        "id": "handoff-1a16d0783a8-13",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "generated_data-accepted-desktop-task-single-file-sha256-no-browser-copy",
+      "actual": {
+        "task_id": "task-11",
+        "size": 50,
+        "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+        "browser_download_absent": true,
+        "no_content_length": false
+      }
+    },
+    {
+      "name": "generated-blob-rejection-keeps-browser-file-sha256",
+      "actual": {
+        "handoff_id": "handoff-1a16d078dcb-14",
+        "browser_filename": "generated-blob-rejected.bin",
+        "size": 50,
+        "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+        "desktop_tasks_unchanged": true
+      }
+    },
+    {
+      "name": "generated-blob-alt-bypasses-takeover-browser-file-sha256",
+      "actual": {
+        "browser_filename": "generated-blob-alt.bin",
+        "size": 50,
+        "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+        "desktop_tasks_unchanged": true,
+        "handoffs_unchanged": true
+      }
+    },
+    {
+      "name": "generated-data-excluded-bypasses-takeover-browser-file-sha256",
+      "actual": {
+        "browser_filename": "generated-data-excluded.bin",
+        "size": 50,
+        "sha256": "0f66d2671bb1d4fdbced1586bd8e0af999d847b6a114962349a86a420079502b",
+        "desktop_tasks_unchanged": true,
+        "handoffs_unchanged": true
+      }
+    },
+    {
+      "name": "takeover-disabled-browser-complete-sha256",
+      "actual": {
+        "bytesReceived": 8388608,
+        "canResume": false,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disabled.bin",
+        "finalUrl": "http://127.0.0.1:49703/disabled.bin",
+        "id": 16,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "state": "complete",
+        "totalBytes": 8388608,
+        "url": "http://127.0.0.1:49703/disabled.bin",
+        "verified_bytes": 8388608,
+        "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "site-excluded-browser-complete-sha256",
+      "actual": {
+        "bytesReceived": 8388608,
+        "canResume": false,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\excluded.bin",
+        "finalUrl": "http://127.0.0.1:49703/excluded.bin",
+        "id": 17,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "state": "complete",
+        "totalBytes": 8388608,
+        "url": "http://127.0.0.1:49703/excluded.bin",
+        "verified_bytes": 8388608,
+        "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "real-takeover-pauses-before-desktop-confirmation",
+      "actual": {
+        "bytesReceived": 0,
+        "canResume": true,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\accept.bin",
+        "finalUrl": "http://127.0.0.1:49703/accept.bin",
+        "id": 18,
+        "mime": "application/octet-stream",
+        "paused": true,
+        "state": "in_progress",
+        "totalBytes": 8388608,
+        "url": "http://127.0.0.1:49703/accept.bin"
+      }
+    },
+    {
+      "name": "real-takeover-accepted-single-complete-file-sha256",
+      "actual": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "one-resolved-handoff-accept",
+      "actual": {
+        "id": "handoff-1a16d07bf53-16",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "real-desktop-rejection-browser-resumes-sha256",
+      "actual": {
+        "bytesReceived": 8388608,
+        "canResume": false,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\reject.bin",
+        "finalUrl": "http://127.0.0.1:49703/reject.bin",
+        "id": 19,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "state": "complete",
+        "totalBytes": 8388608,
+        "url": "http://127.0.0.1:49703/reject.bin",
+        "verified_bytes": 8388608,
+        "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "one-resolved-handoff-reject",
+      "actual": {
+        "id": "handoff-1a16d07d21e-18",
+        "status": "rejected"
+      }
+    },
+    {
+      "name": "real-accepted-desktop-failure-browser-fallback-sha256",
+      "actual": {
+        "bytesReceived": 8388608,
+        "canResume": false,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\fallback.bin",
+        "finalUrl": "http://127.0.0.1:49703/fallback.bin",
+        "id": 20,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "state": "complete",
+        "totalBytes": 8388608,
+        "url": "http://127.0.0.1:49703/fallback.bin",
+        "verified_bytes": 8388608,
+        "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    },
+    {
+      "name": "one-resolved-handoff-fallback",
+      "actual": {
+        "id": "handoff-1a16d07e7a1-1a",
+        "status": "accepted"
+      }
+    },
+    {
+      "name": "actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256",
+      "actual": {
+        "bytesReceived": 8388608,
+        "canResume": false,
+        "danger": "safe",
+        "error": null,
+        "exists": true,
+        "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disconnect.bin",
+        "finalUrl": "http://127.0.0.1:49703/disconnect.bin",
+        "id": 21,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "state": "complete",
+        "totalBytes": 8388608,
+        "url": "http://127.0.0.1:49703/disconnect.bin",
+        "verified_bytes": 8388608,
+        "verified_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+      }
+    }
+  ],
+  "runtime": "C:\\QAWork\\runtime",
+  "components": {
+    "HLSDownloaderEngine.exe": "39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48",
+    "HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+    "HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa"
+  },
+  "background_sha256": "0d5666d992b6608358fe117c3a2d2e9ba7914fe36076487a94f981578f03773a",
+  "page_fixture_probe": {
+    "url": "http://127.0.0.1:49703/page",
+    "status": 200,
+    "bytes": 3025
+  },
+  "default_takeover_settings": {
+    "enabled": true,
+    "minimum_bytes": 0
+  },
+  "urlencoded_post_requests": 1,
+  "multipart_request_methods": [
+    {
+      "path": "/multipart-accept.bin",
+      "method": "POST"
+    },
+    {
+      "path": "/multipart-reject.bin",
+      "method": "POST"
+    }
+  ],
+  "reject_before_confirmation": [
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\excluded.bin",
+      "finalUrl": "http://127.0.0.1:49703/excluded.bin",
+      "id": 17,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/excluded.bin"
+    },
+    {
+      "bytesReceived": 0,
+      "canResume": true,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/reject.bin",
+      "id": 19,
+      "mime": "application/octet-stream",
+      "paused": true,
+      "state": "in_progress",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/reject.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-alt.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192",
+      "id": 14,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-data-excluded.bin",
+      "finalUrl": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE=",
+      "id": 15,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE="
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disabled.bin",
+      "finalUrl": "http://127.0.0.1:49703/disabled.bin",
+      "id": 16,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disabled.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-rejected.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f",
+      "id": 13,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f"
+    },
+    {
+      "bytesReceived": 65536,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\multipart-reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/multipart-reject.bin",
+      "id": 10,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 65536,
+      "url": "http://127.0.0.1:49703/multipart-reject.bin"
+    }
+  ],
+  "fallback_requests": [
+    {
+      "number": 1,
+      "headers": {
+        "Host": "127.0.0.1:49703",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "empty",
+        "Referer": "http://127.0.0.1:49703/page",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"
+      }
+    },
+    {
+      "number": 2,
+      "headers": {
+        "Connection": "Keep-Alive",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Range": "bytes=0-0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+        "Host": "127.0.0.1:49703"
+      }
+    }
+  ],
+  "fallback_before_confirmation": [
+    {
+      "bytesReceived": 0,
+      "canResume": true,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\fallback.bin",
+      "finalUrl": "http://127.0.0.1:49703/fallback.bin",
+      "id": 20,
+      "mime": "application/octet-stream",
+      "paused": true,
+      "state": "in_progress",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/fallback.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\excluded.bin",
+      "finalUrl": "http://127.0.0.1:49703/excluded.bin",
+      "id": 17,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/excluded.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/reject.bin",
+      "id": 19,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/reject.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-alt.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192",
+      "id": 14,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-data-excluded.bin",
+      "finalUrl": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE=",
+      "id": 15,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE="
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disabled.bin",
+      "finalUrl": "http://127.0.0.1:49703/disabled.bin",
+      "id": 16,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disabled.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-rejected.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f",
+      "id": 13,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f"
+    },
+    {
+      "bytesReceived": 65536,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\multipart-reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/multipart-reject.bin",
+      "id": 10,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 65536,
+      "url": "http://127.0.0.1:49703/multipart-reject.bin"
+    }
+  ],
+  "disconnect_before_host_stop": [
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\fallback.bin",
+      "finalUrl": "http://127.0.0.1:49703/fallback.bin",
+      "id": 20,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/fallback.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\excluded.bin",
+      "finalUrl": "http://127.0.0.1:49703/excluded.bin",
+      "id": 17,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/excluded.bin"
+    },
+    {
+      "bytesReceived": 0,
+      "canResume": true,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disconnect.bin",
+      "finalUrl": "http://127.0.0.1:49703/disconnect.bin",
+      "id": 21,
+      "mime": "application/octet-stream",
+      "paused": true,
+      "state": "in_progress",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disconnect.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/reject.bin",
+      "id": 19,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/reject.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-alt.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192",
+      "id": 14,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-data-excluded.bin",
+      "finalUrl": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE=",
+      "id": 15,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE="
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disabled.bin",
+      "finalUrl": "http://127.0.0.1:49703/disabled.bin",
+      "id": 16,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disabled.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-rejected.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f",
+      "id": 13,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f"
+    },
+    {
+      "bytesReceived": 65536,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\multipart-reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/multipart-reject.bin",
+      "id": 10,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 65536,
+      "url": "http://127.0.0.1:49703/multipart-reject.bin"
+    }
+  ],
+  "interrupted_host_pids": [
+    6472
+  ],
+  "disconnect_after_host_stop": [
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\fallback.bin",
+      "finalUrl": "http://127.0.0.1:49703/fallback.bin",
+      "id": 20,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/fallback.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\excluded.bin",
+      "finalUrl": "http://127.0.0.1:49703/excluded.bin",
+      "id": 17,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/excluded.bin"
+    },
+    {
+      "bytesReceived": 0,
+      "canResume": true,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disconnect.bin",
+      "finalUrl": "http://127.0.0.1:49703/disconnect.bin",
+      "id": 21,
+      "mime": "application/octet-stream",
+      "paused": true,
+      "state": "in_progress",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disconnect.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/reject.bin",
+      "id": 19,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/reject.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-alt.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192",
+      "id": 14,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-data-excluded.bin",
+      "finalUrl": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE=",
+      "id": 15,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE="
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disabled.bin",
+      "finalUrl": "http://127.0.0.1:49703/disabled.bin",
+      "id": 16,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disabled.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-rejected.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f",
+      "id": 13,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f"
+    },
+    {
+      "bytesReceived": 65536,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\multipart-reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/multipart-reject.bin",
+      "id": 10,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 65536,
+      "url": "http://127.0.0.1:49703/multipart-reject.bin"
+    }
+  ],
+  "disconnect_after_reject": [
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\fallback.bin",
+      "finalUrl": "http://127.0.0.1:49703/fallback.bin",
+      "id": 20,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/fallback.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\excluded.bin",
+      "finalUrl": "http://127.0.0.1:49703/excluded.bin",
+      "id": 17,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/excluded.bin"
+    },
+    {
+      "bytesReceived": 0,
+      "canResume": true,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disconnect.bin",
+      "finalUrl": "http://127.0.0.1:49703/disconnect.bin",
+      "id": 21,
+      "mime": "application/octet-stream",
+      "paused": true,
+      "state": "in_progress",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disconnect.bin"
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/reject.bin",
+      "id": 19,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/reject.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-alt.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192",
+      "id": 14,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/91201411-9e57-44e9-80a0-163c0e13f192"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-data-excluded.bin",
+      "finalUrl": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE=",
+      "id": 15,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "data:application/octet-stream;base64,SExTIERvd25sb2FkZXIgbG9jYWwgYnJvd3NlciBmaWxlIGNhbmFyeTogMjAyNjEwMTE="
+    },
+    {
+      "bytesReceived": 8388608,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\disabled.bin",
+      "finalUrl": "http://127.0.0.1:49703/disabled.bin",
+      "id": 16,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 8388608,
+      "url": "http://127.0.0.1:49703/disabled.bin"
+    },
+    {
+      "bytesReceived": 50,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\generated-blob-rejected.bin",
+      "finalUrl": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f",
+      "id": 13,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 50,
+      "url": "blob:http://127.0.0.1:49703/e7fe1c04-0341-4018-a960-51aba42b8e0f"
+    },
+    {
+      "bytesReceived": 65536,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUT~1\\AppData\\Local\\Temp\\real-takeover-vrmrihq2\\downloads\\multipart-reject.bin",
+      "finalUrl": "http://127.0.0.1:49703/multipart-reject.bin",
+      "id": 10,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 65536,
+      "url": "http://127.0.0.1:49703/multipart-reject.bin"
+    }
+  ],
+  "user_tasks_preserved": true
+}

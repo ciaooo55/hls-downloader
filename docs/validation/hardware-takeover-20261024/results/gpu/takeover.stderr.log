@@ -1,0 +1,8 @@
+usage: smoke_extension_takeover.py [-h] --extension EXTENSION
+                                   [--browser {chrome,edge,firefox}]
+                                   --browser-binary BROWSER_BINARY
+                                   [--driver DRIVER] [--go GO]
+                                   [--report REPORT]
+                                   [--real-runtime REAL_RUNTIME] [--headed]
+                                   [--real-scenario {all,post,rejection,fallback}]
+smoke_extension_takeover.py: error: unrecognized arguments: Files (x86)\Microsoft\Edge\Application\msedge.exe

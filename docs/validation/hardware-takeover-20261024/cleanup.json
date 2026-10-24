@@ -1,0 +1,71 @@
+{
+  "task": "hardware-takeover-20261024",
+  "finished": true,
+  "targets": [
+    {
+      "path": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache",
+      "files": 13527,
+      "bytes": 2700248370.0,
+      "removed": true
+    },
+    {
+      "path": "A:\\Ubuntu\\测试\\hls-downloader\\artifacts",
+      "files": 152,
+      "bytes": 2936120.0,
+      "removed": true
+    },
+    {
+      "path": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-20261023",
+      "files": 9,
+      "bytes": 204477049.0,
+      "removed": true
+    }
+  ],
+  "preserved": [
+    "outputs/private-user-backup",
+    "native_shell/downloads/.hls-tasks/task-1/control",
+    "native_shell/site-cache/.hls-tasks/task-1/control"
+  ],
+  "control_file_note": "Two pre-existing control files total 8 bytes; earlier automatic approval rejected deletion with blocked by policy; no bypass or retry.",
+  "sandbox_closed": true,
+  "host_product_installed_or_run": false,
+  "host_registry_modified": false,
+  "old_delivery_assets": [
+    {
+      "name": "交付清单.json",
+      "sha256": "2a15f7bd64ec4e0b88c44b3dffa557c9224a6e2b36b90b3de4bb722f15ca8671"
+    },
+    {
+      "name": "验收说明.txt",
+      "sha256": "0bb5ba29076b69fe7006c6ca54298b7e802c5661089da704aa0925a32ac3e0e5"
+    },
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "sha256": "dbb0561339150eed1243adbe4cd2ce7e52ed210e21a972f77e4a096561bc3af8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261023-未签名.msi",
+      "sha256": "4c7a1a7b4b9152f93383f9c7f47c3d77c7c231f7f913edc63c4037305702caa9"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "sha256": "6b4008e47c812955980c7ebd98120f4ce862c5621fdb817eb6252d6276cd02c2"
+    },
+    {
+      "name": "source.patch",
+      "sha256": "dbd243da2ca767a78583ebdcf950ed96740c862840b1d34a506a3abb79158e94"
+    }
+  ]
+}

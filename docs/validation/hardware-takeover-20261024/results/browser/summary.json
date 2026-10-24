@@ -1,0 +1,40 @@
+{
+  "mode": "gpu",
+  "browser_only": true,
+  "passed": true,
+  "steps": [
+    {
+      "name": "register-host",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "configure-core",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "takeover",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "public-takeover",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "unregister-host",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "installer",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "error": "",
+  "finished": true,
+  "current": "installer"
+}

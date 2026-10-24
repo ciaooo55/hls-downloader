@@ -1,0 +1,64 @@
+{
+  "mode": "gpu",
+  "passed": false,
+  "steps": [
+    {
+      "name": "generate-media",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "baseline-rendering",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "candidate-rendering",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "gpu-renderer-comparison",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "download-playback-cleanup",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "core-player-tests",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "core-http-tests",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "http-boundaries",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "register-host",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "configure-core",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "takeover",
+      "exit_code": 2,
+      "passed": false
+    }
+  ],
+  "error": "takeover exited 2",
+  "finished": true,
+  "current": "takeover"
+}

@@ -1,0 +1,7 @@
+{
+  "mode": "software",
+  "passed": false,
+  "steps": [],
+  "error": "The 'Expand-Archive' command was found in the module 'Microsoft.PowerShell.Archive', but the module could not be loaded. For more information, run 'Import-Module Microsoft.PowerShell.Archive'.",
+  "finished": true
+}

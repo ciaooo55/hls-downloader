@@ -1,0 +1,7 @@
+takeover exited 2
+At C:\QAInput\start.ps1:18 char:34
++ ... process.ExitCode -ne 0) { throw "$Name exited $($process.ExitCode)" }
++                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (takeover exited 2:String) [],
+    RuntimeException
+    + FullyQualifiedErrorId : takeover exited 2

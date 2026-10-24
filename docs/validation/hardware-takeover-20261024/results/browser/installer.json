@@ -1,0 +1,199 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "MSI staged on VM local disk with matching SHA256",
+      "actual": true
+    },
+    {
+      "name": "MSI installs at requested path containing spaces",
+      "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader"
+    },
+    {
+      "name": "installed payload hashes match the tested components and delivery archives",
+      "actual": {
+        "app/resources/HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+        "app/resources/libmpv-2.dll": "f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea",
+        "app/resources/HLSDownloaderEngine.exe": "39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48",
+        "app/resources/HLSDownloaderUpdater.exe": "77592ce99ab9dd989be2b8579cb1942d089bb54853703c8a847949b90068e0e5",
+        "app/resources/HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa",
+        "app/resources/ffmpeg.exe": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98"
+      }
+    },
+    {
+      "name": "installed extension ZIPs are valid; unpacked copies match when present",
+      "actual": {
+        "Chromium": {
+          "background_sha256": "0d5666d992b6608358fe117c3a2d2e9ba7914fe36076487a94f981578f03773a",
+          "unpacked_directory_present": false,
+          "archives_sha256": {
+            "HLSDownloader-7.0.3-Chromium.zip": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+          }
+        },
+        "Firefox": {
+          "background_sha256": "64adb41345e21b82f8d8148edf47d0c947c71564955fb11b3c4d526325e155de",
+          "unpacked_directory_present": false,
+          "archives_sha256": {
+            "HLSDownloader-7.0.3-Firefox.zip": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+          }
+        }
+      }
+    },
+    {
+      "name": "default download directory matches Windows Known Folder",
+      "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+    },
+    {
+      "name": "real public MDN video downloads into the default folder with identical bytes",
+      "actual": {
+        "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+        "bytes": 554058,
+        "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+      }
+    },
+    {
+      "name": "installed UI opens visibly and connects to the installed Core",
+      "actual": {
+        "x": 0,
+        "y": 0,
+        "width": 1214,
+        "height": 567,
+        "active": true,
+        "showing": true,
+        "iconCount": 1,
+        "iconWidth": 192,
+        "iconHeight": 192,
+        "scaleX": 1.25,
+        "scaleY": 1.25,
+        "deviceX": 0,
+        "deviceY": 0,
+        "deviceWidth": 1518,
+        "deviceHeight": 709
+      }
+    },
+    {
+      "name": "measured installed runtime idle CPU and memory",
+      "actual": {
+        "seconds": 5.0,
+        "logical_cpus": 8,
+        "cpu_one_core_percent": 0.625,
+        "cpu_machine_percent": 0.078125,
+        "processes": {
+          "804": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.046875,
+            "rss_bytes": 17395712,
+            "private_bytes": 4747264
+          },
+          "4512": {
+            "name": "HLSDownloader.exe",
+            "cpu": 0.0,
+            "rss_bytes": 6348800,
+            "private_bytes": 1384448
+          },
+          "5196": {
+            "name": "HLSDownloader.exe",
+            "cpu": 5.140625,
+            "rss_bytes": 193208320,
+            "private_bytes": 230158336
+          }
+        },
+        "rss_sum_bytes": 216952832,
+        "private_sum_bytes": 236290048
+      }
+    },
+    {
+      "name": "MSI uninstalls and removes its product registration",
+      "actual": true
+    }
+  ],
+  "msi_sha256": "ecabc6cb6facbf55fed6aa4c6ee1a4256fdc7ebb6b809703fa22225aa3cefb01",
+  "installed_bytes": 469511994,
+  "installed_files": 222,
+  "largest_files": [
+    {
+      "path": "app/resources/ffmpeg.exe",
+      "bytes": 165155840
+    },
+    {
+      "path": "app/resources/libmpv-2.dll",
+      "bytes": 119757824
+    },
+    {
+      "path": "runtime/lib/modules",
+      "bytes": 54030811
+    },
+    {
+      "path": "app/resources/HLSDownloaderPresenter.exe",
+      "bytes": 28708864
+    },
+    {
+      "path": "app/resources/HLSDownloaderEngine.exe",
+      "bytes": 14661120
+    },
+    {
+      "path": "app/skiko-windows-x64.dll",
+      "bytes": 14109696
+    },
+    {
+      "path": "runtime/bin/server/jvm.dll",
+      "bytes": 13919872
+    },
+    {
+      "path": "app/icudtl.dat",
+      "bytes": 10468208
+    },
+    {
+      "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+      "bytes": 4740663
+    },
+    {
+      "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+      "bytes": 4069888
+    },
+    {
+      "path": "app/resources/HLSDownloaderNativeHost.exe",
+      "bytes": 3772928
+    },
+    {
+      "path": "app/ui-desktop-1.12.0-c7e12ceabbe9ad2921953e527c30ea.jar",
+      "bytes": 3713949
+    }
+  ],
+  "installed_components_sha256": {
+    "HLSDownloaderEngine.exe": "39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48",
+    "HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+    "HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa",
+    "HLSDownloaderUpdater.exe": "77592ce99ab9dd989be2b8579cb1942d089bb54853703c8a847949b90068e0e5"
+  },
+  "ui_exercised": true,
+  "ui_visible_connected_seconds": 6.296999999999997,
+  "idle": {
+    "seconds": 5.0,
+    "logical_cpus": 8,
+    "cpu_one_core_percent": 0.625,
+    "cpu_machine_percent": 0.078125,
+    "processes": {
+      "804": {
+        "name": "HLSDownloaderEngine.exe",
+        "cpu": 0.046875,
+        "rss_bytes": 17395712,
+        "private_bytes": 4747264
+      },
+      "4512": {
+        "name": "HLSDownloader.exe",
+        "cpu": 0.0,
+        "rss_bytes": 6348800,
+        "private_bytes": 1384448
+      },
+      "5196": {
+        "name": "HLSDownloader.exe",
+        "cpu": 5.140625,
+        "rss_bytes": 193208320,
+        "private_bytes": 230158336
+      }
+    },
+    "rss_sum_bytes": 216952832,
+    "private_sum_bytes": 236290048
+  }
+}

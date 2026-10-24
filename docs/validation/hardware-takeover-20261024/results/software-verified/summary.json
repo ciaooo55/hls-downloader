@@ -1,0 +1,34 @@
+{
+  "mode": "software",
+  "passed": true,
+  "steps": [
+    {
+      "name": "generate-media",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "baseline-rendering",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "candidate-rendering",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "gpu-renderer-comparison",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "download-playback-cleanup",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "error": "",
+  "finished": true,
+  "current": "download-playback-cleanup"
+}

@@ -1,0 +1,72 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "page": "https://www.7-zip.org/download.html",
+  "checks": [
+    {
+      "name": "independent-public-source",
+      "actual": {
+        "url": "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-src.tar.xz",
+        "bytes": 1565688,
+        "sha256": "0b6080b8c3e7a579161d2d495224c0e51c467576cb4c7048b0ab485ef44cc22e"
+      }
+    },
+    {
+      "name": "default-takeover-enabled-for-all-sizes",
+      "actual": true
+    },
+    {
+      "name": "original-website-link-reaches-confirmation-before-task",
+      "actual": true
+    },
+    {
+      "name": "Chromium-browser-transfer-paused-before-confirmation",
+      "actual": {
+        "items": [
+          {
+            "bytesReceived": 0,
+            "canResume": true,
+            "danger": "safe",
+            "error": null,
+            "exists": true,
+            "filename": "",
+            "finalUrl": "https://release-assets.githubusercontent.com/github-production-release-asset/466446150/a0381963-f11d-493e-90a7-934ba12b4c80?redacted=temporary-signed-query",
+            "id": 1,
+            "mime": "application/octet-stream",
+            "paused": true,
+            "state": "in_progress",
+            "totalBytes": 1565688,
+            "url": "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-src.tar.xz"
+          }
+        ],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-src.tar.xz"
+          }
+        ]
+      }
+    },
+    {
+      "name": "one-Core-file-completed-with-source-SHA256",
+      "actual": {
+        "bytes": 1565688,
+        "sha256": "0b6080b8c3e7a579161d2d495224c0e51c467576cb4c7048b0ab485ef44cc22e"
+      }
+    },
+    {
+      "name": "browser-keeps-no-download-item-after-takeover",
+      "actual": {
+        "items": []
+      }
+    }
+  ],
+  "components": {
+    "HLSDownloaderEngine.exe": "39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48",
+    "HLSDownloaderNativeHost.exe": "3d971c7e8a332ea38358d4fc64d1bcc0da6dbfa495745618783a9caf8c5da7ce",
+    "HLSDownloaderPresenter.exe": "38db366412f319b2a3f01b3d48305518c90bb38b4422f4301b538b2b298986aa"
+  },
+  "background_sha256": "0d5666d992b6608358fe117c3a2d2e9ba7914fe36076487a94f981578f03773a",
+  "extension_id": "bbdfldcjnikaemnimalegbopgaknjhla",
+  "original_tasks_preserved": true
+}
