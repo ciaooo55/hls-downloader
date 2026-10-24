@@ -30,4 +30,12 @@ describe('ordinary file takeover', () => {
       kind: 'media', url: 'https://cdn.test/movie.mp4', mimeType: 'video/mp4',
     })).toBe(false)
   })
+
+  it('takes server attachments without a click while leaving media previews gated', () => {
+    for (const kind of ['media', 'hls', 'dash'] as const) {
+      expect(earlyTakeoverRequiresClick(kind, 'attachment; filename="export.dat"')).toBe(false)
+      expect(earlyTakeoverRequiresClick(kind, 'inline; filename="export.dat"')).toBe(true)
+      expect(earlyTakeoverRequiresClick(kind)).toBe(true)
+    }
+  })
 })

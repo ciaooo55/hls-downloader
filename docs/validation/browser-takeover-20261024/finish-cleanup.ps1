@@ -6,13 +6,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml'))) {
 }
 $installer = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader\最新-20261024\HLSDownloader-7.0.3-20261024-未签名.msi'
 if (-not (Test-Path -LiteralPath $installer)) { throw '桌面交付包不存在，停止清理。' }
-if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '227cabe3c177ff64136c5a1ba10c99b5161eae9a82d8e1194f82d0db4e2aa937') {
+if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '7aa26f74fbc1e4db6f0cf1fba1a52eaeb26c78a479e56f31f67f95c56206ec8d') {
     throw '桌面安装包与本轮验收包不同，停止清理。'
 }
 if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyContinue) {
     throw '请先关闭 Windows 沙盒，避免清理正在使用的映射文件。'
 }
 $relativePaths = @(
+    '.tool-cache\response-intercept-20261024'
     '.tool-cache\browser-takeover-20261024'
     '.tool-cache\interleaved-playback-20261024'
     'extension\node_modules'

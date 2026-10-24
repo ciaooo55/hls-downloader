@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "runs": {
+    "edge": "edge-final-02",
+    "firefox": "firefox-final",
+    "installer": "installer-final"
+  },
+  "scope": "browser attachment ownership and installer only",
+  "browser_checks": {
+    "edge": 16,
+    "firefox": 16
+  },
+  "validation_script_sha256": "f2164e1f4302702a7519aa99f5bb444d3999ac82cb38c4d89af970a0b20eced4"
+}

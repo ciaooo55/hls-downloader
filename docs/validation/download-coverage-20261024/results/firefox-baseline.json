@@ -1,0 +1,397 @@
+{
+  "passed": false,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "WebDriver element click",
+  "browser_version": "158.0.1",
+  "extension_background_sha256": "846237f536dfb1d143f0e9f293f53326eea19ea4d93a2474030075fe3affbc70",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAProbe\\smoke_extension_download_ownership.py\", line 243, in run\n    assert not delta, delta\n           ^^^^^^^^^\nAssertionError: [{'id': 1, 'url': 'http://127.0.0.1:52414/media-attachment'}]\n",
+  "failure_targets": [],
+  "failure_screenshot": true,
+  "failure_url": "moz-extension://33b919cd-5edb-41ac-a10b-6e0c3d6abe50/popup.html",
+  "failure_html": "<html lang=\"zh-CN\" data-hlsd-theme=\"light\" data-popup-ready=\"ready\"><head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <title>HLS Downloader</title>\n  <style>\n    html { color-scheme: light dark; background: #eef2f6; }\n    body { margin: 0; width: 360px; background: #eef2f6; color: #0f172a; font: 12px/1.45 \"Segoe UI\", \"Microsoft YaHei\", system-ui, sans-serif; }\n    .popup-boot { display: flex; min-height: 180px; flex-direction: column; background: #eef2f6; }\n    .popup-boot__header { display: flex; height: 48px; align-items: center; gap: 9px; padding: 0 10px; border-bottom: 1px solid #d8e0ea; background: #fff; }\n    .popup-boot__header img { width: 24px; height: 24px; }\n    .popup-boot__title { font-size: 14px; font-weight: 650; }\n    .popup-boot__status { margin-top: 2px; color: #475569; font-size: 10px; }\n    .popup-boot__body { display: grid; flex: 1; place-items: center; padding: 24px; text-align: center; }\n    .popup-boot__body strong { display: block; margin-bottom: 5px; font-size: 13px; }\n    .popup-boot__body span { color: #475569; }\n    @media (prefers-color-scheme: dark) {\n      html, body, .popup-boot { background: #151719; color: #f4f5f6; }\n      .popup-boot__header { border-color: #383d43; background: #1c1f23; }\n      .popup-boot__status, .popup-boot__body span { color: #c5c9cf; }\n    }\n  </style>\n  <script type=\"module\" crossorigin=\"\" src=\"/chunks/popup-BWxwZTLQ.js\"></script>\n  <link rel=\"modulepreload\" crossorigin=\"\" href=\"/chunks/browser-B79nNR8W.js\">\n  <link rel=\"stylesheet\" crossorigin=\"\" href=\"/assets/popup-DC57h4ym.css\">\n<style>\n[data-hlsd-theme=\"dark\"]{\n  color-scheme:dark;\n  --bg:#151719;--surface:#1c1f23;--surface-2:#23272b;--surface-3:#2b3035;\n  --border:#383d43;--control-border:#767a7e;--text:#f4f5f6;--muted:#c5c9cf;--faint:#969ca4;\n  --primary:#5ea2f3;--primary-hover:#7eb7f6;--on-primary:#151719;\n  --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa;\n  --primary-ink:#7eb7f6;--green-ink:#55d283;--red-ink:#f27070;--purple-ink:#c4b5fd;\n  --shadow:rgba(0,0,0,.35);--rail:#1c1f23;\n  --overlay-border:#464c53;\n  --z-extension-overlay:2147483647;--z-extension-video:2147483646;\n}\n[data-hlsd-theme=\"light\"]{\n  color-scheme:light;\n  --bg:#eef2f6;--surface:#ffffff;--surface-2:#f5f7fa;--surface-3:#e8edf3;\n  --border:#d8e0ea;--control-border:#808896;--text:#0f172a;--muted:#475569;--faint:#5f6e83;\n  --primary:#2563eb;--primary-hover:#1d4ed8;--on-primary:#ffffff;\n  --green:#15803d;--amber:#d97706;--red:#dc2626;--purple:#7c3aed;\n  --primary-ink:#1d4ed8;--green-ink:#166534;--red-ink:#b91c1c;--purple-ink:#5b21b6;\n  --shadow:rgba(15,23,42,.12);--rail:#e8edf3;\n  --overlay-border:#c7d0dc;\n  --z-extension-overlay:2147483647;--z-extension-video:2147483646;\n}\n\n.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:7px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}\n.hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}\n.hlsd-button:active:not(:disabled){transform:scale(.975)}\n.hlsd-button:disabled{opacity:.45;cursor:default}\n.hlsd-button.busy:disabled{opacity:1;cursor:progress}\n.hlsd-button.primary{background:var(--primary);color:var(--on-primary)}\n.hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover)}\n.hlsd-button.subtle{background:transparent;color:var(--muted)}\n.hlsd-button.subtle:hover:not(:disabled){background:var(--surface-2);color:var(--text)}\n.hlsd-button.active{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 34%,transparent)}\n.hlsd-button.active:hover:not(:disabled){background:color-mix(in srgb,var(--green) 22%,var(--surface-3))}\n.hlsd-button:focus-visible{outline:2px solid var(--primary);outline-offset:1px}\n.hlsd-icon{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none}\n.hlsd-icon svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.8}\n.hlsd-button.primary .hlsd-icon{width:14px;height:14px}\n.hlsd-button.busy .hlsd-icon{animation:hlsd-spin .8s linear infinite}\n@keyframes hlsd-spin{to{transform:rotate(360deg)}}\n.hlsd-select{height:30px;border:1px solid var(--control-border);border-radius:7px;background:var(--surface-2);color:var(--text);padding:0 8px;font:12.5px system-ui,sans-serif}\n.hlsd-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:color-mix(in srgb,var(--primary) 20%,var(--surface-2));color:var(--primary-ink);font:700 11.5px system-ui,sans-serif}\n</style></head>\n<body>\n  <div id=\"root\"><main style=\"--popup-max-height: 600px;\"><header><div class=\"brand\"><img src=\"/icon-32.png\" alt=\"\" width=\"18\" height=\"18\"><div><h1>HLS Downloader</h1><span class=\"status online\">下载引擎已连接</span></div></div><div class=\"header-actions\"><button class=\"hlsd-button subtle\" type=\"button\" title=\"主题：自动\" aria-label=\"主题：自动\"><span class=\"hlsd-icon\" aria-label=\"主题：自动\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z\"></path></svg></span></button><button class=\"hlsd-button desktop-open\" type=\"button\" title=\"打开桌面端\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h13m-5-5 5 5-5 5\"></path></svg></span><span>主程序</span></button><button class=\"hlsd-button subtle\" type=\"button\" title=\"关闭\" aria-label=\"关闭插件弹窗\"><span class=\"hlsd-icon\" aria-label=\"关闭\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m6 6 12 12M18 6 6 18\"></path></svg></span></button></div></header><nav class=\"view-tabs\" role=\"tablist\" aria-label=\"插件功能\"><button class=\"view-tab\" type=\"button\" id=\"tab-0\" role=\"tab\" aria-controls=\"panel-0\" aria-selected=\"true\" tabindex=\"0\">资源<b>0</b></button><button class=\"view-tab\" type=\"button\" id=\"tab-1\" role=\"tab\" aria-controls=\"panel-1\" aria-selected=\"false\" tabindex=\"-1\">字幕</button><button class=\"view-tab\" type=\"button\" id=\"tab-2\" role=\"tab\" aria-controls=\"panel-2\" aria-selected=\"false\" tabindex=\"-1\">设置</button></nav><div class=\"update-notice\" hidden=\"\"><span></span><button type=\"button\">查看新版</button></div><div class=\"send-error\" hidden=\"\" role=\"alert\"></div><div class=\"views\"><section class=\"resources-panel\" id=\"panel-0\" role=\"tabpanel\" aria-labelledby=\"tab-0\"><div class=\"section-header\"><div class=\"section-title\" title=\"http://127.0.0.1:52414/\">127.0.0.1</div><button class=\"scan-button\" type=\"button\" title=\"重新扫描当前页面的媒体和下载资源\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7\"></path></svg></span><span>重新识别</span></button></div><div class=\"list\"><div class=\"empty\"><div class=\"empty-icon\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"3\" y=\"5\" width=\"18\" height=\"14\" rx=\"2\"></rect><path d=\"m10 9 5 3-5 3Z\"></path></svg></span></div><strong>当前页面还没有可下载资源</strong><span>先播放页面中的媒体，或点击下方重新识别。</span><button class=\"empty-retry\" type=\"button\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7\"></path></svg></span><span>重新识别</span></button></div></div></section><section id=\"panel-1\" role=\"tabpanel\" aria-labelledby=\"tab-1\" hidden=\"\"><p class=\"panel-hint\">正在读取当前页面…</p></section><section class=\"settings-panel\" id=\"panel-2\" role=\"tabpanel\" aria-labelledby=\"tab-2\" hidden=\"\"><h2>下载与站点设置</h2><p class=\"panel-hint\">当前站点 · 127.0.0.1</p><div class=\"controls\"><div class=\"setting-item\"><div><strong>自动接管</strong><small>全局设置，控制浏览器下载是否交给主程序。</small></div><button class=\"hlsd-button active\" type=\"button\" aria-label=\"自动接管：已开启\" title=\"全局下载接管已开启；点击关闭\" aria-pressed=\"true\" aria-busy=\"false\">已开启</button></div><div class=\"setting-item\"><div><strong>本站 Cookie</strong><small>仅在授权后，为本站下载读取资源请求所需的 Cookie。</small></div><button class=\"hlsd-button\" type=\"button\" aria-label=\"本站 Cookie：未授权\" title=\"未授权：默认不读取 Cookie；点击授权当前站点\" aria-pressed=\"false\" aria-busy=\"false\">未授权</button></div><div class=\"setting-item\"><div><strong>本站媒体提示</strong><small>控制网页上的媒体悬浮入口，不影响插件内识别。</small></div><button class=\"hlsd-button\" type=\"button\" aria-label=\"本站提示：已显示\" title=\"当前会在本站显示自动提示；点击隐藏\" aria-pressed=\"false\" aria-busy=\"false\">已显示</button></div></div><button class=\"restore-site-prompts\" type=\"button\" hidden=\"\" title=\"\" aria-busy=\"false\">恢复本站自动提示</button></section></div><footer><span>浏览器插件</span><span>版本 7.0.3</span></footer></main></div>\n  <noscript>浏览器插件脚本未启用。</noscript>\n\n\n</body></html>",
+  "failure_handoffs": [
+    {
+      "id": "handoff-1a16e651b2a-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:52414/direct.zip"
+    },
+    {
+      "id": "handoff-1a16e65303d-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:52414/cancel.zip"
+    },
+    {
+      "id": "handoff-1a16e654727-6",
+      "status": "accepted",
+      "url": "http://127.0.0.1:52414/opaque"
+    },
+    {
+      "id": "handoff-1a16e65620f-8",
+      "status": "rejected",
+      "url": "https://release-assets.githubusercontent.com/github-production-release-asset/1301281603/67d639f9-6435-4648-b038-1ab8f0416966?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-24T15%3A30%3A19Z&rscd=attachment%3B+filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-10-24T14%3A30%3A02Z&ske=2026-10-24T15%3A30%3A19Z&sks=b&skv=2018-11-09&sig=TPBi%2FA52OyphjCDnLsjM7kBOXpi%2BSpeoL7cr%2FkeM7%2F4%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc5Mjg1NTI5OSwibmJmIjoxNzkyODUzNDk5LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.frDAt7ANSgY3tyA2FroAm1j-L9GJPk-owxA9hgdRGj4&response-content-disposition=attachment%3B%20filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&response-content-type=application%2Foctet-stream"
+    },
+    {
+      "id": "handoff-1a16e657498-a",
+      "status": "pending",
+      "url": "http://127.0.0.1:52414/media-attachment"
+    }
+  ],
+  "failure_downloads": [],
+  "failure_storage": [
+    {
+      "enabled": true,
+      "excludedHosts": [],
+      "minimumBytes": 0
+    },
+    {
+      "click-intents": [],
+      "handoff-tracker-v1": [
+        {
+          "checkedAt": 1792853489271,
+          "failures": 0,
+          "id": "handoff-1a16e651b2a-2",
+          "presentation": "presented",
+          "resourceId": "0cba31a15df3d4e3b0bdeff8f7549d36",
+          "selectionKey": "9e367151bc1b3f992480943b815c275e",
+          "status": "accepted",
+          "suppression": null,
+          "tabId": 1,
+          "taskDownloadedBytes": null,
+          "taskErrorCode": null,
+          "taskStage": null,
+          "taskStatus": null,
+          "taskTotalBytes": null
+        },
+        {
+          "checkedAt": 1792853495026,
+          "failures": 0,
+          "id": "handoff-1a16e65303d-4",
+          "presentation": "presented",
+          "resourceId": "ce4fb8107010ebf0786b76b4b052367d",
+          "selectionKey": "44bf3f9a876b5b3a2a541c485a754b63",
+          "status": "rejected",
+          "suppression": null,
+          "tabId": 1,
+          "taskDownloadedBytes": null,
+          "taskErrorCode": null,
+          "taskStage": null,
+          "taskStatus": null,
+          "taskTotalBytes": null
+        },
+        {
+          "checkedAt": 1792853498907,
+          "failures": 0,
+          "id": "handoff-1a16e654727-6",
+          "presentation": "presented",
+          "resourceId": "a82b449c1fc3d27853d5fe556d81ce15",
+          "selectionKey": "a96821e64a18185a7774ce9ec0b05e1b",
+          "status": "accepted",
+          "suppression": null,
+          "tabId": 1,
+          "taskDownloadedBytes": null,
+          "taskErrorCode": null,
+          "taskStage": null,
+          "taskStatus": null,
+          "taskTotalBytes": null
+        },
+        {
+          "checkedAt": 1792853504460,
+          "failures": 0,
+          "id": "handoff-1a16e65620f-8",
+          "presentation": "presented",
+          "resourceId": "ef8003637706a592ce1e8331f5f84393",
+          "selectionKey": "dbc9fb00df23ab6f75663de667107a3a",
+          "status": "rejected",
+          "suppression": null,
+          "tabId": 1,
+          "taskDownloadedBytes": null,
+          "taskErrorCode": null,
+          "taskStage": null,
+          "taskStatus": null,
+          "taskTotalBytes": null
+        },
+        {
+          "checkedAt": 1792853505337,
+          "failures": 0,
+          "id": "handoff-1a16e657498-a",
+          "presentation": "presented",
+          "resourceId": "5a1c2d08f99cf30df9a79d69520785d0",
+          "selectionKey": "2e87af16fee86adb91589c6bfe180a3e",
+          "status": "pending",
+          "suppression": null,
+          "tabId": 1,
+          "taskDownloadedBytes": null,
+          "taskErrorCode": null,
+          "taskStage": null,
+          "taskStatus": null,
+          "taskTotalBytes": null
+        }
+      ],
+      "resources:tab:1:page:d934ef45ac4bf43b7abb5f54e6b2f892": [
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "5a1c2d08f99cf30df9a79d69520785d0",
+          "kind": "media",
+          "method": "GET",
+          "mimeType": "video/mp4",
+          "owner": "tab:1:frame:0:84",
+          "pageUrl": "http://127.0.0.1:52414/",
+          "playbackPatterns": [],
+          "playbackUrlHashes": null,
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52414/media-attachment",
+            "method": "GET",
+            "request_id": "84"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5",
+            "connection": "keep-alive",
+            "host": "127.0.0.1:52414",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
+          },
+          "seenAt": 1792853504468,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52414/media-attachment",
+          "variants": null
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "Codex-Account-Switcher-Portable-0.13.14.exe",
+          "frameId": 0,
+          "id": "ef8003637706a592ce1e8331f5f84393",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:1:frame:0:81",
+          "pageUrl": "http://127.0.0.1:52414/",
+          "playbackPatterns": [],
+          "playbackUrlHashes": null,
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "https://release-assets.githubusercontent.com/github-production-release-asset/1301281603/67d639f9-6435-4648-b038-1ab8f0416966?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-24T15%3A30%3A19Z&rscd=attachment%3B+filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-10-24T14%3A30%3A02Z&ske=2026-10-24T15%3A30%3A19Z&sks=b&skv=2018-11-09&sig=TPBi%2FA52OyphjCDnLsjM7kBOXpi%2BSpeoL7cr%2FkeM7%2F4%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc5Mjg1NTI5OSwibmJmIjoxNzkyODUzNDk5LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.frDAt7ANSgY3tyA2FroAm1j-L9GJPk-owxA9hgdRGj4&response-content-disposition=attachment%3B%20filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&response-content-type=application%2Foctet-stream",
+            "method": "GET",
+            "request_id": "81"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5",
+            "connection": "keep-alive",
+            "host": "release-assets.githubusercontent.com",
+            "referer": "http://127.0.0.1:52414/",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "cross-site",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
+          },
+          "seenAt": 1792853500405,
+          "size": 102535433,
+          "statusCode": 200,
+          "tabId": 1,
+          "title": "Takeover ownership",
+          "url": "https://release-assets.githubusercontent.com/github-production-release-asset/1301281603/67d639f9-6435-4648-b038-1ab8f0416966?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-24T15%3A30%3A19Z&rscd=attachment%3B+filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-10-24T14%3A30%3A02Z&ske=2026-10-24T15%3A30%3A19Z&sks=b&skv=2018-11-09&sig=TPBi%2FA52OyphjCDnLsjM7kBOXpi%2BSpeoL7cr%2FkeM7%2F4%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc5Mjg1NTI5OSwibmJmIjoxNzkyODUzNDk5LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.frDAt7ANSgY3tyA2FroAm1j-L9GJPk-owxA9hgdRGj4&response-content-disposition=attachment%3B%20filename%3DCodex-Account-Switcher-Portable-0.13.14.exe&response-content-type=application%2Foctet-stream",
+          "variants": null
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "opaque.zip",
+          "frameId": 0,
+          "id": "a82b449c1fc3d27853d5fe556d81ce15",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:1:frame:0:78",
+          "pageUrl": "http://127.0.0.1:52414/",
+          "playbackPatterns": [],
+          "playbackUrlHashes": null,
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52414/opaque",
+            "method": "GET",
+            "request_id": "78"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5",
+            "connection": "keep-alive",
+            "host": "127.0.0.1:52414",
+            "referer": "http://127.0.0.1:52414/",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
+          },
+          "seenAt": 1792853493453,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52414/opaque",
+          "variants": null
+        },
+        {
+          "confidence": 0.84,
+          "evidence": [
+            "response_headers",
+            "request_chain"
+          ],
+          "filename": "",
+          "frameId": 0,
+          "id": "ce4fb8107010ebf0786b76b4b052367d",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:1:frame:0:50",
+          "pageUrl": "http://127.0.0.1:52414/",
+          "playbackPatterns": [],
+          "playbackUrlHashes": null,
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52414/cancel.zip",
+            "method": "GET",
+            "request_id": "50"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5",
+            "connection": "keep-alive",
+            "host": "127.0.0.1:52414",
+            "referer": "http://127.0.0.1:52414/",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
+          },
+          "seenAt": 1792853487660,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52414/cancel.zip",
+          "variants": null
+        },
+        {
+          "confidence": 0.84,
+          "evidence": [
+            "response_headers",
+            "request_chain"
+          ],
+          "filename": "",
+          "frameId": 0,
+          "id": "0cba31a15df3d4e3b0bdeff8f7549d36",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:1:frame:0:9",
+          "pageUrl": "http://127.0.0.1:52414/",
+          "playbackPatterns": [],
+          "playbackUrlHashes": null,
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52414/direct.zip",
+            "method": "GET",
+            "request_id": "9"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5",
+            "connection": "keep-alive",
+            "host": "127.0.0.1:52414",
+            "referer": "http://127.0.0.1:52414/",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
+          },
+          "seenAt": 1792853482240,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52414/direct.zip",
+          "variants": null
+        }
+      ]
+    }
+  ],
+  "requests": {
+    "/": 6,
+    "/favicon.ico": 1,
+    "/direct.zip": 3,
+    "/cancel.zip": 1,
+    "/opaque": 3,
+    "/media-attachment": 1
+  }
+}

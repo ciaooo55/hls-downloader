@@ -9,8 +9,9 @@ export function isOrdinaryFileKind(kind?: ResourceKind | null): boolean {
  * zip/exe/pdf responses never autoplay, so a classified file does not need a
  * click before the desktop prompt.
  */
-export function earlyTakeoverRequiresClick(kind?: ResourceKind | null): boolean {
-  return !isOrdinaryFileKind(kind)
+export function earlyTakeoverRequiresClick(kind?: ResourceKind | null, disposition = ''): boolean {
+  // attachment 已明确要求保存；脚本导航、表单跳转和地址栏下载不一定存在点击记录。
+  return !isOrdinaryFileKind(kind) && !/^\s*attachment\b/i.test(disposition)
 }
 
 /** Classified files already have a DownloadItem; do not stall the prompt. */

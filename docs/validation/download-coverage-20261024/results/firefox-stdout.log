@@ -1,0 +1,17 @@
+direct: one Core file, no browser copy
+cancel: cancel starts no browser fallback
+opaque: one Core file, no browser copy
+github: cancel starts no browser fallback
+media-attachment: takeover without a link click, cancel starts no fallback
+audio-attachment: takeover without a link click, cancel starts no fallback
+image-attachment: takeover without a link click, cancel starts no fallback
+json-attachment: takeover without a link click, cancel starts no fallback
+html-attachment: takeover without a link click, cancel starts no fallback
+unknown-attachment: Core saved unknown file type with exact bytes
+redirect-attachment: takeover without a link click, cancel starts no fallback
+form-attachment: takeover without a link click, cancel starts no fallback
+newtab-attachment: takeover without a link click, cancel starts no fallback
+disabled: original browser transfer exactly once
+excluded: original browser transfer exactly once
+offline: original browser transfer exactly once
+{"passed": true, "error": null}

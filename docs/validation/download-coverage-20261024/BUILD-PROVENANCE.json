@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "record_scope": "build_snapshot",
+  "product_version": "7.0.3",
+  "source_commit": "42a89cdf18f8e93c00a0e84d8784c6f9e08947d2",
+  "source_branch": "main",
+  "git_worktree_clean": false,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "source_patch_sha256": "6f0353563f6222975126b91c95f17f3cacdd8bf2f34eabc9f44466ca377c8dc2",
+  "source_files_sha256": {
+    "extension/entrypoints/background.ts": "fc183c0a7ef61b9bc41772f04cfae171a033bbc573043ee108eef80af8aca471",
+    "extension/lib/fileTakeover.ts": "b627ef124f2c4d9f48be4b8ab1c45cccf8b5b50c9b134219e763af9625ead804",
+    "extension/lib/fileTakeover.test.ts": "052d541c465570e0381f396e93232868faed1b4432398ddc8a0db0401d97cb2b",
+    "extension/lib/takeover.test.ts": "485ecce895e3478341073d2f2204557496f4ddb629a146a493cbabdfed0934f5",
+    "extension/README.md": "9469e4fd6f48605e27b07d515a437d10cd62eee946a9132b13f8994587c29bb8"
+  },
+  "engine_sha256": "db1c84d5d96133405351196bd0a96360446880a42125ffb04cbd9697ce8a51f4",
+  "base_msi_sha256": "227cabe3c177ff64136c5a1ba10c99b5161eae9a82d8e1194f82d0db4e2aa937",
+  "validation_scope": "Attachment navigation coverage; Core/UI/Host/media reused unchanged. Chromium DNR experiment is not included."
+}

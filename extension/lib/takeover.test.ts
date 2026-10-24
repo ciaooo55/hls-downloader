@@ -49,6 +49,22 @@ describe('browser transfer parking before desktop takeover', () => {
     expect(await parking).toBe(true)
   })
 
+  it('continues handoff when a fast file completed after the creation snapshot', async () => {
+    vi.stubEnv('FIREFOX', '')
+    vi.mocked(browser.downloads.pause).mockRejectedValue(new Error('already complete'))
+    vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([item({ state: 'complete', bytesReceived: 1024 })]))
+    expect(await pauseBrowserDownload(item())).toBe(false)
+  })
+
+  it('does not hand off a canceled or still-running file after pause failure', async () => {
+    vi.stubEnv('FIREFOX', '')
+    vi.mocked(browser.downloads.pause).mockRejectedValue(new Error('not pausable'))
+    for (const state of ['interrupted', 'in_progress'] as const) {
+      vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([item({ state })]))
+      expect(await pauseBrowserDownload(item())).toBeNull()
+    }
+  })
+
   it('does not take resume ownership of a completed or already paused browser item', async () => {
     expect(await pauseBrowserDownload(item({ state: 'complete' }))).toBe(false)
     expect(await pauseBrowserDownload(item({ paused: true }))).toBe(false)

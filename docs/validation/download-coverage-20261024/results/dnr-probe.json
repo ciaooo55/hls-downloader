@@ -1,0 +1,79 @@
+{
+  "extension": "chrome-extension://edoolhbljbokpgphbhjdmnkhcheenadh/",
+  "install": true,
+  "navigation": "chrome-extension://edoolhbljbokpgphbhjdmnkhcheenadh/redirect.html#http://127.0.0.1:49700/opaque?name=1&other=2#hash",
+  "events": {
+    "events": [
+      {
+        "documentLifecycle": "active",
+        "frameId": 0,
+        "frameType": "outermost_frame",
+        "method": "GET",
+        "parentFrameId": -1,
+        "requestId": "152",
+        "responseHeaders": [
+          {
+            "name": "Server",
+            "value": "BaseHTTP/0.6 Python/3.12.14"
+          },
+          {
+            "name": "Date",
+            "value": "Sat, 24 Oct 2026 14:48:26 GMT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/octet-stream"
+          },
+          {
+            "name": "Content-Length",
+            "value": "1024"
+          },
+          {
+            "name": "Content-Disposition",
+            "value": "attachment; filename=\"opaque.zip\""
+          }
+        ],
+        "statusCode": 200,
+        "statusLine": "HTTP/1.0 200 OK",
+        "tabId": 1047217392,
+        "timeStamp": 1792853306891.92,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:49700/opaque?name=1&other=2#hash"
+      },
+      {
+        "documentLifecycle": "active",
+        "frameId": 0,
+        "frameType": "outermost_frame",
+        "fromCache": false,
+        "ip": "127.0.0.1",
+        "method": "GET",
+        "parentFrameId": -1,
+        "redirectUrl": "chrome-extension://edoolhbljbokpgphbhjdmnkhcheenadh/redirect.html#http://127.0.0.1:49700/opaque?name=1&other=2#hash",
+        "requestId": "152",
+        "statusCode": 302,
+        "statusLine": "HTTP/1.1 302 Found",
+        "tabId": 1047217392,
+        "timeStamp": 1792853306893.162,
+        "type": "main_frame",
+        "url": "http://127.0.0.1:49700/opaque?name=1&other=2#hash"
+      },
+      {
+        "documentLifecycle": "active",
+        "frameId": 0,
+        "frameType": "outermost_frame",
+        "fromCache": false,
+        "method": "GET",
+        "parentFrameId": -1,
+        "requestId": "152",
+        "statusCode": 200,
+        "statusLine": "HTTP/1.1 200 OK",
+        "tabId": 1047217392,
+        "timeStamp": 1792853306901.512,
+        "type": "main_frame",
+        "url": "chrome-extension://edoolhbljbokpgphbhjdmnkhcheenadh/redirect.html#http://127.0.0.1:49700/opaque?name=1&other=2#hash"
+      }
+    ]
+  },
+  "downloads": [],
+  "passed": true
+}

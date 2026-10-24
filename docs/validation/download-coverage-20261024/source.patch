@@ -1,0 +1,155 @@
+diff --git a/extension/README.md b/extension/README.md
+index 909890a..6a88e42 100644
+--- a/extension/README.md
++++ b/extension/README.md
+@@ -8,6 +8,8 @@
+ 
+ Firefox 对已确定为下载的 HTTP(S) GET 导航，在浏览器创建下载记录前交给主程序。Chrome/Edge 对明确的压缩包、安装包链接及同源 download 属性链接，在普通左键点击时交给主程序，阻止浏览器默认导航；其他服务器判定的附件仍通过下载项创建后暂停、接收后立即取消处理。没有隐藏浏览器下载栏，不能保证后者完全没有下载事件。PDF、图片和媒体的普通预览仍保留；Alt、Ctrl/Meta、Shift 点击和按大小过滤不采用点击预接管。
+ 
++服务器明确标记为 `attachment` 的视频、音频和其他文件不依赖网页点击记录；脚本导航、GET 表单、新标签、重定向和直接打开下载地址也适用。POST/Blob 的处理方式见下文，不能据此宣称所有协议和入口均在浏览器下载前阻断。
++
+ 主程序明确离线或拒绝接收时保留浏览器原下载；收到主程序持久接收回执后，由主程序负责确认、取消、重试和失败显示，不再等待首字节或自动恢复浏览器副本。发出交接后失联不能证明未接收，不会盲目重发浏览器导航。取消主程序确认表示取消本次下载。
+ 
+ 下载项接管也覆盖图片、JSON 和无扩展名文件。POST 下载和网页生成的 Blob/data 导出先由浏览器保存，再自动交给桌面确认并导入任务；任务完成后才删除浏览器副本，拒绝或失败保留原文件。POST 下载不会因自动接管而重复提交。
+diff --git a/extension/entrypoints/background.ts b/extension/entrypoints/background.ts
+index ea44fac..5fc9330 100644
+--- a/extension/entrypoints/background.ts
++++ b/extension/entrypoints/background.ts
+@@ -1067,7 +1067,7 @@ async function requestDownload(
+     if (activeDownloadOffers.get(key) === active) activeDownloadOffers.delete(key)
+     else return requestDownload(resource, chain, options)
+   }
+-  const request = offer(resource, chain, { ...options, explicit: true })
++  const request = offer(resource, chain, options)
+     .then(response => {
+       if (!response?.ok) activeDownloadOffers.delete(key)
+       else void waitForHandoffResolution(String(response.handoff.id)).then(resolved => {
+@@ -1094,23 +1094,15 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: st
+   return { ok: true, id }
+ }
+ 
+-async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean, explicit?: boolean } = {}) {
+-  const fingerprint = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
+-  let requestId = ''
+-  try {
+-    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(fingerprint))
+-    requestId = `resource:${resource.tabId ?? -1}:${[...new Uint8Array(digest)].slice(0, 16).map(value => value.toString(16).padStart(2, '0')).join('')}`
+-  } catch {
+-    requestId = globalThis.crypto?.randomUUID?.()
+-      || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+-  }
++async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}) {
+   // 只改写传输负载；原选择身份继续用于去重和弹窗恢复，避免同码率的不同线路串状态。
+   const downloadResource = resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')
+     ? { ...resource, url: resource.manifestUrl } : resource
+   const payload = {
+     ...await resourcePayload(downloadResource, chain, options),
+-    // 自动接管按资源去重；主动点击取消/完成后允许再次打开确认窗。
+-    client_request_id: options.explicit ? `explicit:${crypto.randomUUID()}` : requestId,
++    // 每次下载拥有独立请求；同一 URL 的后续下载不能复用之前已接受或已拒绝的交接。
++    // NativeBridge 重试复用同一负载，仍保留协议的幂等性。
++    client_request_id: `download:${crypto.randomUUID()}`,
+   }
+   const response = await native({ op: 'offer', resource: payload })
+   const handoff = response?.handoff
+@@ -1220,7 +1212,12 @@ export async function pauseBrowserDownload(item: Browser.downloads.DownloadItem)
+     await browser.downloads.pause(item.id)
+     return true
+   } catch {
+-    // 暂停失败不能继续建立桌面任务，否则两个下载器会同时传输。
++    // 下载项事件是快照；策略读取期间小文件可能已完成，此时 pause 会拒绝。
++    // 只有实际完成的文件可以继续交接，其他暂停失败仍不能启动第二份传输。
++    try {
++      const [current] = await browser.downloads.search({ id: item.id })
++      if (current?.state === 'complete') return false
++    } catch {}
+     return null
+   }
+ }
+@@ -1399,7 +1396,7 @@ async function prepareEarlyBrowserTakeover(details: any, chain: RequestChain | u
+     // 同源 download 属性即使响应标记 inline 也会触发下载，普通预览导航仍交给浏览器。
+     if (requiresDownloadAttribute && !intent) return null
+     if (intent?.altBypass) return { resource, bypass: true }
+-    if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
++    if (!intent && earlyTakeoverRequiresClick(resource.kind, observed.disposition)) return null
+     if (!shouldTakeover({
+       url: resource.url,
+       sourcePageUrl: resource.pageUrl,
+@@ -1457,7 +1454,7 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
+   const prepared = await early.promise
+   if (!prepared || prepared.bypass) return undefined
+   try {
+-    const response = await offer(prepared.resource, chain, { explicit: true })
++    const response = await offer(prepared.resource, chain)
+     // 阻塞原响应直到桌面确认接收，随后在 Firefox 建立 DownloadItem 之前取消。
+     // 用户在桌面取消就是取消本次下载，不再启动一个浏览器副本。
+     if (desktopAcceptedHandoff(response)) {
+@@ -1904,7 +1901,7 @@ export default defineBackground(() => {
+             frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
+             seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
+             replayContext: { method: 'GET', page_url: pageUrl },
+-          }, undefined, { allowUnverified: true, explicit: true })
++          }, undefined, { allowUnverified: true })
+           return { ...response, browserFallback: !desktopAcceptedHandoff(response) }
+         } catch (error) {
+           // offer 发送后失联可能已持久接收，不能自动重新导航产生第二份下载。
+diff --git a/extension/lib/fileTakeover.test.ts b/extension/lib/fileTakeover.test.ts
+index bae6461..d94057d 100644
+--- a/extension/lib/fileTakeover.test.ts
++++ b/extension/lib/fileTakeover.test.ts
+@@ -30,4 +30,12 @@ describe('ordinary file takeover', () => {
+       kind: 'media', url: 'https://cdn.test/movie.mp4', mimeType: 'video/mp4',
+     })).toBe(false)
+   })
++
++  it('takes server attachments without a click while leaving media previews gated', () => {
++    for (const kind of ['media', 'hls', 'dash'] as const) {
++      expect(earlyTakeoverRequiresClick(kind, 'attachment; filename="export.dat"')).toBe(false)
++      expect(earlyTakeoverRequiresClick(kind, 'inline; filename="export.dat"')).toBe(true)
++      expect(earlyTakeoverRequiresClick(kind)).toBe(true)
++    }
++  })
+ })
+diff --git a/extension/lib/fileTakeover.ts b/extension/lib/fileTakeover.ts
+index 05c1657..c7edd99 100644
+--- a/extension/lib/fileTakeover.ts
++++ b/extension/lib/fileTakeover.ts
+@@ -9,8 +9,9 @@ export function isOrdinaryFileKind(kind?: ResourceKind | null): boolean {
+  * zip/exe/pdf responses never autoplay, so a classified file does not need a
+  * click before the desktop prompt.
+  */
+-export function earlyTakeoverRequiresClick(kind?: ResourceKind | null): boolean {
+-  return !isOrdinaryFileKind(kind)
++export function earlyTakeoverRequiresClick(kind?: ResourceKind | null, disposition = ''): boolean {
++  // attachment 已明确要求保存；脚本导航、表单跳转和地址栏下载不一定存在点击记录。
++  return !isOrdinaryFileKind(kind) && !/^\s*attachment\b/i.test(disposition)
+ }
+ 
+ /** Classified files already have a DownloadItem; do not stall the prompt. */
+diff --git a/extension/lib/takeover.test.ts b/extension/lib/takeover.test.ts
+index 153cffc..b819108 100644
+--- a/extension/lib/takeover.test.ts
++++ b/extension/lib/takeover.test.ts
+@@ -49,6 +49,22 @@ describe('browser transfer parking before desktop takeover', () => {
+     expect(await parking).toBe(true)
+   })
+ 
++  it('continues handoff when a fast file completed after the creation snapshot', async () => {
++    vi.stubEnv('FIREFOX', '')
++    vi.mocked(browser.downloads.pause).mockRejectedValue(new Error('already complete'))
++    vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([item({ state: 'complete', bytesReceived: 1024 })]))
++    expect(await pauseBrowserDownload(item())).toBe(false)
++  })
++
++  it('does not hand off a canceled or still-running file after pause failure', async () => {
++    vi.stubEnv('FIREFOX', '')
++    vi.mocked(browser.downloads.pause).mockRejectedValue(new Error('not pausable'))
++    for (const state of ['interrupted', 'in_progress'] as const) {
++      vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([item({ state })]))
++      expect(await pauseBrowserDownload(item())).toBeNull()
++    }
++  })
++
+   it('does not take resume ownership of a completed or already paused browser item', async () => {
+     expect(await pauseBrowserDownload(item({ state: 'complete' }))).toBe(false)
+     expect(await pauseBrowserDownload(item({ paused: true }))).toBe(false)

@@ -1,0 +1,358 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:52523/opaque"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "media-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:52523/media-attachment"
+          }
+        ]
+      }
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "0892c1c54c3c26c958285c6218300377ac16964ad03c222a8ef4a4a16420c137",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAProbe\\smoke_extension_download_ownership.py\", line 243, in run\n    offered = pending(before)\n              ^^^^^^^^^^^^^^^\n  File \"C:\\QAProbe\\smoke_extension_download_ownership.py\", line 187, in pending\n    return wait(lambda: next((h for h in handoffs() if h['id'] not in before and h['status'] == 'pending'), None), 'No new desktop offer', 40)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAInput\\source\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: No new desktop offer\n",
+  "failure_targets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:52527/devtools/page/81641D2AEEE71478F631F7A130E9E908",
+      "id": "81641D2AEEE71478F631F7A130E9E908",
+      "title": "Takeover ownership",
+      "type": "page",
+      "url": "http://127.0.0.1:52523/",
+      "webSocketDebuggerUrl": "ws://localhost:52527/devtools/page/81641D2AEEE71478F631F7A130E9E908"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:52527/devtools/page/48CADFD946B86E09CE2E02676882B162",
+      "id": "48CADFD946B86E09CE2E02676882B162",
+      "title": "HLS Downloader",
+      "type": "page",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "webSocketDebuggerUrl": "ws://localhost:52527/devtools/page/48CADFD946B86E09CE2E02676882B162"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:52527/devtools/page/8ED906B261B806C2C8C96E9200518FF7",
+      "id": "8ED906B261B806C2C8C96E9200518FF7",
+      "title": "下载",
+      "type": "page",
+      "url": "edge://downloads-hub/",
+      "webSocketDebuggerUrl": "ws://localhost:52527/devtools/page/8ED906B261B806C2C8C96E9200518FF7"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:52527/devtools/page/861CECE5AF19BACAF18ACA0C34224364",
+      "id": "861CECE5AF19BACAF18ACA0C34224364",
+      "title": "Service Worker https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&amp;bundles=latest&amp;riverAgeMinutes=2880&amp;navAgeMinutes=2880&amp;networkTimeoutSeconds=5&amp;bgTaskNetworkTimeoutSeconds=8&amp;enableNetworkFirst=true&amp;enableEmptySectionRoute=true&amp;enableNavPreload=true&amp;enableStaticAdsRouting=true",
+      "type": "service_worker",
+      "url": "https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&bundles=latest&riverAgeMinutes=2880&navAgeMinutes=2880&networkTimeoutSeconds=5&bgTaskNetworkTimeoutSeconds=8&enableNetworkFirst=true&enableEmptySectionRoute=true&enableNavPreload=true&enableStaticAdsRouting=true",
+      "webSocketDebuggerUrl": "ws://localhost:52527/devtools/page/861CECE5AF19BACAF18ACA0C34224364"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:52527/devtools/page/7FD10D7568F51318C037BF8D7A053981",
+      "id": "7FD10D7568F51318C037BF8D7A053981",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "type": "service_worker",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "webSocketDebuggerUrl": "ws://localhost:52527/devtools/page/7FD10D7568F51318C037BF8D7A053981"
+    }
+  ],
+  "failure_screenshot": true,
+  "failure_url_error": "Message: timeout\nfrom no such execution context: frame does not have execution context\n  (Session info: MicrosoftEdge=156.0.4314.42)\nStacktrace:\nSymbols not available. Dumping unresolved backtrace:\n\t(No symbol) [0x7ff7122509f5]\n\t(No symbol) [0x7ff7121975d4]\n\t(No symbol) [0x7ff7125df8cf]\n\t(No symbol) [0x7ff711f1aeda]\n\t(No symbol) [0x7ff711f2959c]\n\t(No symbol) [0x7ff711f2cca5]\n\t(No symbol) [0x7ff711f2cd6f]\n\t(No symbol) [0x7ff711fb0c06]\n\t(No symbol) [0x7ff711fb08ba]\n\t(No symbol) [0x7ff711f9119a]\n\t(No symbol) [0x7ff711f6651d]\n\t(No symbol) [0x7ff711fae458]\n\t(No symbol) [0x7ff711f65d5c]\n\t(No symbol) [0x7ff711f64f4a]\n\t(No symbol) [0x7ff711f65b83]\n\t(No symbol) [0x7ff7120a5981]\n\t(No symbol) [0x7ff7120b5638]\n\t(No symbol) [0x7ff7122f96d5]\n\t(No symbol) [0x7ff7122ffd51]\n\t(No symbol) [0x7ff7121a36ac]\n\t(No symbol) [0x7ff71219dec4]\n\t(No symbol) [0x7ff71219dfea]\n\t(No symbol) [0x7ff71218f3f8]\n\t(No symbol) [0x7ffff3c1257d]\n\t(No symbol) [0x7ffff550af08]\n",
+  "failure_html": "<html data-hls-downloader-extension=\"1\"><head><title>Takeover ownership</title></head><body><a id=\"direct\" href=\"/direct.zip\">direct.zip</a> <a id=\"cancel\" href=\"/cancel.zip\">cancel.zip</a> <a id=\"opaque\" href=\"/opaque\">opaque attachment</a> <a id=\"disabled\" href=\"/disabled.zip\">disabled.zip</a> <a id=\"excluded\" href=\"/excluded.zip\">excluded.zip</a> <a id=\"offline\" href=\"/offline.zip\">offline.zip</a> <a id=\"preview\" href=\"/preview.pdf\">preview</a> <a id=\"github\" href=\"https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe\">GitHub portable EXE</a><hls-downloader-media-panel></hls-downloader-media-panel></body></html>",
+  "failure_handoffs": [
+    {
+      "id": "handoff-1a16e680d17-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:52523/direct.zip"
+    },
+    {
+      "id": "handoff-1a16e680fa1-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:52523/cancel.zip"
+    },
+    {
+      "id": "handoff-1a16e681311-6",
+      "status": "accepted",
+      "url": "http://127.0.0.1:52523/opaque"
+    },
+    {
+      "id": "handoff-1a16e68160c-8",
+      "status": "rejected",
+      "url": "https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe"
+    },
+    {
+      "id": "handoff-1a16e681917-a",
+      "status": "rejected",
+      "url": "http://127.0.0.1:52523/media-attachment"
+    }
+  ],
+  "failure_downloads": [
+    {
+      "bytesReceived": 1048576,
+      "canResume": false,
+      "danger": "safe",
+      "error": null,
+      "exists": true,
+      "filename": "C:\\Users\\WDAGUtilityAccount\\Downloads\\export.data",
+      "finalUrl": "http://127.0.0.1:52523/audio-attachment",
+      "id": 3,
+      "mime": "audio/mpeg",
+      "paused": false,
+      "state": "complete",
+      "totalBytes": 1048576,
+      "url": "http://127.0.0.1:52523/audio-attachment"
+    }
+  ],
+  "failure_storage": [
+    {
+      "enabled": true,
+      "excludedHosts": [],
+      "minimumBytes": 0
+    },
+    {
+      "click-intents": [],
+      "handoff-tracker-v1": [
+        {
+          "checkedAt": 1792853680047,
+          "failures": 0,
+          "id": "handoff-1a16e680d17-2",
+          "presentation": "presented",
+          "resourceId": "f5a98d731e52004c73886091145c208d",
+          "selectionKey": "b449c88e4b38652a00de86ad4d0f9073",
+          "status": "accepted",
+          "tabId": 1820198692
+        },
+        {
+          "checkedAt": 1792853676358,
+          "failures": 0,
+          "id": "handoff-1a16e680fa1-4",
+          "presentation": "presented",
+          "resourceId": "d19f773424e90813308c2eeeb0802b3a",
+          "selectionKey": "8d8ee661493c390da2c1e13b368317d2",
+          "status": "rejected",
+          "tabId": 1820198692
+        },
+        {
+          "browserRequestId": "171",
+          "checkedAt": 1792853677276,
+          "failures": 0,
+          "id": "handoff-1a16e681311-6",
+          "presentation": "presented",
+          "resourceId": "31adee2b72aa2c93b6563d1450dc6a72",
+          "selectionKey": "73b62cfd6685c16da7f27b30156ab12a",
+          "status": "accepted",
+          "tabId": 1820198692,
+          "taskDownloadedBytes": 1048576,
+          "taskStage": "finished",
+          "taskStatus": "completed",
+          "taskTotalBytes": 1048576
+        },
+        {
+          "checkedAt": 1792853678204,
+          "failures": 0,
+          "id": "handoff-1a16e68160c-8",
+          "presentation": "presented",
+          "resourceId": "757441c92ef2c17b1bbc02606eedb7ea",
+          "selectionKey": "bf7852dee69844e9df92447f59ca5f02",
+          "status": "rejected",
+          "tabId": 1820198692
+        },
+        {
+          "browserRequestId": "230",
+          "checkedAt": 1792853679120,
+          "failures": 0,
+          "id": "handoff-1a16e681917-a",
+          "presentation": "presented",
+          "resourceId": "a81ce863b6116676db658dfee49a9d9f",
+          "selectionKey": "7f5f29ad678875ac78190f8c0c77a761",
+          "status": "rejected",
+          "tabId": 1820198692
+        }
+      ],
+      "resources:tab:1820198692:page:3da4f43cc77af0d0cd2a119597d26811": [
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "f8f26aa80f807ac8daa08f73ffbeb845",
+          "kind": "media",
+          "method": "GET",
+          "mimeType": "audio/mpeg",
+          "owner": "tab:1820198692:frame:0:239",
+          "pageUrl": "http://127.0.0.1:52523/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52523/audio-attachment",
+            "method": "GET",
+            "request_id": "239"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792853678801,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1820198692,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52523/audio-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "a81ce863b6116676db658dfee49a9d9f",
+          "kind": "media",
+          "method": "GET",
+          "mimeType": "video/mp4",
+          "owner": "tab:1820198692:frame:0:230",
+          "pageUrl": "http://127.0.0.1:52523/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52523/media-attachment",
+            "method": "GET",
+            "request_id": "230"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792853678022,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1820198692,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52523/media-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "opaque.zip",
+          "frameId": 0,
+          "id": "31adee2b72aa2c93b6563d1450dc6a72",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:1820198692:frame:0:171",
+          "pageUrl": "http://127.0.0.1:52523/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:52523/opaque",
+            "method": "GET",
+            "request_id": "171"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "referer": "http://127.0.0.1:52523/",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792853676518,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 1820198692,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:52523/opaque"
+        }
+      ]
+    }
+  ],
+  "requests": {
+    "/": 7,
+    "/favicon.ico": 7,
+    "/direct.zip": 2,
+    "/opaque": 3,
+    "/media-attachment": 1,
+    "/audio-attachment": 1
+  }
+}

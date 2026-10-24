@@ -1,0 +1,125 @@
+{
+  "passed": true,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "media-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "audio-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "image-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "json-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "html-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "unknown-attachment: Core saved unknown file type with exact bytes",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "redirect-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "form-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "newtab-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "offline: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "WebDriver element click",
+  "browser_version": "158.0.1",
+  "extension_background_sha256": "5c7fa3d424a7e9311d06923f382fb66f24b563d901802752c5f9a7b04deb1b31",
+  "offline_probe": {
+    "error": "Error: 下载器连接已断开",
+    "ok": false,
+    "reconnecting": true
+  },
+  "requests": {
+    "/": 17,
+    "/favicon.ico": 1,
+    "/direct.zip": 3,
+    "/cancel.zip": 1,
+    "/opaque": 3,
+    "/media-attachment": 2,
+    "/audio-attachment": 1,
+    "/image-attachment": 1,
+    "/json-attachment": 1,
+    "/html-attachment": 1,
+    "/unknown-attachment": 4,
+    "/redirect-attachment": 1,
+    "/media-attachment?": 1,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1,
+    "/offline.zip": 1
+  }
+}

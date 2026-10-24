@@ -1067,7 +1067,7 @@ async function requestDownload(
     if (activeDownloadOffers.get(key) === active) activeDownloadOffers.delete(key)
     else return requestDownload(resource, chain, options)
   }
-  const request = offer(resource, chain, { ...options, explicit: true })
+  const request = offer(resource, chain, options)
     .then(response => {
       if (!response?.ok) activeDownloadOffers.delete(key)
       else void waitForHandoffResolution(String(response.handoff.id)).then(resolved => {
@@ -1094,23 +1094,15 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: st
   return { ok: true, id }
 }
 
-async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean, explicit?: boolean } = {}) {
-  const fingerprint = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
-  let requestId = ''
-  try {
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(fingerprint))
-    requestId = `resource:${resource.tabId ?? -1}:${[...new Uint8Array(digest)].slice(0, 16).map(value => value.toString(16).padStart(2, '0')).join('')}`
-  } catch {
-    requestId = globalThis.crypto?.randomUUID?.()
-      || `offer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-  }
+async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}) {
   // 只改写传输负载；原选择身份继续用于去重和弹窗恢复，避免同码率的不同线路串状态。
   const downloadResource = resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')
     ? { ...resource, url: resource.manifestUrl } : resource
   const payload = {
     ...await resourcePayload(downloadResource, chain, options),
-    // 自动接管按资源去重；主动点击取消/完成后允许再次打开确认窗。
-    client_request_id: options.explicit ? `explicit:${crypto.randomUUID()}` : requestId,
+    // 每次下载拥有独立请求；同一 URL 的后续下载不能复用之前已接受或已拒绝的交接。
+    // NativeBridge 重试复用同一负载，仍保留协议的幂等性。
+    client_request_id: `download:${crypto.randomUUID()}`,
   }
   const response = await native({ op: 'offer', resource: payload })
   const handoff = response?.handoff
@@ -1220,7 +1212,12 @@ export async function pauseBrowserDownload(item: Browser.downloads.DownloadItem)
     await browser.downloads.pause(item.id)
     return true
   } catch {
-    // 暂停失败不能继续建立桌面任务，否则两个下载器会同时传输。
+    // 下载项事件是快照；策略读取期间小文件可能已完成，此时 pause 会拒绝。
+    // 只有实际完成的文件可以继续交接，其他暂停失败仍不能启动第二份传输。
+    try {
+      const [current] = await browser.downloads.search({ id: item.id })
+      if (current?.state === 'complete') return false
+    } catch {}
     return null
   }
 }
@@ -1399,7 +1396,7 @@ async function prepareEarlyBrowserTakeover(details: any, chain: RequestChain | u
     // 同源 download 属性即使响应标记 inline 也会触发下载，普通预览导航仍交给浏览器。
     if (requiresDownloadAttribute && !intent) return null
     if (intent?.altBypass) return { resource, bypass: true }
-    if (!intent && earlyTakeoverRequiresClick(resource.kind)) return null
+    if (!intent && earlyTakeoverRequiresClick(resource.kind, observed.disposition)) return null
     if (!shouldTakeover({
       url: resource.url,
       sourcePageUrl: resource.pageUrl,
@@ -1457,7 +1454,7 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
   const prepared = await early.promise
   if (!prepared || prepared.bypass) return undefined
   try {
-    const response = await offer(prepared.resource, chain, { explicit: true })
+    const response = await offer(prepared.resource, chain)
     // 阻塞原响应直到桌面确认接收，随后在 Firefox 建立 DownloadItem 之前取消。
     // 用户在桌面取消就是取消本次下载，不再启动一个浏览器副本。
     if (desktopAcceptedHandoff(response)) {
@@ -1904,7 +1901,7 @@ export default defineBackground(() => {
             frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
             seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
             replayContext: { method: 'GET', page_url: pageUrl },
-          }, undefined, { allowUnverified: true, explicit: true })
+          }, undefined, { allowUnverified: true })
           return { ...response, browserFallback: !desktopAcceptedHandoff(response) }
         } catch (error) {
           // offer 发送后失联可能已持久接收，不能自动重新导航产生第二份下载。

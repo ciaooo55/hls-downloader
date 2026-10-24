@@ -33,7 +33,7 @@ def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Windows Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
     # Chromium 的配置数据库不能放在 Sandbox 共享文件夹中。
-    stage = Path('C:/QAWork') / (args.browser + '-ownership')
+    stage = Path('C:/QAWork') / (args.browser + '-ownership-' + args.report.parent.name)
     stage.mkdir(exist_ok=True)
     report = {'passed': False, 'browser': args.browser, 'checks': [], 'decision_method': 'Core IPC',
               'browser_input': 'CDP mouse' if args.browser == 'edge' else 'WebDriver element click'}
@@ -45,6 +45,12 @@ def run(args):
 
         def do_GET(self):
             requests[self.path] += 1
+            if self.path == '/redirect-attachment':
+                self.send_response(302)
+                self.send_header('Location', '/unknown-attachment')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             if self.path == '/':
                 body = ("<title>Takeover ownership</title>"
                         "<a id='direct' href='/direct.zip'>direct.zip</a> "
@@ -60,11 +66,19 @@ def run(args):
                 body, mime = b'%PDF-1.4\n%%EOF', 'application/pdf'
             else:
                 body, mime = PAYLOAD, 'application/octet-stream'
+            attachment_mime = {
+                '/media-attachment': 'video/mp4', '/audio-attachment': 'audio/mpeg',
+                '/image-attachment': 'image/png', '/json-attachment': 'application/json',
+                '/html-attachment': 'text/html', '/unknown-attachment': 'application/x-unknown-export',
+            }
+            mime = attachment_mime.get(self.path, mime)
             self.send_response(200)
             self.send_header('Content-Type', mime)
             self.send_header('Content-Length', str(len(body)))
             if self.path == '/opaque':
                 self.send_header('Content-Disposition', 'attachment; filename="opaque.zip"')
+            if self.path in attachment_mime:
+                self.send_header('Content-Disposition', 'attachment; filename="export.data"')
             self.end_headers()
             try:
                 self.wfile.write(body)
@@ -205,6 +219,50 @@ def run(args):
                     record(f'{name}: one Core file, no browser copy', {'created_events': delta, 'sha256': hashlib.sha256(output.read_bytes()).hexdigest()})
                     command({'kind':'task_action','task_id':task['task_id'],'action':'delete_files'})
 
+            # 不依赖链接扩展名或可信点击：脚本导航、GET 表单、新标签和重定向。
+            for name in ('media-attachment', 'audio-attachment', 'image-attachment',
+                         'json-attachment', 'html-attachment', 'unknown-attachment',
+                         'redirect-attachment', 'form-attachment', 'newtab-attachment'):
+                before = {h['id'] for h in handoffs()}
+                prior_events = len(events())
+                driver.switch_to.window(page)
+                driver.get(url)
+                target = url + (name if name not in ('form-attachment', 'newtab-attachment') else 'media-attachment')
+                if name == 'newtab-attachment':
+                    driver.switch_to.new_window('tab')
+                    extra = driver.current_window_handle
+                    driver.execute_cdp_cmd('Page.navigate', {'url':target}) if args.browser == 'edge' else driver.execute_script('location.assign(arguments[0])', target)
+                elif name == 'form-attachment':
+                    if args.browser == 'edge':
+                        driver.execute_cdp_cmd('Runtime.evaluate', {'expression':
+                            "{const f=document.createElement('form');f.method='GET';f.action="+json.dumps(target)+";document.body.append(f);f.submit()}"})
+                    else:
+                        driver.execute_script("const f=document.createElement('form');f.method='GET';f.action=arguments[0];document.body.append(f);f.submit()",target)
+                else:
+                    driver.execute_cdp_cmd('Page.navigate', {'url':target}) if args.browser == 'edge' else driver.execute_script('location.assign(arguments[0])', target)
+                offered = pending(before)
+                wait(absent, 'Browser copy remained for attachment navigation', 15)
+                delta = events()[prior_events:]
+                if args.browser == 'firefox':
+                    assert not delta, delta
+                if name == 'unknown-attachment':
+                    command({'kind':'accept_handoff','handoff_id':offered['id'],'filename':'export.data','download_dir':''})
+                    def attachment_finished():
+                        tasks = [t for t in core({'type':'snapshot','request_id':3})['tasks'] if t['url'] == target]
+                        if tasks and tasks[-1]['status'] == 'failed': raise AssertionError(tasks[-1])
+                        return tasks[-1] if tasks and tasks[-1]['status'] == 'completed' else None
+                    task = wait(attachment_finished, 'Unknown attachment did not complete', 70)
+                    assert Path(task['output_path']).read_bytes() == PAYLOAD
+                    command({'kind':'task_action','task_id':task['task_id'],'action':'delete_files'})
+                    record(f'{name}: Core saved unknown file type with exact bytes', {'created_events':delta})
+                else:
+                    command({'kind':'reject_handoff','handoff_id':offered['id'],'suppress_site_kind':False})
+                    record(f'{name}: takeover without a link click, cancel starts no fallback', {'created_events':delta})
+                assert absent()
+                if name == 'newtab-attachment':
+                    driver.switch_to.window(extra)
+                    driver.close()
+
             # 明确的禁用、排除、离线都保留原浏览器功能，且只恢复一次。
             for name in ('disabled', 'excluded', 'offline'):
                 driver.switch_to.window(inspector)
@@ -244,7 +302,27 @@ def run(args):
     except Exception:
         report['error'] = traceback.format_exc()
         if driver:
+            def background_console():
+                if args.browser != 'edge': return []
+                import websocket
+                target = next(t for t in _debug_targets(driver) if t['type'] == 'service_worker'
+                              and t['url'].startswith(f'chrome-extension://{extension_id}/'))
+                connection = websocket.create_connection(target['webSocketDebuggerUrl'],timeout=5,suppress_origin=True)
+                messages = []
+                try:
+                    connection.send(json.dumps({'id':1,'method':'Runtime.enable'}))
+                    connection.send(json.dumps({'id':2,'method':'Runtime.evaluate','params':{'expression':'true'}}))
+                    while True:
+                        event = json.loads(connection.recv())
+                        if event.get('method') == 'Runtime.consoleAPICalled':
+                            messages.append({'type':event['params']['type'],'args':[
+                                str(a.get('value',a.get('description','')))[:2000] for a in event['params']['args']]})
+                        if event.get('id') == 2: break
+                finally:
+                    connection.close()
+                return messages[-60:]
             for name, capture in (
+                ('failure_background_console', background_console),
                 ('failure_targets', lambda: _debug_targets(driver) if args.browser == 'edge' else []),
                 ('failure_screenshot', lambda: driver.save_screenshot(str(args.report.with_suffix('.png')))),
                 ('failure_url', lambda: driver.current_url),
