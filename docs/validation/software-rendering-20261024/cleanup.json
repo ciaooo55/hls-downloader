@@ -1,0 +1,74 @@
+{
+  "completed": false,
+  "reason": "Automatic approval rejected build-cache deletion and removal of isolated runtime copies: blocked by policy; no further reason was provided. No alternate deletion method used.",
+  "remaining_task_directory": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\player-software-20261024",
+  "inventory_before_attempts": [
+    {
+      "name": "accepted-gpu",
+      "files": 32,
+      "bytes": 1966457.0
+    },
+    {
+      "name": "accepted-software",
+      "files": 11,
+      "bytes": 12724.0
+    },
+    {
+      "name": "accepted-software-stable",
+      "files": 25,
+      "bytes": 191402.0
+    },
+    {
+      "name": "build-cache",
+      "files": 10832,
+      "bytes": 964800893.0
+    },
+    {
+      "name": "final-software",
+      "files": 25,
+      "bytes": 189625.0
+    },
+    {
+      "name": "gpu",
+      "files": 0,
+      "bytes": null
+    },
+    {
+      "name": "input",
+      "files": 978,
+      "bytes": 1674606141.0
+    },
+    {
+      "name": "package",
+      "files": 5,
+      "bytes": 203558730.0
+    },
+    {
+      "name": "software",
+      "files": 15,
+      "bytes": 2213.0
+    },
+    {
+      "name": "software-1080-tuning",
+      "files": 15,
+      "bytes": 15415.0
+    },
+    {
+      "name": "software-tuning",
+      "files": 23,
+      "bytes": 24038.0
+    },
+    {
+      "name": "software-verified",
+      "files": 19,
+      "bytes": 17746.0
+    }
+  ],
+  "manual_script": "docs/validation/software-rendering-20261024/finish-cleanup.ps1",
+  "prior_residue_preserved": [
+    ".tool-cache/release-upload",
+    "native_shell/downloads/.hls-tasks/task-1/control",
+    "native_shell/site-cache/.hls-tasks/task-1/control",
+    "outputs/private-user-backup"
+  ]
+}

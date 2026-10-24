@@ -18,7 +18,7 @@ Core 通过系统 DXGI 1.1 枚举显示适配器，仅确认所有适配器都�
 - `results/long-sample`：延长样本后，360p 为 2.15% CPU、0 掉帧；1080p 仍为 77.11% CPU、143 掉帧，未通过。旧基线的 1080p 在 10 秒内仅前进 1.64 秒，不能因采样掉帧为零称为流畅。下载 / 播放 / 清理 27 项实际检查通过。
 - `results/1080-isolation`：在同一第一版 Core 上额外设置 `correct-downscaling=no` 后，1080p 为 1.875% CPU、0 掉帧、播放速度比 1.0；关闭抖动仍为 78.75% CPU、125 掉帧。整体 `fast` 配置也有效，但会同时改变其他画质参数，未整体用于生产。
 
-以上均为 8 逻辑 CPU 沙盒的短时样本，CPU 百分比按整机计算。第一版 Engine 为 `4b08540b70da85aa596fade031414e91e6fe16b74f765f69aa924db4e0acea26`；旧 r13 基线为 `39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48`。失败报告原样保留，不能作为最终候选通过证据。
+以上均为 8 逻辑 CPU 沙盒的短时样本；CPU 是播放器进程占用按全部逻辑 CPU 归一后的百分比，未将其他沙盒进程的占用计入播放器。第一版 Engine 为 `4b08540b70da85aa596fade031414e91e6fe16b74f765f69aa924db4e0acea26`；旧 r13 基线为 `39bc4856824e31610cb478409d423031f647a1a03f66c41b08d3a4e1c5fddc48`。失败报告原样保留，不能作为最终候选通过证据。
 
 ## 最终候选
 
@@ -46,3 +46,13 @@ r13 的 1080p 仅以请求速度的约 17.6% 播放，故其低采样掉帧不�
 包内来源文件保留打包时 `candidate`、`release_ready=false` 和 GPU / MSI 待验证的历史状态；最终验收见本报告及 `delivery.json`。本轮未重跑 Firefox、收费字幕、实体接收设备、全部网站或完整按钮矩阵；Chromium 通用 MV3 接管仍先创建下载项后暂停。以上限制不能表述为本轮已经修复。
 
 沙盒测试完成后已关闭。一次正常关闭等待 20 秒未退出，核对唯一沙盒为本任务 `accept-gpu.wsb` 后结束了该任务的客户端与启动进程，未操作其他虚拟机服务。
+
+## 同步与清理状态
+
+普通 Git HTTPS 地址连接重置，Windows 原生 HTTPS 访问同一 Git 地址也失败，但 GitHub API 正常。通过官方 Git 数据 API 逐个上传并校验本地对象哈希，三个提交保持原哈希，使用 `force=false` 快进 `main` 到 `3d0699d`。没有更改系统代理、DNS 或全局 Git 配置。
+
+自动审批拒绝了删除旧就绪标记、构建缓存和隔离运行依赖副本的命令，均只返回 `blocked by policy`，未给具体原因。没有换方法删除被拒绝内容；本轮临时目录约 2.65 GiB 仍在 `.tool-cache/player-software-20261024`，明细见 `cleanup.json`。`finish-cleanup.ps1` 已保存并通过 PowerShell 静态语法检查，未由代理执行：用户可运行它清除该轮临时目录及本轮额外复制的空日志 / 重复 stdout，保留已入库证据、Git、桌面成品、用户备份和下载。
+
+此前被拒绝的 `.tool-cache/release-upload`、两个历史 control 文件及原有 `outputs/private-user-backup` 均未操作。因此不能称为工作目录生成物已经完全清空。
+
+已发布 [v7.0.3-r14 未签名预发布](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r14)，九项远端资产 SHA256 全部核对。发布指向含完整验收证据的 `3d0699d`；产品源码为 `4de9a58`。旧 r13 发布及其远端标签已移除，只保留一个 v7 发布，其他主版本未操作；最终身份及哈希见 `publication.json`。
