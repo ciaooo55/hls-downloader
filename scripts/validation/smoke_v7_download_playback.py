@@ -47,6 +47,8 @@ def run(args):
               'engine_sha256': hashlib.sha256(engine.read_bytes()).hexdigest()}
     process = server = None
     accelerated = threading.Event()
+    audio_tail_release = threading.Event()
+    audio_tail_release.set()
 
     def save():
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -152,6 +154,13 @@ def run(args):
             def do_GET(self):
                 report['requests'].append({'path': self.path, 'range': self.headers.get('Range'),
                                            'at': time.monotonic()})
+                audio = re.search(r'/external/a(\d+)\.ts', self.path)
+                dash_audio = re.search(r'/dash/chunk-stream1-(\d+)\.m4s', self.path)
+                if ((audio and int(audio[1]) > 0) or (dash_audio and int(dash_audio[1]) > 1)):
+                    # 确定性保留未下载的音轨尾部，避免小样本全下完也误判为提前播放。
+                    if not audio_tail_release.wait(60):
+                        self.send_error(503, 'Audio prefix acceptance was not released')
+                        return
                 if self.path == '/source.mp4':
                     size = source.stat().st_size
                     value = self.headers.get('Range')
@@ -239,6 +248,8 @@ def run(args):
                     ('external', 'external/index.m3u8', 'hls'), ('dash', 'dash/index.mpd', 'dash'),
                     ('http', 'source.mp4', 'file')]:
                 accelerated.clear()
+                if name in ('external', 'dash'):
+                    audio_tail_release.clear()
                 start_requests = len(report['requests'])
                 tid = create(path, kind, name+'.mp4')
                 # 预览清单与合并后的进度事件分别发布；续传验收须先等到非零检查点。
@@ -246,6 +257,14 @@ def run(args):
                     and t['downloaded_bytes'] > 0) or t['status'] == 'failed', 90)
                 assert task['status'] not in ('failed', 'completed'), task
                 work = root/'downloads/.hls-tasks'/tid
+                if name in ('external', 'dash'):
+                    audio_playlist = work/'audio'/('preview-video.m3u8' if name == 'external' else 'preview-audio.m3u8')
+                    media = [line.strip() for line in audio_playlist.read_text().splitlines()
+                             if line.strip() and not line.startswith('#')]
+                    tail = audio_playlist.parent/media[-1]
+                    assert not tail.exists(), f'{name}: preview only opened after the complete audio track'
+                    record(name+': preview opens while audio tail is blocked and absent')
+                    audio_tail_release.set()
                 command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
                 paused = wait_task(ipc, tid, lambda t: t['status'] == 'paused'
                                    and t['active_workers'] == 0, 30)
@@ -378,6 +397,7 @@ def run(args):
         report['error'] = traceback.format_exc()
     finally:
         accelerated.set()
+        audio_tail_release.set()
         if process:
             for child in psutil.Process(process.pid).children(recursive=True):
                 try:

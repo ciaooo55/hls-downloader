@@ -3,6 +3,31 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+// 两轨按播放时间领取分片，避免先下载整条音轨；未知时长仍按分片交错。
+pub(crate) fn segment_order(primary: &[f64], audio: &[f64]) -> Vec<(bool, usize)> {
+    let mut order = Vec::with_capacity(primary.len() + audio.len());
+    let (mut video_index, mut audio_index) = (0, 0);
+    let (mut video_time, mut audio_time) = (0.0, 0.0);
+    while video_index < primary.len() || audio_index < audio.len() {
+        let is_audio =
+            audio_index < audio.len() && (video_index == primary.len() || audio_time < video_time);
+        let (durations, index, time) = if is_audio {
+            (audio, &mut audio_index, &mut audio_time)
+        } else {
+            (primary, &mut video_index, &mut video_time)
+        };
+        let duration = durations[*index];
+        order.push((is_audio, *index));
+        *time += if duration.is_finite() && duration > 0.0 {
+            duration
+        } else {
+            1.0
+        };
+        *index += 1;
+    }
+    order
+}
+
 pub(crate) fn relative_file(root: &Path, file: &Path) -> Option<String> {
     let relative = file.strip_prefix(root).ok()?;
     if relative.as_os_str().is_empty()

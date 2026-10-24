@@ -561,18 +561,6 @@ pub fn download_hls_with(
     control: &Path,
     options: HlsDownloadOptions,
 ) -> Result<PathBuf, String> {
-    download_hls_with_offset(url, headers, proxy, task_dir, control, options, (0, 0, 0))
-}
-
-fn download_hls_with_offset(
-    url: &str,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    task_dir: &Path,
-    control: &Path,
-    options: HlsDownloadOptions,
-    mut progress_offset: (u64, u64, u64),
-) -> Result<PathBuf, String> {
     let live = options.live;
     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
     let mut current = url.to_string();
@@ -596,39 +584,36 @@ fn download_hls_with_offset(
     }
     apply_ad_policy(&mut playlist, options.skip_ads);
     let has_external_audio = audio_uri.is_some();
-    // VOD 先准备较小的音轨，随后从首个连续视频分片开始播放，避免无声预览。
     let mut audio_merged = None;
+    let audio_dir = task_dir.join("audio");
+    let mut audio_vod = VodCheckpoint::load(&audio_dir);
+    let mut audio_prepared = Vec::new();
+    let mut audio_target_duration = 1.0;
     if !live {
         if let Some(audio) = audio_uri.take() {
-            audio_merged = Some(download_hls_with_offset(
-                &audio,
+            let mut audio_playlist = load_playlist(&audio, headers, proxy)?;
+            if audio_playlist.is_master {
+                let variant = select_variant_for(&audio_playlist, 0, 0)
+                    .ok_or("HLS audio master has no variants")?;
+                audio_playlist = load_playlist(&variant.uri, headers, proxy)?;
+            }
+            apply_ad_policy(&mut audio_playlist, options.skip_ads);
+            fs::create_dir_all(audio_dir.join("segments")).map_err(|error| error.to_string())?;
+            audio_target_duration = audio_playlist.target_duration;
+            audio_prepared = prepare_segments(
+                pending_segments(&audio_playlist, &[]),
                 headers,
                 proxy,
-                &task_dir.join("audio"),
+                &audio_dir,
                 control,
-                HlsDownloadOptions {
-                    concurrency: options.concurrency,
-                    skip_ads: options.skip_ads,
-                    download_subtitles: false,
-                    progress: options.progress.clone(),
-                    ..HlsDownloadOptions::default()
-                },
-                (
-                    progress_offset.0,
-                    progress_offset.1,
-                    progress_offset.2 + pending_segments(&playlist, &[]).len() as u64,
-                ),
-            )?);
-            if let Some(progress) = options
-                .progress
-                .as_ref()
-                .and_then(|path| fs::read_to_string(path).ok())
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            {
-                progress_offset.0 = progress["downloaded"].as_u64().unwrap_or(progress_offset.0);
-                progress_offset.1 = progress["completed_segments"]
-                    .as_u64()
-                    .unwrap_or(progress_offset.1);
+                false,
+                &audio_vod,
+                &mut 0,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+            )?;
+            if audio_prepared.is_empty() {
+                return Err("HLS audio track has no downloadable segments".into());
             }
         }
     }
@@ -699,10 +684,14 @@ fn download_hls_with_offset(
             &mut key_cache,
             &mut map_cache,
         )?;
-        let previewable = !live && !prepared.iter().any(|item| item.segment.is_part);
+        let previewable = !live
+            && !prepared
+                .iter()
+                .chain(&audio_prepared)
+                .any(|item| item.segment.is_part);
         if previewable {
             let marker_root = control.parent().unwrap_or(task_dir);
-            for item in &prepared {
+            for item in prepared.iter().chain(&audio_prepared) {
                 if item.needs_download {
                     super::preview::reset_ready(marker_root, &item.path)?;
                 } else {
@@ -729,10 +718,18 @@ fn download_hls_with_offset(
                 &task_dir.join("preview-video.m3u8"),
                 &timeline_playlist(playlist.target_duration, &entries, true),
             )?;
+            if has_external_audio {
+                let audio_entries = buffered_entries(&[], &audio_prepared, &HashSet::new(), false);
+                write_text_atomic(
+                    &audio_dir.join("preview-video.m3u8"),
+                    &timeline_playlist(audio_target_duration, &audio_entries, true),
+                )?;
+            }
         }
-        let preview_update = Mutex::new((0usize, std::time::Instant::now()));
+        let preview_update = Mutex::new(((0usize, 0usize), std::time::Instant::now()));
         let (completed, stop_error) = download_prepared_segments(
             &prepared,
+            &audio_prepared,
             headers,
             proxy,
             control,
@@ -744,13 +741,11 @@ fn download_hls_with_offset(
                         .entries
                         .iter()
                         .map(|entry| file_len(&entry.path))
-                        .sum::<u64>()
-                        + progress_offset.0,
-                    timeline.entries.len() as u64 + progress_offset.1,
+                        .sum::<u64>(),
+                    timeline.entries.len() as u64,
                     timeline.entries.len() as u64
-                        + progress_offset.1
                         + prepared.len() as u64
-                        + progress_offset.2,
+                        + audio_prepared.len() as u64,
                     live,
                 )
             }),
@@ -759,19 +754,37 @@ fn download_hls_with_offset(
                 if !previewable {
                     return;
                 }
-                let ready = prepared
+                let video_ready = prepared
                     .iter()
                     .take_while(|item| !item.needs_download || completed.contains(&item.path))
                     .count();
+                let audio_ready = audio_prepared
+                    .iter()
+                    .take_while(|item| !item.needs_download || completed.contains(&item.path))
+                    .count();
+                let ready = (video_ready, audio_ready);
                 if let Ok(mut last) = preview_update.lock() {
                     if ready == last.0
-                        || (last.0 > 0
-                            && ready < prepared.len()
+                        || (last.0 .0 > 0
+                            && (!has_external_audio || last.0 .1 > 0)
+                            && ready != (prepared.len(), audio_prepared.len())
                             && last.1.elapsed() < std::time::Duration::from_millis(500))
                     {
                         return;
                     }
                     *last = (ready, std::time::Instant::now());
+                }
+                if has_external_audio {
+                    if audio_ready == 0 {
+                        return;
+                    }
+                    let entries = buffered_entries(&[], &audio_prepared, completed, true);
+                    if let Err(error) =
+                        write_timeline_playlist(&audio_dir, audio_target_duration, &entries, false)
+                    {
+                        eprintln!("HLS audio preview playlist update failed: {error}");
+                        return;
+                    }
                 }
                 if let Err(error) = write_buffered_preview(
                     task_dir,
@@ -798,6 +811,15 @@ fn download_hls_with_offset(
                     vod.remember(item.slot, &item.identity, file_len(&item.path));
                 }
                 let _ = vod.save(task_dir);
+                if has_external_audio {
+                    for item in audio_prepared
+                        .iter()
+                        .filter(|item| completed.contains(&item.path))
+                    {
+                        audio_vod.remember(item.slot, &item.identity, file_len(&item.path));
+                    }
+                    let _ = audio_vod.save(&audio_dir);
+                }
             }
             return Err(error);
         }
@@ -835,12 +857,16 @@ fn download_hls_with_offset(
                 .iter()
                 .map(|entry| file_len(&entry.path))
                 .sum();
-            let completed = progress_offset.1 + timeline.entries.len() as u64;
+            let completed = (timeline.entries.len() + audio_prepared.len()) as u64;
             crate::http_engine::write_media_progress(
                 progress,
-                progress_offset.0 + downloaded,
+                downloaded
+                    + audio_prepared
+                        .iter()
+                        .map(|item| file_len(&item.path))
+                        .sum::<u64>(),
                 completed,
-                completed + progress_offset.2,
+                completed,
                 live,
             );
         }
@@ -881,6 +907,20 @@ fn download_hls_with_offset(
     if let Some(recorder) = live_audio.as_mut() {
         audio_merged = recorder.finish()?;
     }
+    if has_external_audio && !live {
+        for item in &audio_prepared {
+            audio_vod.remember(item.slot, &item.identity, file_len(&item.path));
+        }
+        audio_vod.save(&audio_dir)?;
+        let entries = buffered_entries(&[], &audio_prepared, &HashSet::new(), false);
+        write_timeline_playlist(&audio_dir, audio_target_duration, &entries, true)?;
+        if let Some(progress) = &options.progress {
+            crate::http_engine::write_media_merging(progress);
+        }
+        let output = audio_dir.join("merged.mp4");
+        merge_with_ffmpeg(&audio_dir, &output, control)?;
+        audio_merged = Some(output);
+    }
     let mut subtitles = Vec::new();
     if live && options.download_subtitles {
         subtitles = live_subs.publish(task_dir);
@@ -906,7 +946,7 @@ fn download_hls_with_offset(
             }
         }
     }
-    if let Some(progress) = options.progress.as_ref().filter(|_| progress_offset.2 == 0) {
+    if let Some(progress) = options.progress.as_ref() {
         crate::http_engine::write_media_merging(progress);
     }
     let output = task_dir.join("merged.mp4");
@@ -1072,18 +1112,42 @@ fn write_buffered_preview(
     target_duration: f64,
     external_audio: bool,
 ) -> Result<(), String> {
+    let entries = buffered_entries(previous, prepared, completed, true);
+    if entries.is_empty() {
+        return Ok(());
+    }
+    write_timeline_playlist(task_dir, target_duration, &entries, false)?;
+    if external_audio && !task_dir.join("audio/local.m3u8").is_file() {
+        return Ok(());
+    }
+    let master = if external_audio {
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/preview-video.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\npreview-video.m3u8\n"
+    } else {
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=1\npreview-video.m3u8\n"
+    };
+    write_text_atomic(&task_dir.join("preview.m3u8"), master)
+}
+
+fn buffered_entries(
+    previous: &[TimelineEntry],
+    prepared: &[PreparedSegment],
+    completed: &HashSet<PathBuf>,
+    contiguous_only: bool,
+) -> Vec<TimelineEntry> {
     let mut entries = previous.to_vec();
     // 并行下载会乱序完成；只发布无缺口的前缀，不能让播放器跳过尚未落盘的片段。
-    for item in prepared
-        .iter()
-        .take_while(|item| !item.needs_download || completed.contains(&item.path))
-    {
-        entries.retain(|entry| {
-            entry.identity != item.identity
-                && !(entry.media_sequence == item.segment.media_sequence
-                    && (item.segment.part_index.is_none()
-                        || entry.part_index == item.segment.part_index))
-        });
+    for item in prepared.iter().take_while(|item| {
+        !contiguous_only || !item.needs_download || completed.contains(&item.path)
+    }) {
+        // 点播的 previous 为空；prepared 已去重，不再逐片扫描刚追加的前缀。
+        if !previous.is_empty() {
+            entries.retain(|entry| {
+                entry.identity != item.identity
+                    && !(entry.media_sequence == item.segment.media_sequence
+                        && (item.segment.part_index.is_none()
+                            || entry.part_index == item.segment.part_index))
+            });
+        }
         entries.push(TimelineEntry {
             identity: item.identity.clone(),
             media_sequence: item.segment.media_sequence,
@@ -1094,20 +1158,8 @@ fn write_buffered_preview(
             init_map_path: item.init_map_path.clone(),
         });
     }
-    if entries.is_empty() {
-        return Ok(());
-    }
     sort_timeline(&mut entries);
-    write_timeline_playlist(task_dir, target_duration, &entries, false)?;
-    if external_audio && !task_dir.join("audio/local.m3u8").is_file() {
-        return Ok(());
-    }
-    let master = if external_audio {
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/local.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\npreview-video.m3u8\n"
-    } else {
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=1\npreview-video.m3u8\n"
-    };
-    write_text_atomic(&task_dir.join("preview.m3u8"), master)
+    entries
 }
 
 fn write_timeline_playlist(
@@ -1423,6 +1475,7 @@ fn prepare_segments(
 /// re-downloaded on resume -- which is what the reused-segment contract needs.
 fn download_prepared_segments(
     prepared: &[PreparedSegment],
+    audio: &[PreparedSegment],
     headers: &HashMap<String, String>,
     proxy: &str,
     control: &Path,
@@ -1430,16 +1483,30 @@ fn download_prepared_segments(
     progress: Option<(&Path, u64, u64, u64, bool)>,
     on_completed: &(dyn Fn(&HashSet<PathBuf>) + Sync),
 ) -> (HashSet<PathBuf>, Option<String>) {
-    let queue: VecDeque<SegmentWork> = prepared
+    let video_durations: Vec<_> = prepared.iter().map(|item| item.segment.duration).collect();
+    let audio_durations: Vec<_> = audio.iter().map(|item| item.segment.duration).collect();
+    let queue: VecDeque<SegmentWork> =
+        super::preview::segment_order(&video_durations, &audio_durations)
+            .into_iter()
+            .map(|(is_audio, index)| {
+                if is_audio {
+                    &audio[index]
+                } else {
+                    &prepared[index]
+                }
+            })
+            .filter(|item| item.needs_download)
+            .map(|item| SegmentWork {
+                segment: item.segment.clone(),
+                path: item.path.clone(),
+                key_bytes: item.key_bytes.clone(),
+            })
+            .collect();
+    let reused = prepared
         .iter()
-        .filter(|item| item.needs_download)
-        .map(|item| SegmentWork {
-            segment: item.segment.clone(),
-            path: item.path.clone(),
-            key_bytes: item.key_bytes.clone(),
-        })
-        .collect();
-    let reused = prepared.iter().filter(|item| !item.needs_download).count() as u64;
+        .chain(audio)
+        .filter(|item| !item.needs_download)
+        .count() as u64;
     on_completed(&HashSet::new());
     if let Some((path, bytes, previous, total, live)) = progress {
         crate::http_engine::write_media_progress(
@@ -1447,6 +1514,7 @@ fn download_prepared_segments(
             bytes
                 + prepared
                     .iter()
+                    .chain(audio)
                     .filter(|item| !item.needs_download)
                     .map(|item| file_len(&item.path))
                     .sum::<u64>(),
@@ -1469,6 +1537,7 @@ fn download_prepared_segments(
         progress.map_or(0, |(_, bytes, _, _, _)| bytes)
             + prepared
                 .iter()
+                .chain(audio)
                 .filter(|item| !item.needs_download)
                 .map(|item| file_len(&item.path))
                 .sum::<u64>(),
@@ -1557,7 +1626,11 @@ fn download_prepared_segments(
     let errors = errors.lock().map(|guard| guard.clone()).unwrap_or_default();
     let mut error = errors.first().cloned();
     if error.is_none() {
-        if let Some(missing) = prepared.iter().find(|item| file_len(&item.path) == 0) {
+        if let Some(missing) = prepared
+            .iter()
+            .chain(audio)
+            .find(|item| file_len(&item.path) == 0)
+        {
             error = Some(format!("HLS 分片下载结果为空: {}", missing.segment.uri));
         }
     }
@@ -2548,6 +2621,79 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn separate_vod_audio_opens_preview_before_track_completion_and_resumes_both_tracks() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-interleaved-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&requests);
+        let server_root = root.clone();
+        let phase = Arc::new(AtomicUsize::new(0));
+        let server_phase = Arc::clone(&phase);
+        let preview_seen = Arc::new(AtomicBool::new(false));
+        let server_preview_seen = Arc::clone(&preview_seen);
+        let origin = super::super::harness::serve_dynamic(Arc::new(move |path, _| {
+            seen.lock().unwrap().push(path.to_string());
+            let phase = server_phase.load(Ordering::SeqCst);
+            if (phase == 0 && path == "/a1.ts") || (phase == 1 && path == "/v1.ts") {
+                if phase == 0 {
+                    server_preview_seen
+                        .store(server_root.join("preview.m3u8").is_file(), Ordering::SeqCst);
+                }
+                fs::write(server_root.join("control"), "pause").unwrap();
+            }
+            Some(match path {
+                "/master.m3u8" => b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Audio\",DEFAULT=YES,URI=\"audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,AUDIO=\"a\"\nvideo.m3u8\n".to_vec(),
+                "/video.m3u8" => b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nv0.ts\n#EXTINF:4,\nv1.ts\n#EXT-X-ENDLIST\n".to_vec(),
+                "/audio.m3u8" => b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\na0.ts\n#EXTINF:1,\na1.ts\n#EXTINF:1,\na2.ts\n#EXTINF:1,\na3.ts\n#EXTINF:1,\na4.ts\n#EXT-X-ENDLIST\n".to_vec(),
+                _ => b"fragment bytes".to_vec(),
+            })
+        }));
+        let run = || {
+            download_hls_with(
+                &format!("{}/master.m3u8", origin.base),
+                &HashMap::new(),
+                "",
+                &root,
+                &control,
+                HlsDownloadOptions {
+                    concurrency: 1,
+                    download_subtitles: false,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+        };
+        assert_eq!(run().unwrap_err(), "paused");
+        assert!(preview_seen.load(Ordering::SeqCst));
+        let video = root.join("segments/000000.ts");
+        let audio = root.join("audio/segments/000000.ts");
+        assert_eq!(fs::read(&video).unwrap(), b"fragment bytes");
+        assert_eq!(fs::read(&audio).unwrap(), b"fragment bytes");
+        assert!(super::super::preview::is_ready(
+            &root,
+            "audio/segments/000000.ts"
+        ));
+        assert!(!root.join("audio/segments/000004.ts").exists());
+        let playlist = fs::read_to_string(root.join("audio/preview-video.m3u8")).unwrap();
+        assert!(playlist.contains("000004.ts") && playlist.contains("#EXT-X-ENDLIST"));
+        phase.store(1, Ordering::SeqCst);
+        fs::write(&control, "run").unwrap();
+        assert_eq!(run().unwrap_err(), "paused");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.iter().filter(|path| *path == "/v0.ts").count(), 1);
+        assert_eq!(requests.iter().filter(|path| *path == "/a0.ts").count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn buffered_preview_waits_for_contiguous_segments_and_external_audio() {
         let root = std::env::temp_dir().join(format!(
             "hls-preview-prefix-{}-{}",
@@ -2591,7 +2737,7 @@ mod tests {
         assert!(!video.contains("000002.ts") && !video.contains("#EXT-X-ENDLIST"));
         assert!(fs::read_to_string(root.join("preview.m3u8"))
             .unwrap()
-            .contains("audio/local.m3u8"));
+            .contains("audio/preview-video.m3u8"));
         fs::remove_dir_all(root).unwrap();
     }
 

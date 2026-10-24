@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "scope": "Authorized HLS/DASH interleaved download regression and unsigned delivery",
+  "hls_tests": 26,
+  "dash_tests": 17,
+  "download_playback_checks": 29,
+  "installer_checks": 9,
+  "installer_sha256": "9b8f1afb154c6a72d9f1cdff2dc4f6739ed911bed34153ff12aacb19e0300203",
+  "desktop_installer_hash_verified": true,
+  "host_install_performed": false,
+  "github_release_assets_updated": false,
+  "cache_cleanup": "blocked by policy",
+  "superseded_failures": [
+    "results/first-attempt",
+    "results/installer-environment-failure"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "record_scope": "build_snapshot",
+  "product_version": "7.0.3",
+  "source_commit": "7dd99d25928b553f6f8d9701f237d2eff63f9f3d",
+  "source_branch": "main",
+  "git_worktree_clean": false,
+  "source_patch_sha256": "3633878bbf1a3141da9c9e8c417b1667a6465100fdaf43d66fd9da0b7798f49c",
+  "source_files_sha256": {
+    "native_shell/src/media/hls.rs": "db8065805e058e32b7210a82a7a64be7fadeaa317fee5669c9116df0fae55ded",
+    "native_shell/src/media/dash.rs": "a94c4b8e126c2e5cd336ca7dad004506a30f51c23e4d5750dde3a10077d6bc17",
+    "native_shell/src/media/preview.rs": "b74cddcea871b683cda5e48b49cdb7abd547652880e7df530339f77ef168c8c0"
+  },
+  "package_tier": "candidate",
+  "release_ready": false,
+  "generated_at_utc": "2026-10-24T13:28:29.0674384Z",
+  "base_msi_sha256": "fa0d637cd6fc4cb1f23374a69042f0f86eca5ad58d51ce7c3fc4468a2aa5e6bf",
+  "engine_sha256": "db1c84d5d96133405351196bd0a96360446880a42125ffb04cbd9697ce8a51f4",
+  "validation_note": "构建时快照；后续验收以交付清单及报告为准，必须核对安装包 SHA256。release_ready 是正式发布门禁，不等于候选包测试结果。",
+  "validation_scope": "Interleaved HLS/DASH candidate. Other runtime components and extensions reused unchanged from accepted r14 MSI. This build snapshot does not record subsequent acceptance results."
+}

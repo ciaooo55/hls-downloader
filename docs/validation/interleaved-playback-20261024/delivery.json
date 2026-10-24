@@ -1,0 +1,62 @@
+{
+  "source_baseline_commit": "7dd99d25928b553f6f8d9701f237d2eff63f9f3d",
+  "source_patch_sha256": "3633878bbf1a3141da9c9e8c417b1667a6465100fdaf43d66fd9da0b7798f49c",
+  "unsigned": true,
+  "release_ready": false,
+  "sandbox_acceptance": true,
+  "installer_acceptance": true,
+  "host_install_performed": false,
+  "github_release_assets_updated": false,
+  "directory": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-20261024",
+  "validation_report": "docs/validation/interleaved-playback-20261024/README.md",
+  "installed_bytes": 469445527,
+  "installed_files": 222,
+  "reused_extension_archives": [
+    "HLSDownloader-7.0.3-插件完整源码.zip",
+    "HLSDownloader-7.0.3-Chromium.zip",
+    "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+    "HLSDownloader-7.0.3-Firefox-未签名.zip"
+  ],
+  "known_limits": [
+    "Chromium MV3 creates DownloadItem before handoff",
+    "Firefox POST/Blob interception not comprehensively solved",
+    "No current browser, paid cloud, physical receiver or long-duration rerun"
+  ],
+  "assets": [
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 1349,
+      "sha256": "62868b0422330d246196fc6d992f68fc7956706d888bf339c1814bbe89a5320a"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261024-未签名.msi",
+      "bytes": 203448320,
+      "sha256": "9b8f1afb154c6a72d9f1cdff2dc4f6739ed911bed34153ff12aacb19e0300203"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 329554,
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 370660,
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329533,
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-插件完整源码.zip",
+      "bytes": 365742,
+      "sha256": "caf8be3c7d9e2236231dfc45ad1bd79167a345b5fbdca0d88a910336cb5837ed"
+    },
+    {
+      "name": "验收说明.txt",
+      "bytes": 1906,
+      "sha256": "95c1d4a513ce613f41ece7767c0c3f182167d3be5054a78d0c52849b2d58c04b"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "dash-tests",
+    "steps":  [
+                  {
+                      "name":  "hls-tests",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "dash-tests",
+                      "exit_code":  101
+                  }
+              ],
+    "error":  "dash-tests failed: 101"
+}

@@ -496,6 +496,8 @@ if (-not [String]::IsNullOrWhiteSpace($ProvenancePath)) {
     }
     $provenance = [ordered]@{
         schema = 1
+        record_scope = 'build_snapshot'
+        validation_note = '构建时快照；不随后续验收改写。最终验收以交付清单和报告为准，必须核对安装包 SHA256；release_ready 表示正式发布门禁，不等于候选包测试结果。'
         product_version = [string]$json.product_version
         source_commit = $commit
         source_tree = $tree

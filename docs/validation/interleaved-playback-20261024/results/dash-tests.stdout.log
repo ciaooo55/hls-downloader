@@ -1,0 +1,22 @@
+
+running 17 tests
+test media::dash::tests::a_stopped_control_sentinel_surfaces_as_an_error_not_a_completion ... ok
+test media::dash::tests::audio_only_dash_is_selectable ... ok
+test media::dash::tests::collects_webvtt_subtitle_tracks_without_calling_them_video ... ok
+test media::dash::tests::dash_identity_skips_matching_and_rejects_mismatch ... ok
+test media::dash::tests::dynamic_manifest_and_update_period ... ok
+test media::dash::tests::expands_adaptation_set_segment_timeline ... ok
+test media::dash::tests::fails_closed_on_multi_period_codec_change ... ok
+test media::dash::tests::fixed_duration_templates_download_every_video_and_audio_segment ... ok
+test media::dash::tests::fixed_duration_templates_respect_period_boundaries_and_partial_last_segment ... ok
+test media::dash::tests::formats_padded_number_templates ... ok
+test media::dash::tests::live_audio_and_sub_urls_accumulate_across_mpd_refreshes ... ok
+test media::dash::tests::parses_static_representation_and_segment_list ... ok
+test media::dash::tests::progressive_dash_playlist_keeps_real_durations_and_only_ends_when_complete ... ok
+test media::dash::tests::representation_level_segment_template_segments_are_all_expanded ... ok
+test media::dash::tests::selected_height_distinguishes_equal_bandwidth_video_tracks ... ok
+test media::dash::tests::self_closing_video_representations_do_not_consume_following_audio_template ... ok
+test media::dash::tests::separate_vod_audio_opens_preview_before_track_completion ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 612 filtered out; finished in 0.23s
+

@@ -6,6 +6,8 @@
 - 包内 provenance 描述具体交付物。r12 是 `unsigned-prerelease`，自身 `release_ready=false`，不等于 canonical 的状态。
 - 验收报告只证明列明的提交、产物哈希、环境和场景。候选构建成功或历史报告不能替代最终提交证据。
 
+`BUILD-PROVENANCE.json` 是不可回写的构建时快照，新生成文件用 `record_scope=build_snapshot` 明确这一点。包内的 `pending` 只描述打包当时尚未执行的验收，`release_ready=false` 表示未通过正式发布门禁；两者都不能直接解释为最终候选验收失败。后续结果由外部交付清单及报告记录，以安装包 SHA256 绑定。不能为了让状态看起来一致而修改已验收包，再把旧验收结果套到新哈希。
+
 正式构建调用脚本检查 canonical completeness、readiness、残留 gap、干净工作树和同提交发布证据；不能只修改元数据或文字绕过。当前范围及排除项见 [验证状态](../validation/v7-verification.md)。
 
 ## 冻结与发布

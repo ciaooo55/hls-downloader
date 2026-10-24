@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\interleaved-playback-20261024\\input\\candidate.msi",
+  "original_product_code": "{C7F34161-20B0-4339-8839-BA91D95D7CBE}",
+  "verified_product_code": "{4D203C76-2AC6-416D-ABCE-68A57B76E0DC}",
+  "original_package_code": "{7AFA8817-AEBE-431B-B554-6DCAD349F7BD}",
+  "verified_package_code": "{4018A9E1-A732-45AD-A056-F2F793FDB905}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "59A4AC556956EC36AD5B0E5AAB3DF1B3C1D41B0DD4AAECB2FE14E543807929F8",
+  "sha256_after": "9B8F1AFB154C6A72D9F1CDFF2DC4F6739ED911BED34153FF12AACB19E0300203"
+}

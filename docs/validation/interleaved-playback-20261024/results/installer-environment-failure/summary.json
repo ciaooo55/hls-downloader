@@ -1,0 +1,24 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "installer",
+    "steps":  [
+                  {
+                      "name":  "hls-tests",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "dash-tests",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "download-playback-cleanup",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "installer",
+                      "exit_code":  1
+                  }
+              ],
+    "error":  "installer failed: 1"
+}
