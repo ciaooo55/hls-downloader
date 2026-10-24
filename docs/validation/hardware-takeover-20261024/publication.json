@@ -1,0 +1,24 @@
+{
+  "release_tag": "v7.0.3-r13",
+  "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r13",
+  "published_at": "2026-10-24T08:41:17Z",
+  "draft": false,
+  "prerelease": true,
+  "release_source_commit": "6d670dfc6b4912fc8b42abee2bb8d5598ddbb92c",
+  "product_source_commit": "be7f646e2e4439560b0d3531c96d859f945dfd76",
+  "assets_verified": true,
+  "old_v7_release_and_tag_removed": "v7.0.3-r12",
+  "v7_release_count": 1,
+  "asset_name_note": "Distinct ASCII remote filenames avoid GitHub stripping Chinese characters and colliding Firefox archive names. Payload hashes match desktop files; each location has its own filename checksum list.",
+  "assets": [
+    {"name": "BUILD-PROVENANCE.json", "bytes": 744, "sha256": "f40910c661f9e38c36ad1374449421d9101292671497f1c4162fa6547f75f48c"},
+    {"name": "desktop-delivery-manifest.json", "bytes": 1895, "sha256": "010319ed7ece65afc9e86aac75a9c55c4bbe4f5e27322de5dbbeb095988421a6"},
+    {"name": "Firefox-review-sources.zip", "bytes": 370660, "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"},
+    {"name": "HLSDownloader-7.0.3-r13-Chromium.zip", "bytes": 329554, "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"},
+    {"name": "HLSDownloader-7.0.3-r13-extension-source.zip", "bytes": 365742, "sha256": "caf8be3c7d9e2236231dfc45ad1bd79167a345b5fbdca0d88a910336cb5837ed"},
+    {"name": "HLSDownloader-7.0.3-r13-Firefox.zip", "bytes": 329533, "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"},
+    {"name": "HLSDownloader-7.0.3-r13-unsigned.msi", "bytes": 203468800, "sha256": "ecabc6cb6facbf55fed6aa4c6ee1a4256fdc7ebb6b809703fa22225aa3cefb01"},
+    {"name": "SHA256SUMS.txt", "bytes": 784, "sha256": "ea470afcbf115116f51dcffe358b43728cd772b50abae6f365839c02238bcb58"},
+    {"name": "VALIDATION-NOTES.txt", "bytes": 1686, "sha256": "c27cda1c623e2ab7eb183b3251afd85f4d17442d5505c15145d936cc28eb0b5d"}
+  ]
+}

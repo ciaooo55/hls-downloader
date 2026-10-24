@@ -51,4 +51,8 @@ MSI SHA256：`ecabc6cb6facbf55fed6aa4c6ee1a4256fdc7ebb6b809703fa22225aa3cefb01`�
 
 保留本轮使用的沙盒 runner、配置和关键日志/JSON；runner 依赖临时准备好的输入目录，不是单独可运行的发行脚本。不提交依赖、媒体、安装包或构建缓存。公开网站报告中的短期签名下载 URL 查询参数已脱敏，文件大小和 SHA 未改动。源码静态差异检查和播放器 rustfmt 检查已执行通过。
 
-本轮结束后仅保留一个 `main`、一个 worktree，桌面成品在 `C:\Users\lee\Desktop\HLSDownloader\最新-20261024`。清理结果和 GitHub 发布身份见本目录 `delivery.json` 与 `cleanup.json`。原有用户备份 `outputs/private-user-backup` 不删除。两个旧 `.hls-tasks/task-1/control` 共 8 字节此前被自动审批拒绝删除，仍保留，不绕过拒绝。
+本轮结束后仅保留一个 `main`、一个 worktree，桌面成品在 `C:\Users\lee\Desktop\HLSDownloader\最新-20261024`。交付来源、清理结果和 GitHub 发布身份分别见 `delivery.json`、`cleanup.json` 与 `publication.json`。新 `v7.0.3-r13` 未签名预发布的九项资产均已核对远端 SHA；旧 `v7.0.3-r12` 发布与标签已删除，其他主版本未操作。
+
+首轮发布上传返回 HTTP 404，未删除旧发布。随后先建立草稿，逐项上传时确认 GitHub 去除了资产文件名中的中文，使两个 Firefox 包名称冲突；已按哈希识别并改为不同的英文资产名，内容未变。远端 SHA256SUMS 使用远端英文名称，桌面保留中文名称及自己的校验表。
+
+构建缓存、临时验收目录和旧桌面包合计约 2.71 GiB 已清除。本轮上传另产生的 `.tool-cache/release-upload` 仍含一个 Firefox 插件副本与校验表，合计 330317 字节；最终清理命令被自动审批以 `blocked by policy` 拒绝，未给原因，未换方式绕过。因此不能宣称工作目录已完全清空生成物。原有用户备份 `outputs/private-user-backup` 保留。两个旧 `.hls-tasks/task-1/control` 共 8 字节此前同样被拒绝删除，仍保留。

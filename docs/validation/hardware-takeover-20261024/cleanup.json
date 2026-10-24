@@ -1,6 +1,14 @@
 {
   "task": "hardware-takeover-20261024",
-  "finished": true,
+  "finished": false,
+  "main_cleanup_finished": true,
+  "release_upload_cleanup": {
+    "path": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\release-upload",
+    "files": 2,
+    "bytes": 330317,
+    "removed": false,
+    "reason": "Final cleanup command rejected by automatic approval: blocked by policy, no further reason provided; not retried through another tool."
+  },
   "targets": [
     {
       "path": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache",
