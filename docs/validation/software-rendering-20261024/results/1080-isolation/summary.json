@@ -1,0 +1,25 @@
+﻿{
+    "mode":  "software",
+    "passed":  false,
+    "finished":  true,
+    "steps":  [
+                  {
+                      "name":  "generate-1080",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "correct-downscaling-no",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "fast-profile",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "dither-no",
+                      "exit_code":  1
+                  }
+              ],
+    "error":  "dither-no failed; ",
+    "current":  "dither-no"
+}

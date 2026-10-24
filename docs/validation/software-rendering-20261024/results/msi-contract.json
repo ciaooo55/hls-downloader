@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\player-software-20261024\\package\\candidate.msi",
+  "original_product_code": "{750DF7DA-73FD-46F2-9573-5A0CA62DCD67}",
+  "verified_product_code": "{C7F34161-20B0-4339-8839-BA91D95D7CBE}",
+  "original_package_code": "{7FB0EE81-25C3-4C88-8BB3-6BBAC6A37454}",
+  "verified_package_code": "{4C9A7BDB-060A-4277-B2D2-5F39E865DF73}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "744BD4C02B0968833D4B85DCB6DC170694C0A8F3DD3123BD150B1AFB404DF033",
+  "sha256_after": "FA0D637CD6FC4CB1F23374A69042F0F86ECA5AD58D51CE7C3FC4468A2AA5E6BF"
+}

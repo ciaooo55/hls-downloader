@@ -1,0 +1,55 @@
+{
+  "product_source_commit": "4de9a580477b0873fecb7b1861d948170d21aa42",
+  "unsigned": true,
+  "release_ready": false,
+  "sandbox_acceptance": true,
+  "installer_acceptance": true,
+  "host_install_performed": false,
+  "planned_release_tag": "v7.0.3-r14",
+  "directory": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-20261024",
+  "validation_report": "docs/validation/software-rendering-20261024/README.md",
+  "installed_bytes": 469526377,
+  "installed_files": 222,
+  "known_limits": [
+    "Software-only scaling changes image filtering quality",
+    "Chromium MV3 creates a download item before pausing handoff",
+    "No current Firefox, paid cloud or physical receiver rerun"
+  ],
+  "assets": [
+    {
+      "name": "验收说明.txt",
+      "bytes": 1701,
+      "sha256": "6feb6ef186a2280485ee2b81130d40fbe3fe58c9bdbaa31ac4c198f025e2715f"
+    },
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 791,
+      "sha256": "e01f6fc497ece1cd54e4464cc271be4ba53b0027256bc82b33648b5dcc671cc8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261024-未签名.msi",
+      "bytes": 203468800,
+      "sha256": "fa0d637cd6fc4cb1f23374a69042f0f86eca5ad58d51ce7c3fc4468a2aa5e6bf"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-插件完整源码.zip",
+      "bytes": 365742,
+      "sha256": "caf8be3c7d9e2236231dfc45ad1bd79167a345b5fbdca0d88a910336cb5837ed"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 329554,
+      "sha256": "2702d06ba55e58c5410751dc8a0bb54a5050af23c916d847977c851385b2ac18"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 370660,
+      "sha256": "f97be5d9e2192e8e93e85b9aedcb64832b8bdc39b6c8202a7085ee7a25300aa8"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329533,
+      "sha256": "d9684014eca4c10e0e6d88220dd848261ff2e0aa5cf58a701aeb280e989e7e0c"
+    }
+  ]
+}

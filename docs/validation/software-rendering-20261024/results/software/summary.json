@@ -1,0 +1,37 @@
+﻿{
+    "mode":  "software",
+    "passed":  true,
+    "finished":  true,
+    "steps":  [
+                  {
+                      "name":  "generate-640x360",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "baseline-640x360",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "candidate-640x360",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "generate-1920x1080",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "baseline-1920x1080",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "candidate-1920x1080",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "download-playback-cleanup",
+                      "exit_code":  0
+                  }
+              ],
+    "error":  "",
+    "current":  "download-playback-cleanup"
+}

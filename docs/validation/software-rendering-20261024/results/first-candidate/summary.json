@@ -1,0 +1,21 @@
+﻿{
+    "mode":  "software",
+    "passed":  false,
+    "finished":  true,
+    "steps":  [
+                  {
+                      "name":  "generate-640x360",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "baseline-640x360",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "candidate-640x360",
+                      "exit_code":  1
+                  }
+              ],
+    "error":  "candidate-640x360 failed",
+    "current":  "candidate-640x360"
+}
