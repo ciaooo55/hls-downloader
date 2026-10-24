@@ -1,4 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw '请使用 PowerShell 7 执行此脚本。' }
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml'))) {
     throw '未找到项目源码，停止清理。'
@@ -31,8 +32,12 @@ foreach ($relative in $relativePaths) {
         if ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "发现重解析目录：$($parent.FullName)" }
         $parent = $parent.Parent
     }
-    if (Get-ChildItem -LiteralPath $target -Directory -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
-        throw "目标中存在重解析目录：$target"
+    foreach ($link in Get-ChildItem -LiteralPath $target -Directory -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
+        # pnpm 的包链接留在自己的 node_modules 内；PS 7 删除链接本身，不递归其目标。
+        $resolved = $link.ResolveLinkTarget($true)
+        if ($relative -ne 'extension\node_modules' -or -not $resolved -or -not $resolved.FullName.StartsWith($target + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw "发现范围外的重解析目录：$($link.FullName)"
+        }
     }
     $targets += $target
 }
