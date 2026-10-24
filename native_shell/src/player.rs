@@ -868,6 +868,96 @@ fn quote_mpv(url: &str) -> Result<String, String> {
 }
 
 #[allow(clippy::manual_c_str_literals)]
+#[cfg(windows)]
+fn only_software_graphics_adapters() -> bool {
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::Foundation::{FreeLibrary, LUID};
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    };
+
+    // windows-sys 没有 DXGI COM 绑定；仅使用固定的 DXGI 1.1 ABI，避免为一次枚举新增依赖。
+    #[repr(C)]
+    struct AdapterDesc {
+        description: [u16; 128],
+        vendor_id: u32,
+        device_id: u32,
+        subsystem_id: u32,
+        revision: u32,
+        dedicated_video_memory: usize,
+        dedicated_system_memory: usize,
+        shared_system_memory: usize,
+        luid: LUID,
+        flags: u32,
+    }
+
+    unsafe {
+        let name: Vec<u16> = "dxgi.dll\0".encode_utf16().collect();
+        let module = LoadLibraryExW(
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
+        if module.is_null() {
+            return false;
+        }
+        let result = (|| {
+            let create = GetProcAddress(module, b"CreateDXGIFactory1\0".as_ptr())?;
+            let create: unsafe extern "system" fn(*const GUID, *mut *mut c_void) -> i32 =
+                std::mem::transmute(create);
+            let iid = GUID::from_u128(0x770aae78_f26f_4dba_a829_253c83d1b387);
+            let mut factory = std::ptr::null_mut();
+            if create(&iid, &mut factory) < 0 {
+                return None;
+            }
+            let table = *(factory as *const *const *const c_void);
+            // IDXGIFactory1::EnumAdapters1，IUnknown::Release。
+            let enumerate: unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> i32 =
+                std::mem::transmute(*table.add(12));
+            let release_factory: unsafe extern "system" fn(*mut c_void) -> u32 =
+                std::mem::transmute(*table.add(2));
+            let software_only = (|| {
+                let mut found_software = false;
+                for index in 0..u32::MAX {
+                    let mut adapter = std::ptr::null_mut();
+                    let code = enumerate(factory, index, &mut adapter);
+                    if code == 0x887a0002u32 as i32 {
+                        return found_software;
+                    }
+                    if code < 0 {
+                        return false;
+                    }
+                    let table = *(adapter as *const *const *const c_void);
+                    // IDXGIAdapter1::GetDesc1，IUnknown::Release。
+                    let describe: unsafe extern "system" fn(*mut c_void, *mut AdapterDesc) -> i32 =
+                        std::mem::transmute(*table.add(10));
+                    let release_adapter: unsafe extern "system" fn(*mut c_void) -> u32 =
+                        std::mem::transmute(*table.add(2));
+                    let mut desc: AdapterDesc = std::mem::zeroed();
+                    let described = describe(adapter, &mut desc);
+                    release_adapter(adapter);
+                    if described < 0 {
+                        return false;
+                    }
+                    // 同 mpv：Basic Render Driver 在部分系统上不设置 SOFTWARE 标记。
+                    if desc.flags & 2 == 0 && !(desc.vendor_id == 0x1414 && desc.device_id == 0x8c)
+                    {
+                        return false;
+                    }
+                    found_software = true;
+                }
+                false
+            })();
+            release_factory(factory);
+            Some(software_only)
+        })();
+        FreeLibrary(module);
+        // 检测不完整或存在任意硬件适配器时保留正常画质，不能把软解码等同于软件渲染。
+        result.unwrap_or(false)
+    }
+}
+
+#[allow(clippy::manual_c_str_literals)]
 fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
     #[cfg(windows)]
     {
@@ -976,6 +1066,15 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                             "allowed_extensions=ALL,extension_picky=0".into(),
                         ),
                     ];
+                    if only_software_graphics_adapters() {
+                        // WARP 上多抽头缩放实测占满 CPU；仅软件显示设备改用单次采样。
+                        // 保留硬件设备的默认缩放，以及原有 HDR、抖动、字幕和音轨功能。
+                        options.extend([
+                            ("scale", "bilinear".into()),
+                            ("dscale", "bilinear".into()),
+                            ("correct-downscaling", "no".into()),
+                        ]);
+                    }
                     if let Some(wid) = wid {
                         options.extend([("wid", wid.to_string()), ("force-window", "no".into())]);
                     } else {
