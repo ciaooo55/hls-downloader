@@ -152,6 +152,18 @@ describe('paused handoff follow-up store', () => {
 })
 
 describe('paused handoff follow-up steps', () => {
+  it('retains cleanup ownership across restart without waiting for task progress or resuming on cancel', async () => {
+    const storage = new MemoryStorage()
+    const store = new PausedHandoffFollowUpStore(storage, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY, () => 10_000)
+    await store.remember(followUp({ phase: 'cleanup' }))
+    const restarted = new PausedHandoffFollowUpStore(storage, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY, () => 20_000)
+    await restarted.hydrate()
+    const [record] = restarted.list()
+    expect(record.phase).toBe('cleanup')
+    for (const handoff of [{}, { status: 'pending' }, { status: 'canceled' }, { status: 'accepted', task_downloaded_bytes: 0 }]) {
+      expect(stepPausedHandoffFollowUp(record, handoff, 20_000, 60_000)).toEqual({ kind: 'remove-download' })
+    }
+  })
   it('keeps waiting while the desktop confirmation is pending and fresh', () => {
     const step = stepPausedHandoffFollowUp(followUp(), { status: 'pending' }, 129_999, 60_000)
     expect(step).toEqual({ kind: 'keep-paused', followUp: followUp() })

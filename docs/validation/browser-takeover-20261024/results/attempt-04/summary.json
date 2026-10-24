@@ -1,0 +1,16 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "firefox-ownership",
+    "steps":  [
+                  {
+                      "name":  "configure",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "firefox-ownership",
+                      "exit_code":  1
+                  }
+              ],
+    "error":  "firefox-ownership failed: 1"
+}

@@ -26,7 +26,7 @@ export default defineConfig({
     permissions: [
       'downloads', 'contextMenus', 'nativeMessaging', 'storage', 'cookies', 'webRequest', 'alarms',
       ...(browser === 'firefox' ? ['webRequestBlocking'] : []),
-      ...(browser === 'chrome' ? ['downloads.ui', 'downloads.shelf', 'tabCapture', 'offscreen', 'activeTab'] : []),
+      ...(browser === 'chrome' ? ['tabCapture', 'offscreen', 'activeTab'] : []),
     ],
     host_permissions: ['<all_urls>'],
     web_accessible_resources: [{ resources: ['icon-16.png', 'icon-32.png', 'icon-48.png', 'icon-128.png', 'subtitle-pcm.js'], matches: ['<all_urls>'] }],

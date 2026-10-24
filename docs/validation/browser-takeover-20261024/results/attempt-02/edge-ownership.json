@@ -1,0 +1,13 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [],
+  "decision_method": "Core IPC",
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "019a4a80fd7a4dde4b8ffbca2f710ee6f12cff2d5cc03c464b9c61a8dfda5a14",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 166, in run\n    click(name)\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 152, in click\n    if driver.current_url != url:\n       ^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\webdriver.py\", line 641, in current_url\n    return self.execute(Command.GET_CURRENT_URL)[\"value\"]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\webdriver.py\", line 506, in execute\n    self.error_handler.check_response(response)\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\errorhandler.py\", line 232, in check_response\n    raise exception_class(message, screen, stacktrace)\nselenium.common.exceptions.TimeoutException: Message: timeout\nfrom no such execution context: frame does not have execution context\n  (Session info: MicrosoftEdge=156.0.4314.42)\nStacktrace:\nSymbols not available. Dumping unresolved backtrace:\n\t(No symbol) [0x7ff7040e09f5]\n\t(No symbol) [0x7ff7040275d4]\n\t(No symbol) [0x7ff70446f8cf]\n\t(No symbol) [0x7ff703daaeda]\n\t(No symbol) [0x7ff703db959c]\n\t(No symbol) [0x7ff703dbcca5]\n\t(No symbol) [0x7ff703dbcd6f]\n\t(No symbol) [0x7ff703e40c06]\n\t(No symbol) [0x7ff703e408ba]\n\t(No symbol) [0x7ff703e2119a]\n\t(No symbol) [0x7ff703df651d]\n\t(No symbol) [0x7ff703e3e458]\n\t(No symbol) [0x7ff703df5d5c]\n\t(No symbol) [0x7ff703df4f4a]\n\t(No symbol) [0x7ff703df5b83]\n\t(No symbol) [0x7ff703f35981]\n\t(No symbol) [0x7ff703f45638]\n\t(No symbol) [0x7ff7041896d5]\n\t(No symbol) [0x7ff70418fd51]\n\t(No symbol) [0x7ff7040336ac]\n\t(No symbol) [0x7ff70402dec4]\n\t(No symbol) [0x7ff70402dfea]\n\t(No symbol) [0x7ff70401f3f8]\n\t(No symbol) [0x7ffff3c1257d]\n\t(No symbol) [0x7ffff550af08]\n\n",
+  "requests": {
+    "/": 1,
+    "/favicon.ico": 1
+  }
+}

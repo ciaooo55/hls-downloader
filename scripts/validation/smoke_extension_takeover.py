@@ -449,6 +449,12 @@ def _item_for(driver, inspector: str, suffix: str) -> dict[str, Any] | None:
     return max(matches, key=lambda item:item['id'], default=None)
 
 
+def _assert_browser_absent(driver, inspector: str, suffix: str):
+    _wait_until(lambda: _item_for(driver, inspector, suffix) is None,
+                f'桌面接收后浏览器仍保留副本：{suffix}', 20)
+    return {'items': []}
+
+
 def _click_download(driver, page: str, element_id: str) -> None:
     driver.switch_to.window(page)
     driver.find_element(By.ID, element_id).click()
@@ -751,49 +757,13 @@ def run(
                 auto_button().click()
                 _wait_until(lambda: "开" in auto_button().text, "自动接管重新开启")
 
-                _click_download(driver, page, "accept")
-                paused = _wait_until(
-                    lambda: (
-                        item
-                        if (item := _item_for(driver, inspector, "accept.bin"))
-                        and item.get("state") == "in_progress"
-                        and item.get("paused") is True
-                        else None
-                    ),
-                    "桌面确认前浏览器项目已暂停",
-                )
-                _wait_until(
-                    lambda: _item_for(driver, inspector, "accept.bin") is None,
-                    "桌面接受后清除浏览器副本",
-                    20,
-                )
+                for name in ('accept', 'fallback', 'reject', 'disconnect'):
+                    _click_download(driver, page, name)
+                    _wait_until(lambda: any(event.get('op') == 'offer'
+                        and name+'.bin' in str(event.get('url', ''))
+                        for event in _host_events(host_log)), 'Native Host received offer')
+                    _assert_browser_absent(driver, inspector, name+'.bin')
 
-                _click_download(driver, page, "fallback")
-                fallback = _assert_browser_completed(driver, inspector, "fallback.bin")
-                _wait_until(
-                    lambda: any(
-                        event.get("op") == "handoff_status"
-                        and event.get("status") == "accepted"
-                        and "fallback.bin" in str(event.get("handoff_id", ""))
-                        for event in _host_events(host_log)
-                    ),
-                    "桌面任务失败后恢复浏览器原下载",
-                )
-
-                _click_download(driver, page, "reject")
-                rejected = _assert_browser_completed(driver, inspector, "reject.bin")
-                _wait_until(
-                    lambda: any(
-                        event.get("op") == "handoff_status"
-                        and event.get("status") == "rejected"
-                        and "reject.bin" in str(event.get("handoff_id", ""))
-                        for event in _host_events(host_log)
-                    ),
-                    "桌面拒绝状态已返回",
-                )
-
-                _click_download(driver, page, "disconnect")
-                disconnected = _assert_browser_completed(driver, inspector, "disconnect.bin")
                 disconnect_events = [
                     event for event in _host_events(host_log)
                     if event.get("op") == "offer" and event.get("disconnect") is True
@@ -806,12 +776,9 @@ def run(
                     "sitePopupTab": site_popup_tab,
                     "excludedCompletedBytes": excluded.get("bytesReceived"),
                     "disabledCompletedBytes": disabled.get("bytesReceived"),
-                    "acceptPausedBytes": paused.get("bytesReceived"),
-                    "fallbackCompletedBytes": fallback.get("bytesReceived"),
-                    "rejectCompletedBytes": rejected.get("bytesReceived"),
-                    "disconnectCompletedBytes": disconnected.get("bytesReceived"),
+                    "desktopOwnedBrowserCopiesRemoved": ["accept.bin", "fallback.bin", "reject.bin", "disconnect.bin"],
                     "nativeEvents": len(_host_events(host_log)),
-                    "browserFileSha256Verified": ["excluded.bin", "disabled.bin", "fallback.bin", "reject.bin", "disconnect.bin"],
+                    "browserFileSha256Verified": ["excluded.bin", "disabled.bin"],
                 }
                 if report:
                     report.parent.mkdir(parents=True, exist_ok=True)
@@ -1287,7 +1254,7 @@ def run_real(args) -> dict[str, Any]:
                 if args.browser == 'firefox':
                     record('targeted-Firefox-decision-keeps-browser-idle', assert_no_firefox_download(name+'.bin'))
                 else:
-                    record('targeted-browser-recovery-sha256',_assert_browser_completed(driver,inspector,name+'.bin'))
+                    record('targeted-desktop-ownership-keeps-browser-idle',_assert_browser_absent(driver,inspector,name+'.bin'))
                 single_resolved_handoff(name)
                 result['passed']=True
                 return result
@@ -1308,9 +1275,9 @@ def run_real(args) -> dict[str, Any]:
             if args.browser == 'firefox':
                 assert_no_firefox_download('accept.bin')
             else:
-                assert paused and paused['paused'], paused
+                _assert_browser_absent(driver,inspector,'accept.bin')
             assert before=={t['task_id'] for t in tasks()}, 'Task began before confirmation'
-            record('real-takeover-blocks-before-desktop-confirmation' if args.browser=='firefox' else 'real-takeover-pauses-before-desktop-confirmation',paused)
+            record('real-takeover-blocks-before-desktop-confirmation' if args.browser=='firefox' else 'real-takeover-removes-browser-copy-before-confirmation',paused)
             click_download_confirmation(evidence_path=args.report.with_name('accept-click.json'), runtime=runtime)
             def completed():
                 found=[t for t in tasks() if t['task_id'] not in before and 'accept.bin' in t['url']]
@@ -1333,7 +1300,7 @@ def run_real(args) -> dict[str, Any]:
             if args.browser == 'firefox':
                 record('real-desktop-rejection-cancels-without-Firefox-download', assert_no_firefox_download('reject.bin'))
             else:
-                record('real-desktop-rejection-browser-resumes-sha256',_assert_browser_completed(driver,inspector,'reject.bin'))
+                record('real-desktop-rejection-keeps-browser-idle',_assert_browser_absent(driver,inspector,'reject.bin'))
             single_resolved_handoff('reject')
             assert len(created)==len([t for t in tasks() if t['task_id'] not in initial]), 'Rejected takeover created another task'
             _click_download(driver,page,'fallback')
@@ -1350,7 +1317,7 @@ def run_real(args) -> dict[str, Any]:
             if args.browser == 'firefox':
                 record('real-accepted-desktop-failure-keeps-Firefox-idle', assert_no_firefox_download('fallback.bin'))
             else:
-                record('real-accepted-desktop-failure-browser-fallback-sha256',_assert_browser_completed(driver,inspector,'fallback.bin'))
+                record('real-accepted-desktop-failure-keeps-browser-idle',_assert_browser_absent(driver,inspector,'fallback.bin'))
             single_resolved_handoff('fallback')
             _click_download(driver,page,'disconnect')
             wait(lambda:presenter_window(runtime=runtime),'Disconnect confirmation missing',20)
@@ -1379,7 +1346,7 @@ def run_real(args) -> dict[str, Any]:
             if args.browser == 'firefox':
                 record('actual-native-host-disconnect-keeps-Firefox-idle', assert_no_firefox_download('disconnect.bin'))
             else:
-                record('actual-native-host-disconnect-pending-confirmation-browser-recovery-sha256',_assert_browser_completed(driver,inspector,'disconnect.bin'))
+                record('actual-native-host-disconnect-after-receipt-keeps-browser-idle',_assert_browser_absent(driver,inspector,'disconnect.bin'))
             assert message({'type':'ping'}).get('ok'),'Native Host did not reconnect'
             result['passed']=True
         except Exception as error:

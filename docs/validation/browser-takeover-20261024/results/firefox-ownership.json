@@ -1,0 +1,57 @@
+{
+  "passed": true,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "offline: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_version": "158.0.1",
+  "extension_background_sha256": "846237f536dfb1d143f0e9f293f53326eea19ea4d93a2474030075fe3affbc70",
+  "requests": {
+    "/": 8,
+    "/favicon.ico": 1,
+    "/direct.zip": 3,
+    "/cancel.zip": 1,
+    "/opaque": 3,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1,
+    "/offline.zip": 1
+  }
+}

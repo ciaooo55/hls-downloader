@@ -5,11 +5,10 @@ import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggrega
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
 import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
-import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, desktopTaskReadiness, localFileTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload, type DesktopTaskReadiness } from '../lib/takeover'
+import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, localFileTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload } from '../lib/takeover'
 import {
   PAUSED_FOLLOW_UP_RECHECK_MS,
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
-  PAUSED_HANDOFF_RESOLUTION_MS,
   PausedHandoffFollowUpStore,
   type PausedHandoffFollowUp,
   stepPausedHandoffFollowUp,
@@ -24,6 +23,7 @@ import { cookieHeaderForUrl, cookieLookupUrl, cookieMatchesUrl, cookiePartitionK
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
 import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
+import { isDirectDownloadLink } from '../lib/directLink'
 import { ClickIntentStore } from '../lib/clickIntentStore'
 import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
@@ -214,8 +214,6 @@ const requestChains = new RequestChainStore()
 const blobSources = new BlobSourceStore()
 let nativeBridge: NativeBridge | null = null
 let takeoverSettingsSync: TakeoverSettingsSync | null = null
-let concealedDownloadCount = 0
-let downloadUiFailsafe: ReturnType<typeof setTimeout> | null = null
 const inspectedAdaptive = new InspectionCache()
 const resourceSessionStore = new SessionListStore<MediaResource>(browser.storage.session)
 let browserClientIdPromise: Promise<string> | null = null
@@ -497,40 +495,6 @@ async function waitForHandoffResolution(handoffId: string): Promise<TrackedHando
   return { id: handoffId, resourceId: '', status: 'connection_lost', checkedAt: Date.now(), failures: 0 }
 }
 
-type BrowserFallbackDecision = DesktopTaskReadiness | 'keep-paused'
-
-async function waitForDesktopTaskReadiness(
-  handoffId: string,
-  timeoutMs = 90_000,
-): Promise<BrowserFallbackDecision> {
-  const tracked = await trackHandoff(handoffId)
-  const deadline = Date.now() + timeoutMs
-  let failures = 0
-  while (Date.now() < deadline) {
-    try {
-      const response = await native({ op: 'handoff_status', handoff_id: handoffId }, 2_500)
-      const handoff = (response?.handoff || response || {}) as BrowserHandoffPayload
-      updateTrackedHandoff(tracked, handoff)
-      failures = 0
-      const readiness = desktopTaskReadiness(handoff)
-      if (readiness !== 'waiting') {
-        await persistHandoffTracker()
-        return readiness
-      }
-    } catch {
-      failures += 1
-      tracked.checkedAt = Date.now()
-      tracked.failures = failures
-    }
-    await new Promise(resolve => setTimeout(resolve, failures ? 1_000 : 500))
-  }
-  // Status uncertainty is not permission to start a second transfer. Keep the
-  // original item visibly paused so the user still owns the fallback and can
-  // resume it manually; confirmed task failure is resumed automatically.
-  await persistHandoffTracker()
-  return 'keep-paused'
-}
-
 function schedulePausedFollowUpAccelerator(delay: number): void {
   if (pausedFollowUpAccelerator) return
   pausedFollowUpAccelerator = setTimeout(() => {
@@ -540,16 +504,14 @@ function schedulePausedFollowUpAccelerator(delay: number): void {
 }
 
 async function rememberPausedHandoffFollowUp(downloadId: number, handoffId: string): Promise<PausedHandoffFollowUp> {
-  // Persist the deadline BEFORE the first long wait: a suspended worker drops
-  // every setTimeout, so the stored record plus the worker alarm are the only
-  // carriers that survive. The takeover-flow awaits are just accelerators.
+  // 只在桌面确认接收后创建；先保存清理责任，避免 worker 休眠留下暂停副本。
   const record = await pausedFollowUpStore.remember({
     downloadId,
     handoffId,
-    phase: 'resolution',
-    deadline: Date.now() + PAUSED_HANDOFF_RESOLUTION_MS,
+    phase: 'cleanup',
+    deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
   })
-  schedulePausedFollowUpAccelerator(PAUSED_HANDOFF_RESOLUTION_MS)
+  schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
   return record
 }
 
@@ -601,6 +563,12 @@ async function continuePausedHandoffFollowups(): Promise<void> {
       if (pausedFollowUpsInFlight.has(record.handoffId)) continue
       pausedFollowUpsInFlight.add(record.handoffId)
       try {
+        if (record.phase === 'cleanup') {
+          const removed = await removeFollowUpDownload(record.downloadId)
+          if (removed) await pausedFollowUpStore.drop(record.handoffId)
+          else await retryPausedFollowUp(record)
+          continue
+        }
         // The user may resume, cancel, finish or erase the browser item while
         // Core is unreachable. That is an explicit browser-side ownership
         // decision; never resume it again or remove its file on a later alarm.
@@ -634,14 +602,9 @@ async function continuePausedHandoffFollowups(): Promise<void> {
           else await retryPausedFollowUp(record)
           continue
         }
-        concealBrowserDownload()
-        try {
-          const removed = await removeFollowUpDownload(record.downloadId)
-          if (removed) await pausedFollowUpStore.drop(record.handoffId)
-          else await retryPausedFollowUp(record)
-        } finally {
-          revealBrowserDownload()
-        }
+        const removed = await removeFollowUpDownload(record.downloadId)
+        if (removed) await pausedFollowUpStore.drop(record.handoffId)
+        else await retryPausedFollowUp(record)
       } finally {
         pausedFollowUpsInFlight.delete(record.handoffId)
       }
@@ -654,54 +617,6 @@ async function continuePausedHandoffFollowups(): Promise<void> {
   const parked = pausedFollowUpStore.list()
     .find(record => record.phase === 'readiness' && record.deadline > Date.now())
   if (parked) schedulePausedFollowUpAccelerator(parked.deadline - Date.now())
-}
-
-/**
- * Ownership of a paused download after the desktop accepted its handoff. The
- * persisted follow-up is the reliable carrier: only browser.alarms reliably
- * wake a suspended worker, so the shared alarm handler rehydrates and finishes
- * this cleanup. The in-process wait below only accelerates resolution while
- * this worker happens to stay alive.
- */
-async function followUpPausedHandoffCleanup(item: Browser.downloads.DownloadItem, handoffId: string): Promise<void> {
-  pausedFollowUpsInFlight.add(handoffId)
-  try {
-    const followUp = await pausedFollowUpStore.remember({
-      downloadId: item.id,
-      handoffId,
-      phase: 'readiness',
-      deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
-    })
-    schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
-    const later = await waitForDesktopTaskReadiness(handoffId, 180_000)
-    if (later === 'safe-to-remove') {
-      concealBrowserDownload()
-      try {
-        const removed = await removeBrowserDownload(item)
-        if (removed) await pausedFollowUpStore.drop(handoffId)
-        else await retryPausedFollowUp({
-          ...followUp,
-          phase: 'readiness',
-          deadline: Date.now(),
-        })
-      } finally {
-        revealBrowserDownload()
-      }
-      return
-    }
-    if (later === 'browser-fallback') {
-      const resumed = await resumeBrowserDownload(item, true)
-      if (resumed) await pausedFollowUpStore.drop(handoffId)
-      else await retryPausedFollowUp({
-        ...followUp,
-        phase: 'readiness',
-        deadline: Date.now(),
-      })
-    }
-  } finally {
-    pausedFollowUpsInFlight.delete(handoffId)
-  }
-  // keep-paused: the persisted follow-up keeps polling through the worker alarm.
 }
 
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
@@ -947,44 +862,6 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
     // The captured manifest remains downloadable and the next observation can retry.
     inspectedAdaptive.defer(inspectionKey)
   }
-}
-
-async function setBrowserDownloadUi(enabled: boolean): Promise<void> {
-  if (!import.meta.env.CHROME) return
-  const downloads = browser.downloads as typeof browser.downloads & {
-    setUiOptions?: (options: { enabled: boolean }) => Promise<void>
-    setShelfEnabled?: (enabled: boolean) => Promise<void>
-  }
-  try {
-    if (downloads.setUiOptions) await downloads.setUiOptions({ enabled })
-    else if (downloads.setShelfEnabled) await downloads.setShelfEnabled(enabled)
-  } catch {
-    // UI suppression is best-effort; download ownership is enforced separately.
-  }
-}
-
-function concealBrowserDownload(): void {
-  concealedDownloadCount += 1
-  void setBrowserDownloadUi(false)
-  if (downloadUiFailsafe) clearTimeout(downloadUiFailsafe)
-  downloadUiFailsafe = setTimeout(() => {
-    concealedDownloadCount = 0
-    downloadUiFailsafe = null
-    void setBrowserDownloadUi(true)
-  }, 130_000)
-}
-
-function revealBrowserDownload(): void {
-  // 引用计数为 0 时直接返回：没有配对的 conceal 就恢复下载栏，会在 takeover
-  // 删除浏览器下载项的窗口期把即将被移除的项闪回给用户。两个已知误调来源：
-  // onCreated 的 `finally`（同页未被接管的下载也会走到）和 nativeBridge 的
-  // `disconnected()`（单次超时重试同样会触发），见各自调用点。
-  if (concealedDownloadCount <= 0) return
-  concealedDownloadCount -= 1
-  if (concealedDownloadCount) return
-  if (downloadUiFailsafe) clearTimeout(downloadUiFailsafe)
-  downloadUiFailsafe = null
-  void setBrowserDownloadUi(true)
 }
 
 function successfulChainForResource(resource: MediaResource, explicitChain?: RequestChain): RequestChain | undefined {
@@ -1627,10 +1504,6 @@ export default defineBackground(() => {
   nativeBridge = new NativeBridge(
     () => browser.runtime.connectNative(HOST) as unknown as NativePortLike,
     30_000,
-    () => {
-      concealedDownloadCount = 0
-      revealBrowserDownload()
-    },
   )
   takeoverSettingsSync = new TakeoverSettingsSync(
     browser.storage.local,
@@ -1664,7 +1537,6 @@ export default defineBackground(() => {
   // storage.local survives suspension and browser restart, so finish that work right away.
   void continuePausedHandoffFollowups().catch(() => undefined)
   void continueLocalDownloadHandoffs().catch(() => undefined)
-  void setBrowserDownloadUi(true)
   void pingDesktop().catch(() => undefined)
   // One recurring alarm drives everything that must survive service-worker
   // suspension: the desktop heartbeat, handoff tracking, paused-download
@@ -1770,13 +1642,10 @@ export default defineBackground(() => {
     }
     console.debug('HLS Downloader observed a browser download candidate')
     let paused = false
-    let downloadUiConcealed = false
     // Once a handoff may own the transfer, finally must leave the durable
     // paused browser fallback alone. This also covers transient status loss;
     // it does not mean Core acceptance was observed.
     let browserOwnedByHandoff = false
-    let followUpHandoffId = ''
-    let followUpCreatedAt = 0
     try {
       const config = await settings()
       if (!config.enabled) return
@@ -1807,33 +1676,19 @@ export default defineBackground(() => {
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
-          concealBrowserDownload()
-          downloadUiConcealed = true
           const response = earlyResult
             ? await offer(earlyResult.resource, provisionalChain) : undefined
           if (!restored && !desktopAcceptedHandoff(response)) return
           const handoffId = String(response?.handoff?.id || restored?.id || '')
+          // 持久回执即为交接边界；后续取消/重试属于桌面，不再启动浏览器副本。
+          browserOwnedByHandoff = true
+          await rememberPausedHandoffFollowUp(item.id, handoffId)
           if (earlyTakeover && earlyResult && response?.handoff?.id) {
             const tracked = await trackHandoff(handoffId, earlyResult.resource.id, earlyResult.resource.tabId)
             tracked.browserRequestId = earlyTakeover.requestId
             await persistHandoffTracker()
           }
-          followUpHandoffId = handoffId
-          followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
-          const handoff = await waitForHandoffResolution(handoffId)
-          if (handoff?.status !== 'accepted') {
-            if (!handoffTerminalStatus(handoff?.status)) browserOwnedByHandoff = true
-            return
-          }
-          const readiness = await waitForDesktopTaskReadiness(handoffId)
-          if (readiness === 'browser-fallback') return
-          if (readiness === 'keep-paused') {
-            browserOwnedByHandoff = true
-            void followUpPausedHandoffCleanup(item, handoffId)
-            return
-          }
           const removed = await removeBrowserDownload(item)
-          browserOwnedByHandoff = true
           if (removed) await pausedFollowUpStore.drop(handoffId)
           return
         }
@@ -1934,55 +1789,20 @@ export default defineBackground(() => {
       const pauseResult = await pauseBrowserDownload(actualBrowser)
       if (pauseResult === null) return
       paused = pauseResult
-      concealBrowserDownload()
-      downloadUiConcealed = true
       console.debug('HLS Downloader offering a verified browser download')
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
-      // Do not discard the browser download just because the confirmation
-      // window opened. The user owns the final decision; cancel/reject keeps
-      // this original download in the browser. The follow-up deadline is
-      // persisted before waiting so a suspended worker continues this flow
-      // from the shared alarm.
       const handoffId = String(response.handoff.id)
-      followUpHandoffId = handoffId
-      followUpCreatedAt = (await rememberPausedHandoffFollowUp(item.id, handoffId)).createdAt
-      const handoff = await waitForHandoffResolution(handoffId)
-      if (handoff?.status !== 'accepted') {
-        if (!handoffTerminalStatus(handoff?.status)) browserOwnedByHandoff = true
-        return
-      }
-      const readiness = await waitForDesktopTaskReadiness(handoffId)
-      if (readiness === 'browser-fallback') return
-      if (readiness === 'keep-paused') {
-        browserOwnedByHandoff = true
-        void followUpPausedHandoffCleanup(actualBrowser, handoffId)
-        return
-      }
-      // Core 已有实际传输后，取消并移除原下载项；确认框关闭或接管失败则恢复原下载。
-      const removed = await removeBrowserDownload(actualBrowser)
       browserOwnedByHandoff = true
+      await rememberPausedHandoffFollowUp(item.id, handoffId)
+      const removed = await removeBrowserDownload(actualBrowser)
       if (removed) await pausedFollowUpStore.drop(handoffId)
     } catch (error) {
-      console.warn('HLS Downloader takeover failed; browser download remains untouched', error)
+      console.warn('HLS Downloader browser handoff failed', error)
     } finally {
       determinedDownloads.delete(item.id)
       determinationWaiters.delete(item.id)
-      // A failed browser recovery keeps its record so the alarm can retry it.
-      if (followUpHandoffId && !browserOwnedByHandoff) {
-        const resumed = await resumeBrowserDownload(item, paused)
-        if (resumed) await pausedFollowUpStore.drop(followUpHandoffId)
-        else await retryPausedFollowUp({
-          downloadId: item.id,
-          handoffId: followUpHandoffId,
-          phase: 'resolution',
-          deadline: Date.now(),
-          createdAt: followUpCreatedAt,
-        })
-      } else {
-        await resumeBrowserDownload(item, paused && !browserOwnedByHandoff)
-      }
-      if (downloadUiConcealed) revealBrowserDownload()
+      await resumeBrowserDownload(item, paused && !browserOwnedByHandoff)
     }
   })
 
@@ -2058,6 +1878,42 @@ export default defineBackground(() => {
   })
 
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'intercept-download-link') {
+      const href = String(message.href || '')
+      const pageUrl = String(sender.url || sender.tab?.url || '')
+      const tabId = sender.tab?.id
+      void (async () => {
+        const config = await settings()
+        if (!validIdentity(tabId) || config.minimumBytes > 0
+          || !isDirectDownloadLink(href, pageUrl, Boolean(message.downloadAttribute))
+          || !shouldTakeover({ url: href, sourcePageUrl: pageUrl, ...config, explicitClick: true })
+          || isHandoffSuppressed(config.suppressions, pageUrl, 'file')) {
+          return { ok: false, browserFallback: true }
+        }
+        await clickIntentStore.consume({ url: href, referrer: pageUrl, tabId })
+        // 此阶段尚未发 offer；桌面离线可安全恢复原始浏览器导航。
+        try {
+          const ping = await native({ op: 'ping' })
+          if (!ping?.ok) return { ok: false, browserFallback: true }
+        } catch {
+          return { ok: false, browserFallback: true }
+        }
+        try {
+          const response = await offer({
+            id: resourceId(href), url: href, kind: 'file', pageUrl, tabId,
+            frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
+            seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
+            replayContext: { method: 'GET', page_url: pageUrl },
+          }, undefined, { allowUnverified: true, explicit: true })
+          return { ...response, browserFallback: !desktopAcceptedHandoff(response) }
+        } catch (error) {
+          // offer 发送后失联可能已持久接收，不能自动重新导航产生第二份下载。
+          await reportDownloadError(tabId, '无法确认下载交接，请检查主程序后重试')
+          return { ok: false, browserFallback: false, error: String(error) }
+        }
+      })().then(sendResponse, error => sendResponse({ ok: false, browserFallback: true, error: String(error) }))
+      return true
+    }
     if (message?.type === 'blob-source') {
       const tabId = Number(sender.tab?.id ?? -1)
       if (tabId >= 0) {

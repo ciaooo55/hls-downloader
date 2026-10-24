@@ -1,0 +1,24 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "installer",
+    "steps":  [
+                  {
+                      "name":  "configure",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "firefox-ownership",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "edge-ownership",
+                      "exit_code":  1
+                  },
+                  {
+                      "name":  "installer",
+                      "exit_code":  0
+                  }
+              ],
+    "error":  "edge-ownership failed: 1; "
+}

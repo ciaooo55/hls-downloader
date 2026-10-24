@@ -1,0 +1,8 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [],
+  "decision_method": "Core IPC",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 133, in run\n    driver.get(url)\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\webdriver.py\", line 526, in get\n    self.execute(Command.GET, {\"url\": url})\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\webdriver.py\", line 506, in execute\n    self.error_handler.check_response(response)\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\errorhandler.py\", line 232, in check_response\n    raise exception_class(message, screen, stacktrace)\nselenium.common.exceptions.WebDriverException: Message: tab crashed\n  (Session info: MicrosoftEdge=156.0.4314.42)\n\n",
+  "requests": {}
+}

@@ -9,7 +9,7 @@ export const PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY = 'paused-handoff-followups-v1
 export const PAUSED_HANDOFF_RESOLUTION_MS = 125_000
 /** Cadence for re-checking an accepted handoff whose desktop task is still unconfirmed. */
 export const PAUSED_FOLLOW_UP_RECHECK_MS = 60_000
-export type PausedHandoffFollowUpPhase = 'resolution' | 'readiness'
+export type PausedHandoffFollowUpPhase = 'resolution' | 'readiness' | 'cleanup'
 
 export interface PausedHandoffFollowUp {
   downloadId: number
@@ -31,10 +31,11 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
   const handoffId = String(item.handoffId || '')
   const downloadId = Number(item.downloadId)
   if (!handoffId || !Number.isInteger(downloadId) || downloadId < 0) return null
-  const phase: PausedHandoffFollowUpPhase = item.phase === 'readiness' ? 'readiness' : 'resolution'
+  const phase: PausedHandoffFollowUpPhase = item.phase === 'cleanup' ? 'cleanup'
+    : item.phase === 'readiness' ? 'readiness' : 'resolution'
   const deadline = Number(item.deadline)
   const createdAt = Number(item.createdAt)
-  const maxFutureWait = phase === 'readiness' ? PAUSED_FOLLOW_UP_RECHECK_MS : PAUSED_HANDOFF_RESOLUTION_MS
+  const maxFutureWait = phase === 'resolution' ? PAUSED_HANDOFF_RESOLUTION_MS : PAUSED_FOLLOW_UP_RECHECK_MS
   return {
     downloadId,
     handoffId,
@@ -79,6 +80,8 @@ export function stepPausedHandoffFollowUp(
   now: number,
   recheckMs: number,
 ): PausedFollowUpStep {
+  // 已收到桌面持久接收回执，浏览器只负责清掉自己的副本，不再等待用户确认或传输字节。
+  if (followUp.phase === 'cleanup') return { kind: 'remove-download' }
   if (followUp.phase === 'resolution') {
     const status = String(handoff.status || '')
     if (!handoffTerminalStatus(status)) {

@@ -1,0 +1,8 @@
+direct: one Core file, no browser copy
+cancel: cancel starts no browser fallback
+opaque: one Core file, no browser copy
+github: cancel starts no browser fallback
+disabled: original browser transfer exactly once
+excluded: original browser transfer exactly once
+offline: original browser transfer exactly once
+{"passed": true, "error": null}

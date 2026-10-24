@@ -1,0 +1,54 @@
+{
+  "source_baseline_commit": "37d055004c11ca2db57e4fe1ef0c0ae2e19c3659",
+  "source_patch_sha256": "190493f04391ae57943219a56fa602fa48160e849b89db5d97c4f0005c22452e",
+  "unsigned": true,
+  "release_ready": false,
+  "sandbox_acceptance": true,
+  "installer_acceptance": true,
+  "host_install_performed": false,
+  "github_release_assets_updated": false,
+  "directory": "C:\\Users\\lee\\Desktop\\HLSDownloader\\最新-20261024",
+  "validation_report": "docs/validation/browser-takeover-20261024/README.md",
+  "known_limits": [
+    "Generic Chromium attachments create DownloadItem before cancellation",
+    "POST/Blob retain local import; not zero browser events",
+    "No full-site, paid cloud, physical receiver or long-duration rerun"
+  ],
+  "assets": [
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 1455,
+      "sha256": "fe9ad24708ecf276fc601027e10e3cfcd01fd054e0423a1a1f06e4365962052d"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261024-未签名.msi",
+      "bytes": 203444224,
+      "sha256": "227cabe3c177ff64136c5a1ba10c99b5161eae9a82d8e1194f82d0db4e2aa937"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 327485,
+      "sha256": "1e6cb14c99e328f0666f87c8bf4cd1a39a15904b7ead3c01ec6bc3527e6a6f82"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 281305,
+      "sha256": "d7a18ebacaa151e4e36e3228a03ce61946643449b0d0f213c2648654a6263efc"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 326794,
+      "sha256": "4ac50655abdc82fefa9df8193a8d7c76a539c990f7b8f6d6a8056c16b3a4896e"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-插件完整源码.zip",
+      "bytes": 361395,
+      "sha256": "7852fd1768ef1fdb9f0290b33da9936e26dd92b8a069e2cc58587052ec8bebd0"
+    },
+    {
+      "name": "验收说明.txt",
+      "bytes": 1539,
+      "sha256": "f6d0b6acf3c4eea54249847a819ad1f21945b1f8df9712afc5b6014f27973c9c"
+    }
+  ]
+}

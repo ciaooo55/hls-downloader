@@ -1,0 +1,99 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49711/opaque"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "019a4a80fd7a4dde4b8ffbca2f710ee6f12cff2d5cc03c464b9c61a8dfda5a14",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 229, in run\n    item = wait(browser_done, f'{name} browser fallback failed', 55)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAInput\\source\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: offline browser fallback failed\n",
+  "failure_targets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49716/devtools/page/27AB9604DD355068CC951E5051FB5EB9",
+      "id": "27AB9604DD355068CC951E5051FB5EB9",
+      "title": "HLS Downloader",
+      "type": "page",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "webSocketDebuggerUrl": "ws://localhost:49716/devtools/page/27AB9604DD355068CC951E5051FB5EB9"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49716/devtools/page/0C0223785243BCF408BABED104C2E6F4",
+      "id": "0C0223785243BCF408BABED104C2E6F4",
+      "title": "Takeover ownership",
+      "type": "page",
+      "url": "http://127.0.0.1:49711/",
+      "webSocketDebuggerUrl": "ws://localhost:49716/devtools/page/0C0223785243BCF408BABED104C2E6F4"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49716/devtools/page/31DB8A72E1F19C2EBD8DA82FB77CFB24",
+      "id": "31DB8A72E1F19C2EBD8DA82FB77CFB24",
+      "title": "下载",
+      "type": "page",
+      "url": "edge://downloads-hub/",
+      "webSocketDebuggerUrl": "ws://localhost:49716/devtools/page/31DB8A72E1F19C2EBD8DA82FB77CFB24"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:49716/devtools/page/9A48FB79CDFD126319616D6E4C12E9AE",
+      "id": "9A48FB79CDFD126319616D6E4C12E9AE",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "type": "service_worker",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "webSocketDebuggerUrl": "ws://localhost:49716/devtools/page/9A48FB79CDFD126319616D6E4C12E9AE"
+    }
+  ],
+  "failure_screenshot": true,
+  "failure_url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+  "failure_html": "<html lang=\"zh-CN\" data-hlsd-theme=\"light\" data-popup-ready=\"ready\"><head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <title>HLS Downloader</title>\n  <style>\n    html { color-scheme: light dark; background: #eef2f6; }\n    body { margin: 0; width: 360px; background: #eef2f6; color: #0f172a; font: 12px/1.45 \"Segoe UI\", \"Microsoft YaHei\", system-ui, sans-serif; }\n    .popup-boot { display: flex; min-height: 180px; flex-direction: column; background: #eef2f6; }\n    .popup-boot__header { display: flex; height: 48px; align-items: center; gap: 9px; padding: 0 10px; border-bottom: 1px solid #d8e0ea; background: #fff; }\n    .popup-boot__header img { width: 24px; height: 24px; }\n    .popup-boot__title { font-size: 14px; font-weight: 650; }\n    .popup-boot__status { margin-top: 2px; color: #475569; font-size: 10px; }\n    .popup-boot__body { display: grid; flex: 1; place-items: center; padding: 24px; text-align: center; }\n    .popup-boot__body strong { display: block; margin-bottom: 5px; font-size: 13px; }\n    .popup-boot__body span { color: #475569; }\n    @media (prefers-color-scheme: dark) {\n      html, body, .popup-boot { background: #151719; color: #f4f5f6; }\n      .popup-boot__header { border-color: #383d43; background: #1c1f23; }\n      .popup-boot__status, .popup-boot__body span { color: #c5c9cf; }\n    }\n  </style>\n  <script type=\"module\" crossorigin=\"\" src=\"/chunks/popup-BWxwZTLQ.js\"></script>\n  <link rel=\"modulepreload\" crossorigin=\"\" href=\"/chunks/browser-B79nNR8W.js\">\n  <link rel=\"stylesheet\" crossorigin=\"\" href=\"/assets/popup-DC57h4ym.css\">\n<style>\n[data-hlsd-theme=\"dark\"]{\n  color-scheme:dark;\n  --bg:#151719;--surface:#1c1f23;--surface-2:#23272b;--surface-3:#2b3035;\n  --border:#383d43;--control-border:#767a7e;--text:#f4f5f6;--muted:#c5c9cf;--faint:#969ca4;\n  --primary:#5ea2f3;--primary-hover:#7eb7f6;--on-primary:#151719;\n  --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa;\n  --primary-ink:#7eb7f6;--green-ink:#55d283;--red-ink:#f27070;--purple-ink:#c4b5fd;\n  --shadow:rgba(0,0,0,.35);--rail:#1c1f23;\n  --overlay-border:#464c53;\n  --z-extension-overlay:2147483647;--z-extension-video:2147483646;\n}\n[data-hlsd-theme=\"light\"]{\n  color-scheme:light;\n  --bg:#eef2f6;--surface:#ffffff;--surface-2:#f5f7fa;--surface-3:#e8edf3;\n  --border:#d8e0ea;--control-border:#808896;--text:#0f172a;--muted:#475569;--faint:#5f6e83;\n  --primary:#2563eb;--primary-hover:#1d4ed8;--on-primary:#ffffff;\n  --green:#15803d;--amber:#d97706;--red:#dc2626;--purple:#7c3aed;\n  --primary-ink:#1d4ed8;--green-ink:#166534;--red-ink:#b91c1c;--purple-ink:#5b21b6;\n  --shadow:rgba(15,23,42,.12);--rail:#e8edf3;\n  --overlay-border:#c7d0dc;\n  --z-extension-overlay:2147483647;--z-extension-video:2147483646;\n}\n\n.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:7px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}\n.hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}\n.hlsd-button:active:not(:disabled){transform:scale(.975)}\n.hlsd-button:disabled{opacity:.45;cursor:default}\n.hlsd-button.busy:disabled{opacity:1;cursor:progress}\n.hlsd-button.primary{background:var(--primary);color:var(--on-primary)}\n.hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover)}\n.hlsd-button.subtle{background:transparent;color:var(--muted)}\n.hlsd-button.subtle:hover:not(:disabled){background:var(--surface-2);color:var(--text)}\n.hlsd-button.active{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 34%,transparent)}\n.hlsd-button.active:hover:not(:disabled){background:color-mix(in srgb,var(--green) 22%,var(--surface-3))}\n.hlsd-button:focus-visible{outline:2px solid var(--primary);outline-offset:1px}\n.hlsd-icon{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none}\n.hlsd-icon svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.8}\n.hlsd-button.primary .hlsd-icon{width:14px;height:14px}\n.hlsd-button.busy .hlsd-icon{animation:hlsd-spin .8s linear infinite}\n@keyframes hlsd-spin{to{transform:rotate(360deg)}}\n.hlsd-select{height:30px;border:1px solid var(--control-border);border-radius:7px;background:var(--surface-2);color:var(--text);padding:0 8px;font:12.5px system-ui,sans-serif}\n.hlsd-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:color-mix(in srgb,var(--primary) 20%,var(--surface-2));color:var(--primary-ink);font:700 11.5px system-ui,sans-serif}\n</style></head>\n<body>\n  <div id=\"root\"><main style=\"--popup-max-height: 558px;\"><header><div class=\"brand\"><img src=\"/icon-32.png\" alt=\"\" width=\"18\" height=\"18\"><div><h1>HLS Downloader</h1><span class=\"status online\">下载引擎已连接</span></div></div><div class=\"header-actions\"><button class=\"hlsd-button subtle\" type=\"button\" title=\"主题：自动\" aria-label=\"主题：自动\"><span class=\"hlsd-icon\" aria-label=\"主题：自动\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z\"></path></svg></span></button><button class=\"hlsd-button desktop-open\" type=\"button\" title=\"打开桌面端\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h13m-5-5 5 5-5 5\"></path></svg></span><span>主程序</span></button><button class=\"hlsd-button subtle\" type=\"button\" title=\"关闭\" aria-label=\"关闭插件弹窗\"><span class=\"hlsd-icon\" aria-label=\"关闭\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m6 6 12 12M18 6 6 18\"></path></svg></span></button></div></header><nav class=\"view-tabs\" role=\"tablist\" aria-label=\"插件功能\"><button class=\"view-tab\" type=\"button\" id=\"tab-0\" role=\"tab\" aria-controls=\"panel-0\" aria-selected=\"true\" tabindex=\"0\">资源<b>0</b></button><button class=\"view-tab\" type=\"button\" id=\"tab-1\" role=\"tab\" aria-controls=\"panel-1\" aria-selected=\"false\" tabindex=\"-1\">字幕</button><button class=\"view-tab\" type=\"button\" id=\"tab-2\" role=\"tab\" aria-controls=\"panel-2\" aria-selected=\"false\" tabindex=\"-1\">设置</button></nav><div class=\"update-notice\" hidden=\"\"><span></span><button type=\"button\">查看新版</button></div><div class=\"send-error\" hidden=\"\" role=\"alert\"></div><div class=\"views\"><section class=\"resources-panel\" id=\"panel-0\" role=\"tabpanel\" aria-labelledby=\"tab-0\"><div class=\"section-header\"><div class=\"section-title\" title=\"http://127.0.0.1:49711/\">127.0.0.1</div><button class=\"scan-button\" type=\"button\" title=\"重新扫描当前页面的媒体和下载资源\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7\"></path></svg></span><span>重新识别</span></button></div><div class=\"list\"><div class=\"empty\"><div class=\"empty-icon\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"3\" y=\"5\" width=\"18\" height=\"14\" rx=\"2\"></rect><path d=\"m10 9 5 3-5 3Z\"></path></svg></span></div><strong>当前页面还没有可下载资源</strong><span>先播放页面中的媒体，或点击下方重新识别。</span><button class=\"empty-retry\" type=\"button\"><span class=\"hlsd-icon\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7\"></path></svg></span><span>重新识别</span></button></div></div></section><section id=\"panel-1\" role=\"tabpanel\" aria-labelledby=\"tab-1\" hidden=\"\"><p class=\"panel-hint\">正在读取当前页面…</p></section><section class=\"settings-panel\" id=\"panel-2\" role=\"tabpanel\" aria-labelledby=\"tab-2\" hidden=\"\"><h2>下载与站点设置</h2><p class=\"panel-hint\">当前站点 · 127.0.0.1</p><div class=\"controls\"><div class=\"setting-item\"><div><strong>自动接管</strong><small>全局设置，控制浏览器下载是否交给主程序。</small></div><button class=\"hlsd-button active\" type=\"button\" aria-label=\"自动接管：已开启\" title=\"全局下载接管已开启；点击关闭\" aria-pressed=\"true\" aria-busy=\"false\">已开启</button></div><div class=\"setting-item\"><div><strong>本站 Cookie</strong><small>仅在授权后，为本站下载读取资源请求所需的 Cookie。</small></div><button class=\"hlsd-button\" type=\"button\" aria-label=\"本站 Cookie：未授权\" title=\"未授权：默认不读取 Cookie；点击授权当前站点\" aria-pressed=\"false\" aria-busy=\"false\">未授权</button></div><div class=\"setting-item\"><div><strong>本站媒体提示</strong><small>控制网页上的媒体悬浮入口，不影响插件内识别。</small></div><button class=\"hlsd-button\" type=\"button\" aria-label=\"本站提示：已显示\" title=\"当前会在本站显示自动提示；点击隐藏\" aria-pressed=\"false\" aria-busy=\"false\">已显示</button></div></div><button class=\"restore-site-prompts\" type=\"button\" hidden=\"\" title=\"\" aria-busy=\"false\">恢复本站自动提示</button></section></div><footer><span>浏览器插件</span><span>版本 7.0.3</span></footer></main></div>\n  <noscript>浏览器插件脚本未启用。</noscript>\n\n\n</body></html>",
+  "requests": {
+    "/": 8,
+    "/favicon.ico": 8,
+    "/direct.zip": 2,
+    "/opaque": 3,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1
+  }
+}

@@ -1,0 +1,16 @@
+﻿{
+    "passed":  true,
+    "finished":  true,
+    "current":  "edge-ownership",
+    "steps":  [
+                  {
+                      "name":  "configure",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "edge-ownership",
+                      "exit_code":  0
+                  }
+              ],
+    "error":  ""
+}

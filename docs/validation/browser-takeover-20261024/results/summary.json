@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "runs": {
+    "edge": "attempt-08",
+    "firefox": "attempt-05",
+    "installer": "attempt-05"
+  }
+}

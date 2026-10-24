@@ -1,0 +1,8 @@
+{
+  "passed": false,
+  "browser": "firefox",
+  "checks": [],
+  "decision_method": "Core IPC",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 115, in run\n    extension_id = json.loads((args.extension/'manifest.json').read_text())['browser_specific_settings']['gecko']['id']\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAWork\\python\\python312.zip\\pathlib.py\", line 1028, in read_text\n    return f.read()\n           ^^^^^^^^\nUnicodeDecodeError: 'gbk' codec can't decode byte 0xa7 in position 49: illegal multibyte sequence\n",
+  "requests": {}
+}

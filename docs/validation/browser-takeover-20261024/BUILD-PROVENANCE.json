@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "record_scope": "build_snapshot",
+  "product_version": "7.0.3",
+  "source_commit": "37d055004c11ca2db57e4fe1ef0c0ae2e19c3659",
+  "source_branch": "main",
+  "git_worktree_clean": false,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "source_patch_sha256": "190493f04391ae57943219a56fa602fa48160e849b89db5d97c4f0005c22452e",
+  "source_files_sha256": {
+    "extension/entrypoints/background.ts": "5d4d57b438a04fd3afc8b7fdd51458c65e3de6ad3cf5fa67b779e42131d7e03f",
+    "extension/entrypoints/takeover.content.ts": "8544479a3f1c817e7bb8213f835ca000accac417a6c7904b6fee1400f1b4b6f5",
+    "extension/lib/directLink.ts": "efa2f0086e522992b9820a53ca53cc0e237b4b59aa1654c9192a12ccec3d2182",
+    "extension/lib/pausedHandoffFollowups.ts": "3522ffd33e47c5e9bba3139f5a3c97a8bf5a8c441c0f64bf78bb75af90b49cd6",
+    "extension/wxt.config.ts": "3ef82ac99626462c8c3ca636e0382ff70977732c639d6f01d9282d6af37774f7"
+  },
+  "engine_sha256": "db1c84d5d96133405351196bd0a96360446880a42125ffb04cbd9697ce8a51f4",
+  "base_msi_sha256": "9b8f1afb154c6a72d9f1cdff2dc4f6739ed911bed34153ff12aacb19e0300203",
+  "generated_at_utc": "2026-10-24T13:58:02.9275808Z",
+  "validation_note": "构建时快照；后续验收以安装包和插件 SHA256 绑定的外部报告为准。",
+  "validation_scope": "Browser download ownership candidate; Core, UI, Host and media libraries reused unchanged from the interleaved-playback accepted MSI."
+}

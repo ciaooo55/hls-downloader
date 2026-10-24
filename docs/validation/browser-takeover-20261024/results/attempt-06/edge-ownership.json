@@ -1,0 +1,54 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [],
+  "decision_method": "Core IPC",
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "019a4a80fd7a4dde4b8ffbca2f710ee6f12cff2d5cc03c464b9c61a8dfda5a14",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 169, in run\n    click(name)\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 157, in click\n    WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.ID, name))).click()\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\support\\wait.py\", line 121, in until\n    raise TimeoutException(message, screen, stacktrace)\nselenium.common.exceptions.TimeoutException: Message: \nStacktrace:\nSymbols not available. Dumping unresolved backtrace:\n\t(No symbol) [0x7ff703ea09f5]\n\t(No symbol) [0x7ff703de75d4]\n\t(No symbol) [0x7ff70422f8cf]\n\t(No symbol) [0x7ff703bc0212]\n\t(No symbol) [0x7ff703bc049a]\n\t(No symbol) [0x7ff703c00817]\n\t(No symbol) [0x7ff703bb651d]\n\t(No symbol) [0x7ff703bfe458]\n\t(No symbol) [0x7ff703bb5d5c]\n\t(No symbol) [0x7ff703bb4f4a]\n\t(No symbol) [0x7ff703bb5b83]\n\t(No symbol) [0x7ff703cf5981]\n\t(No symbol) [0x7ff703d05638]\n\t(No symbol) [0x7ff703f496d5]\n\t(No symbol) [0x7ff703f4fd51]\n\t(No symbol) [0x7ff703df36ac]\n\t(No symbol) [0x7ff703dedec4]\n\t(No symbol) [0x7ff703dedfea]\n\t(No symbol) [0x7ff703ddf3f8]\n\t(No symbol) [0x7ffff3c1257d]\n\t(No symbol) [0x7ffff550af08]\n\n",
+  "failure_targets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49705/devtools/page/450D2F8C888C203AD7882D1423A0C528",
+      "id": "450D2F8C888C203AD7882D1423A0C528",
+      "title": "Takeover ownership",
+      "type": "page",
+      "url": "http://127.0.0.1:49701/",
+      "webSocketDebuggerUrl": "ws://localhost:49705/devtools/page/450D2F8C888C203AD7882D1423A0C528"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49705/devtools/page/2FD9D7CC52E5D7EC422E4C61E0987B61",
+      "id": "2FD9D7CC52E5D7EC422E4C61E0987B61",
+      "title": "HLS Downloader",
+      "type": "page",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "webSocketDebuggerUrl": "ws://localhost:49705/devtools/page/2FD9D7CC52E5D7EC422E4C61E0987B61"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:49705/devtools/page/376179A1936D9B1A5B8AA2B3895437C3",
+      "id": "376179A1936D9B1A5B8AA2B3895437C3",
+      "title": "Service Worker https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&amp;bundles=latest&amp;riverAgeMinutes=2880&amp;navAgeMinutes=2880&amp;networkTimeoutSeconds=5&amp;bgTaskNetworkTimeoutSeconds=8&amp;enableNetworkFirst=true&amp;enableEmptySectionRoute=true&amp;enableNavPreload=true&amp;enableStaticAdsRouting=true",
+      "type": "service_worker",
+      "url": "https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&bundles=latest&riverAgeMinutes=2880&navAgeMinutes=2880&networkTimeoutSeconds=5&bgTaskNetworkTimeoutSeconds=8&enableNetworkFirst=true&enableEmptySectionRoute=true&enableNavPreload=true&enableStaticAdsRouting=true",
+      "webSocketDebuggerUrl": "ws://localhost:49705/devtools/page/376179A1936D9B1A5B8AA2B3895437C3"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:49705/devtools/page/CCE2E562C4662C87CDCDCFA85F791B15",
+      "id": "CCE2E562C4662C87CDCDCFA85F791B15",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "type": "service_worker",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "webSocketDebuggerUrl": "ws://localhost:49705/devtools/page/CCE2E562C4662C87CDCDCFA85F791B15"
+    }
+  ],
+  "failure_screenshot": true,
+  "failure_url_error": "Message: timeout\nfrom no such execution context: frame does not have execution context\n  (Session info: MicrosoftEdge=156.0.4314.42)\nStacktrace:\nSymbols not available. Dumping unresolved backtrace:\n\t(No symbol) [0x7ff703ea09f5]\n\t(No symbol) [0x7ff703de75d4]\n\t(No symbol) [0x7ff70422f8cf]\n\t(No symbol) [0x7ff703b6aeda]\n\t(No symbol) [0x7ff703b7959c]\n\t(No symbol) [0x7ff703b7cca5]\n\t(No symbol) [0x7ff703b7cd6f]\n\t(No symbol) [0x7ff703c00c06]\n\t(No symbol) [0x7ff703c008ba]\n\t(No symbol) [0x7ff703be119a]\n\t(No symbol) [0x7ff703bb651d]\n\t(No symbol) [0x7ff703bfe458]\n\t(No symbol) [0x7ff703bb5d5c]\n\t(No symbol) [0x7ff703bb4f4a]\n\t(No symbol) [0x7ff703bb5b83]\n\t(No symbol) [0x7ff703cf5981]\n\t(No symbol) [0x7ff703d05638]\n\t(No symbol) [0x7ff703f496d5]\n\t(No symbol) [0x7ff703f4fd51]\n\t(No symbol) [0x7ff703df36ac]\n\t(No symbol) [0x7ff703dedec4]\n\t(No symbol) [0x7ff703dedfea]\n\t(No symbol) [0x7ff703ddf3f8]\n\t(No symbol) [0x7ffff3c1257d]\n\t(No symbol) [0x7ffff550af08]\n",
+  "failure_html": "<html data-hls-downloader-extension=\"1\"><head><title>Takeover ownership</title></head><body><a id=\"direct\" href=\"/direct.zip\">direct.zip</a> <a id=\"cancel\" href=\"/cancel.zip\">cancel.zip</a> <a id=\"opaque\" href=\"/opaque\">opaque attachment</a> <a id=\"disabled\" href=\"/disabled.zip\">disabled.zip</a> <a id=\"excluded\" href=\"/excluded.zip\">excluded.zip</a> <a id=\"offline\" href=\"/offline.zip\">offline.zip</a> <a id=\"preview\" href=\"/preview.pdf\">preview</a> <a id=\"github\" href=\"https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe\">GitHub portable EXE</a></body></html>",
+  "requests": {
+    "/": 2,
+    "/favicon.ico": 2
+  }
+}

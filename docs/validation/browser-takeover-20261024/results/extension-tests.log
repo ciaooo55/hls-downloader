@@ -1,0 +1,9 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+
+ Test Files  6 passed (6)
+      Tests  66 passed (66)
+   Start at  21:54:52
+   Duration  874ms (transform 73%, import 16%, tests 8%, worker 3%)
+

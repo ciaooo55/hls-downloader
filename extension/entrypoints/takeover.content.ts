@@ -1,5 +1,7 @@
 import { browser } from 'wxt/browser'
 import { localDownloadIntentUrl } from '../lib/resources'
+import { isDirectDownloadLink } from '../lib/directLink'
+import { desktopAcceptedHandoff } from '../lib/takeover'
 import {
   isLikelyDownloadControl,
   linkOpensNewTab,
@@ -28,6 +30,23 @@ export default defineContentScript({
   matchOriginAsFallback: true,
   runAt: 'document_start',
   main(ctx) {
+    let interceptLinks = false
+    let linkSettings = { enabled: true, minimumBytes: 0 }
+    if (import.meta.env.CHROME) {
+      const applySettings = () => { interceptLinks = linkSettings.enabled && linkSettings.minimumBytes <= 0 }
+      void browser.storage.local.get(['enabled', 'minimumBytes']).then(values => {
+        linkSettings = { enabled: values.enabled !== false, minimumBytes: Number(values.minimumBytes || 0) }
+        applySettings()
+      }).catch(() => undefined)
+      const onSettingsChanged = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+        if (area !== 'local') return
+        if (changes.enabled) linkSettings.enabled = changes.enabled.newValue !== false
+        if (changes.minimumBytes) linkSettings.minimumBytes = Number(changes.minimumBytes.newValue || 0)
+        applySettings()
+      }
+      browser.storage.onChanged.addListener(onSettingsChanged)
+      ctx.onInvalidated(() => browser.storage.onChanged.removeListener(onSettingsChanged))
+    }
     let lastIntent = { key: '', at: 0 }
     let lastTrustedClick = { at: 0, alt: false, ctrl: false }
     const recordIntent = (event: MouseEvent) => {
@@ -149,5 +168,42 @@ export default defineContentScript({
     // earliest trusted phase so onHeadersReceived can present immediately.
     ctx.addEventListener(window, 'pointerdown', recordIntent, { capture: true })
     ctx.addEventListener(window, 'click', recordIntent, { capture: true })
+    ctx.addEventListener(window, 'click', (event: MouseEvent) => {
+      if (!interceptLinks || !event.isTrusted || !event.cancelable || event.defaultPrevented
+        || event.button !== 0 || event.altKey || event.shiftKey || event.metaKey || event.ctrlKey) return
+      const link = event.composedPath().find(isHtmlLink)
+      if (!link || !isDirectDownloadLink(link.href, location.href, link.hasAttribute('download'))) return
+      const href = link.href
+      const pageUrl = location.href
+      const target = link.target || '_self'
+      const filename = link.getAttribute('download')
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      const fallback = async () => {
+        // 本次交接未发生；让原链接恢复一次，并防止响应/onCreated 再次接管。
+        await browser.runtime.sendMessage({
+          type: 'click-intent', href, pageUrl, altBypass: true, opensNewTab: linkOpensNewTab(target),
+        }).catch(() => undefined)
+        const original = document.createElement('a')
+        original.href = href
+        original.target = target
+        original.rel = link.rel
+        original.referrerPolicy = link.referrerPolicy
+        if (filename !== null) original.setAttribute('download', filename)
+        original.hidden = true
+        document.documentElement.append(original)
+        original.click()
+        original.remove()
+      }
+      void browser.runtime.sendMessage({
+        type: 'intercept-download-link', href, pageUrl, filename,
+        downloadAttribute: filename !== null,
+      }).then(response => {
+        if (!desktopAcceptedHandoff(response) && response?.browserFallback === true) return fallback()
+      }).catch(() => {
+        // 发送后连接中断不能证明桌面没收到；自动导航可能造成第二份下载。
+        console.warn('HLS Downloader 无法确认链接交接，请检查主程序后重试')
+      })
+    }, { capture: true })
   },
 })

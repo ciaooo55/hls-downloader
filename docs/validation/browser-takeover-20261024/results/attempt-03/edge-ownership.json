@@ -1,0 +1,13 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [],
+  "decision_method": "Core IPC",
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "019a4a80fd7a4dde4b8ffbca2f710ee6f12cff2d5cc03c464b9c61a8dfda5a14",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 166, in run\n    click(name)\n  File \"C:\\QAInput\\source\\smoke_extension_download_ownership.py\", line 154, in click\n    driver.find_element(By.ID, name).click()\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\webdriver.py\", line 914, in find_element\n    return self.execute(Command.FIND_ELEMENT, {\"using\": by, \"value\": value})[\"value\"]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\webdriver.py\", line 506, in execute\n    self.error_handler.check_response(response)\n  File \"C:\\QAWork\\python\\selenium\\webdriver\\remote\\errorhandler.py\", line 232, in check_response\n    raise exception_class(message, screen, stacktrace)\nselenium.common.exceptions.NoSuchElementException: Message: no such element: Unable to locate element: {\"method\":\"css selector\",\"selector\":\"[id=\"direct\"]\"}\n  (Session info: MicrosoftEdge=156.0.4314.42); For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#nosuchelementexception\nStacktrace:\nSymbols not available. Dumping unresolved backtrace:\n\t(No symbol) [0x7ff741c609f5]\n\t(No symbol) [0x7ff741ba75d4]\n\t(No symbol) [0x7ff741fef8cf]\n\t(No symbol) [0x7ff741980212]\n\t(No symbol) [0x7ff74198049a]\n\t(No symbol) [0x7ff7419c0817]\n\t(No symbol) [0x7ff74197651d]\n\t(No symbol) [0x7ff7419be458]\n\t(No symbol) [0x7ff741975d5c]\n\t(No symbol) [0x7ff741974f4a]\n\t(No symbol) [0x7ff741975b83]\n\t(No symbol) [0x7ff741ab5981]\n\t(No symbol) [0x7ff741ac5638]\n\t(No symbol) [0x7ff741d096d5]\n\t(No symbol) [0x7ff741d0fd51]\n\t(No symbol) [0x7ff741bb36ac]\n\t(No symbol) [0x7ff741badec4]\n\t(No symbol) [0x7ff741badfea]\n\t(No symbol) [0x7ff741b9f3f8]\n\t(No symbol) [0x7ffff3c1257d]\n\t(No symbol) [0x7ffff550af08]\n\n",
+  "requests": {
+    "/": 2,
+    "/favicon.ico": 2
+  }
+}

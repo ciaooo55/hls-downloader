@@ -81,17 +81,10 @@ def run(args):
         if {task["task_id"] for task in tasks()} != initial:
             raise AssertionError("Core task started before actual confirmation")
         record("original-website-link-reaches-confirmation-before-task")
-        if args.browser == 'firefox':
-            items = _download_items(driver, inspector)
-            events = driver.execute_script('return window.takeoverDownloadEvents')
-            assert not items and not events, {'items': items, 'created_events': events}
-            record('Firefox-never-created-a-browser-download-before-confirmation', True)
-        else:
-            items = _download_items(driver, inspector)
-            # 确认窗口出现后不能继续并行传输；存在下载项也必须如实记录，不能靠隐藏 UI 判通过。
-            assert items and all(item.get('paused') for item in items), {'items': items}
-            record('Chromium-browser-transfer-paused-before-confirmation', {
-                'items': items, 'created_events': driver.execute_script('return window.takeoverDownloadEvents')})
+        items = _download_items(driver, inspector)
+        events = driver.execute_script('return window.takeoverDownloadEvents')
+        assert not items and not events, {'items': items, 'created_events': events}
+        record('never-created-a-browser-download-before-confirmation', True)
         click_download_confirmation(runtime=args.runtime, evidence_path=args.report.with_name("accept.json"))
 
         def completed():
@@ -112,12 +105,9 @@ def run(args):
         def no_browser_copy():
             items = [item for item in _download_items(driver, inspector)
                      if filename in str(item.get("url", "")) or Path(item.get("filename", "")).name == filename]
-            if args.browser == 'firefox':
-                events = driver.execute_script('return window.takeoverDownloadEvents')
-                assert not events, {'created_events': events}
-                return {"items": items, 'created_events': events} if not items else None
-            # exists=false 也可能只是浏览器尚未写完，不能证明已取消并清除接管项。
-            return {"items": items} if not items else None
+            events = driver.execute_script('return window.takeoverDownloadEvents')
+            assert not events, {'created_events': events}
+            return {"items": items, 'created_events': events} if not items else None
 
         record("browser-keeps-no-download-item-after-takeover",
                wait(no_browser_copy, "Browser kept a download item after takeover", 20))
