@@ -1,0 +1,14 @@
+{
+  "owned_clients": [
+    {
+      "ProcessId": 4552,
+      "ParentProcessId": 1836,
+      "CreationDate": "2026-10-26T01:20:10.313228+08:00",
+      "Name": "WindowsSandboxClient.exe"
+    }
+  ],
+  "checked_at": "2026-10-26T01:45:30.0479093+08:00",
+  "sandbox_pid": 1836,
+  "sandbox_remaining": false,
+  "client_remaining": false
+}

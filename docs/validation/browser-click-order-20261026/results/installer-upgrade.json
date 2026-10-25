@@ -1,0 +1,56 @@
+{
+  "passed": true,
+  "old_product": "{2657A7CF-164B-4F55-BB73-D86D7F5E7E76}",
+  "new_product": "{938E35A6-0C75-4297-A09B-B226EFADBE25}",
+  "checks": [
+    {
+      "name": "baseline product is installed",
+      "actual": true
+    },
+    {
+      "name": "seeded completed task, file and setting before upgrade",
+      "actual": {
+        "task_id": "task-1",
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "same-version upgrade replaces old product registration with Core running",
+      "actual": {
+        "exit_code": 0,
+        "old_state": -1,
+        "new_state": 5
+      }
+    },
+    {
+      "name": "installed runtime, provenance and both plugin ZIPs match tested bytes",
+      "actual": {
+        "app/resources/HLSDownloaderEngine.exe": "b72a5e83edb87a9c5e1e754d0c48489658edd467cc6c236bced7ad7f9008c283",
+        "app/resources/HLSDownloaderNativeHost.exe": "bbcc0dd0fba23334b7955cb2f9dd65e99e1f870884e24f4258e1d0f0e15bc5a7",
+        "app/resources/HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+        "app/resources/HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a",
+        "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "6ad623e86d14e27212d60cb7a736088786ee669228b79d6421bb50c0d0072670",
+        "app/resources/BUILD-PROVENANCE.json": "72bc39d5703fb98a3b5378a9e20e1167b68c142664686bc09567c331a1270fd2",
+        "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "6dc1af062037a3e762e30faf6cb8da9b474e296f4a33562adc4f4344e785e3b5",
+        "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "abfb58466bb9af84f810f928aa07e254f09bae513fe5fcc5a9680bc94f37f9cc"
+      }
+    },
+    {
+      "name": "task, exact file bytes and settings survive upgrade",
+      "actual": true
+    },
+    {
+      "name": "sandbox canary task, file and cache removed",
+      "actual": true
+    },
+    {
+      "name": "uninstall removes final product registration and executable",
+      "actual": {
+        "exit_code": 0
+      }
+    }
+  ],
+  "msi_sha256": "7cc0f1e14ee234bfe6de5e6dce7858b4755b412938de3c2100aac10ac55aebca",
+  "installed_files": 222,
+  "installed_bytes": 469604467
+}

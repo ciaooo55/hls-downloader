@@ -1,0 +1,41 @@
+{
+  "passed": false,
+  "old_product": "{2657A7CF-164B-4F55-BB73-D86D7F5E7E76}",
+  "new_product": "{938E35A6-0C75-4297-A09B-B226EFADBE25}",
+  "checks": [
+    {
+      "name": "baseline product is installed",
+      "actual": true
+    },
+    {
+      "name": "seeded completed task, file and setting before upgrade",
+      "actual": {
+        "task_id": "task-1",
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "same-version upgrade replaces old product registration with Core running",
+      "actual": {
+        "exit_code": 0,
+        "old_state": -1,
+        "new_state": 5
+      }
+    },
+    {
+      "name": "installed runtime, provenance and both plugin ZIPs match tested bytes",
+      "actual": {
+        "app/resources/HLSDownloaderEngine.exe": "b72a5e83edb87a9c5e1e754d0c48489658edd467cc6c236bced7ad7f9008c283",
+        "app/resources/HLSDownloaderNativeHost.exe": "bbcc0dd0fba23334b7955cb2f9dd65e99e1f870884e24f4258e1d0f0e15bc5a7",
+        "app/resources/HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+        "app/resources/HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a",
+        "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "6ad623e86d14e27212d60cb7a736088786ee669228b79d6421bb50c0d0072670",
+        "app/resources/BUILD-PROVENANCE.json": "72bc39d5703fb98a3b5378a9e20e1167b68c142664686bc09567c331a1270fd2",
+        "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "6dc1af062037a3e762e30faf6cb8da9b474e296f4a33562adc4f4344e785e3b5",
+        "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "abfb58466bb9af84f810f928aa07e254f09bae513fe5fcc5a9680bc94f37f9cc"
+      }
+    }
+  ],
+  "msi_sha256": "7cc0f1e14ee234bfe6de5e6dce7858b4755b412938de3c2100aac10ac55aebca",
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsExchange\\run-final-upgrade.py\", line 58, in <module>\n    settings=request({'type':'load_settings','request_id':3});assert settings['speed_limit_kib']==1234,settings\n                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'type': 'settings', 'request_id': 3, 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'legal_accepted': True, 'speed_limit_kib': 0, 'hourly_quota_mib': 0, 'schedule_enabled': False, 'schedule_start': '22:00', 'schedule_end': '08:00', 'schedule_kib': 0, 'auto_category': False, 'category_dir_media': '', 'category_dir_program': '', 'category_dir_archive': '', 'category_dir_other': '', 'queue_max': 3, 'queue_profiles': [{'id': 'default', 'name': '默认队列', 'enabled': True, 'priority': 0, 'max_active': 3, 'speed_limit_kib': 0, 'schedule_enabled': False, 'start_time': '00:00', 'stop_time': '07:30', 'active_days': '1,2,3,4,5,6,7', 'completion_action': 'none'}], 'site_rules': '', 'av_scan_enabled': False, 'av_scan_command': '', 'torrent_watch': '', 'torrent_watch_enabled': False, 'download_dir': 'C:\\\\HlsQA\\\\upgrade-downloads', 'temp_dir': '', 'default_concurrency': 12, 'proxy_url': '', 'ffmpeg_path': '', 'clipboard_watch': False, 'completion_sound_enabled': False, 'progress_window_enabled': True, 'complete_popup_enabled': True, 'resume_interrupted': False, 'auto_retry_max': 0, 'existing_file_policy': 'rename', 'live_record_max_minutes': 0, 'download_subtitles': True, 'skip_ad_segments': True, 'keep_temp_files': False, 'default_user_agent': '', 'tvbox_endpoint': '', 'dark_mode': False, 'allow_duplicate': False, 'queue_auto_start_enabled': False, 'queue_auto_start_time': '00:00', 'queue_auto_stop_enabled': False, 'queue_auto_stop_time': '07:30', 'default_referer': '', 'default_origin': '', 'allowed_hosts': '', 'http_chunk_size_mb': 8, 'completion_power_action': 'none', 'start_on_login': False, 'queue_active_days': '1,2,3,4,5,6,7', 'proxy_mode': 'system', 'proxy_bypass': '', 'legal_terms_version': '2026-08-06-cn-1', 'reduce_motion': False, 'harvest_minimum_bytes': 0, 'av_scan_fail_on_threat': True, 'bt_upload_limit_kib': 1024, 'bt_max_connections': 200, 'bt_enable_dht': True, 'preferred_cast_device_id': '', 'task_column_layout': '', 'toolbar_actions': '', 'task_sort': 'queue:asc', 'default_cookie_configured': False}\n"
+}

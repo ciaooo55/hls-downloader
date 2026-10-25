@@ -1,0 +1,14 @@
+{
+  "Chromium": {
+    "archive_sha256": "6dc1af062037a3e762e30faf6cb8da9b474e296f4a33562adc4f4344e785e3b5",
+    "takeover_sha256": "d4d36f94ee75d270cea0dd8de394a24ffde5db9cb08e2f107a6b1850f2038f04",
+    "background_sha256": "b6575951b02073a339ff8af7784718a398ed4e7a2923b0ff94f3ce489e4b68ad",
+    "baseline_takeover_sha256": "9d2ceb5788d8e2c4ca760b7b9d8fb7a05fc8cdd4d1263108d5e27b82edb30000"
+  },
+  "Firefox": {
+    "archive_sha256": "abfb58466bb9af84f810f928aa07e254f09bae513fe5fcc5a9680bc94f37f9cc",
+    "takeover_sha256": "f3e38b6ed6f05a54373cedb4bd91d5dd7a9d84f1ada453c16e4ddda4b3254434",
+    "background_sha256": "6bd1813ecbdcfd2da2ee9dcea3e4b2dc01d3c0efe668e9a53913743ab228f159",
+    "baseline_takeover_sha256": "085033a61ca4ae55c4933b50b184843e855bc48358b635924444c9a2bcb906ff"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "msi_first_attempt": {
+    "exit_code": 1619,
+    "cause": "MSI passed from Sandbox shared folder; Windows Installer service cannot access that mapping. Staging on guest local disk succeeded."
+  },
+  "native_host_runner": {
+    "error": "Core spawn failed with Windows access denied (os error 5)",
+    "cause": "PowerShell Start-Process -Wait creates a process-tree Job that does not permit the Core breakaway flag. Using Start-Process -PassThru followed by WaitForExit fixed the runner; production binaries were unchanged."
+  },
+  "diagnostics_fix": "Early browser startup error referenced an events function before definition, losing its final failure report. Defer that diagnostic reference until inside the existing protected capture block.",
+  "green_edge_first_attempt": "Added fixture links wrapped the GitHub anchor. CDP bounding-box center missed actual text, producing no click intent and no handoff. Use the first DOM content quad after scrolling; failure preserved separately.",
+  "host_package_preparation": "Python default GBK decoding failed on UTF-8 reports before packaging. Explicit UTF-8 reading fixed preparation; no package was produced by that failed attempt.",
+  "upgrade_setting_key": "The fixture used read field speed_limit_kib instead of write key download_speed_limit_kib; an explicit pre-upgrade readback was added. Original failed report retained; corrected real upgrade passed.",
+  "source_archive_line_endings": "Git archive of HEAD:extension did not inherit repository-root attributes and core.autocrlf converted line endings. A byte check caught it before desktop writes. Re-export with core.autocrlf=false exactly matched all 123 tracked extension blobs and the full tracked path set."
+}

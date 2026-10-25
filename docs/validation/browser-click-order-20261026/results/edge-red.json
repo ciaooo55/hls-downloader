@@ -1,0 +1,94 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 1,
+            "observed_at_ms": 1792949232309,
+            "url": "http://127.0.0.1:63412/opaque"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "b72a5e83edb87a9c5e1e754d0c48489658edd467cc6c236bced7ad7f9008c283",
+    "HLSDownloaderNativeHost.exe": "bbcc0dd0fba23334b7955cb2f9dd65e99e1f870884e24f4258e1d0f0e15bc5a7"
+  },
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "b6575951b02073a339ff8af7784718a398ed4e7a2923b0ff94f3ce489e4b68ad",
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 227, in run\n    assert offered['offer']['url'] == url+'scripted-export', offered\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'created_at_ms': 1792949235054, 'filename': 'stale.zip', 'id': 'handoff-1a1741a2d6e-a', 'mime_type': '', 'offer': {'confidence': 0.99, 'credential_ref': 'cred-1a1741a2d67-9', 'evidence': ['trusted_download_link'], 'filename': '', 'handoff_id': 'handoff-1a1741a2d6e-a', 'local_source_path': None, 'mime_type': '', 'owner': '', 'preferred_bandwidth': 0, 'preferred_height': 0, 'replay_context_ref': None, 'request_method': 'GET', 'resource_kind': 'file', 'size': 0, 'source_page_url': 'http://127.0.0.1:63412/', 'title': '', 'url': 'http://127.0.0.1:63412/stale.zip'}, 'presentation': 'presenting', 'presentation_lease_until_ms': 1792949250086, 'presentation_owner': 'presenter-1044-1792949229331', 'request_id': 'download:d045f291-e5ee-41be-aaa0-7d5066d99b5b', 'size': 0, 'status': 'pending', 'suppression': None, 'task_id': None, 'title': ''}\n",
+  "failure_created_events": [
+    {
+      "filename": "",
+      "id": 1,
+      "observed_at_ms": 1792949232309,
+      "url": "http://127.0.0.1:63412/opaque"
+    }
+  ],
+  "failure_page_state": {
+    "activation": true,
+    "blobStage": null,
+    "errors": []
+  },
+  "failure_handoffs": [
+    {
+      "id": "handoff-1a1741a16be-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:63412/direct.zip"
+    },
+    {
+      "id": "handoff-1a1741a1d71-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:63412/cancel.zip"
+    },
+    {
+      "id": "handoff-1a1741a234b-6",
+      "status": "accepted",
+      "url": "http://127.0.0.1:63412/opaque"
+    },
+    {
+      "id": "handoff-1a1741a282e-8",
+      "status": "rejected",
+      "url": "https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe"
+    },
+    {
+      "id": "handoff-1a1741a2d6e-a",
+      "status": "pending",
+      "url": "http://127.0.0.1:63412/stale.zip"
+    }
+  ],
+  "requests": {
+    "/": 6,
+    "/favicon.ico": 6,
+    "/direct.zip": 2,
+    "/opaque": 3
+  }
+}

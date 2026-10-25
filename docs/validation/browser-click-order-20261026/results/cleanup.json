@@ -1,0 +1,29 @@
+{
+  "passed": true,
+  "script_executed": "docs/validation/live-presenter-20261025/finish-cleanup.ps1",
+  "script_exit_code": 0,
+  "removed_generated_paths": [
+    ".tool-cache",
+    "extension/node_modules",
+    "extension/.output",
+    "extension/.wxt"
+  ],
+  "generated_paths_remaining": [],
+  "removed_host_window_state_files": [
+    "window-geometry.properties",
+    "workbench.lock",
+    "workbench.wake"
+  ],
+  "host_window_state_remaining": false,
+  "product_or_sandbox_processes": [],
+  "local_branches": [
+    "main"
+  ],
+  "worktree_count": 1,
+  "desktop_assets_verified": 7,
+  "user_backup_retained": true,
+  "user_downloads_untouched": true,
+  "host_product_install_performed": false,
+  "registry_writes_performed": false,
+  "checked_at": "2026-10-26T01:48:14.6685008+08:00"
+}

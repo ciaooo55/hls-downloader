@@ -1,0 +1,78 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 1,
+            "observed_at_ms": 1792949351375,
+            "url": "http://127.0.0.1:54772/opaque"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "b72a5e83edb87a9c5e1e754d0c48489658edd467cc6c236bced7ad7f9008c283",
+    "HLSDownloaderNativeHost.exe": "bbcc0dd0fba23334b7955cb2f9dd65e99e1f870884e24f4258e1d0f0e15bc5a7"
+  },
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "b6575951b02073a339ff8af7784718a398ed4e7a2923b0ff94f3ce489e4b68ad",
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 228, in run\n    offered = pending(before)\n              ^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 218, in pending\n    return wait(lambda: next((h for h in handoffs() if h['id'] not in before and h['status'] == 'pending'), None), 'No new desktop offer', 40)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: No new desktop offer\n",
+  "failure_created_events": [
+    {
+      "filename": "",
+      "id": 1,
+      "observed_at_ms": 1792949351375,
+      "url": "http://127.0.0.1:54772/opaque"
+    }
+  ],
+  "failure_page_state": {
+    "activation": false,
+    "blobStage": null,
+    "errors": []
+  },
+  "failure_handoffs": [
+    {
+      "id": "handoff-1a1741be855-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:54772/direct.zip"
+    },
+    {
+      "id": "handoff-1a1741bef6c-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:54772/cancel.zip"
+    },
+    {
+      "id": "handoff-1a1741bf4b0-6",
+      "status": "accepted",
+      "url": "http://127.0.0.1:54772/opaque"
+    }
+  ],
+  "requests": {
+    "/": 5,
+    "/favicon.ico": 5,
+    "/direct.zip": 2,
+    "/opaque": 3
+  }
+}
