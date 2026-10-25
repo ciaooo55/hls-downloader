@@ -1,4 +1,4 @@
-"""Sandbox-only malformed HTTP range responses and queue continuation."""
+"""Sandbox-only malformed/oversized HTTP ranges and queue continuation."""
 import argparse
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +27,31 @@ def run(engine, root):
         def do_GET(self):
             name = self.path.strip('/')
             requests.append({'path': self.path, 'range': self.headers.get('Range')})
+            if name.endswith('/playlist.m3u8'):
+                manifest = (b'#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n'
+                            b'#EXTINF:1,\n#EXT-X-BYTERANGE:8@0\nsegment.bin\n#EXT-X-ENDLIST\n')
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(manifest)))
+                self.end_headers()
+                self.wfile.write(manifest)
+                return
+            if name.endswith('/segment.bin'):
+                chunked = name.startswith('oversize-chunked/')
+                framing = b'Transfer-Encoding: chunked' if chunked else b'Content-Length: 64'
+                # 只有客户端主动放弃错误响应才结束，避免正常 EOF 掩盖无界读取。
+                self.connection.settimeout(35)
+                try:
+                    self.connection.sendall(b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/8\r\n' +
+                        framing + b'\r\nConnection: close\r\n\r\n' +
+                        (b'9\r\n123456789\r\n' if chunked else b'123456789'))
+                    closed = self.connection.recv(1) == b''
+                except (ConnectionResetError, BrokenPipeError):
+                    closed = True
+                except TimeoutError:
+                    closed = False
+                requests.append({'path': self.path, 'client_closed_before_eof': closed})
+                self.close_connection = True
+                return
             if name in invalid:
                 self.connection.sendall(b'HTTP/1.1 206 Partial Content\r\nContent-Range: ' +
                     invalid[name] + b'\r\nContent-Length: 8\r\nConnection: close\r\n\r\n01234567')
@@ -56,16 +81,18 @@ def run(engine, root):
             core.call({'type': 'store_settings', 'request_id': 10,
                        'values': {'queue_max_active': 1}})
 
-            def create(path, filename):
+            def create(path, filename, resource_kind='file'):
                 reply = core.command({'kind': 'create_task', 'spec': {
                     'url': f'http://127.0.0.1:{server.server_port}/{path}',
-                    'filename': filename, 'resource_kind': 'file',
+                    'filename': filename, 'resource_kind': resource_kind,
                     'proxy': 'hls-downloader://direct-proxy'}})
                 return next(e['event']['snapshot']['task_id'] for e in reply['events']
                             if e['event']['kind'] == 'task_created')
 
-            for name in invalid:
-                bad = create(name, name + '.bin')
+            for name in [*invalid, 'oversize-length', 'oversize-chunked']:
+                oversized = name.startswith('oversize-')
+                bad = create(name + '/playlist.m3u8' if oversized else name,
+                             name + '.bin', 'hls' if oversized else 'file')
                 good = create('good', name + '-following.bin')
 
                 def terminal():
@@ -75,6 +102,10 @@ def run(engine, root):
 
                 tasks = wait(terminal, 30)
                 assert tasks[bad]['status'] == 'failed', tasks[bad]
+                if oversized:
+                    assert 'byte range' in json.dumps(tasks[bad]), tasks[bad]
+                    wait(lambda: any(r.get('client_closed_before_eof')
+                                     for r in requests if r['path'] == '/' + name + '/segment.bin'))
                 assert tasks[good]['status'] == 'completed', tasks[good]
                 output = Path(tasks[good]['output_path'])
                 assert output.read_bytes() == payload
@@ -82,7 +113,7 @@ def run(engine, root):
                     core.command({'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'})
                     wait(lambda: not (root/'downloads/.hls-tasks'/tid).exists())
                 assert not output.exists()
-                results.append({'case': name, 'malformed_task_failed': True,
+                results.append({'case': name, 'fault_task_failed': True,
                                 'following_task_sha256': hashlib.sha256(payload).hexdigest(),
                                 'tasks_files_and_caches_removed': True})
         assert 'panicked at' not in (root/'core.log').read_text(encoding='utf-8', errors='replace')

@@ -488,6 +488,7 @@ pub fn build_job(
         body_path: PathBuf::from(&spec.body_path),
         mirrors: spec.mirrors.clone(),
         replay_json: String::new(),
+        curl_body_limit: None,
     };
     Ok((job, paths))
 }
@@ -5362,6 +5363,7 @@ fn harvest_page(
                     body_path: PathBuf::new(),
                     mirrors: Vec::new(),
                     replay_json: String::new(),
+                    curl_body_limit: None,
                 };
                 let size = crate::http_engine::probe_resource(&job)
                     .ok()

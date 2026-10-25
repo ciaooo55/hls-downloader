@@ -1,0 +1,159 @@
+{
+  "cases": [
+    {
+      "case": "utf8",
+      "fault_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    },
+    {
+      "case": "invalid-utf8",
+      "fault_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    },
+    {
+      "case": "ascii",
+      "fault_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    },
+    {
+      "case": "oversize-length",
+      "fault_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    },
+    {
+      "case": "oversize-chunked",
+      "fault_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    }
+  ],
+  "requests": [
+    {
+      "path": "/utf8",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/utf8",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    },
+    {
+      "path": "/invalid-utf8",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/invalid-utf8",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    },
+    {
+      "path": "/ascii",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/ascii",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    },
+    {
+      "path": "/oversize-length/playlist.m3u8",
+      "range": null
+    },
+    {
+      "path": "/oversize-length/segment.bin",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/oversize-length/segment.bin",
+      "client_closed_before_eof": true
+    },
+    {
+      "path": "/oversize-length/segment.bin",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/oversize-length/segment.bin",
+      "client_closed_before_eof": true
+    },
+    {
+      "path": "/oversize-length/segment.bin",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/oversize-length/segment.bin",
+      "client_closed_before_eof": true
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    },
+    {
+      "path": "/oversize-chunked/playlist.m3u8",
+      "range": null
+    },
+    {
+      "path": "/oversize-chunked/segment.bin",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/oversize-chunked/segment.bin",
+      "client_closed_before_eof": true
+    },
+    {
+      "path": "/oversize-chunked/segment.bin",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/oversize-chunked/segment.bin",
+      "client_closed_before_eof": true
+    },
+    {
+      "path": "/oversize-chunked/segment.bin",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/oversize-chunked/segment.bin",
+      "client_closed_before_eof": true
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    }
+  ],
+  "no_core_panic": true,
+  "passed": true,
+  "engine_sha256": "8d9200cb821c899f604cf8b420eb742e6650df3a840f55dbcab9f37ab3e77f9e"
+}

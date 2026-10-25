@@ -944,6 +944,7 @@ fn download_one(
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
         replay_json: crate::credentials::scoped_replay_json(),
+        curl_body_limit: None,
     };
     run_job(&job).map_err(|error| error.to_string())?;
     Ok(output.to_path_buf())

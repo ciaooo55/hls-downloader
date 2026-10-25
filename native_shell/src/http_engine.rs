@@ -138,6 +138,10 @@ pub struct Job {
     /// per request URL so CDN hops do not keep the page Cookie.
     #[serde(default)]
     pub replay_json: String,
+    /// 已知媒体范围的浏览器传输正文上限；按解码后的临时文件大小检查。
+    /// 普通文件留空，保留服务器不支持 Range 时的整包回退。
+    #[serde(default)]
+    pub curl_body_limit: Option<u64>,
 }
 
 fn default_connections() -> usize {
@@ -849,6 +853,7 @@ fn fetch_bytes_with_transport(
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
         replay_json: String::new(),
+        curl_body_limit: None,
     };
     let result = (|| {
         let fetched = if browser_first {
@@ -940,6 +945,7 @@ fn fetch_bytes_range_with_transport(
             body_path: PathBuf::new(),
             mirrors: Vec::new(),
             replay_json: String::new(),
+            curl_body_limit: Some(length),
         };
         let range = format!("bytes={start}-{end}");
         let fetched = if browser_first {
@@ -966,8 +972,16 @@ fn fetch_bytes_range_with_transport(
                 ))
             }
         }
+        if let Some(size) = fetched.content_length {
+            if size != length {
+                return Err(EngineError::Failed(format!(
+                    "byte range Content-Length {size} != {length}"
+                )));
+            }
+        }
         let mut body = Vec::new();
-        let mut reader = fetched.body;
+        // 多读一个字节用于判定超长；不能等错误响应结束后才验证大小。
+        let mut reader = fetched.body.take(length.saturating_add(1));
         if let Err(error) = reader.read_to_end(&mut body) {
             check_control(&job.control)?;
             return Err(EngineError::Failed(error.to_string()));
@@ -2426,6 +2440,10 @@ fn fetch_via_curl_impersonate(
             .arg("-w")
             .arg("%{http_code}");
         command.arg("-A").arg(request_user_agent(&headers));
+        if job.curl_body_limit.is_some() {
+            // 让既有进程等待循环能看到已解码正文，不能留在 curl 的写缓冲中。
+            command.arg("--no-buffer");
+        }
         for (key, value) in &headers {
             if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
                 continue;
@@ -2464,6 +2482,15 @@ fn fetch_via_curl_impersonate(
                 let _ = child.wait();
                 return Err(error);
             }
+            if let Some(limit) = job.curl_body_limit {
+                if fs::metadata(&body_path).is_ok_and(|meta| meta.len() > limit) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(EngineError::Failed(format!(
+                        "byte range response body exceeds {limit} bytes"
+                    )));
+                }
+            }
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => {
@@ -2487,6 +2514,13 @@ fn fetch_via_curl_impersonate(
             }
         };
         drop(child);
+        if let Some(limit) = job.curl_body_limit {
+            if fs::metadata(&body_path).is_ok_and(|meta| meta.len() > limit) {
+                return Err(EngineError::Failed(format!(
+                    "byte range response body exceeds {limit} bytes"
+                )));
+            }
+        }
         // HTTP 200 只证明收到响应头；curl 非零退出仍可能表示正文截断，不能交给 HLS 当成完整分片。
         if !exit.success() {
             let error = fs::read_to_string(&error_path).unwrap_or_default();
@@ -3622,6 +3656,7 @@ mod tests {
             body_path,
             mirrors: Vec::new(),
             replay_json: String::new(),
+            curl_body_limit: None,
         }
     }
 
@@ -3759,6 +3794,64 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .contains(&3));
+    }
+
+    #[test]
+    fn hls_byte_range_rejects_oversize_body_before_eof() {
+        for (use_proxy, declared_length) in [(false, false), (false, true), (true, false), (true, true)] {
+            if use_proxy && !cfg!(windows) {
+                continue;
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let proxy = if use_proxy {
+                url.clone()
+            } else {
+                String::new()
+            };
+            let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let framing = if declared_length {
+                    "Content-Length: 64\r\n"
+                } else {
+                    "Transfer-Encoding: chunked\r\n"
+                };
+                let _ = write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/8\r\n{framing}Connection: close\r\n\r\n");
+                let _ = stream.write_all(if declared_length {
+                    b"123456789"
+                } else {
+                    b"9\r\n123456789\r\n"
+                });
+                sent_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                if !declared_length {
+                    let _ = stream.write_all(b"0\r\n\r\n");
+                }
+            });
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let client = thread::spawn(move || {
+                let result = fetch_hls_bytes_range(&url, &HashMap::new(), &proxy, 0, 8);
+                done_tx.send(result).unwrap();
+            });
+            sent_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let result = done_rx.recv_timeout(Duration::from_secs(3));
+            release_tx.send(()).unwrap();
+            server.join().unwrap();
+            client.join().unwrap();
+            let error = result
+                .expect("oversized body must be rejected before server EOF")
+                .unwrap_err();
+            assert!(error.to_string().contains("byte range"), "{error}");
+        }
     }
 
     #[test]
@@ -3968,6 +4061,7 @@ mod tests {
                 body_path: PathBuf::new(),
                 mirrors: Vec::new(),
                 replay_json: String::new(),
+                curl_body_limit: None,
             },
             dir,
         )
@@ -5025,6 +5119,7 @@ mod tests {
             body_path: PathBuf::new(),
             mirrors: Vec::new(),
             replay_json: String::new(),
+            curl_body_limit: None,
         };
         assert_eq!(request_method(&job), "GET");
         job.method = "POST".into();
@@ -5790,6 +5885,75 @@ mod tests {
                     !temporary.exists(),
                     "successful curl temp directory must be released"
                 );
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    fn curl_transport_range_body_limit_uses_decoded_bytes_and_stops_before_eof() {
+        use std::sync::mpsc;
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        assert!(curl_impersonate_exe().is_some(), "bundled curl required");
+        for case in ["gzip-valid", "gzip-oversize", "chunked-oversize", "length-oversize"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                // 固定 gzip 夹具：线上压缩长度大于范围长度，合法响应不可误判。
+                let gzip_valid: &[u8] = &[31,139,8,0,0,0,0,0,2,10,51,52,50,54,49,53,51,183,0,0,175,218,224,154,8,0,0,0];
+                let gzip_oversize: &[u8] = &[31,139,8,0,0,0,0,0,2,10,51,52,50,54,49,53,51,183,176,4,0,38,57,244,203,9,0,0,0];
+                let (framing, body) = match case {
+                    "gzip-valid" => ("Content-Encoding: gzip\r\nContent-Length: 28\r\n", gzip_valid),
+                    "gzip-oversize" => ("Content-Encoding: gzip\r\nContent-Length: 29\r\n", gzip_oversize),
+                    "chunked-oversize" => ("Transfer-Encoding: chunked\r\n", &b"9\r\n123456789\r\n"[..]),
+                    _ => ("Content-Length: 64\r\n", &b"123456789"[..]),
+                };
+                write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/8\r\n{framing}Connection: close\r\n\r\n").unwrap();
+                stream.write_all(body).unwrap();
+                ready_tx.send(()).unwrap();
+                if !case.starts_with("gzip-") {
+                    let _ = release_rx.recv();
+                }
+            });
+            let (mut job, dir) = temp_job(&url, true, 0, 1);
+            job.curl_body_limit = Some(8);
+            let worker_job = job.clone();
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                let _ = done_tx.send(fetch_via_curl_impersonate(&worker_job, Some("bytes=0-7")));
+            });
+            ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let result = done_rx.recv_timeout(Duration::from_secs(3));
+            let _ = release_tx.send(());
+            server.join().unwrap();
+            worker.join().unwrap();
+            let result = result.expect("curl must reject oversize before EOF").expect("curl available");
+            if case == "gzip-valid" {
+                let mut fetched = result.unwrap();
+                let mut body = Vec::new();
+                fetched.body.read_to_end(&mut body).unwrap();
+                assert_eq!(body, b"12345678");
+                assert_eq!(fetched.content_length, Some(8));
+            } else {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!("{case}: oversized response accepted"),
+                };
+                assert!(error.to_string().contains("byte range response body exceeds 8"), "{case}: {error}");
             }
             fs::remove_dir_all(dir).unwrap();
         }

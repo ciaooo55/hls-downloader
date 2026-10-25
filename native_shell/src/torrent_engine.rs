@@ -585,6 +585,7 @@ fn download_torrent_with_telemetry(
                 body_path: PathBuf::new(),
                 mirrors: Vec::new(),
                 replay_json: String::new(),
+                curl_body_limit: None,
             };
             last = match run_job(&job) {
                 Ok(()) => match verify_web_seed_pieces(output, &meta) {

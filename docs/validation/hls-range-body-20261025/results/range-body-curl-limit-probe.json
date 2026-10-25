@@ -1,0 +1,20 @@
+[
+  {
+    "case": "valid-gzip",
+    "exit": 63,
+    "body_bytes": 0,
+    "stderr": "curl: (63) Maximum file size exceeded\r\n"
+  },
+  {
+    "case": "oversize-gzip",
+    "exit": 63,
+    "body_bytes": 0,
+    "stderr": "curl: (63) Maximum file size exceeded\r\n"
+  },
+  {
+    "case": "oversize-chunked",
+    "exit": 63,
+    "body_bytes": 8,
+    "stderr": "curl: (63) Exceeded the maximum allowed file size (8) with 8 bytes\r\n"
+  }
+]

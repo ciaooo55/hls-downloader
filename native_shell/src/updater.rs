@@ -215,6 +215,7 @@ pub fn download_installer(info: &UpdateInfo) -> Result<std::path::PathBuf, Strin
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
         replay_json: String::new(),
+        curl_body_limit: None,
     };
     if let Err(error) = crate::http_engine::run_job(&job) {
         let _ = std::fs::remove_file(&part);
