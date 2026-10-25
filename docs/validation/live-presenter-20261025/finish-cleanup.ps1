@@ -7,7 +7,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml'))) {
 $delivery = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader\最新-20261025'
 $installer = Join-Path $delivery 'HLSDownloader-7.0.3-20261025-未签名.msi'
 if (-not (Test-Path -LiteralPath $installer) -or
-    (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '08390b4920a5bbc8ecec54309e4810c48d0d61ffe368410f71853297463627e7') {
+    (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '39f38d9e31df06fdc0a24ad39c2e8085fc6309d6b4b489191bee2e1068fefe27') {
     throw '桌面成品不存在或哈希不同，停止清理。'
 }
 if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyContinue) {
@@ -15,6 +15,10 @@ if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyC
 }
 $scratch = Join-Path $repo '.tool-cache\live-presenter-20261024'
 $relativePaths = @(
+    '.tool-cache\build-cache'
+    '.tool-cache\navigation-20261025'
+    'desktop_ui\.gradle'
+    'desktop_ui\.kotlin'
     'extension\node_modules'
     'extension\.output'
     'extension\.wxt'

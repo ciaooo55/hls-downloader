@@ -5,6 +5,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import traceback
 from urllib.request import Request, urlopen
@@ -45,6 +47,63 @@ def free_port():
     with socket.socket() as server:
         server.bind(('127.0.0.1', 0))
         return server.getsockname()[1]
+
+
+def verify_http_retry(ipc, download_dir):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status = int(self.path.strip('/').split('-')[0])
+            self.send_response(206 if status == 200 else status)
+            if status == 200:
+                self.send_header('Content-Range', 'bytes 0-0/1')
+            self.send_header('Content-Length', '1' if status == 200 else '0')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            if status == 200:
+                self.wfile.write(b'x')
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cases = []
+    try:
+        send(ipc, {'type': 'store_settings', 'request_id': 100, 'values': {
+            'auto_retry_failed_max': 2, 'queue_max_active': 1}})
+        for status, attempts in ((403, 1), (503, 3)):
+            ids = []
+            for code in (status, 200):
+                created = send(ipc, {'type': 'command', 'request_id': 101, 'command': {
+                    'kind': 'create_task', 'spec': {
+                        'url': f'http://127.0.0.1:{server.server_port}/{code}-{status}.bin',
+                        'filename': f'retry-{code}-{status}.bin', 'resource_kind': 'file',
+                        'expected_size': 1, 'etag': '"retry-fixture"', 'concurrency': 1,
+                        'proxy': 'hls-downloader://direct-proxy'}}})
+                ids.append(next(e['event']['snapshot']['task_id'] for e in created['events']
+                                if e['event']['kind'] == 'task_created'))
+            completed = wait_task(ipc, ids[1], lambda t: t['status'] in ('completed', 'failed'), 102)
+            assert completed['status'] == 'completed', completed
+            assert Path(completed['output_path']).read_bytes() == b'x'
+            snapshots = send(ipc, {'type': 'snapshot', 'request_id': 103})['tasks']
+            failed = next(task for task in snapshots if task['task_id'] == ids[0])
+            assert failed['status'] == 'failed' and failed['http_status'] == status, failed
+            assert failed['error_attempt'] == attempts and 'retry' in failed['available_actions'], failed
+            for tid in ids:
+                send(ipc, {'type': 'command', 'request_id': 104, 'command': {
+                    'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
+                assert not (download_dir/'.hls-tasks'/tid).exists(), tid
+            assert not Path(completed['output_path']).exists()
+            cases.append({'http_status': status, 'task_attempts': attempts,
+                          'following_download_verified': True, 'test_tasks_and_files_removed': True})
+    finally:
+        send(ipc, {'type': 'store_settings', 'request_id': 105, 'values': {
+            'auto_retry_failed_max': 0, 'queue_max_active': 3}})
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return cases
 
 
 def run(args):
@@ -178,6 +237,9 @@ def run(args):
             deleted = send(ipc, {'type': 'command', 'request_id': 4, 'command': {
                 'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
             assert 'events' in deleted and not output.exists(), deleted
+            if args.verify_http_retry:
+                record('installed release Engine respects HTTP retry policy and removes test caches',
+                       verify_http_retry(ipc, expected))
         report['ui_exercised'] = not args.core_only
         if not args.core_only:
             started = time.monotonic()
@@ -299,4 +361,5 @@ if __name__ == '__main__':
                         help='JSON mapping installation-relative paths to tested SHA256 values')
     parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
     parser.add_argument('--verify-browser-color', action='store_true', help='Verify footer pixels before/after a simulated browser handshake')
+    parser.add_argument('--verify-http-retry', action='store_true', help='Verify permanent/transient HTTP failures and queue continuation with the installed Engine')
     raise SystemExit(run(parser.parse_args()))

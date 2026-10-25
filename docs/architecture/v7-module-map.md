@@ -9,7 +9,7 @@
 | 下载缓存 | `download_worker.rs` 的完成和任务删除路径 | 成品发布和字幕处理后按保留临时文件设置清理；失败/暂停保留续传数据；删除任务按操作处理缓存和成品 |
 | 主工作台 | `desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt`、`Protocol.kt` | 新建、批量、抓取、队列、搜索筛选、详情、选择操作和错误反馈；设置通过 Core 持久化 |
 | 内置播放器 | 同目录 `VideoPlayer.kt`；Core player 会话与媒体服务 | 主窗口内浮层、时间轴、缓冲、音量、倍速、音轨/字幕、全屏/画中画；下载中播放，完成后原会话切换成品 |
-| 浏览器插件 | `extension/entrypoints`、`extension/lib` | 媒体发现、清晰度选择、下载接管、复制、字幕设置及推送；实际传输交给 Core |
+| 浏览器插件 | `extension/entrypoints`、`extension/lib` | 媒体发现、清晰度选择、下载接管、复制、字幕会话控制及推送；字幕服务和密钥在主程序设置，实际传输交给 Core |
 | Native Messaging | `native_host.rs`、`native_host_registration.rs` | 浏览器与 Core 之间的有界消息及精确 Host 注册 |
 | 确认/进度/完成窗口 | `presenter_ui/src/hot_main.rs` | 独立提示窗口，通过同一 Core 获取任务和发送操作 |
 | 字幕 | Core 字幕链路、插件字幕入口 | 音频预取和翻译状态；本轮没有上传音频或重新验收真实云端服务 |
