@@ -32,7 +32,12 @@ struct IdleHandlePool {
 
 impl IdleHandlePool {
     fn take(&mut self, key: &str) -> Option<usize> {
-        self.idle.get_mut(key).and_then(Vec::pop)
+        let bucket = self.idle.get_mut(key)?;
+        let handle = bucket.pop();
+        if bucket.is_empty() {
+            self.idle.remove(key);
+        }
+        handle
     }
 
     fn put(&mut self, key: String, handle: usize) -> bool {
@@ -2766,7 +2771,10 @@ fn parse_header_meta(head: &str) -> HeaderMeta {
 
 fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
     let mut text = value.trim();
-    if text.len() >= 5 && text[..5].eq_ignore_ascii_case("bytes") {
+    if text
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bytes"))
+    {
         text = text[5..].trim();
     }
     let (range, total_text) = text.split_once('/')?;
@@ -3723,11 +3731,21 @@ mod tests {
         assert_eq!(pool.take("a"), Some(12));
         assert_eq!(pool.take("a"), Some(11));
         assert!(pool.take("a").is_none());
+        assert!(
+            pool.idle.is_empty(),
+            "checked-out origins must not accumulate"
+        );
         assert!(!pool.put("a".into(), 0));
         for index in 1..=CONNECT_POOL_PER_KEY {
             assert!(pool.put("full".into(), index));
         }
         assert!(!pool.put("full".into(), 99));
+        for index in 0..1024 {
+            let key = format!("origin-{index}");
+            assert!(pool.put(key.clone(), 100));
+            assert_eq!(pool.take(&key), Some(100));
+        }
+        assert_eq!(pool.idle.len(), 1, "only the full idle bucket remains");
     }
 
     #[test]
@@ -4296,6 +4314,9 @@ mod tests {
         assert!(require_content_range_start(Some("bytes 4-9/10"), 4).is_ok());
         assert!(require_content_range_start(Some("bytes 0-9/10"), 4).is_err());
         assert!(require_content_range_start(None, 0).is_err());
+        for header in ["byte界 0-7/8", "🙂🙂", "byte� 0-7/8"] {
+            assert_eq!(parse_content_range(header), None);
+        }
     }
 
     #[test]

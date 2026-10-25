@@ -1,0 +1,138 @@
+{
+  "passed": true,
+  "samples": [
+    {
+      "variant": "baseline-a",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8266888999999651,
+      "cpu_seconds": 0.109375,
+      "rss_bytes": 15163392,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-b",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8392344000000094,
+      "cpu_seconds": 0.15625,
+      "rss_bytes": 14708736,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "candidate",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8221288999999956,
+      "cpu_seconds": 0.09375,
+      "rss_bytes": 14737408,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-b",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8429704000000129,
+      "cpu_seconds": 0.078125,
+      "rss_bytes": 14766080,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "candidate",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8154028000000153,
+      "cpu_seconds": 0.15625,
+      "rss_bytes": 14872576,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-a",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8488247999999885,
+      "cpu_seconds": 0.078125,
+      "rss_bytes": 14774272,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "candidate",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8164577000000008,
+      "cpu_seconds": 0.0625,
+      "rss_bytes": 14766080,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-a",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8678136999999992,
+      "cpu_seconds": 0.0625,
+      "rss_bytes": 14807040,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-b",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 200,
+      "transport": "WinHTTP loopback proxy",
+      "elapsed_seconds": 0.8785900000000311,
+      "cpu_seconds": 0.171875,
+      "rss_bytes": 14778368,
+      "temp_files_created": 0
+    }
+  ],
+  "medians": {
+    "PROBE-0": {
+      "baseline-a": {
+        "elapsed_seconds": 0.8488247999999885,
+        "cpu_seconds": 0.078125,
+        "rss_bytes": 14807040
+      },
+      "baseline-b": {
+        "elapsed_seconds": 0.8429704000000129,
+        "cpu_seconds": 0.15625,
+        "rss_bytes": 14766080
+      },
+      "candidate": {
+        "elapsed_seconds": 0.8164577000000008,
+        "cpu_seconds": 0.09375,
+        "rss_bytes": 14766080
+      }
+    }
+  },
+  "scope": "Core-only WinHTTP loopback proxy probes; real IPC and SQLite commits; loopback; not TLS, full-product or IDM/AB parity",
+  "sha256": {
+    "baseline-a": "61b3959a123f4e83bcbeecd99603ec1d5873fd641d27907c90bb4145bfb3bdf2",
+    "baseline-b": "61b3959a123f4e83bcbeecd99603ec1d5873fd641d27907c90bb4145bfb3bdf2",
+    "candidate": "14827b83e4bcee40230da505a044f74a3d7fd19e069621b2702f82ccaa1db44c"
+  }
+}

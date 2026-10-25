@@ -1,0 +1,7 @@
+
+running 3 tests
+test http_engine::tests::winhttp_media_entity_stop_preserves_pause_and_cancel ... ok
+test http_engine::tests::winhttp_proxy_downloads_ranges_posts_and_head_without_changing_bytes ... ok
+test http_engine::tests::winhttp_stalled_headers_body_and_chunked_reads_can_stop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 639 filtered out; finished in 0.94s

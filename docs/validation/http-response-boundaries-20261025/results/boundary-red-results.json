@@ -1,0 +1,10 @@
+[
+    {
+        "exit_code":  101,
+        "test":  "origin_connect_pool_does_not_share_live_handles"
+    },
+    {
+        "exit_code":  101,
+        "test":  "content_range_parser_accepts_rfc_and_bare_forms"
+    }
+]

@@ -1,0 +1,22 @@
+
+running 1 test
+boundary-red-tests.exe :
+At C:\HlsQA\sequential-command.ps1:11 char:5
++     & C:\HlsQA\boundary-red-tests.exe "http_engine::tests::$name" --e ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+thread 'http_engine::tests::content_range_parser_accepts_rfc_and_bare_forms'
+(3252) panicked at src\http_engine.rs:2769:31:
+end byte index 5 is not a char boundary; it is inside '界' (bytes 4..7 of
+string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test http_engine::tests::content_range_parser_accepts_rfc_and_bare_forms ... FAILED
+
+failures:
+
+failures:
+    http_engine::tests::content_range_parser_accepts_rfc_and_bare_forms
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 641 filtered out; finished in 0.00s

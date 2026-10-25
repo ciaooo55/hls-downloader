@@ -15,7 +15,7 @@ from compare_v7_sequential_io import transfer
 from smoke_v7_resource_boundaries import Core
 
 
-def probe(engine, root, padding):
+def probe(engine, root, padding, *, winhttp=False):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -38,6 +38,9 @@ def probe(engine, root, padding):
     temporary.mkdir(parents=True)
     try:
         with patch.dict(os.environ, {'TEMP': str(temporary), 'TMP': str(temporary)}), Core(engine, root) as core:
+            if winhttp:
+                core.call({'type': 'store_settings', 'request_id': 10,
+                           'values': {'proxy_url': origin, 'proxy_mode': 'manual'}})
             before_files = set(temporary.rglob('*'))
             def request():
                 response = core.command({'kind': 'harvest_page', 'url': origin+'/watch',
@@ -51,9 +54,11 @@ def probe(engine, root, padding):
                 request()
             cpu_before = sum(core.ps.cpu_times()[:2])
             started = time.perf_counter()
-            for _ in range(20):
+            probes = 200 if winhttp else 20
+            for _ in range(probes):
                 request()
-            return {'header_padding_bytes': padding, 'probes': 20,
+            return {'header_padding_bytes': padding, 'probes': probes,
+                    'transport': 'WinHTTP loopback proxy' if winhttp else 'raw HTTP',
                     'elapsed_seconds': time.perf_counter()-started,
                     'cpu_seconds': sum(core.ps.cpu_times()[:2])-cpu_before,
                     'rss_bytes': core.ps.memory_info().rss,
@@ -73,12 +78,14 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--probe-only', action='store_true')
     mode.add_argument('--large-get-only', action='store_true')
+    mode.add_argument('--winhttp-probes', action='store_true')
     args = parser.parse_args()
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     engines = {'baseline-a': args.baseline, 'baseline-b': args.baseline,
                'candidate': args.candidate}
     result = {'passed': False, 'samples': [], 'medians': {},
-              'scope': ('Core-only resource size probes; real IPC and SQLite commits' if args.probe_only else
+              'scope': ('Core-only WinHTTP loopback proxy probes; real IPC and SQLite commits' if args.winhttp_probes else
+                        'Core-only resource size probes; real IPC and SQLite commits' if args.probe_only else
                         'Core-only 128 MiB GET and POST without server Range support') +
                        '; loopback; not TLS, full-product or IDM/AB parity',
               'sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -87,18 +94,19 @@ def main():
     names = list(engines)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     try:
-        methods = ('PROBE',) if args.probe_only else ('GET', 'POST')
+        methods = ('PROBE',) if args.probe_only or args.winhttp_probes else ('GET', 'POST')
         if args.large_get_only:
             methods = ('GET',)
         for method in methods:
-            for padding in ((32768,) if args.large_get_only else (0, 32768)):
+            for padding in ((0,) if args.winhttp_probes else (32768,) if args.large_get_only else (0, 32768)):
                 key = f'{method}-{padding}'
                 for number in range(3):
                     for name in names[number:] + names[:number]:
                         folder = root/f'{key}-{number}-{name}'
-                        value = (probe(engines[name], folder, padding) if args.probe_only else
+                        value = (probe(engines[name], folder, padding, winhttp=args.winhttp_probes)
+                                 if args.probe_only or args.winhttp_probes else
                                  transfer(engines[name], folder, method, 65536, header_bytes=padding))
-                        if args.probe_only and name == 'candidate':
+                        if (args.probe_only or args.winhttp_probes) and name == 'candidate':
                             assert value['temp_files_created'] == 0, value
                         result['samples'].append({'variant': name, 'round': number+1,
                                                   'method': method, **value})

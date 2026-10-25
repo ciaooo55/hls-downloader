@@ -1,0 +1,75 @@
+{
+  "cases": [
+    {
+      "case": "utf8",
+      "malformed_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    },
+    {
+      "case": "invalid-utf8",
+      "malformed_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    },
+    {
+      "case": "ascii",
+      "malformed_task_failed": true,
+      "following_task_sha256": "8a3fad25a9f59eabe413e81f1e00e8fc4da1b76c6886a51dcbc956e2c5b37cbb",
+      "tasks_files_and_caches_removed": true
+    }
+  ],
+  "requests": [
+    {
+      "path": "/utf8",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/utf8",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    },
+    {
+      "path": "/invalid-utf8",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/invalid-utf8",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    },
+    {
+      "path": "/ascii",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/ascii",
+      "range": "bytes=0-7"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/good",
+      "range": "bytes=0-90111"
+    }
+  ],
+  "no_core_panic": true,
+  "passed": true,
+  "engine_sha256": "14827b83e4bcee40230da505a044f74a3d7fd19e069621b2702f82ccaa1db44c"
+}
