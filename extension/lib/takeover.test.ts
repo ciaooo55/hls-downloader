@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { findEarlyBrowserTakeoverByUrl, pauseBrowserDownload, refreshedDownload, type EarlyBrowserTakeover } from '../entrypoints/background'
+import { completeBrowserTakeover, findEarlyBrowserTakeoverByUrl, pauseBrowserDownload, refreshedDownload, type EarlyBrowserTakeover } from '../entrypoints/background'
 
 vi.hoisted(() => {
   ;(globalThis as Record<string, unknown>).defineBackground = (main: unknown) => ({ main })
@@ -8,8 +8,11 @@ vi.hoisted(() => {
 vi.mock('wxt/browser', () => ({
   browser: {
     contextMenus: {},
-    downloads: { pause: vi.fn(), search: vi.fn() },
-    storage: { session: { get: vi.fn().mockResolvedValue({}), set: vi.fn().mockResolvedValue(undefined) } },
+    downloads: { pause: vi.fn(), search: vi.fn(), cancel: vi.fn(), erase: vi.fn(), removeFile: vi.fn() },
+    storage: {
+      session: { get: vi.fn().mockResolvedValue({}), set: vi.fn().mockResolvedValue(undefined) },
+      local: { get: vi.fn(), set: vi.fn() },
+    },
   },
 }))
 import { browser } from 'wxt/browser'
@@ -93,6 +96,31 @@ describe('browser transfer parking before desktop takeover', () => {
     } finally {
       await vi.runAllTimersAsync()
       await refresh
+    }
+  })
+
+  it('removes an acknowledged browser copy while follow-up storage is still writing', async () => {
+    vi.useFakeTimers()
+    let release!: () => void
+    const write = new Promise<void>(resolve => { release = resolve })
+    vi.mocked(browser.storage.local.get).mockImplementation(() => Promise.resolve({}))
+    vi.mocked(browser.storage.session.get).mockImplementation(() => Promise.resolve({}))
+    vi.mocked(browser.storage.local.set).mockImplementationOnce(() => write)
+      .mockResolvedValue(undefined)
+    let current = item()
+    vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([current]))
+    vi.mocked(browser.downloads.cancel).mockImplementation(async () => {
+      current = item({ state: 'interrupted' })
+    })
+    vi.mocked(browser.downloads.erase).mockImplementation(() => Promise.resolve([42]))
+    const cleanup = completeBrowserTakeover(current, 'slow-storage-handoff')
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(browser.downloads.erase).toHaveBeenCalledWith({ id: 42 })
+    } finally {
+      release()
+      await cleanup
+      vi.clearAllTimers()
     }
   })
 })

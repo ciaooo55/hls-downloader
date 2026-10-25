@@ -446,8 +446,8 @@ async function trackHandoff(handoffId: string, resourceId = '', tabId?: number, 
   const tracked: TrackedHandoff = { id, resourceId, selectionKey, tabId, status: 'pending', checkedAt: 0, failures: 0 }
   trackedHandoffs.set(id, tracked)
   pruneTrackedHandoffs()
-  await persistHandoffTracker()
   scheduleHandoffPoll()
+  await persistHandoffTracker()
   return tracked
 }
 
@@ -992,7 +992,10 @@ async function resourcePayload(
         path_contexts: { ...(requestContexts[origin]?.path_contexts as Record<string, unknown> || {}), [path]: context },
       }
     }
-    const contexts = requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl)
+    // 普通文件只重放自身请求；其他媒体/CDN 的身份只供 HLS/DASH 分片使用。
+    const contexts = resource.kind === 'hls' || resource.kind === 'dash'
+      ? requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl)
+      : []
     // 最后应用所选媒体；同域的其他音轨/分片保留自己的目录请求身份。
     for (const context of contexts.filter(context => context.requestId !== chain?.requestId)) {
       await addRequestContext(context.finalUrl, context.requestHeaders)
@@ -1114,7 +1117,7 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
   // Handoff creation is the acknowledgement. Presentation happens in the
   // desktop queue and must never hold the browser button at “发送中”.
   // 桌面已确认接收后，跟踪缓存写入失败不能把下载重新交还浏览器。
-  await trackHandoff(String(handoff.id), resource.id, resource.tabId, downloadSelectionKey(resource))
+  void trackHandoff(String(handoff.id), resource.id, resource.tabId, downloadSelectionKey(resource))
     .catch(error => console.warn('HLS Downloader handoff tracking unavailable', error))
   return response
 }
@@ -1178,6 +1181,14 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Prom
     return false
   }
   return true
+}
+
+export async function completeBrowserTakeover(item: Browser.downloads.DownloadItem, handoffId: string): Promise<void> {
+  // 回执已确认桌面接管；持久化清理责任与取消并行，不能让慢存储拖住浏览器副本。
+  const followUp = rememberPausedHandoffFollowUp(item.id, handoffId)
+  const removed = await removeBrowserDownload(item)
+  await followUp
+  if (removed) await pausedFollowUpStore.drop(handoffId)
 }
 
 function downloadRequestItem(
@@ -1679,14 +1690,12 @@ export default defineBackground(() => {
           const handoffId = String(response?.handoff?.id || restored?.id || '')
           // 持久回执即为交接边界；后续取消/重试属于桌面，不再启动浏览器副本。
           browserOwnedByHandoff = true
-          await rememberPausedHandoffFollowUp(item.id, handoffId)
+          await completeBrowserTakeover(item, handoffId)
           if (earlyTakeover && earlyResult && response?.handoff?.id) {
             const tracked = await trackHandoff(handoffId, earlyResult.resource.id, earlyResult.resource.tabId)
             tracked.browserRequestId = earlyTakeover.requestId
             await persistHandoffTracker()
           }
-          const removed = await removeBrowserDownload(item)
-          if (removed) await pausedFollowUpStore.drop(handoffId)
           return
         }
       }
@@ -1790,9 +1799,7 @@ export default defineBackground(() => {
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       const handoffId = String(response.handoff.id)
       browserOwnedByHandoff = true
-      await rememberPausedHandoffFollowUp(item.id, handoffId)
-      const removed = await removeBrowserDownload(actualBrowser)
-      if (removed) await pausedFollowUpStore.drop(handoffId)
+      await completeBrowserTakeover(actualBrowser, handoffId)
     } catch (error) {
       console.warn('HLS Downloader browser handoff failed', error)
     } finally {

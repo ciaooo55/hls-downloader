@@ -1,4 +1,4 @@
-"""Verify Firefox response takeover without ever creating a browser download.
+"""Verify Firefox response blocking and Chromium download-item cleanup.
 
 Run only in a disposable Windows Sandbox. Decisions use the real Core protocol;
 this is not a test of clicking the desktop confirmation buttons.
@@ -24,7 +24,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
-from smoke_extension_takeover import IMAGE_PAYLOAD, JSON_PAYLOAD, _create_driver, _extension_call, _registered_host
+from smoke_extension_takeover import EXTENSION_ID, IMAGE_PAYLOAD, JSON_PAYLOAD, _create_driver, _extension_call, _registered_host
 from smoke_v7_portable_app import Pipe, wait
 
 PUBLIC_URL = ('https://github.com/ciaooo55/codex-account-switcher/releases/download/'
@@ -33,7 +33,7 @@ PAYLOAD = bytes(range(256)) * 8192
 
 
 def run(args):
-    report = {'passed': False, 'checks': [], 'decision_transport': 'Core protocol',
+    report = {'passed': False, 'checks': [], 'browser': args.browser, 'decision_transport': 'Core protocol',
               'background_sha256': hashlib.sha256((args.extension / 'background.js').read_bytes()).hexdigest()}
     args.report.parent.mkdir(parents=True, exist_ok=True)
     driver = None
@@ -73,7 +73,9 @@ def run(args):
         manifest.write_text(json.dumps({
             'name': 'com.ciaooo55.hls_downloader', 'description': 'Isolated real host',
             'path': str(args.runtime / 'app/resources/HLSDownloaderNativeHost.exe'),
-            'type': 'stdio', 'allowed_extensions': ['hls-downloader-store@ciaooo55.com'],
+            'type': 'stdio',
+            **({'allowed_extensions': ['hls-downloader-store@ciaooo55.com']} if args.browser == 'firefox'
+               else {'allowed_origins': [f'chrome-extension://{EXTENSION_ID}/']}),
         }), encoding='utf-8')
 
         class Handler(BaseHTTPRequestHandler):
@@ -121,21 +123,25 @@ def run(args):
             server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()
             page_url = f'http://127.0.0.1:{server.server_port}/page'
-            with _registered_host(manifest, 'firefox'):
-                driver = _create_driver('firefox', args.binary, args.extension, root / 'profile',
+            with _registered_host(manifest, args.browser):
+                driver = _create_driver(args.browser, args.binary, args.extension, root / 'profile',
                                         downloads, args.driver, headed=args.headed)
                 report['browser_version'] = driver.capabilities.get('browserVersion')
                 driver.set_script_timeout(70)
                 driver.set_page_load_timeout(30)
                 driver.get(page_url)
                 page = driver.current_window_handle
-                driver.set_context('chrome')
-                uuids = json.loads(driver.execute_script(
-                    "return Services.prefs.getStringPref('extensions.webextensions.uuids','{}')"))
-                driver.set_context('content')
+                if args.browser == 'firefox':
+                    driver.set_context('chrome')
+                    uuids = json.loads(driver.execute_script(
+                        "return Services.prefs.getStringPref('extensions.webextensions.uuids','{}')"))
+                    driver.set_context('content')
+                    popup_url = f'moz-extension://{uuids["hls-downloader-store@ciaooo55.com"]}/popup.html'
+                else:
+                    popup_url = f'chrome-extension://{EXTENSION_ID}/popup.html'
                 driver.switch_to.new_window('tab')
                 inspector = driver.current_window_handle
-                driver.get(f'moz-extension://{uuids["hls-downloader-store@ciaooo55.com"]}/popup.html')
+                driver.get(popup_url)
                 # The event log survives erase(), so cancelling/erasing a browser item cannot pass.
                 driver.execute_script('window.downloadEvents=[]; chrome.downloads.onCreated.addListener('
                                       'item=>window.downloadEvents.push({id:item.id,url:item.url}));')
@@ -157,13 +163,18 @@ def run(args):
                                      '.then(([items,events])=>done({items,events}))')
 
                 def assert_no_browser_download(name):
-                    state = browser_state()
-                    assert not state['items'] and not state['events'], state
-                    assert not list(downloads.iterdir()), list(downloads.iterdir())
-                    driver.set_context('chrome')
-                    panel = driver.execute_script("return {state:window.DownloadsPanel?.panel?.state || 'closed'}")
-                    driver.set_context('content')
-                    assert panel['state'] == 'closed', panel
+                    def cleared():
+                        value = browser_state()
+                        return value if not value['items'] else None
+                    state = wait(cleared, name + ': browser copy not removed', 15)
+                    wait(lambda: not list(downloads.iterdir()), name + ': browser file not removed', 15)
+                    panel = None
+                    if args.browser == 'firefox':
+                        assert not state['events'], state
+                        driver.set_context('chrome')
+                        panel = driver.execute_script("return {state:window.DownloadsPanel?.panel?.state || 'closed'}")
+                        driver.set_context('content')
+                        assert panel['state'] == 'closed', panel
                     record(name, {'items': state['items'], 'created_events': state['events'], 'panel': panel})
 
                 def click(name, alt=False):
@@ -333,6 +344,7 @@ if __name__ == '__main__':
         parser.add_argument('--' + flag, type=Path, required=True)
     parser.add_argument('--headed', action='store_true')
     parser.add_argument('--public', action='store_true')
+    parser.add_argument('--browser', choices=('firefox', 'edge', 'chrome'), default='firefox')
     arguments = parser.parse_args()
     result = run(arguments)
     print(json.dumps(result, ensure_ascii=False, indent=2))
