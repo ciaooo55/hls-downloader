@@ -7,7 +7,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml'))) {
 $delivery = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader\最新-20261025'
 $installer = Join-Path $delivery 'HLSDownloader-7.0.3-20261025-未签名.msi'
 if (-not (Test-Path -LiteralPath $installer) -or
-    (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '2c87bdc8af83100538350809befae63324540e0b430e23acd8b2ce7408432946') {
+    (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '88dfbf2f968f31d3d418f8a0e9b4b1aa1be8c1bbb6d545269eb71e2c022000cc') {
     throw '桌面成品不存在或哈希不同，停止清理。'
 }
 if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyContinue) {
@@ -15,16 +15,19 @@ if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyC
 }
 $scratch = Join-Path $repo '.tool-cache\live-presenter-20261024'
 $relativePaths = @(
-    '.tool-cache\request-control-20261025'
-    '.tool-cache\http-transport-20261025'
-    '.tool-cache\build-cache'
-    '.tool-cache\navigation-20261025'
+    '.tool-cache'
     'desktop_ui\.gradle'
     'desktop_ui\.kotlin'
+    'desktop_ui\.tool-cache'
+    'desktop_ui\build'
+    'desktop_ui\resources\common'
     'extension\node_modules'
     'extension\.output'
     'extension\.wxt'
-    '.tool-cache\live-presenter-20261024'
+    'extension\.tool-cache'
+    'native_shell\target'
+    'presenter_ui\target'
+    'scripts\validation\__pycache__'
 )
 $targets = @()
 $sourceLinks = @()
@@ -32,6 +35,10 @@ foreach ($relative in $relativePaths) {
     $target = [IO.Path]::GetFullPath((Join-Path $repo $relative))
     if (-not $target.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw '清理目标超出项目，停止。'
+    }
+    $tracked = @(git -C $repo ls-files -- $relative.Replace('\', '/'))
+    if ($LASTEXITCODE -ne 0 -or $tracked.Count -ne 0) {
+        throw "目标包含受版本控制的源码，停止清理：$target"
     }
     if (-not (Test-Path -LiteralPath $target)) { continue }
     $parent = Get-Item -LiteralPath $target -Force
@@ -44,7 +51,7 @@ foreach ($relative in $relativePaths) {
     foreach ($link in Get-ChildItem -LiteralPath $target -Directory -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
         $resolved = $link.ResolveLinkTarget($true)
         # pnpm 项目索引指回源码，只允许删除链接本身，不能沿链接删除源码。
-        if ($target -eq $scratch -and $link.LinkType -eq 'SymbolicLink' -and
+        if ($link.LinkType -eq 'SymbolicLink' -and
             $link.Parent.FullName -eq (Join-Path $scratch 'pnpm-store\v11\projects') -and
             $resolved -and $resolved.FullName -eq (Join-Path $repo 'extension')) {
             $sourceLinks += $link.FullName
@@ -61,4 +68,4 @@ foreach ($target in $targets) {
     Remove-Item -LiteralPath $target -Recurse -Force
     Write-Host "已清理：$target"
 }
-Write-Host '本轮生成目录已清理；源码、Git、桌面成品、宿主安装、用户下载及备份均保留。'
+Write-Host '指定生成目录已清理；源码、Git、桌面成品、用户下载及 outputs/private-user-backup 备份均保留。'
