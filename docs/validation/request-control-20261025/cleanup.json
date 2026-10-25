@@ -1,0 +1,12 @@
+{
+  "task_sandbox_closed": true,
+  "cleanup_executed": false,
+  "automatic_approval_result": "blocked by policy; no specific reason provided",
+  "new_blocked_directory": ".tool-cache/request-control-20261025",
+  "prior_blocked_paths_not_retried_reference": "docs/validation/http-transport-20261025/cleanup.json",
+  "manual_cache_cleanup_script": "docs/validation/live-presenter-20261025/finish-cleanup.ps1",
+  "manual_script_scope": "Ten explicit build/dependency/validation directories; not executed by agent; historical fixture control files and empty logs remain outside this script",
+  "host_installation_and_user_data_touched": false,
+  "desktop_delivery": "HLSDownloader/最新-20261025",
+  "desktop_msi_sha256": "f20b3b68f1153cbd96d820f3e2a5425816f7549e6c6fb498167e47637652a7bd"
+}
