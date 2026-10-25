@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "record_scope": "build_snapshot",
+  "product_version": "7.0.3",
+  "source_commit": "b674a58f1ffaccc66338f207b776941aad5266cc",
+  "source_branch": "main",
+  "git_worktree_clean": true,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "source_patch_sha256": null,
+  "source_files_sha256": {
+    "extension/entrypoints/background.ts": "29eb40f1d84184cb6012321fb8fd1a2e8b5a2a29cf329fa66f58ba563b5c950a",
+    "extension/entrypoints/content.ts": "6061dd4558ccc9413e0cba7a4d47887a8200bd98ada55e472342e47df346b509",
+    "extension/entrypoints/popup/main.ts": "504ca93049e275e677b0dcfb1a910575258f4fe1f51965e08e20f863859b73a4",
+    "extension/lib/mediaOverlay.ts": "470db30eda89bb10d3072733e2be84b0d66de67cec118cbb3c2c383c2b76b083",
+    "native_shell/src/core_runtime.rs": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+    "native_shell/src/download_worker.rs": "9446072c462f3aa6f5e352270f5a885bf1cc9ad8f63bbba46384dbe600633b72",
+    "native_shell/src/media/hls.rs": "e924a98dd56f1f0ebcbcfe19a69239dad30d17d83c5af2f94949445bd7daec81",
+    "presenter_ui/src/hot_main.rs": "dd465b94150a2d4dc00d16a2e99942f2eda825d876d84eaa25fc8087567497e7",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "39346ac89e9cdb2a071508bc1f855911d718f4cbce23c9ccd27b0a4c0d76b6aa",
+    "native_shell/src/bin/hls_downloader_engine.rs": "ab23b50eafe70e18ec35cd199dc930c89c909e0c194c4d6f714a710ff2fbd7e7",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/SidebarNavigationUiTest.kt": "ef0e470cb2e6e3150c513ef9beb16e80f4b03d18476be257aa85e4ddadc06412",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/WorkbenchWindowTest.kt": "6206f87a4fc7c0861115290f2960fd65b81ded1bb49aa3be4be1367e4ada8d36",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt": "7139ed7833948eb1c823d3c26450fb1975ec244e30187e18b598a84387acc60c",
+    "native_shell/src/http_engine.rs": "ae7c054ffe32a2760ee6cc67730261be97df16f425bb09efe9439554f1bedad5",
+    "native_shell/src/net_policy.rs": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998",
+    "scripts/validation/smoke_v7_installed_footprint.py": "5b78b634c497d90b28adb523ad8feb5513b30eea6d87753aada9ca6aece9e045",
+    "native_shell/src/core_service.rs": "88e1b175014da24e5bc9dfd37d337cf34c6027ad937decfb5e22f3ef3b5df05b",
+    "scripts/validation/compare_v7_player_events.py": "b45cfe8f3d8765c2323eb879dbc59cd2621e34d8bb92fa3e79c7cac1886553c1",
+    "scripts/validation/compare_v7_http_headers.py": "10c569408776226ff0c6d840e00039ac00a44f94183784df7b467f734830a46f",
+    "scripts/validation/compare_v7_sequential_io.py": "f826de7a8f6e529f12a3798b0d77a1c46bc218a9cb27400dfcfd9fd8e396c592",
+    "scripts/validation/smoke_v7_range_response_faults.py": "94b23a1a9fbf2e8ca714283ef4a56b39044c9f5c0eddba4b05b1118b630acf93",
+    "native_shell/src/media/dash.rs": "fb6a389131a44bbcd804ee1dfe69d7f3b5c11ea849d34bec0c47acf5b1b2d0e5",
+    "native_shell/src/torrent_engine.rs": "54484534ce44bfdef398ffc9d17231faa6b60fe8b1737a557e90fa71ee4433a3",
+    "native_shell/src/updater.rs": "9e8152a5b0bf78477111c27f177bc7a233d1020ed5b1c55c3cd0cf77a7e58399",
+    "extension/lib/nativeBridge.ts": "ec574baf3f5cf486968d2c85dc4abbd0238f63193e2771fe198e0302d4c83c2b",
+    "extension/lib/nativeBridge.test.ts": "178a277692a40680aee0adf0d9f19e7e8b7dde31a1ac6a72de5e1dc2a302e211",
+    "scripts/validation/smoke_extension_download_ownership.py": "57ffc372564f107fae981e81844ea67b6e72e8a8712b90ca0618e5598d88f8a1",
+    "scripts/validation/smoke_v7_replay_retry.py": "bbdf24196178992c11f5ab60544e6a3afd96c56e61d19fb55e9a31b5ba1f2648",
+    "extension/lib/takeover.test.ts": "1caa74423d47b064dd40aa61bcd91e43e521fdb044e22b66e91a204d6b82cd30",
+    "extension/lib/browserCapabilities.ts": "153c1ea87eef6ab31bda11f825767a36c3c16d7305496b4979aee25cb35da6bf",
+    "native_shell/src/store.rs": "204923d3ffa468017c47d71bce5a8e62e9825c4d202aca98bc2352b849c5f28c",
+    "native_shell/src/core_ipc.rs": "4a250c5724f02cac1c358a1f78d3766a5fbec81636daffc11eef9d39c670b862"
+  },
+  "base_msi_sha256": "3378bebfa5dc7e61b033c7ae8f8e52aa20d42f754244161d9e77d14181fb0a3f",
+  "replaced_components": [
+    "Engine",
+    "Native Host",
+    "Chromium/Firefox extension ZIPs",
+    "Build provenance"
+  ],
+  "reused_components": [
+    "Desktop UI/JRE/player/Updater/Presenter from baseline MSI 3378bebf; not rebuilt this batch"
+  ],
+  "validation_limits": [
+    "Core regression and transport suites passed; same-version upgrade and final installed startup acceptance pending at build snapshot",
+    "Prior 400 extension tests and 18 Edge/18 Firefox cases cover unchanged extension bundles; no browser rerun on new Core yet",
+    "Pipe-only timeout policy fixed; current database version is no longer rewritten on reopen",
+    "Initial new-database write latency and historical startup outliers remain unresolved; no full UI/cloud/devices/long-run or IDM-AB parity certification"
+  ]
+}

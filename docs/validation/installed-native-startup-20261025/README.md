@@ -57,3 +57,15 @@
 宿主离线编译成功，产品仅在沙盒运行：634 项常规 Core 回归、4 项 curl 和 4 项 WinHTTP 回归通过；还有 4 项 ignored 未执行。文件重开回归包含在上述 634 项中，不能重复计数。见[分组结果](results/store-reopen-test-results.json)及同前缀构建和测试日志。本轮尚未测得实际启动延迟的改善幅度；最终安装包和桌面交付状态后续单独记录。
 
 对照资料仅用于理解取舍：[AB 作者的历史架构说明](https://github.com/amir1376/ab-download-manager/discussions/318)描述使用文件系统保存数据，不能据此推断当前版本所有持久化实现或性能；[IDM 官方选项说明](https://www.internetdownloadmanager.com/support/using_idm/options.html)提供自动启动等用户选项，未披露其存储实现。本项目需要保持现有 SQLite 任务、设置和凭据的一致性，不因竞品使用不同存储就整体迁移。以上不是实际竞品性能对测。
+
+### 最终候选包的安装验证
+
+源码 `b674a58` 构建的 Engine SHA-256 为 `2e0effa9f148869b3b51fc6b57857e81378b7a528000b8396bb88e86ed3df873`，Native Host 为 `c0d3e28df3ddf129b02eec59f864564baffe1f9abae02403365f35452b5f3140`。候选 MSI SHA-256 为 `f1e92a17a6ba3108697fc4851f250192cc3ec2f70fd119a5e653b558edda215c`，203444224 字节，比前一桌面 MSI 多 12288 字节。未重建 UI/JRE/播放器/Updater/Presenter；双插件使用文件名等待修复后已验证的同一 ZIP。
+
+新沙盒先运行上述回归，再安装原桌面 MSI 并直接覆盖为本候选。安装前及最终 Host 首次启动前默认任务库均不存在；不等于整个操作系统和文件缓存完全冷态。最终包九项验收通过：同哈希本地包、自选含空格路径、五组件与插件 ZIP 一致、默认命名管道并发唯一 Core、系统 Downloads、公开 MDN 文件内容及 SHA-256、完成缓存删除及测试成品删除、闲置采样、卸载注销。覆盖后旧产品登记和旧可执行文件均消失，最终卸载后新登记也消失。见[安装报告](results/store-reopen-installer.json)和[覆盖报告](results/store-reopen-upgrade.json)。
+
+四个 Host 的首响应最大值分别为首次新库 135.97ms、常驻接入 78.91ms、关闭后重开 120.80ms；启动计数分别为 1/0/1。没有放宽 1500ms 门槛。单次样本不证明历史新库初始化慢点已消失，更不能将它全部归功于只影响现有版本重开的优化。安装共 469603729 字节、222 文件；仅 Core 五秒闲置样本 RSS 为 16891904 字节，8 个逻辑 CPU 上整机占用 0.0390625%，未运行 UI，不代表整个桌面程序的占用。
+
+随后对同哈希 MSI 补跑已安装 Engine 的故障验收：HTTP 403 不自动重试、503 重试、异常 206 处理与后续队列继续；HLS 普通/范围分片的 403、503 与截断恢复六组均通过，每组测试任务、成品与分片缓存均移除，最后卸载注销通过。见[已安装包故障报告](results/store-reopen-faults-installer.json)。
+
+桌面 `HLSDownloader/最新-20261025` 已替换为本套未签名 MSI、Chromium/Firefox 插件及两份插件源码，仍为 `release_ready=false` 候选，未更新 GitHub Release。七项成品资产和 SHA256SUMS 校验通过；完整插件源码的 124 个文件逐一匹配 HEAD 的 Git blob。首次直接比较工作文件字节在 `hooks.content.ts` 报错，确认仅为工作树 454 个 CRLF 与 Git 导出 LF 差异，换行归一后文本相同，未修改源码内容。见[桌面清单](results/store-reopen-desktop-delivery.json)和[交付复核](results/store-reopen-delivery-audit.json)。最终沙盒产品进程为空并已关闭，见[收尾记录](results/store-reopen-vm-handoff.json)。未在宿主安装；历史缓存删除拒绝仍未绕过，生成物保留在项目既有 `.tool-cache`。

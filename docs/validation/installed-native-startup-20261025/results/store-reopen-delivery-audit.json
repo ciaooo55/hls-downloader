@@ -1,0 +1,14 @@
+{
+  "checksum_file_verified": true,
+  "complete_source_files_verified": 124,
+  "checked_at": "2026-10-25T21:57:59.4406745+08:00",
+  "initial_byte_comparison_failure": {
+    "file": "extension/entrypoints/hooks.content.ts",
+    "working_crlf": 454,
+    "normalized_text_equal": true,
+    "export_crlf": 0
+  },
+  "msi_sha256": "f1e92a17a6ba3108697fc4851f250192cc3ec2f70fd119a5e653b558edda215c",
+  "source_comparison": "Every Git archive blob equals HEAD; extension working tree clean",
+  "delivery_assets_verified": 7
+}

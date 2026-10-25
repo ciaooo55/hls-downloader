@@ -1,0 +1,217 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "MSI staged on VM local disk with matching SHA256",
+      "actual": true
+    },
+    {
+      "name": "MSI installs at requested path containing spaces",
+      "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader-8b906510"
+    },
+    {
+      "name": "installed payload hashes match the tested components and delivery archives",
+      "actual": {
+        "app/resources/HLSDownloaderEngine.exe": "2e0effa9f148869b3b51fc6b57857e81378b7a528000b8396bb88e86ed3df873",
+        "app/resources/HLSDownloaderNativeHost.exe": "c0d3e28df3ddf129b02eec59f864564baffe1f9abae02403365f35452b5f3140",
+        "app/resources/HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+        "app/resources/HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a",
+        "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "6ad623e86d14e27212d60cb7a736088786ee669228b79d6421bb50c0d0072670"
+      }
+    },
+    {
+      "name": "installed extension ZIPs are valid; unpacked copies match when present",
+      "actual": {
+        "Chromium": {
+          "background_sha256": "b6575951b02073a339ff8af7784718a398ed4e7a2923b0ff94f3ce489e4b68ad",
+          "unpacked_directory_present": false,
+          "archives_sha256": {
+            "HLSDownloader-7.0.3-Chromium.zip": "d2dbc94767c073c8cc26b5b695235cbf87bbb5186e96181f4e3bdc147594dd69"
+          }
+        },
+        "Firefox": {
+          "background_sha256": "6bd1813ecbdcfd2da2ee9dcea3e4b2dc01d3c0efe668e9a53913743ab228f159",
+          "unpacked_directory_present": false,
+          "archives_sha256": {
+            "HLSDownloader-7.0.3-Firefox.zip": "4e6f17ab5bda9fbdd955e018c538c53a4c03e741ca9acd84271cbd5009443b44"
+          }
+        }
+      }
+    },
+    {
+      "name": "default download directory matches Windows Known Folder",
+      "actual": "C:\\Users\\WDAGUtilityAccount\\Downloads"
+    },
+    {
+      "name": "real public MDN video downloads into the default folder with identical bytes",
+      "actual": {
+        "url": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
+        "bytes": 554058,
+        "sha256": "c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda"
+      }
+    },
+    {
+      "name": "installed release Engine respects HTTP retry policy and removes test caches",
+      "actual": [
+        {
+          "http_status": 403,
+          "task_attempts": 1,
+          "following_download_verified": true,
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "http_status": 503,
+          "task_attempts": 3,
+          "following_download_verified": true,
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "http_status": 206,
+          "task_attempts": 1,
+          "following_download_verified": true,
+          "test_tasks_and_files_removed": true
+        }
+      ]
+    },
+    {
+      "name": "installed release Engine retries recoverable HLS segments and cleans completed/deleted caches",
+      "actual": [
+        {
+          "case": "forbidden",
+          "segment_requests": 2,
+          "status": "failed",
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "case": "range-forbidden",
+          "segment_requests": 2,
+          "status": "failed",
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "case": "transient",
+          "segment_requests": 3,
+          "status": "completed",
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "case": "range-transient",
+          "segment_requests": 3,
+          "status": "completed",
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "case": "truncated",
+          "segment_requests": 2,
+          "status": "completed",
+          "test_tasks_and_files_removed": true
+        },
+        {
+          "case": "range-truncated",
+          "segment_requests": 2,
+          "status": "completed",
+          "test_tasks_and_files_removed": true
+        }
+      ]
+    },
+    {
+      "name": "measured installed runtime idle CPU and memory",
+      "actual": {
+        "seconds": 5.0,
+        "logical_cpus": 8,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "processes": {
+          "872": {
+            "name": "HLSDownloaderEngine.exe",
+            "cpu": 0.21875,
+            "rss_bytes": 17666048,
+            "private_bytes": 4653056
+          }
+        },
+        "rss_sum_bytes": 17666048,
+        "private_sum_bytes": 4653056
+      }
+    },
+    {
+      "name": "MSI uninstalls and removes its product registration",
+      "actual": true
+    }
+  ],
+  "msi_sha256": "f1e92a17a6ba3108697fc4851f250192cc3ec2f70fd119a5e653b558edda215c",
+  "installed_bytes": 469603729,
+  "installed_files": 222,
+  "largest_files": [
+    {
+      "path": "app/resources/ffmpeg.exe",
+      "bytes": 165155840
+    },
+    {
+      "path": "app/resources/libmpv-2.dll",
+      "bytes": 119757824
+    },
+    {
+      "path": "runtime/lib/modules",
+      "bytes": 54030811
+    },
+    {
+      "path": "app/resources/HLSDownloaderPresenter.exe",
+      "bytes": 28737024
+    },
+    {
+      "path": "app/resources/HLSDownloaderEngine.exe",
+      "bytes": 14721024
+    },
+    {
+      "path": "app/skiko-windows-x64.dll",
+      "bytes": 14109696
+    },
+    {
+      "path": "runtime/bin/server/jvm.dll",
+      "bytes": 13919872
+    },
+    {
+      "path": "app/icudtl.dat",
+      "bytes": 10468208
+    },
+    {
+      "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+      "bytes": 4740663
+    },
+    {
+      "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+      "bytes": 4069888
+    },
+    {
+      "path": "app/resources/HLSDownloaderNativeHost.exe",
+      "bytes": 3777024
+    },
+    {
+      "path": "app/ui-desktop-1.12.0-c7e12ceabbe9ad2921953e527c30ea.jar",
+      "bytes": 3713949
+    }
+  ],
+  "installed_components_sha256": {
+    "HLSDownloaderEngine.exe": "2e0effa9f148869b3b51fc6b57857e81378b7a528000b8396bb88e86ed3df873",
+    "HLSDownloaderNativeHost.exe": "c0d3e28df3ddf129b02eec59f864564baffe1f9abae02403365f35452b5f3140",
+    "HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+    "HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a"
+  },
+  "ui_exercised": false,
+  "idle": {
+    "seconds": 5.0,
+    "logical_cpus": 8,
+    "cpu_one_core_percent": 0.0,
+    "cpu_machine_percent": 0.0,
+    "processes": {
+      "872": {
+        "name": "HLSDownloaderEngine.exe",
+        "cpu": 0.21875,
+        "rss_bytes": 17666048,
+        "private_bytes": 4653056
+      }
+    },
+    "rss_sum_bytes": 17666048,
+    "private_sum_bytes": 4653056
+  }
+}
