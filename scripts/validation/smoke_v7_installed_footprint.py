@@ -56,11 +56,12 @@ def verify_http_retry(ipc, download_dir):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             status = int(self.path.strip('/').split('-')[0])
+            invalid_range = status == 206 and 'invalid-range' in self.path
             self.send_response(206 if status == 200 else status)
-            if status in (200, 206):
+            if status in (200, 206) and not invalid_range:
                 self.send_header('Content-Range', 'bytes 0-0/1')
             if status == 206:
-                self.send_header('ETag', '"changed-entity"')
+                self.send_header('ETag', '"retry-fixture"' if invalid_range else '"changed-entity"')
             self.send_header('Content-Length', '1' if status in (200, 206) else '0')
             self.send_header('Connection', 'close')
             self.end_headers()
@@ -77,13 +78,15 @@ def verify_http_retry(ipc, download_dir):
     try:
         send(ipc, {'type': 'store_settings', 'request_id': 100, 'values': {
             'auto_retry_failed_max': 2, 'queue_max_active': 1}})
-        for status, attempts in ((403, 1), (503, 3), (206, 1)):
+        for status, invalid_range, attempts in ((403, False, 1), (503, False, 3),
+                                                (206, False, 1), (206, True, 1)):
+            suffix = f'{status}-invalid-range' if invalid_range else str(status)
             ids = []
             for code in (status, 200):
                 created = send(ipc, {'type': 'command', 'request_id': 101, 'command': {
                     'kind': 'create_task', 'spec': {
-                        'url': f'http://127.0.0.1:{server.server_port}/{code}-{status}.bin',
-                        'filename': f'retry-{code}-{status}.bin', 'resource_kind': 'file',
+                        'url': f'http://127.0.0.1:{server.server_port}/{code}-{suffix}.bin',
+                        'filename': f'retry-{code}-{suffix}.bin', 'resource_kind': 'file',
                         'expected_size': 1, 'etag': '"retry-fixture"', 'concurrency': 1,
                         'proxy': 'hls-downloader://direct-proxy'}}})
                 ids.append(next(e['event']['snapshot']['task_id'] for e in created['events']
@@ -95,9 +98,9 @@ def verify_http_retry(ipc, download_dir):
             failed = next(task for task in snapshots if task['task_id'] == ids[0])
             assert failed['status'] == 'failed', failed
             if status == 206:
-                assert failed['error_code'] == 'RESOURCE_CHANGED', failed
+                assert failed['error_code'] == ('RANGE_UNSUPPORTED' if invalid_range else 'RESOURCE_CHANGED'), failed
                 assert '新建任务' in failed['error_hint'], failed
-                assert not (download_dir/f'retry-{status}-{status}.bin').exists()
+                assert not (download_dir/f'retry-{status}-{suffix}.bin').exists()
             else:
                 assert failed['http_status'] == status, failed
             assert failed['error_attempt'] == attempts and 'retry' in failed['available_actions'], failed
@@ -106,7 +109,7 @@ def verify_http_retry(ipc, download_dir):
                     'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
                 assert not (download_dir/'.hls-tasks'/tid).exists(), tid
             assert not Path(completed['output_path']).exists()
-            cases.append({'http_status': status, 'task_attempts': attempts,
+            cases.append({'http_status': status, 'invalid_range': invalid_range, 'task_attempts': attempts,
                           'following_download_verified': True, 'test_tasks_and_files_removed': True})
     finally:
         send(ipc, {'type': 'store_settings', 'request_id': 105, 'values': {

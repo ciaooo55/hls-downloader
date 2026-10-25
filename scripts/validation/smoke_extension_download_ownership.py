@@ -132,6 +132,10 @@ def run(args):
 
     try:
         resources = args.runtime/'app/resources'
+        report['runtime_component_sha256'] = {
+            name: hashlib.sha256((resources/name).read_bytes()).hexdigest()
+            for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe')
+        }
         if args.browser == 'edge':
             from selenium.webdriver.edge.options import Options
             from selenium.webdriver.edge.service import Service

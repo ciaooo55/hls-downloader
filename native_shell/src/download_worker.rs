@@ -2826,6 +2826,7 @@ impl CoreCoordinator {
                     if u64::from(attempt) <= max
                         && max > 0
                         && !error.starts_with("resource identity changed:")
+                        && !error.starts_with("range response rejected:")
                         && extract_http_status(&error)
                             .is_none_or(crate::http_engine::retryable_http_status)
                     {
@@ -3371,7 +3372,14 @@ fn run_http_file(
     loop {
         match receiver.recv_timeout(Duration::from_millis(200)) {
             Ok(result) => {
-                let report = result.map_err(|error| error.to_string())?;
+                let report = result.map_err(|error| match error {
+                    crate::http_engine::EngineError::RangeUnsupported(message)
+                        if !message.starts_with("resource identity changed:") =>
+                    {
+                        format!("range response rejected: {message}")
+                    }
+                    error => error.to_string(),
+                })?;
                 if !report.mirrors.is_empty() {
                     core.lock()
                         .map_err(|_| "v7 Core mutex poisoned".to_string())?
@@ -3486,7 +3494,12 @@ fn task_failure_from_error(
 ) -> crate::TaskFailure {
     let lower = error.to_ascii_lowercase();
     let http_status = extract_http_status(error);
-    let (code, hint) = if let Some(status) = http_status {
+    let (code, hint) = if lower.starts_with("range response rejected:") {
+        (
+            "RANGE_UNSUPPORTED".into(),
+            "服务器未按请求返回有效的分段数据，无法安全续传。已下载的缓存会保留；请回到来源页面重新获取地址并新建任务，不要反复重试原任务".into(),
+        )
+    } else if let Some(status) = http_status {
         let hint = match status {
             401 if !has_credential_ref => "服务器要求登录：手工新建任务请在“请求”页填写 Cookie 或 Authorization 请求头；也可从已登录页面通过浏览器插件重新发送",
             401 => "服务器拒绝了当前凭据，请回到原网页刷新登录状态后重新发送，或更新任务的请求头/Cookie",
@@ -7190,7 +7203,10 @@ mod tests {
     #[test]
     fn automatic_http_retry_respects_permanent_failure_and_keeps_queue_running() {
         // 后续任务完成证明前一任务已走完整个收尾/重排队过程，不能只观察短暂的 failed 状态。
-        for (status, expected_attempts) in [(401, 1), (403, 1), (404, 1), (503, 3), (206, 1)] {
+        for (status, invalid_range, expected_attempts) in [
+            (401, false, 1), (403, false, 1), (404, false, 1),
+            (503, false, 3), (206, false, 1), (206, true, 1),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
@@ -7210,7 +7226,9 @@ mod tests {
                         stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx").unwrap();
                         break;
                     }
-                    if status == 206 {
+                    if invalid_range {
+                        let _ = stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nETag: \"retry-fixture\"\r\nConnection: close\r\n\r\ny");
+                    } else if status == 206 {
                         let _ = stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\nETag: \"changed-entity\"\r\nConnection: close\r\n\r\ny");
                     } else {
                         let _ = write!(stream, "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -7249,7 +7267,11 @@ mod tests {
                     let failed = tasks.iter().find(|task| task.task_id == "task-1").unwrap();
                     assert_eq!(failed.status, "failed", "HTTP {status}");
                     assert_eq!(failed.http_status, (status != 206).then_some(status));
-                    if status == 206 {
+                    if invalid_range {
+                        assert_eq!(failed.error_code.as_deref(), Some("RANGE_UNSUPPORTED"));
+                        assert!(failed.error_hint.contains("新建任务"));
+                        assert!(!download_dir.join("expired.bin").exists());
+                    } else if status == 206 {
                         assert_eq!(failed.error_code.as_deref(), Some("RESOURCE_CHANGED"));
                         assert!(failed.error_hint.contains("新建任务"));
                         assert!(!download_dir.join("expired.bin").exists());
