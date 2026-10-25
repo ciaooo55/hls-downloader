@@ -1,0 +1,38 @@
+[
+  {
+    "label": "appdata-1",
+    "create_write_ms": 0.42069999994964746,
+    "sync_ms": 4.801400000133071,
+    "exit": 0,
+    "first_response_ms": 186.75,
+    "engine_sha256": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75",
+    "core_spawn_attempts": 1
+  },
+  {
+    "label": "qa-1",
+    "create_write_ms": 0.339500000109183,
+    "sync_ms": 1.5558000000055472,
+    "exit": 0,
+    "first_response_ms": 168.85,
+    "engine_sha256": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75",
+    "core_spawn_attempts": 1
+  },
+  {
+    "label": "qa-2",
+    "create_write_ms": 0.9851999998318206,
+    "sync_ms": 1.3370000001486915,
+    "exit": 1,
+    "first_response_ms": 5102.39,
+    "engine_sha256": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75",
+    "core_spawn_attempts": 1
+  },
+  {
+    "label": "appdata-2",
+    "create_write_ms": 0.9861999999429827,
+    "sync_ms": 1.209199999948396,
+    "exit": 0,
+    "first_response_ms": 161.64,
+    "engine_sha256": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75",
+    "core_spawn_attempts": 1
+  }
+]

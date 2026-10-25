@@ -1,0 +1,340 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "MSI staged on VM local disk with matching SHA256",
+      "actual": true
+    },
+    {
+      "name": "MSI installs at requested path containing spaces",
+      "actual": "C:\\QAWork\\Custom Install Path\\HLSDownloader-1b62b87b"
+    },
+    {
+      "name": "installed payload hashes match the tested components and delivery archives",
+      "actual": {
+        "app/resources/HLSDownloaderEngine.exe": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75",
+        "app/resources/HLSDownloaderNativeHost.exe": "27d6c619e6489fd46aa61a5598dff8a79779621364d43b1b0a4d8f65ab6e7c92",
+        "app/resources/HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+        "app/resources/HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a",
+        "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "6ad623e86d14e27212d60cb7a736088786ee669228b79d6421bb50c0d0072670"
+      }
+    },
+    {
+      "name": "installed extension ZIPs are valid; unpacked copies match when present",
+      "actual": {
+        "Chromium": {
+          "background_sha256": "b6575951b02073a339ff8af7784718a398ed4e7a2923b0ff94f3ce489e4b68ad",
+          "unpacked_directory_present": false,
+          "archives_sha256": {
+            "HLSDownloader-7.0.3-Chromium.zip": "d2dbc94767c073c8cc26b5b695235cbf87bbb5186e96181f4e3bdc147594dd69"
+          }
+        },
+        "Firefox": {
+          "background_sha256": "6bd1813ecbdcfd2da2ee9dcea3e4b2dc01d3c0efe668e9a53913743ab228f159",
+          "unpacked_directory_present": false,
+          "archives_sha256": {
+            "HLSDownloader-7.0.3-Firefox.zip": "4e6f17ab5bda9fbdd955e018c538c53a4c03e741ca9acd84271cbd5009443b44"
+          }
+        }
+      }
+    }
+  ],
+  "msi_sha256": "559db7c1389a625163858aa865847775153816d264dae775df2c77ac30fc95d6",
+  "installed_bytes": 469579765,
+  "installed_files": 222,
+  "largest_files": [
+    {
+      "path": "app/resources/ffmpeg.exe",
+      "bytes": 165155840
+    },
+    {
+      "path": "app/resources/libmpv-2.dll",
+      "bytes": 119757824
+    },
+    {
+      "path": "runtime/lib/modules",
+      "bytes": 54030811
+    },
+    {
+      "path": "app/resources/HLSDownloaderPresenter.exe",
+      "bytes": 28737024
+    },
+    {
+      "path": "app/resources/HLSDownloaderEngine.exe",
+      "bytes": 14694912
+    },
+    {
+      "path": "app/skiko-windows-x64.dll",
+      "bytes": 14109696
+    },
+    {
+      "path": "runtime/bin/server/jvm.dll",
+      "bytes": 13919872
+    },
+    {
+      "path": "app/icudtl.dat",
+      "bytes": 10468208
+    },
+    {
+      "path": "app/foundation-desktop-1.12.0-ba5937e2f088acd7a6b5788f20cc22b8.jar",
+      "bytes": 4740663
+    },
+    {
+      "path": "app/resources/tools/curl-impersonate/curl-impersonate.exe",
+      "bytes": 4069888
+    },
+    {
+      "path": "app/resources/HLSDownloaderNativeHost.exe",
+      "bytes": 3779072
+    },
+    {
+      "path": "app/ui-desktop-1.12.0-c7e12ceabbe9ad2921953e527c30ea.jar",
+      "bytes": 3713949
+    }
+  ],
+  "installed_components_sha256": {
+    "HLSDownloaderEngine.exe": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75",
+    "HLSDownloaderNativeHost.exe": "27d6c619e6489fd46aa61a5598dff8a79779621364d43b1b0a4d8f65ab6e7c92",
+    "HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+    "HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a"
+  },
+  "native_host_startup": {
+    "transport": "default Windows named pipe",
+    "concurrent_hosts": 4,
+    "database_existed_before_first_launch": false,
+    "rounds": [
+      {
+        "phase": "first-installed-launch",
+        "first_response_ms": [
+          2382.05,
+          2382.96,
+          2381.11,
+          2384.74
+        ],
+        "responses": [
+          [
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            },
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            }
+          ],
+          [
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            },
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            }
+          ],
+          [
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            },
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            }
+          ],
+          [
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            },
+            {
+              "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases/latest",
+              "minimum_extension_version": "2.0.11",
+              "ok": true,
+              "protocol": "hls-downloader-v7-core",
+              "protocol_version": 1,
+              "recommended_extension_version": "7.0.3",
+              "takeover_enabled": true,
+              "takeover_minimum_bytes": 0,
+              "version": "7.0.3"
+            }
+          ]
+        ],
+        "startup_diagnostics": [
+          [
+            {
+              "received_ms": 16.35,
+              "message": "native_host_startup stage=entry elapsed_us=0"
+            },
+            {
+              "received_ms": 2335.61,
+              "message": "native_host_startup stage=session_ready elapsed_us=2319266"
+            }
+          ],
+          [
+            {
+              "received_ms": 18.45,
+              "message": "native_host_startup stage=entry elapsed_us=0"
+            },
+            {
+              "received_ms": 2335.84,
+              "message": "native_host_startup stage=session_ready elapsed_us=2317372"
+            }
+          ],
+          [
+            {
+              "received_ms": 15.9,
+              "message": "native_host_startup stage=entry elapsed_us=0"
+            },
+            {
+              "received_ms": 47.92,
+              "message": "core_spawn stage=before_spawn elapsed_us=534"
+            },
+            {
+              "received_ms": 50.58,
+              "message": "core_spawn stage=spawn_return elapsed_us=3131"
+            },
+            {
+              "received_ms": 65.78,
+              "message": "core_startup stage=entry elapsed_us=12"
+            },
+            {
+              "received_ms": 67.71,
+              "message": "core_startup stage=registration elapsed_us=1998"
+            },
+            {
+              "received_ms": 68.39,
+              "message": "core_startup stage=instance_lock elapsed_us=2690"
+            },
+            {
+              "received_ms": 68.61,
+              "message": "core_sqlite_open stage=directory_ready elapsed_us=76"
+            },
+            {
+              "received_ms": 69.61,
+              "message": "core_sqlite_open stage=connection_ready elapsed_us=1056"
+            },
+            {
+              "received_ms": 70.04,
+              "message": "core_sqlite_open stage=version_read elapsed_us=1481"
+            },
+            {
+              "received_ms": 1244.24,
+              "message": "core_sqlite_initialize stage=pragmas_ready elapsed_us=1174110"
+            },
+            {
+              "received_ms": 1326.28,
+              "message": "core_sqlite_initialize stage=schema_ready elapsed_us=1256144"
+            },
+            {
+              "received_ms": 2316.16,
+              "message": "core_sqlite_initialize stage=committed elapsed_us=2246009"
+            },
+            {
+              "received_ms": 2316.18,
+              "message": "core_sqlite_open stage=initialized elapsed_us=2247599"
+            },
+            {
+              "received_ms": 2316.44,
+              "message": "core_store_startup stage=database_open elapsed_us=2247896"
+            },
+            {
+              "received_ms": 2317.78,
+              "message": "core_store_startup stage=bootstrap elapsed_us=2249223"
+            },
+            {
+              "received_ms": 2318.08,
+              "message": "core_store_startup stage=recovery_watchers elapsed_us=2249547"
+            },
+            {
+              "received_ms": 2318.28,
+              "message": "core_startup stage=store_ready elapsed_us=2252582"
+            },
+            {
+              "received_ms": 2318.5,
+              "message": "core_startup stage=tray elapsed_us=2252787"
+            },
+            {
+              "received_ms": 2321.67,
+              "message": "core_startup stage=ipc_ready elapsed_us=2255931"
+            },
+            {
+              "received_ms": 2321.7,
+              "message": "download engine listening on 127.0.0.1:18765"
+            },
+            {
+              "received_ms": 2334.5,
+              "message": "native_host_startup stage=session_ready elapsed_us=2318715"
+            }
+          ],
+          [
+            {
+              "received_ms": 16.26,
+              "message": "native_host_startup stage=entry elapsed_us=0"
+            },
+            {
+              "received_ms": 2335.35,
+              "message": "native_host_startup stage=session_ready elapsed_us=2319100"
+            }
+          ]
+        ],
+        "core_spawn_attempts": 1,
+        "resident_pids": [
+          6940
+        ]
+      }
+    ]
+  },
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_v7_installed_footprint.py\", line 347, in run\n    verify_native_host_startup(resources, report['native_host_startup'], save)\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_v7_installed_footprint.py\", line 232, in verify_native_host_startup\n    assert max(reply[1] for reply in replies) <= 1500, sample\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'phase': 'first-installed-launch', 'first_response_ms': [2382.05, 2382.96, 2381.11, 2384.74], 'responses': [[{'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}, {'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}], [{'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}, {'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}], [{'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}, {'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}], [{'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}, {'extension_release_url': 'https://github.com/ciaooo55/hls-downloader/releases/latest', 'minimum_extension_version': '2.0.11', 'ok': True, 'protocol': 'hls-downloader-v7-core', 'protocol_version': 1, 'recommended_extension_version': '7.0.3', 'takeover_enabled': True, 'takeover_minimum_bytes': 0, 'version': '7.0.3'}]], 'startup_diagnostics': [[{'received_ms': 16.35, 'message': 'native_host_startup stage=entry elapsed_us=0'}, {'received_ms': 2335.61, 'message': 'native_host_startup stage=session_ready elapsed_us=2319266'}], [{'received_ms': 18.45, 'message': 'native_host_startup stage=entry elapsed_us=0'}, {'received_ms': 2335.84, 'message': 'native_host_startup stage=session_ready elapsed_us=2317372'}], [{'received_ms': 15.9, 'message': 'native_host_startup stage=entry elapsed_us=0'}, {'received_ms': 47.92, 'message': 'core_spawn stage=before_spawn elapsed_us=534'}, {'received_ms': 50.58, 'message': 'core_spawn stage=spawn_return elapsed_us=3131'}, {'received_ms': 65.78, 'message': 'core_startup stage=entry elapsed_us=12'}, {'received_ms': 67.71, 'message': 'core_startup stage=registration elapsed_us=1998'}, {'received_ms': 68.39, 'message': 'core_startup stage=instance_lock elapsed_us=2690'}, {'received_ms': 68.61, 'message': 'core_sqlite_open stage=directory_ready elapsed_us=76'}, {'received_ms': 69.61, 'message': 'core_sqlite_open stage=connection_ready elapsed_us=1056'}, {'received_ms': 70.04, 'message': 'core_sqlite_open stage=version_read elapsed_us=1481'}, {'received_ms': 1244.24, 'message': 'core_sqlite_initialize stage=pragmas_ready elapsed_us=1174110'}, {'received_ms': 1326.28, 'message': 'core_sqlite_initialize stage=schema_ready elapsed_us=1256144'}, {'received_ms': 2316.16, 'message': 'core_sqlite_initialize stage=committed elapsed_us=2246009'}, {'received_ms': 2316.18, 'message': 'core_sqlite_open stage=initialized elapsed_us=2247599'}, {'received_ms': 2316.44, 'message': 'core_store_startup stage=database_open elapsed_us=2247896'}, {'received_ms': 2317.78, 'message': 'core_store_startup stage=bootstrap elapsed_us=2249223'}, {'received_ms': 2318.08, 'message': 'core_store_startup stage=recovery_watchers elapsed_us=2249547'}, {'received_ms': 2318.28, 'message': 'core_startup stage=store_ready elapsed_us=2252582'}, {'received_ms': 2318.5, 'message': 'core_startup stage=tray elapsed_us=2252787'}, {'received_ms': 2321.67, 'message': 'core_startup stage=ipc_ready elapsed_us=2255931'}, {'received_ms': 2321.7, 'message': 'download engine listening on 127.0.0.1:18765'}, {'received_ms': 2334.5, 'message': 'native_host_startup stage=session_ready elapsed_us=2318715'}], [{'received_ms': 16.26, 'message': 'native_host_startup stage=entry elapsed_us=0'}, {'received_ms': 2335.35, 'message': 'native_host_startup stage=session_ready elapsed_us=2319100'}]], 'core_spawn_attempts': 1, 'resident_pids': [6940]}\n",
+  "launched_processes": [],
+  "cleanup_uninstall_exit": 0
+}

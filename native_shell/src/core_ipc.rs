@@ -1119,25 +1119,25 @@ impl CoreIpcClient {
     pub fn connect_existing(timeout: Duration) -> Result<Self, String> {
         #[cfg(windows)]
         {
-            let started = std::time::Instant::now();
-            let deadline = started + timeout;
-            loop {
+            let deadline = std::time::Instant::now() + timeout;
+            let last_error = loop {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 let pipe_timeout = remaining.as_millis().clamp(1, 40) as u32;
                 match Self::connect_pipe_timeout(&v7_pipe_name(), pipe_timeout) {
                     Ok(client) => return Ok(client),
-                    Err(error) if std::time::Instant::now() >= deadline => {
-                        if !tcp_loopback_enabled() {
-                            return Err(error);
+                    Err(error) => {
+                        let remaining = deadline
+                            .saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() {
+                            break error;
                         }
-                        break;
+                        thread::sleep(Duration::from_millis(10).min(remaining));
                     }
-                    Err(_) => {}
                 }
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10).min(remaining));
+            };
+            // 所有管道超时出口都必须执行策略检查，不能在时限边界意外进入 TCP 的五秒重试。
+            if !tcp_loopback_enabled() {
+                return Err(last_error);
             }
         }
         Self::connect_addr(default_core_bind()?)
