@@ -5,6 +5,7 @@ use crate::{
     CredentialVault, EventEnvelope, MediaPushRequest, MirrorStatus, PersistentCore, QueueProfile,
     TaskSpec, TorrentSession,
 };
+use crate::http_engine::extract_http_status;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
@@ -3566,27 +3567,6 @@ fn task_failure_from_error(
     }
 }
 
-fn extract_http_status(error: &str) -> Option<u16> {
-    let upper = error.to_ascii_uppercase();
-    for marker in ["HTTP ", "HTTP_", "STATUS ", "STATUS="] {
-        let mut start = 0;
-        while let Some(offset) = upper[start..].find(marker) {
-            let value_start = start + offset + marker.len();
-            let digits: String = upper[value_start..]
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .take(3)
-                .collect();
-            if let Ok(status) = digits.parse::<u16>() {
-                if (100..=599).contains(&status) {
-                    return Some(status);
-                }
-            }
-            start = value_start;
-        }
-    }
-    None
-}
 
 /// Every transport words a size disagreement differently, so the classifier has
 /// to recognise all of them.  Matching only the literal "size mismatch" silently

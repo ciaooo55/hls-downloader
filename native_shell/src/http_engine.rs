@@ -943,8 +943,8 @@ fn fetch_bytes_range_with_transport(
             fetch(&job, Some(&range))?
         };
         if fetched.status != 206 {
-            return Err(EngineError::RangeUnsupported(format!(
-                "byte range needs HTTP 206, got {}",
+            return Err(EngineError::Failed(format!(
+                "HTTP {}: byte range requires status 206",
                 fetched.status
             )));
         }
@@ -968,8 +968,8 @@ fn fetch_bytes_range_with_transport(
             return Err(EngineError::Failed(error.to_string()));
         }
         if body.len() as u64 != length {
-            return Err(EngineError::RangeUnsupported(format!(
-                "byte range length {} != {length}",
+            return Err(EngineError::Failed(format!(
+                "incomplete response body: byte range length {} != {length}",
                 body.len()
             )));
         }
@@ -1710,6 +1710,28 @@ fn wait_before_range_retry(job: &Job, failed_attempts: u32) -> Result<(), Engine
         waited += step;
     }
     Ok(())
+}
+
+pub(crate) fn extract_http_status(error: &str) -> Option<u16> {
+    let upper = error.to_ascii_uppercase();
+    for marker in ["HTTP ", "HTTP_", "STATUS ", "STATUS="] {
+        let mut start = 0;
+        while let Some(offset) = upper[start..].find(marker) {
+            let value_start = start + offset + marker.len();
+            let digits: String = upper[value_start..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .take(3)
+                .collect();
+            if let Ok(status) = digits.parse::<u16>() {
+                if (100..=599).contains(&status) {
+                    return Some(status);
+                }
+            }
+            start = value_start;
+        }
+    }
+    None
 }
 
 pub(crate) fn retryable_http_status(status: u16) -> bool {

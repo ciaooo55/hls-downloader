@@ -1,0 +1,12 @@
+{
+  "installer_pending": true,
+  "explicit_curl_passed": 2,
+  "distinct_regressions_passed": 637,
+  "host_install_performed": false,
+  "explicit_winhttp_passed": 3,
+  "core_passed": 632,
+  "core_ignored": 9,
+  "baseline_observation": "HTTP 401 segment requested three times",
+  "baseline_exit_code": 101,
+  "remaining_unrun_ignored_tests": 4
+}

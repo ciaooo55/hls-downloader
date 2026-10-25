@@ -114,6 +114,85 @@ def verify_http_retry(ipc, download_dir):
     return cases
 
 
+def verify_hls_retry(ipc, download_dir, media_bytes):
+    counts = {}
+    counts_lock = threading.Lock()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            with counts_lock:
+                hit = counts[self.path] = counts.get(self.path, 0) + 1
+            route = self.path.strip('/')
+            if route.endswith('.m3u8'):
+                case = route.removesuffix('.m3u8')
+                byterange = f'#EXT-X-BYTERANGE:{len(media_bytes)}@0\n' if case.startswith('range-') else ''
+                body = f'#EXTM3U\n#EXTINF:1,\n{byterange}{case}.ts\n#EXT-X-ENDLIST\n'.encode()
+                status = 200
+            else:
+                case = route.removesuffix('.ts')
+                ranged = case.startswith('range-')
+                case = case.removeprefix('range-')
+                status = (403 if case == 'forbidden' else
+                          503 if case == 'transient' and hit < 3 else
+                          206 if ranged else 200)
+                body = media_bytes if status in (200, 206) else b''
+                if ranged:
+                    assert self.headers.get('Range') == f'bytes=0-{len(media_bytes)-1}'
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(body)))
+            if status == 206:
+                self.send_header('Content-Range', f'bytes 0-{len(body)-1}/{len(body)}')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            if not route.endswith('.m3u8') and case == 'truncated' and hit == 1:
+                body = body[:len(body)//2]
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cases = []
+    try:
+        send(ipc, {'type': 'store_settings', 'request_id': 110, 'values': {
+            'auto_retry_failed_max': 0, 'queue_max_active': 1}})
+        for case in ('forbidden', 'range-forbidden', 'transient', 'range-transient',
+                     'truncated', 'range-truncated'):
+            created = send(ipc, {'type': 'command', 'request_id': 111, 'command': {
+                'kind': 'create_task', 'spec': {
+                    'url': f'http://127.0.0.1:{server.server_port}/{case}.m3u8',
+                    'filename': f'hls-retry-{case}.webm', 'resource_kind': 'hls',
+                    'concurrency': 1, 'proxy': 'hls-downloader://direct-proxy'}}})
+            tid = next(e['event']['snapshot']['task_id'] for e in created['events']
+                       if e['event']['kind'] == 'task_created')
+            task = wait_task(ipc, tid, lambda t: t['status'] in ('completed', 'failed'), 112)
+            # 安装包含 curl：HTTP 403 会先经过既有的单次浏览器身份回退。
+            expected_requests = 2 if case.endswith('forbidden') else 3 if case.endswith('transient') else 2
+            with counts_lock:
+                requests = counts.get(f'/{case}.ts', 0)
+            assert requests == expected_requests, (case, requests, task)
+            if case.endswith('forbidden'):
+                assert task['status'] == 'failed' and task['http_status'] == 403, task
+            else:
+                assert task['status'] == 'completed', task
+                assert Path(task['output_path']).read_bytes() == media_bytes, case
+                wait(lambda: not (download_dir/'.hls-tasks'/tid).exists(), f'{case}: completed cache remains')
+            send(ipc, {'type': 'command', 'request_id': 113, 'command': {
+                'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
+            assert not (download_dir/'.hls-tasks'/tid).exists(), case
+            assert not Path(task['output_path']).is_file(), case
+            cases.append({'case': case, 'segment_requests': requests, 'status': task['status'],
+                          'test_tasks_and_files_removed': True})
+    finally:
+        send(ipc, {'type': 'store_settings', 'request_id': 114, 'values': {'queue_max_active': 3}})
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return cases
+
+
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -249,6 +328,9 @@ def run(args):
             if args.verify_http_retry:
                 record('installed release Engine respects HTTP retry policy and removes test caches',
                        verify_http_retry(ipc, expected))
+            if args.verify_hls_retry:
+                record('installed release Engine retries recoverable HLS segments and cleans completed/deleted caches',
+                       verify_hls_retry(ipc, expected, expected_body))
         report['ui_exercised'] = not args.core_only
         if not args.core_only:
             started = time.monotonic()
@@ -373,4 +455,5 @@ if __name__ == '__main__':
     parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
     parser.add_argument('--verify-browser-color', action='store_true', help='Verify footer pixels before/after a simulated browser handshake')
     parser.add_argument('--verify-http-retry', action='store_true', help='Verify permanent/transient HTTP failures and queue continuation with the installed Engine')
+    parser.add_argument('--verify-hls-retry', action='store_true', help='Verify full/range HLS segment errors, recovery and cache cleanup with the installed Engine')
     raise SystemExit(run(parser.parse_args()))

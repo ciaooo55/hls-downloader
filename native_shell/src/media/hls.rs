@@ -1,6 +1,8 @@
 //! HLS / LL-HLS downloader. Segments use the HTTP engine; mux is local.
 
-use crate::http_engine::{fetch_hls_bytes, fetch_hls_bytes_range};
+use crate::http_engine::{
+    extract_http_status, fetch_hls_bytes, fetch_hls_bytes_range, retryable_http_status, EngineError,
+};
 use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -1599,6 +1601,9 @@ fn download_prepared_segments(
                                 if let Some(root) = control.parent() {
                                     if let Err(error) = super::preview::mark_ready(root, &work.path)
                                     {
+                                        if let Ok(mut queue) = queue.lock() {
+                                            queue.clear();
+                                        }
                                         if let Ok(mut errors) = errors.lock() {
                                             errors.push(error);
                                         }
@@ -1624,6 +1629,10 @@ fn download_prepared_segments(
                                 }
                             }
                             Err(error) => {
+                                // 已完成的分片仍正常记入 checkpoint；失败后不再派发新分片。
+                                if let Ok(mut queue) = queue.lock() {
+                                    queue.clear();
+                                }
                                 if let Ok(mut errors) = errors.lock() {
                                     errors.push(error);
                                 }
@@ -2093,8 +2102,7 @@ fn load_playlist(
     parse_playlist(&text, url)
 }
 
-// 与 HTTP 文件引擎的 MAX_RANGE_ATTEMPTS 对齐：单个分片弱网下至少尝试 3 次，
-// 避免一次瞬时失败即中止整批、被迫整任务重跑（checkpoint 只能兜底已完成的分片）。
+// 只重试可恢复的网络失败；解密和写盘失败不应重新请求相同资源。
 const MAX_SEGMENT_ATTEMPTS: u32 = 3;
 const SEGMENT_RETRY_DELAY_MS: u64 = 250;
 
@@ -2109,60 +2117,41 @@ fn download_segment(
     media_key: Option<&MediaKey>,
     sequence: u64,
 ) -> Result<PathBuf, String> {
-    let mut last_error = String::new();
-    for attempt in 1..=MAX_SEGMENT_ATTEMPTS {
-        let result = download_segment_once(
-            segment, headers, proxy, path, control, key_bytes, media_key, sequence,
-        );
-        match result {
-            Ok(path) => return Ok(path),
+    let mut attempt = 1;
+    let mut body = loop {
+        match fetch_segment_bytes(&segment.uri, headers, proxy, control, segment.byterange) {
+            Ok(body) => break body,
             Err(error) => {
-                // 暂停/取消是控制信号且调用方按精确字符串判定，必须原样立即上抛
-                if error == "paused" || error == "canceled" {
-                    return Err(error);
+                let message = error.to_string();
+                if matches!(
+                    error,
+                    EngineError::Pause | EngineError::Cancel | EngineError::RangeUnsupported(_)
+                ) || extract_http_status(&message)
+                    .is_some_and(|status| !retryable_http_status(status))
+                {
+                    return Err(message);
                 }
-                last_error = error;
-                if attempt < MAX_SEGMENT_ATTEMPTS {
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        SEGMENT_RETRY_DELAY_MS * attempt as u64,
-                    ));
+                if attempt == MAX_SEGMENT_ATTEMPTS {
+                    return Err(format!("{message}（已重试 {} 次）", attempt - 1));
                 }
+                wait_with_control(
+                    control,
+                    SEGMENT_RETRY_DELAY_MS as f64 * attempt as f64 / 1000.0,
+                )?;
+                attempt += 1;
             }
         }
-    }
-    Err(format!(
-        "{last_error}（已重试 {} 次）",
-        MAX_SEGMENT_ATTEMPTS - 1
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn download_segment_once(
-    segment: &Segment,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    path: &Path,
-    control: &Path,
-    key_bytes: Option<&Vec<u8>>,
-    media_key: Option<&MediaKey>,
-    sequence: u64,
-) -> Result<PathBuf, String> {
-    download_one_with_range(
-        &segment.uri,
-        headers,
-        proxy,
-        path,
-        control,
-        segment.byterange,
-    )?;
+    };
     if let (Some(key), Some(media_key)) = (key_bytes, media_key) {
         if media_key.method.eq_ignore_ascii_case("AES-128") {
             let iv = media_key.iv.unwrap_or_else(|| sequence_iv(sequence));
-            let encrypted = fs::read(path).map_err(|error| error.to_string())?;
-            let plain = decrypt_aes128(key, &iv, &encrypted)?;
-            fs::write(path, plain).map_err(|error| error.to_string())?;
+            body = decrypt_aes128(key, &iv, &body)?;
         }
     }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, body).map_err(|error| error.to_string())?;
     Ok(path.to_path_buf())
 }
 
@@ -2369,20 +2358,7 @@ fn download_one(
     output: &Path,
     control: &Path,
 ) -> Result<PathBuf, String> {
-    match read_control(control).as_str() {
-        "cancel" => return Err("canceled".into()),
-        "pause" => return Err("paused".into()),
-        _ => {}
-    }
-    let (status, body) = fetch_hls_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
-    if status != 200 && status != 206 {
-        return Err(format!("HLS media HTTP {status}"));
-    }
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::write(output, body).map_err(|error| error.to_string())?;
-    Ok(output.to_path_buf())
+    download_one_with_range(url, headers, proxy, output, control, None)
 }
 
 fn download_one_with_range(
@@ -2393,21 +2369,35 @@ fn download_one_with_range(
     control: &Path,
     byterange: Option<(u64, u64)>,
 ) -> Result<PathBuf, String> {
-    let Some((offset, length)) = byterange else {
-        return download_one(url, headers, proxy, output, control);
-    };
-    match read_control(control).as_str() {
-        "cancel" => return Err("canceled".into()),
-        "pause" => return Err("paused".into()),
-        _ => {}
-    }
-    let body = fetch_hls_bytes_range(url, headers, proxy, offset, length)
+    let body = fetch_segment_bytes(url, headers, proxy, control, byterange)
         .map_err(|error| error.to_string())?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     fs::write(output, body).map_err(|error| error.to_string())?;
     Ok(output.to_path_buf())
+}
+
+fn fetch_segment_bytes(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    control: &Path,
+    byterange: Option<(u64, u64)>,
+) -> Result<Vec<u8>, EngineError> {
+    match read_control(control).as_str() {
+        "cancel" => return Err(EngineError::Cancel),
+        "pause" => return Err(EngineError::Pause),
+        _ => {}
+    }
+    if let Some((offset, length)) = byterange {
+        return fetch_hls_bytes_range(url, headers, proxy, offset, length);
+    }
+    let (status, body) = fetch_hls_bytes(url, headers, proxy)?;
+    if status != 200 && status != 206 {
+        return Err(EngineError::Failed(format!("HLS media HTTP {status}")));
+    }
+    Ok(body)
 }
 
 fn playlist_leaf(path: &Path) -> String {
@@ -2639,6 +2629,171 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn segment_retries_only_recoverable_requests() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "hls-segment-retry-{}-{}",
+            std::process::id(),
+            address.port()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let requests = Arc::new(Mutex::new(HashMap::<String, usize>::new()));
+        let seen = Arc::clone(&requests);
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = std::thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                if server_stop.load(Ordering::SeqCst) {
+                    break;
+                }
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let target = line.split_whitespace().nth(1).unwrap().to_string();
+                let mut range = false;
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    range |= line.to_ascii_lowercase().starts_with("range:");
+                }
+                let hit = {
+                    let mut counts = seen.lock().unwrap();
+                    let count = counts.entry(target.clone()).or_default();
+                    *count += 1;
+                    *count
+                };
+                let route = target.trim_start_matches('/').trim_start_matches("range-");
+                let status = match route {
+                    "transient" if hit < 3 => 503,
+                    "exhausted" => 503,
+                    "no-range" => 200,
+                    _ => route
+                        .parse::<u16>()
+                        .unwrap_or(if range { 206 } else { 200 }),
+                };
+                let body = b"ABCDEF";
+                let truncated = route == "truncated" && hit == 1;
+                let range_header = if status == 206 {
+                    "Content-Range: bytes 0-5/6\r\n"
+                } else {
+                    ""
+                };
+                let header = format!("HTTP/1.1 {status} Test\r\nContent-Length: 6\r\n{range_header}Connection: close\r\n\r\n");
+                let _ = reader.get_mut().write_all(header.as_bytes());
+                let _ = reader
+                    .get_mut()
+                    .write_all(if truncated { &body[..2] } else { body });
+            }
+        });
+        // 先完成所有场景并停止服务器，再断言；旧逻辑失败时也不会遗留测试线程。
+        let mut outcomes = Vec::new();
+        for range in [false, true] {
+            for route in [
+                "401",
+                "403",
+                "404",
+                "410",
+                "416",
+                "transient",
+                "exhausted",
+                "truncated",
+                "no-range",
+                "write",
+                "cipher",
+            ] {
+                if !range && route == "no-range" {
+                    continue;
+                }
+                let target = format!("{}{}", if range { "range-" } else { "" }, route);
+                let playlist = parse_playlist(
+                    &format!("#EXTM3U\n#EXTINF:1,\n{target}\n#EXT-X-ENDLIST\n"),
+                    &format!("http://{address}/index.m3u8"),
+                )
+                .unwrap();
+                let mut segment = playlist.segments[0].clone();
+                segment.byterange = range.then_some((0, 6));
+                let output = if route == "write" {
+                    let parent = root.join(format!("blocked-{range}"));
+                    fs::write(&parent, b"file, not a directory").unwrap();
+                    parent.join("segment.ts")
+                } else {
+                    root.join(format!("{target}.ts"))
+                };
+                let key = MediaKey {
+                    method: "AES-128".into(),
+                    uri: String::new(),
+                    iv: None,
+                };
+                let key_bytes = vec![0; 16];
+                let encrypted = route == "cipher";
+                let result = download_segment(
+                    &segment,
+                    &HashMap::new(),
+                    "hls-downloader://direct-proxy",
+                    &output,
+                    &control,
+                    encrypted.then_some(&key_bytes),
+                    encrypted.then_some(&key),
+                    0,
+                );
+                let count = requests
+                    .lock()
+                    .unwrap()
+                    .get(&format!("/{target}"))
+                    .copied()
+                    .unwrap_or(0);
+                let saved = fs::read(&output).ok();
+                outcomes.push((target, result, count, saved));
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        drop(TcpStream::connect(address).unwrap());
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+        for (target, result, count, saved) in outcomes {
+            let route = target.trim_start_matches("range-");
+            let expected = match route {
+                "transient" | "exhausted" => 3,
+                "truncated" => 2,
+                _ => 1,
+            };
+            eprintln!("{target}: requests={count}, result={result:?}");
+            if route == "403" {
+                // 通用传输在 403 后可尝试一次已有的浏览器身份传输；不能再重跑整个分片。
+                assert!((1..=2).contains(&count), "{target}: {result:?}");
+            } else {
+                assert_eq!(count, expected, "{target}: {result:?}");
+            }
+            if matches!(route, "transient" | "truncated") {
+                assert!(result.is_ok(), "{target}: {result:?}");
+                assert_eq!(saved.as_deref(), Some(b"ABCDEF".as_slice()), "{target}");
+            } else {
+                assert!(result.is_err(), "{target}: {result:?}");
+                assert!(saved.is_none(), "{target}: invalid segment was published");
+                if let Ok(status) = route.parse::<u16>() {
+                    assert!(
+                        result.unwrap_err().contains(&format!("HTTP {status}")),
+                        "{target}: actual response status lost"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn separate_vod_audio_opens_preview_before_track_completion_and_resumes_both_tracks() {
         let root = std::env::temp_dir().join(format!(
             "hls-interleaved-{}-{}",
@@ -2814,10 +2969,8 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let root = std::env::temp_dir().join(format!(
-            "hls-live-audio-stop-{}-{port}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("hls-live-audio-stop-{}-{port}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let parent_control = root.join("control");
         fs::write(&parent_control, "run").unwrap();
@@ -2825,7 +2978,9 @@ mod tests {
         let (release_tx, release_rx) = mpsc::sync_channel(1);
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut reader = BufReader::new(stream);
             loop {
                 let mut line = String::new();
@@ -2868,8 +3023,14 @@ mod tests {
         worker.join().unwrap();
         let parent_state = fs::read_to_string(&parent_control).unwrap();
         fs::remove_dir_all(root).unwrap();
-        assert!(stopped, "audio worker waited for the server instead of its own cancel signal");
-        assert_eq!(parent_state, "run", "audio cleanup must not cancel the parent task");
+        assert!(
+            stopped,
+            "audio worker waited for the server instead of its own cancel signal"
+        );
+        assert_eq!(
+            parent_state, "run",
+            "audio cleanup must not cancel the parent task"
+        );
     }
 
     #[test]
@@ -3336,7 +3497,10 @@ mod tests {
                 let (status, body): (u16, &[u8]) = if !authorized {
                     (401, b"unauthorized")
                 } else if path == "/live.m3u8" {
-                    (200, b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nlive-video.m3u8\n")
+                    (
+                        200,
+                        b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nlive-video.m3u8\n",
+                    )
                 } else if path == "/live-video.m3u8" {
                     let number = server_playlists.fetch_add(1, Ordering::SeqCst);
                     if number == 0 {
