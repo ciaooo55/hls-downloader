@@ -1,0 +1,10 @@
+   Compiling hls-native-shell v7.0.3 (A:\Ubuntu\测试\hls-downloader\native_shell)
+    Finished `release` profile [optimized] target(s) in 10.78s
+     Running unittests src\bin\hls_downloader_engine.rs (.tool-cache\live-presenter-20261024\target\release\deps\hls_downloader_engine-c011152186c331a6.exe)
+
+running 2 tests
+test tests::engine_entry_wires_the_resident_tray ... ok
+test tests::installed_engine_resolves_the_compose_launcher ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

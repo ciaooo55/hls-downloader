@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.UiStateMirrorEffectTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-24T17:18:19.624Z" hostname="DESKTOP-FTE6QH2" time="3.507">
+  <properties/>
+  <testcase name="state_mirror_follows_values_written_outside_its_own_scope()" classname="com.hlsdownloader.desktop.UiStateMirrorEffectTest" time="3.501"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.SidebarNavigationUiTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-24T17:34:40.183Z" hostname="06885BBA-FE99-4" time="6.396">
+  <properties/>
+  <testcase name="switching_navigation_groups_clears_the_previous_group_in_both_layouts()" classname="com.hlsdownloader.desktop.SidebarNavigationUiTest" time="6.371"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

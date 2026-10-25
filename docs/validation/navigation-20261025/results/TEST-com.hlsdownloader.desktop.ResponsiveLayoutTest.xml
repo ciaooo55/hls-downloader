@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.ResponsiveLayoutTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-10-24T17:18:19.431Z" hostname="DESKTOP-FTE6QH2" time="0.187">
+  <properties/>
+  <testcase name="desktop_shortcuts_cover_the_high_frequency_workflow()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.002"/>
+  <testcase name="settings_content_keeps_a_dedicated_scroll_viewport()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.005"/>
+  <testcase name="task_accessibility_label_exposes_the_scannable_row_state()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.005"/>
+  <testcase name="completed_file_preview_only_accepts_supported_image_suffixes()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.001"/>
+  <testcase name="task_row_press_state_has_its_own_feedback_step()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.028"/>
+  <testcase name="the_minimum_window_size_never_exceeds_the_workspace()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.006"/>
+  <testcase name="compact_task_columns_fit_the_1024_workbench_content_area()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.006"/>
+  <testcase name="the_settings_dialog_never_shrinks_at_the_minimum_workbench_width()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.006"/>
+  <testcase name="displayed_resource_locations_hide_credentials_and_signed_parameters()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.003"/>
+  <testcase name="task_rows_keep_the_real_file_suffix_visible_in_metadata()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.001"/>
+  <testcase name="dialogs_shrink_inside_narrow_and_short_workspaces()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.001"/>
+  <testcase name="settings_visual_fixtures_open_the_requested_page_without_pointer_input()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.003"/>
+  <testcase name="desktop_shortcut_dispatcher_reads_the_latest_dialog_state()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.021"/>
+  <testcase name="a_small_workspace_shrinks_the_window_instead_of_pushing_it_off_screen()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.001"/>
+  <testcase name="narrow_workspaces_collapse_the_sidebar_instead_of_dropping_table_columns()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.005"/>
+  <testcase name="task_columns_use_the_product_layout_at_every_width()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.002"/>
+  <testcase name="startup_retries_without_raw_pipe_text_and_modals_hide_the_workbench_tree()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.021"/>
+  <testcase name="the_sidebar_collapse_and_fixture_origin_stay_wired_up()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.012"/>
+  <testcase name="desktop_runtime_uses_the_real_compose_accessibility_contract()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.02"/>
+  <testcase name="wide_task_columns_preserve_the_full_density_layout()" classname="com.hlsdownloader.desktop.ResponsiveLayoutTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

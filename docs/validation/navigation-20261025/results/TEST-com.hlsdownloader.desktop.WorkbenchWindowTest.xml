@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.WorkbenchWindowTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-24T17:34:46.587Z" hostname="06885BBA-FE99-4" time="1.218">
+  <properties/>
+  <testcase name="single_instance_wake_restores_java_visibility_and_painting()" classname="com.hlsdownloader.desktop.WorkbenchWindowTest" time="1.216"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

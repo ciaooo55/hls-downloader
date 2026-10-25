@@ -1473,16 +1473,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
                 // maxWidth 就是"窗口内容区宽度"，正是断点需要比较的量。
                 BoxWithConstraints(Modifier.fillMaxHeight()) {
+                    // 各组计数面向全部任务；切换入口时清掉其他组的筛选，避免有计数却看不到任务。
                     Sidebar(
                         filter, category, selectedQueueId, settings.queueProfiles, tasks, maxWidth < SIDEBAR_COLLAPSE_WIDTH,
-                        { filter = it; category = null },
-                        { category = if (category == it) null else it },
-                        { selectedQueueId = if (selectedQueueId == it) null else it },
+                        { filter = it; category = null; selectedQueueId = null },
+                        { category = if (category == it) null else it; filter = TaskFilter.ALL; selectedQueueId = null },
+                        { selectedQueueId = if (selectedQueueId == it) null else it; filter = TaskFilter.ALL; category = null },
                         { queueManagerDialog = true },
                     )
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().background(canvas)) {
-                ContentHeader(filter, visible.size, visible.filter { it.id in selected }, visible.count { it.status == "已完成" }, { selected = emptySet() }, { refreshKey++ }, {
+                ContentHeader(category?.label ?: settings.queueProfiles.firstOrNull { it.id == selectedQueueId }?.name ?: filter.label, visible.size, visible.filter { it.id in selected }, visible.count { it.status == "已完成" }, { selected = emptySet() }, { refreshKey++ }, {
                     val completedIds = visible.filter { it.status == "已完成" }.map { it.id }.toSet()
                     if (completedIds.isNotEmpty()) {
                         destructiveRequest = DestructiveRequest("delete", completedIds)
@@ -2793,7 +2794,7 @@ private fun NavRow(
 private fun categoryIcon(filter: TaskFilter): ImageVector = when (filter) { TaskFilter.RUNNING -> Icons.Outlined.Downloading; TaskFilter.QUEUED -> Icons.Outlined.Schedule; TaskFilter.PAUSED -> Icons.Outlined.PauseCircle; TaskFilter.COMPLETED -> Icons.Outlined.CheckCircle; TaskFilter.FAILED -> Icons.Outlined.ErrorOutline; else -> Icons.Outlined.Folder }
 private fun categoryIcon(category: TaskCategory): ImageVector = when (category) { TaskCategory.MEDIA -> Icons.Outlined.Image; TaskCategory.PROGRAM -> Icons.Outlined.Apps; TaskCategory.ARCHIVE -> Icons.Outlined.FolderZip; TaskCategory.OTHER -> Icons.AutoMirrored.Outlined.InsertDriveFile }
 
-@Composable private fun ContentHeader(filter: TaskFilter, count: Int, selection: List<DownloadTask>, completedCount: Int, onClearSelection: () -> Unit, onRefresh: () -> Unit, onClearCompleted: () -> Unit, onMore: (String) -> Unit, onSelectedAction: (String) -> Unit) {
+@Composable private fun ContentHeader(title: String, count: Int, selection: List<DownloadTask>, completedCount: Int, onClearSelection: () -> Unit, onRefresh: () -> Unit, onClearCompleted: () -> Unit, onMore: (String) -> Unit, onSelectedAction: (String) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     val selectedSources = selection.map { it.source }
     val clearHint = "清理当前列表中 $completedCount 个已完成任务；保留已下载文件"
@@ -2809,7 +2810,7 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
             ToolbarIcon(icon, label, enabled = eligibleCount > 0, hint = hint) { onSelectedAction(action) }
         }
         Row(Modifier.fillMaxSize().padding(horizontal = if (compact) 8.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(filter.label, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
+            Text(title, color = ink, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.width(8.dp)); Text("$count 项", color = faint, fontSize = TypeScale.caption)
             if (selection.isNotEmpty()) {
                 Spacer(Modifier.width(if (compact) 8.dp else 16.dp))
@@ -3399,7 +3400,7 @@ private fun actionLabel(action: String) = mapOf("details" to "详情与日志", 
         }
     }
 }
-@Composable private fun ConnectionStatus(tasks: List<DownloadTask>, engine: String, extension: String, modifier: Modifier = Modifier) { val activeTasks = tasks.filter { isActiveTaskStatus(it.status) }; val active = activeTasks.size; val bytes = activeTasks.sumOf { it.speedBytes }; Row(modifier.height(28.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("活动任务 $active", color = muted, fontSize = TypeScale.caption); Spacer(Modifier.width(14.dp)); Text("队列 ${tasks.count { it.status == "排队中" }}", color = muted, fontSize = TypeScale.caption); Spacer(Modifier.width(14.dp)); Text("总速度 ${formatRate(bytes)}", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text(engine, color = if (engine == Product.engineConnected) successColor else warningColor, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(14.dp)); Text(extension, color = faint, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
+@Composable private fun ConnectionStatus(tasks: List<DownloadTask>, engine: String, extension: String, modifier: Modifier = Modifier) { val activeTasks = tasks.filter { isActiveTaskStatus(it.status) }; val active = activeTasks.size; val bytes = activeTasks.sumOf { it.speedBytes }; Row(modifier.height(28.dp).fillMaxWidth().background(rail).border(BorderStroke(1.dp, border)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) { Text("活动任务 $active", color = muted, fontSize = TypeScale.caption); Spacer(Modifier.width(14.dp)); Text("队列 ${tasks.count { it.status == "排队中" }}", color = muted, fontSize = TypeScale.caption); Spacer(Modifier.width(14.dp)); Text("总速度 ${formatRate(bytes)}", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text(engine, color = if (engine == Product.engineConnected) successColor else warningColor, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis); Spacer(Modifier.width(14.dp)); Text(extension, color = if (connectionStateOf(extension)) successColor else faint, fontSize = TypeScale.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
 
 internal data class DialogBounds(val width: Dp, val maxHeight: Dp)
 

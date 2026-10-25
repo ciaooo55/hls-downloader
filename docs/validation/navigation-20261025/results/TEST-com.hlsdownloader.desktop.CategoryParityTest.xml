@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.CategoryParityTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-24T17:18:18.469Z" hostname="DESKTOP-FTE6QH2" time="0.499">
+  <properties/>
+  <testcase name="the_media_short_circuit_matches_the_rust_resource_kinds()" classname="com.hlsdownloader.desktop.CategoryParityTest" time="0.399"/>
+  <testcase name="the_fork_that_made_the_same_file_two_categories_stays_deleted()" classname="com.hlsdownloader.desktop.CategoryParityTest" time="0.001"/>
+  <testcase name="kotlin_category_table_matches_the_rust_source()" classname="com.hlsdownloader.desktop.CategoryParityTest" time="0.051"/>
+  <testcase name="playable_media_never_lands_in_the_other_folder()" classname="com.hlsdownloader.desktop.CategoryParityTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

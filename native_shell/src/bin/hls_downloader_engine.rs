@@ -22,41 +22,9 @@ fn workbench_candidates(engine: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-#[cfg(windows)]
-fn focus_existing_workbench() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
-    };
-
-    // Windows 11 keeps an Explorer TabProxyWindow with the product title after
-    // the real UI closes. Match Compose/AWT's actual top-level class as well as
-    // the title so a stale taskbar proxy cannot swallow a tray click.
-    let class_name: Vec<u16> = "SunAwtFrame\0".encode_utf16().collect();
-    let title: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
-    let hwnd = unsafe { FindWindowW(class_name.as_ptr(), title.as_ptr()) };
-    if hwnd.is_null() {
-        return false;
-    }
-    unsafe {
-        if IsIconic(hwnd) != 0 {
-            ShowWindow(hwnd, SW_RESTORE);
-        }
-        ShowWindow(hwnd, SW_RESTORE);
-        SetForegroundWindow(hwnd);
-    }
-    true
-}
-
-#[cfg(not(windows))]
-fn focus_existing_workbench() -> bool {
-    false
-}
-
 fn open_workbench() -> Result<(), String> {
-    if focus_existing_workbench() {
-        eprintln!("tray action: restored the running workbench");
-        return Ok(());
-    }
+    // 由工作台的单实例入口唤醒现有窗口，让 AWT/Compose 同步可见状态。
+    // 直接 ShowWindow 只恢复 HWND，Java 仍可能认为窗口已隐藏而停止绘制和交互。
     let engine =
         std::env::current_exe().map_err(|error| format!("resolve engine path: {error}"))?;
     let launcher = workbench_candidates(&engine)
@@ -306,8 +274,6 @@ mod tests {
         let source = include_str!("hls_downloader_engine.rs");
         assert!(source.contains("start_resident_tray();"));
         assert!(source.contains("hls_native_shell::spawn_tray(sender)"));
-        assert!(source.contains("focus_existing_workbench()"));
-        assert!(source.contains("SunAwtFrame"));
         assert!(source.contains("--prepare-native-host-manifests"));
         assert!(source.contains("register_packaged_native_host"));
         assert!(source.contains("--unregister-native-host"));

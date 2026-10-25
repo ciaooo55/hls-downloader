@@ -139,7 +139,9 @@ def run(args):
         record('installed extension ZIPs are valid; unpacked copies match when present', extensions)
         port, ui_port = free_port(), free_port()
         token = uuid.uuid4().hex
-        env = {**os.environ, 'HLS_V7_CORE_TCP': '1', 'HLS_V7_CORE_BIND': f'127.0.0.1:{port}',
+        # 安装验收必须加载真实任务库，不能继承前一轮离线界面夹具。
+        env = {**{key: value for key, value in os.environ.items() if not key.startswith('HLS_UI_AUDIT_')},
+               'HLS_V7_CORE_TCP': '1', 'HLS_V7_CORE_BIND': f'127.0.0.1:{port}',
                'HLS_UI_TEST_API': '1', 'HLS_UI_TEST_PORT': str(ui_port), 'HLS_UI_TEST_TOKEN': token}
         for key in ('HLS_V7_DATA_DIR', 'HLS_V7_DOWNLOAD_DIR', 'HLS_V7_PIPE', 'HLS_ENGINE_PATH'):
             env.pop(key, None)
@@ -213,6 +215,34 @@ def run(args):
             assert any(report['ui_capture'].values()), 'UI reports showing but both screen and paint captures are blank'
             record('installed UI reports showing, connects to Core and produces a nonblank render',
                    {'window': window, 'capture': report['ui_capture']})
+            if args.verify_browser_color:
+                # 比较同一页脚在握手前后的像素；引擎已有的绿色不计入变化。
+                endpoint = 'screenshot' if report['ui_capture']['screen_nonblank'] else 'screenshot?mode=paint'
+
+                def footer_green(data):
+                    with Image.open(io.BytesIO(data)) as image:
+                        rgb = image.convert('RGB')
+                        footer = rgb.crop((rgb.width * 2 // 3, max(0, rgb.height - 50), rgb.width, rgb.height))
+                        return sum(count for count, (r, g, b) in footer.getcolors(footer.width * footer.height)
+                                   if g > r * 1.25 and g > b * 1.15)
+
+                before = ui(endpoint, True)
+                before_green = footer_green(before)
+                with connect(port) as ipc:
+                    reply = send(ipc, {'type': 'command', 'request_id': 20, 'command': {
+                        'kind': 'browser_hello', 'version': version, 'browser': 'sandbox-verification'}})
+                    assert 'events' in reply, reply
+
+                def connected_footer():
+                    data = ui(endpoint, True)
+                    return data if footer_green(data) - before_green > 30 else None
+
+                connected = wait(connected_footer, 'Browser handshake did not turn the footer green', 15)
+                args.report.with_suffix('.disconnected.png').write_bytes(before)
+                args.report.with_suffix('.connected.png').write_bytes(connected)
+                record('simulated browser handshake changes the rendered connection label to green',
+                       {'before_green_pixels': before_green, 'after_green_pixels': footer_green(connected),
+                        'transport': 'Core IPC browser_hello; no real browser extension used'})
             time.sleep(3)
 
 
@@ -268,4 +298,5 @@ if __name__ == '__main__':
     parser.add_argument('--expected-components', type=Path,
                         help='JSON mapping installation-relative paths to tested SHA256 values')
     parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
+    parser.add_argument('--verify-browser-color', action='store_true', help='Verify footer pixels before/after a simulated browser handshake')
     raise SystemExit(run(parser.parse_args()))
