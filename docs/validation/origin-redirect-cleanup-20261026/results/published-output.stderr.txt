@@ -1,0 +1,6 @@
+
+thread '<unnamed>' (6116) panicked at src\download_worker.rs:10435:9:
+poison the Core mutex on purpose
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+v7 task task-1 was published but the Core mutex was poisoned
+v7 task task-1 was published but its completion power action failed: v7 Core mutex poisoned

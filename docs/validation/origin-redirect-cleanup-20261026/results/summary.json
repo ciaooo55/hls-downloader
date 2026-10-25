@@ -1,0 +1,41 @@
+﻿{
+    "passed":  true,
+    "finished":  true,
+    "current":  "extension-tests",
+    "steps":  [
+                  {
+                      "name":  "redirect-transports",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "redirect-credentials",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "cleanup-player-lock",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "published-output",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "cleanup-boundaries",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "completed-media",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "extension-install",
+                      "exit_code":  0
+                  },
+                  {
+                      "name":  "extension-tests",
+                      "exit_code":  0
+                  }
+              ],
+    "error":  "",
+    "curl_sha256":  "DC377941626E298AF9041FFB06353B03795908150AA9F5A96078E1A4682C42D8"
+}

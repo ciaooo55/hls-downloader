@@ -1,0 +1,15 @@
+{
+  "generated_paths_remaining": [],
+  "desktop_assets_verified": 7,
+  "registry_writes_performed": false,
+  "checked_at": "2026-10-26T02:34:31.2616228+08:00",
+  "passed": true,
+  "user_backup_retained": true,
+  "host_product_install_performed": false,
+  "worktrees": [
+    "\"A:/Ubuntu/\\346\\265\\213\\350\\257\\225/hls-downloader\" 1dea557 [main]"
+  ],
+  "local_branches": [
+    "main"
+  ]
+}

@@ -1,0 +1,35 @@
+=== Verbose logging started: 10/26/2026  2:24:01  Build type: SHIP UNICODE 5.00.10011.00  Calling process: C:\Windows\system32\msiexec.exe ===
+MSI (c) (78:90) [02:24:01:291]: Resetting cached policy values
+MSI (c) (78:90) [02:24:01:291]: Machine policy value 'Debug' is 0
+MSI (c) (78:90) [02:24:01:291]: ******* RunEngine:
+           ******* Product: C:/QAWork/baseline.msi
+           ******* Action:
+           ******* CommandLine: **********
+MSI (c) (78:90) [02:24:01:291]: Client-side and UI is none or basic: Running entire install on the server.
+MSI (c) (78:90) [02:24:01:291]: Grabbed execution mutex.
+MSI (c) (78:90) [02:24:01:401]: Cloaking enabled.
+MSI (c) (78:90) [02:24:01:401]: Attempting to enable all disabled privileges before calling Install on Server
+MSI (c) (78:90) [02:24:01:416]: Incrementing counter to disable shutdown. Counter after increment: 0
+MSI (s) (A0:C4) [02:24:01:432]: Running installation inside multi-package transaction C:/QAWork/baseline.msi
+MSI (s) (A0:C4) [02:24:01:432]: Grabbed execution mutex.
+MSI (s) (A0:C8) [02:24:01:432]: Resetting cached policy values
+MSI (s) (A0:C8) [02:24:01:432]: Machine policy value 'Debug' is 0
+MSI (s) (A0:C8) [02:24:01:432]: ******* RunEngine:
+           ******* Product: C:/QAWork/baseline.msi
+           ******* Action:
+           ******* CommandLine: **********
+MSI (s) (A0:C8) [02:24:01:447]: Machine policy value 'DisableUserInstalls' is 0
+MSI (s) (A0:C8) [02:24:01:447]: Note: 1: 2203 2: C:\Windows\Installer\inprogressinstallinfo.ipi 3: -2147287038
+MSI (s) (A0:C8) [02:24:01:447]: SRSetRestorePoint skipped for this transaction.
+MSI (s) (A0:C8) [02:24:01:447]: Note: 1: 1314 2: /QAWork/baseline.msi
+MSI (s) (A0:C8) [02:24:01:447]: MainEngineThread is returning 2
+MSI (s) (A0:C4) [02:24:01:447]: No System Restore sequence number for this installation.
+MSI (s) (A0:C4) [02:24:01:447]: User policy value 'DisableRollback' is 0
+MSI (s) (A0:C4) [02:24:01:447]: Machine policy value 'DisableRollback' is 0
+MSI (s) (A0:C4) [02:24:01:447]: Incrementing counter to disable shutdown. Counter after increment: 0
+MSI (s) (A0:C4) [02:24:01:447]: Note: 1: 1402 2: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Installer\Rollback\Scripts 3: 2
+MSI (s) (A0:C4) [02:24:01:447]: Note: 1: 1402 2: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Installer\Rollback\Scripts 3: 2
+MSI (s) (A0:C4) [02:24:01:447]: Decrementing counter to disable shutdown. If counter >= 0, shutdown will be denied.  Counter after decrement: -1
+MSI (c) (78:90) [02:24:01:463]: Decrementing counter to disable shutdown. If counter >= 0, shutdown will be denied.  Counter after decrement: -1
+MSI (c) (78:90) [02:24:01:463]: MainEngineThread is returning 2
+=== Verbose logging stopped: 10/26/2026  2:24:01 ===

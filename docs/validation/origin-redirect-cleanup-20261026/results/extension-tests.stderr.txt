@@ -1,0 +1,1 @@
+$ wxt prepare && tsc --noEmit && vitest run

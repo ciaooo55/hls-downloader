@@ -1,0 +1,7 @@
+{
+  "passed": false,
+  "finished": true,
+  "checks": [],
+  "error": "Error: msiexec.exe exited 1619: �e�lSb\u0000_dk�[ň\u000bz�^\u0005S\u00020��nx���\u000bz�^\u0005SX[(W\f�v^\u0014N`O\tgCg��[\f�\u0016b\u0005�\u000eN�^(u\u000bz�^�O�^FUT��|\f��Nnx��ُ/f\u0000N*N\tgHe�v \u0000W\u0000i\u0000n\u0000d\u0000o\u0000w\u0000s\u0000 \u0000I\u0000n\u0000s\u0000t\u0000a\u0000l\u0000l\u0000e\u0000r\u0000 \u0000\u000bz�^\u0005S\u00020\n\u0000\r\u0000\n    at ChildProcess.<anonymous> (C:\\QAInput\\installer-qa.cjs:28:149)\n    at ChildProcess.wrapper (node:events:639:12)\n    at ChildProcess.emit (node:events:514:28)\n    at ChildProcess._handle.onexit (node:internal/child_process:324:12)",
+  "source_commit": "1dea557e54b1eb0684065a53368b74c761a1d42d"
+}

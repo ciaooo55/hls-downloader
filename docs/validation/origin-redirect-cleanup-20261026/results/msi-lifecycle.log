@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\audit-fixes\\delivery\\HLSDownloader-7.0.3-20261026-未签名.msi",
+  "original_product_code": "{938E35A6-0C75-4297-A09B-B226EFADBE25}",
+  "verified_product_code": "{83EEE747-04FF-47E9-B973-E934B32C5F70}",
+  "original_package_code": "{8BFBD9D4-973C-4769-812E-9D494D05F80D}",
+  "verified_package_code": "{352C598E-7668-4166-9E75-3D73CBE72004}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "1D3B31FC979293056979ED5682F31162CDD698EE10C14E00C1C391EDC71FBC53",
+  "sha256_after": "2522A1AE46C203D8C581F5DAD985AD7806B480E09E2A521473889C577CF8A574"
+}

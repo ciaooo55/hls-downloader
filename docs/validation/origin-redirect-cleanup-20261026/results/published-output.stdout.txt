@@ -1,0 +1,8 @@
+
+running 4 tests
+test download_worker::a_published_payload_is_recorded_not_failed ... ok
+test download_worker::a_published_payload_never_fails_the_task ... ok
+test download_worker::a_published_selection_directory_reports_the_bytes_it_wrote ... ok
+test download_worker::media_cleanup_preserves_a_published_file_inside_the_work_directory ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 644 filtered out; finished in 0.46s

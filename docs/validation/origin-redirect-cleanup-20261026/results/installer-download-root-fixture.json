@@ -1,0 +1,12 @@
+{
+  "passed": false,
+  "finished": true,
+  "checks": [
+    {
+      "name": "baseline installed",
+      "actual": "{938E35A6-0C75-4297-A09B-B226EFADBE25}"
+    }
+  ],
+  "error": "Error: {\"type\":\"error\",\"request_id\":11,\"code\":\"core_command_failed\",\"message\":\"下载目录必须位于默认下载根目录内\"}\n    at Socket.<anonymous> (C:\\QAInput\\installer-qa.cjs:48:104)\n    at Socket.emit (node:events:514:28)\n    at addChunk (node:internal/streams/readable:569:12)\n    at readableAddChunkPushByteMode (node:internal/streams/readable:520:3)\n    at Readable.push (node:internal/streams/readable:400:5)\n    at Pipe.onStreamRead (node:internal/stream_base_commons:194:23)",
+  "source_commit": "1dea557e54b1eb0684065a53368b74c761a1d42d"
+}

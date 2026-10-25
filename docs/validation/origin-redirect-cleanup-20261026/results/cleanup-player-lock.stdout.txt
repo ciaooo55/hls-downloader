@@ -1,0 +1,5 @@
+
+running 1 test
+test download_worker::completed_cache_cleanup_releases_player_after_recording_the_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 647 filtered out; finished in 0.10s

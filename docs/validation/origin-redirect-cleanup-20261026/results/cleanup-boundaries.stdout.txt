@@ -1,0 +1,6 @@
+
+running 2 tests
+test download_worker::completed_cache_cleanup_releases_player_after_recording_the_output ... ok
+test download_worker::media_cleanup_preserves_a_published_file_inside_the_work_directory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 646 filtered out; finished in 0.16s

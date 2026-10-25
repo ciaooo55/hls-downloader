@@ -1,0 +1,19 @@
+{
+  "installer": {
+    "bytes": 203448320,
+    "sha256": "2522a1ae46c203d8c581f5dad985ad7806b480e09e2a521473889c577cf8a574",
+    "source_commit": "1dea557e54b1eb0684065a53368b74c761a1d42d",
+    "release_ready": false,
+    "product_code": "{83EEE747-04FF-47E9-B973-E934B32C5F70}"
+  },
+  "installed_payloads": {
+    "app/resources/HLSDownloaderEngine.exe": "da8248ca4558c1333bb94dbb2a08aa3495de479271e3d1411eec695c3d81954c",
+    "app/resources/HLSDownloaderNativeHost.exe": "0f92c4fb3fd7cd1d99b316c9be0d5594a7c039ce30a5c217eac9021e236770a1",
+    "app/resources/HLSDownloaderPresenter.exe": "63c551a166e3e3e328987aa33813ee496e8ade297d35af1ab873f68e6871ad96",
+    "app/resources/HLSDownloaderUpdater.exe": "e355a9d0e21ff8e0636dcff924d8bef7cc9e26d314cb5d28811c96509387035a",
+    "app/HLSDownloaderDesktop-7.0.3-b2d6415bb812f96d74ee688fdf78f.jar": "6ad623e86d14e27212d60cb7a736088786ee669228b79d6421bb50c0d0072670",
+    "app/resources/BUILD-PROVENANCE.json": "624801a472a2065ea4e4432fe0d3d92852bad6bf2eb179a4595ce75d6d82ca4a",
+    "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "1b4c09ad6a9358379c76c47cca62ce146202a273265a53d8b6b1a0462d3151b9",
+    "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "143cdd6a0532acf065ce05199aabb714c3508031205600139e59b951985572ff"
+  }
+}
