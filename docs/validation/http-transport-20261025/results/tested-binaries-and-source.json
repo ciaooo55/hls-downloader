@@ -1,0 +1,6 @@
+{
+  "native_shell/src/http_engine.rs": "88315abc4d661ffe6f13fb0cd78d7d84d337f6e528c22719325198e57fb78b6b",
+  ".tool-cache/http-transport-20261025/core-tests.exe": "1fa6ccb9a4df29e0c797211c91572056f04368cfefe1093b2d499ada3c9d2f87",
+  ".tool-cache/live-presenter-20261024/target/release/hls-downloader-engine.exe": "a86c920766b88012abcfb12b5a7cdc8f70d9335bc00ac584b1bb0b1b5c6c9f36",
+  ".tool-cache/live-presenter-20261024/curl-impersonate.exe": "dc377941626e298af9041ffb06353b03795908150aa9f5a96078e1a4682c42d8"
+}

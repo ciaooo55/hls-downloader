@@ -547,7 +547,8 @@ pub fn strip_stale_cloudflare_cookies(
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if name == "__cf_bm" || name == "__cflb" {
+        // __cflb 是源站会话亲和 Cookie，不能当成过期风控凭据删除。
+        if name == "__cf_bm" {
             changed = true;
             continue;
         }
@@ -845,11 +846,20 @@ fn fetch_bytes_with_transport(
             fetch(&job, None)?
         };
         let status = fetched.status;
+        let expected_length = fetched.content_length;
         let mut body = Vec::new();
         let mut reader = fetched.body;
         reader
             .read_to_end(&mut body)
             .map_err(|err| EngineError::Failed(err.to_string()))?;
+        if matches!(status, 200 | 206)
+            && expected_length.is_some_and(|expected| expected != body.len() as u64)
+        {
+            return Err(EngineError::Failed(format!(
+                "incomplete response body: received {} bytes, expected {}",
+                body.len(), expected_length.unwrap()
+            )));
+        }
         crate::net_policy::consume(body.len(), || check_control(&job.control))?;
         Ok((status, body))
     })();
@@ -2145,6 +2155,7 @@ fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, En
         if let Some(result) = fetch_curl_follow(job, range) {
             match result {
                 Ok(fetched) if (200..400).contains(&fetched.status) => return Ok(fetched),
+                Err(error @ (EngineError::Pause | EngineError::Cancel)) => return Err(error),
                 Ok(_) | Err(_) => {}
             }
         }
@@ -2325,10 +2336,8 @@ fn fetch_via_curl_impersonate(
     if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
         return None;
     }
-    let mut headers = headers_for_request(job, &job.url);
-    if let Some(stripped) = strip_stale_cloudflare_cookies(&headers) {
-        headers = stripped;
-    }
+    // 首次浏览器传输必须保留实际请求身份，不能预先假定 Cookie 已失效。
+    let headers = headers_for_request(job, &job.url);
     let dir = std::env::temp_dir().join(format!(
         "hls-curl-impersonate-{}-{}",
         std::process::id(),
@@ -2340,110 +2349,151 @@ fn fetch_via_curl_impersonate(
     if fs::create_dir_all(&dir).is_err() {
         return Some(Err(EngineError::Failed("curl-impersonate temp dir".into())));
     }
-    let body_path = dir.join("body");
-    let header_path = dir.join("headers");
-    let mut command = std::process::Command::new(exe);
-    command
-        .arg("--compressed")
-        .arg("--impersonate")
-        .arg("chrome146")
-        .arg("-sS")
-        .arg("--connect-timeout")
-        .arg("15")
-        // A total `--max-time` cap made every download above ~60 s on this
-        // fallback path abort mid-transfer.  The rest of the engine bounds stalls
-        // (Tcp read timeout, WinHttp 60 s receive timeout), so mirror that shape:
-        // abort only when the transfer stalls, never because it is merely long.
-        .arg("--speed-time")
-        .arg("30")
-        .arg("--speed-limit")
-        .arg("1024")
-        .arg("-D")
-        .arg(&header_path)
-        .arg("-o")
-        .arg(&body_path)
-        .arg("-w")
-        .arg("%{http_code}");
-    command.arg("-A").arg(request_user_agent(&headers));
-    for (key, value) in &headers {
-        if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
-            continue;
+    let result = (|| {
+        check_control(&job.control)?;
+        let body_path = dir.join("body");
+        let header_path = dir.join("headers");
+        let status_path = dir.join("status");
+        let error_path = dir.join("stderr");
+        let mut command = std::process::Command::new(exe);
+        command
+            .arg("--compressed")
+            .arg("--impersonate")
+            .arg("chrome146")
+            .arg("-sS")
+            .arg("--connect-timeout")
+            .arg("15")
+            // A total `--max-time` cap made every download above ~60 s on this
+            // fallback path abort mid-transfer.  The rest of the engine bounds stalls
+            // (Tcp read timeout, WinHttp 60 s receive timeout), so mirror that shape:
+            // abort only when the transfer stalls, never because it is merely long.
+            .arg("--speed-time")
+            .arg("30")
+            .arg("--speed-limit")
+            .arg("1024")
+            .arg("-D")
+            .arg(&header_path)
+            .arg("-o")
+            .arg(&body_path)
+            .arg("-w")
+            .arg("%{http_code}");
+        command.arg("-A").arg(request_user_agent(&headers));
+        for (key, value) in &headers {
+            if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
+                continue;
+            }
+            command.arg("-H").arg(format!("{key}: {value}"));
         }
-        command.arg("-H").arg(format!("{key}: {value}"));
+        if let Some(range) = range {
+            command.arg("-H").arg(format!("Range: {range}"));
+        }
+        command.args(curl_request_args(job, &headers));
+        match proxy_route(&job.proxy) {
+            ProxyRoute::Direct => {
+                command.arg("--noproxy").arg("*");
+            }
+            ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
+            ProxyRoute::Manual(proxy) => {
+                command.arg("-x").arg(proxy);
+            }
+        }
+        command.arg(&job.url);
+        // 输出写文件，避免等待退出时 stderr 管道填满；暂停/取消须能中止在途请求。
+        let status_file = File::create(&status_path)
+            .map_err(|error| EngineError::Failed(error.to_string()))?;
+        let error_file = File::create(&error_path)
+            .map_err(|error| EngineError::Failed(error.to_string()))?;
+        let mut child = command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(status_file))
+            .stderr(std::process::Stdio::from(error_file))
+            .spawn()
+            .map_err(|error| EngineError::Failed(error.to_string()))?;
+        drop(command);
+        let exit = loop {
+            if let Err(error) = check_control(&job.control) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    // 进程退出立即唤醒，避免给每个小分片固定增加一次轮询间隔。
+                    #[cfg(windows)]
+                    unsafe {
+                        use std::os::windows::io::AsRawHandle;
+                        windows_sys::Win32::System::Threading::WaitForSingleObject(
+                            child.as_raw_handle() as _,
+                            100,
+                        );
+                    }
+                    #[cfg(not(windows))]
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(EngineError::Failed(error.to_string()));
+                }
+            }
+        };
+        drop(child);
+        // HTTP 200 只证明收到响应头；curl 非零退出仍可能表示正文截断，不能交给 HLS 当成完整分片。
+        if !exit.success() {
+            let error = fs::read_to_string(&error_path).unwrap_or_default();
+            return Err(EngineError::Failed(format!(
+                "curl-impersonate transfer failed ({exit}): {}",
+                error.trim()
+            )));
+        }
+        let status = fs::read_to_string(&status_path)
+            .map_err(|error| EngineError::Failed(error.to_string()))?
+            .trim()
+            .parse::<u16>()
+            .unwrap_or(0);
+        let headers = fs::read_to_string(&header_path).unwrap_or_default();
+        let meta = parse_header_meta(&headers);
+        record_download_type(job, status, &headers);
+        // A body read failure must not look like an empty body: `unwrap_or_default`
+        // silently turned a partial transfer into a truncated-but-"successful" file.
+        // The entity itself stays on disk and is streamed (see `Body::File`), so only
+        // the open is checked here and nothing is buffered into RAM.
+        let body_file = File::open(&body_path).map_err(|error| {
+            EngineError::Failed(format!("curl-impersonate body read failed: {error}"))
+        })?;
+        // `--compressed` makes this branch request gzip/br and hand *decoded* bytes
+        // on disk, while the header dump still reports the compressed wire length.
+        // Reporting that wire length as the content length makes `download_sequential`
+        // reject every complete download from a compressing server, so the length of
+        // what curl actually wrote wins.
+        let content_length = if meta.content_encoding {
+            fs::metadata(&body_path)
+                .map(|file_meta| file_meta.len())
+                .ok()
+        } else {
+            meta.content_length
+        };
+        Ok(FetchResult {
+            status,
+            location: meta.location.clone(),
+            content_range: meta.content_range,
+            content_length,
+            etag: meta.etag,
+            last_modified: meta.last_modified,
+            accept_ranges: meta.accept_ranges,
+            // `dir` moves into the reader: `Drop for Body` removes it once the entity
+            // has been consumed, including on the early `?` returns in the caller.
+            body: Body::File {
+                file: body_file,
+                temp_dir: dir.clone(),
+            },
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&dir);
     }
-    if let Some(range) = range {
-        command.arg("-H").arg(format!("Range: {range}"));
-    }
-    command.args(curl_request_args(job, &headers));
-    match proxy_route(&job.proxy) {
-        ProxyRoute::Direct => {
-            command.arg("--noproxy").arg("*");
-        }
-        ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
-        ProxyRoute::Manual(proxy) => {
-            command.arg("-x").arg(proxy);
-        }
-    }
-    command.arg(&job.url);
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(error) => {
-            let _ = fs::remove_dir_all(&dir);
-            return Some(Err(EngineError::Failed(error.to_string())));
-        }
-    };
-    let status = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u16>()
-        .unwrap_or(0);
-    let headers = fs::read_to_string(&header_path).unwrap_or_default();
-    let meta = parse_header_meta(&headers);
-    record_download_type(job, status, &headers);
-    // A body read failure must not look like an empty body: `unwrap_or_default`
-    // silently turned a partial transfer into a truncated-but-"successful" file.
-    // The entity itself stays on disk and is streamed (see `Body::File`), so only
-    // the open is checked here and nothing is buffered into RAM.
-    let body_file = match File::open(&body_path) {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = fs::remove_dir_all(&dir);
-            return Some(Err(EngineError::Failed(format!(
-                "curl-impersonate body read failed: {error}"
-            ))));
-        }
-    };
-    // `--compressed` makes this branch request gzip/br and hand *decoded* bytes
-    // on disk, while the header dump still reports the compressed wire length.
-    // Reporting that wire length as the content length makes `download_sequential`
-    // reject every complete download from a compressing server, so the length of
-    // what curl actually wrote wins.
-    let content_length = if meta.content_encoding {
-        fs::metadata(&body_path)
-            .map(|file_meta| file_meta.len())
-            .ok()
-    } else {
-        meta.content_length
-    };
-    if !output.status.success() && status == 0 {
-        return Some(Err(EngineError::Failed(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        )));
-    }
-    Some(Ok(FetchResult {
-        status,
-        location: meta.location.clone(),
-        content_range: meta.content_range,
-        content_length,
-        etag: meta.etag,
-        last_modified: meta.last_modified,
-        accept_ranges: meta.accept_ranges,
-        // `dir` moves into the reader: `Drop for Body` removes it once the entity
-        // has been consumed, including on the early `?` returns in the caller.
-        body: Body::File {
-            file: body_file,
-            temp_dir: dir,
-        },
-    }))
+    Some(result)
 }
 
 struct ParsedUrl {
@@ -5278,7 +5328,7 @@ mod tests {
         });
         let url = format!("http://127.0.0.1:{}/file.bin", addr.port());
         let mut headers = HashMap::new();
-        headers.insert("Cookie".into(), "__cf_bm=stale; session=ok".into());
+        headers.insert("Cookie".into(), "__cf_bm=stale; __cflb=pool-a; session=ok".into());
         let (status, body) = fetch_bytes(&url, &headers, "").unwrap();
         assert_eq!(status, 200);
         assert_eq!(body, b"ok");
@@ -5286,10 +5336,142 @@ mod tests {
         assert!(seen.len() >= 2);
         assert!(seen[0].0.contains("__cf_bm"));
         assert!(!seen[1].0.contains("__cf_bm"));
+        assert!(seen[1].0.contains("__cflb=pool-a"));
         assert!(seen[1].0.contains("session=ok"));
         assert!(seen[0].1.contains("chrome/146") || seen[0].1.contains("Chrome/146"));
         let stripped = strip_stale_cloudflare_cookies(&headers).unwrap();
-        assert_eq!(stripped.get("Cookie").unwrap(), "session=ok");
+        assert_eq!(stripped.get("Cookie").unwrap(), "__cflb=pool-a; session=ok");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    fn curl_transport_preserves_browser_cookies_and_rejects_truncated_body() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        assert!(curl_impersonate_exe().is_some(), "bundled curl-impersonate required");
+        for truncated in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() { break; }
+                    request.push_str(&line);
+                }
+                let response: &[u8] = if truncated {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nok"
+                } else {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                };
+                reader.get_mut().write_all(response).unwrap();
+                request
+            });
+            let (mut job, dir) = temp_job(&url, true, 0, 1);
+            // 使用下载时才解密注入的请求上下文，而不只检查预先填好的 Job 头。
+            job.replay_json = serde_json::json!({
+                "cookie": "__cf_bm=valid; __cflb=pool-a; session=ok",
+                "referer": "https://page.test/watch",
+                "user_agent": "Browser fixture",
+            }).to_string();
+            let result = fetch_via_curl_impersonate(&job, None).expect("curl transport available");
+            let request = server.join().unwrap().to_ascii_lowercase();
+            assert!(request.contains("cookie: __cf_bm=valid; __cflb=pool-a; session=ok\r\n"), "{request}");
+            assert!(request.contains("referer: https://page.test/watch\r\n"), "{request}");
+            if truncated {
+                assert!(result.is_err(), "HTTP 200 with an incomplete body must fail");
+            } else {
+                let mut fetched = result.unwrap();
+                assert_eq!(fetched.status, 200);
+                let mut body = Vec::new();
+                fetched.body.read_to_end(&mut body).unwrap();
+                assert_eq!(body, b"ok");
+                let Body::File { temp_dir, .. } = &fetched.body else { panic!("expected file body"); };
+                let temporary = temp_dir.clone();
+                drop(fetched);
+                assert!(!temporary.exists(), "successful curl temp directory must be released");
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    fn curl_transport_stalled_headers_and_body_obey_pause_and_cancel() {
+        use std::sync::mpsc;
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        assert!(curl_impersonate_exe().is_some(), "bundled curl-impersonate required");
+        for action in ["pause", "cancel"] {
+            for phase in ["headers", "body"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
+                let (ready_tx, ready_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let server = thread::spawn(move || {
+                    let (stream, _) = listener.accept().unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut reader = BufReader::new(stream);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() { break; }
+                    }
+                    let mut stream = reader.into_inner();
+                    let response: &[u8] = if phase == "headers" {
+                        b"HTTP/1.1 200 OK\r\n"
+                    } else {
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc"
+                    };
+                    stream.write_all(response).unwrap();
+                    ready_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                });
+                let (job, dir) = temp_job(&url, true, 0, 1);
+                let worker_job = job.clone();
+                let (done_tx, done_rx) = mpsc::channel();
+                let worker = thread::spawn(move || {
+                    let _ = done_tx.send(fetch_via_curl_impersonate(&worker_job, None));
+                });
+                ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                fs::write(&job.control, action).unwrap();
+                // 服务端只有收到释放信号才结束；结果必须在网络释放之前返回。
+                let result = done_rx.recv_timeout(Duration::from_secs(3));
+                let _ = release_tx.send(());
+                server.join().unwrap();
+                worker.join().unwrap();
+                let error = match result.expect("stalled curl did not stop promptly").expect("curl available") {
+                    Err(error) => error,
+                    Ok(_) => panic!("control signal was ignored"),
+                };
+                assert!(matches!((&error, action),
+                    (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")), "{phase}/{action}: {error}");
+                fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn hls_entity_fetch_rejects_a_truncated_successful_http_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() { break; }
+            }
+            reader.get_mut().write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nok"
+            ).unwrap();
+        });
+        let result = fetch_hls_bytes(&url, &HashMap::new(), "");
+        server.join().unwrap();
+        assert!(result.is_err(), "a truncated media entity cannot be published as a complete segment");
     }
 
     #[test]

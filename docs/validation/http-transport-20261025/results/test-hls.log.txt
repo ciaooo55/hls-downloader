@@ -1,0 +1,40 @@
+
+running 26 tests
+test media::hls::tests::authenticated_master_auto_detects_live_and_restores_atomic_timeline ... ok
+test media::hls::tests::authenticated_vod_pause_resume_reuses_completed_segments ... ok
+test media::hls::tests::blocking_reload_requests_next_media_position ... ok
+test media::hls::tests::buffered_preview_waits_for_contiguous_segments_and_external_audio ... ok
+test media::hls::tests::byterange_offsets_continue_per_resource_and_map_ranges_are_preserved ... ok
+test media::hls::tests::cue_out_and_ad_path_are_marked_and_filtered ... ok
+test media::hls::tests::keyformat_com_apple_is_rejected ... ok
+core-tests.exe :
+At C:\HlsQA\command.ps1:35 char:5
++     & C:\HlsQA\core-tests.exe @($case.args) *> ('C:\HlsExchange\test- ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+thread '<unnamed>' (4092) panicked at src\media\hls.rs:2821:17:
+intentional live audio worker panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test media::hls::tests::live_audio_recorder_finish_reports_thread_panic ... ok
+test media::hls::tests::live_state_v2_is_atomic_and_invalid_state_is_discarded ... ok
+test media::hls::tests::live_subtitle_webvtt_url_is_captured_once ... ok
+test media::hls::tests::live_subtitles_merge_sidecar_cues ... ok
+test media::hls::tests::ll_hls_tracks_sequence_parts_keys_maps_and_gaps ... ok
+test media::hls::tests::master_collects_subtitle_renditions ... ok
+test media::hls::tests::master_prefers_resolution_over_audio_only ... ok
+test media::hls::tests::media_playlist_keeps_map_parts_and_endlist ... ok
+test media::hls::tests::non_http_segment_uris_are_dropped ... ok
+test media::hls::tests::resume_reuses_legacy_segment_files ... ok
+test media::hls::tests::sample_aes_is_rejected ... ok
+test media::hls::tests::segment_identity_includes_sequence_part_range_and_stable_url ... ok
+test media::hls::tests::selected_external_audio_failure_fails_vod_and_live_hls_downloads ... ok
+test media::hls::tests::separate_vod_audio_opens_preview_before_track_completion_and_resumes_both_tracks ... ok
+test media::hls::tests::signed_access_query_is_inherited_only_by_same_origin_children ... ok
+test media::hls::tests::subtitle_language_cannot_escape_subs_dir ... ok
+test media::hls::tests::vod_identity_skips_matching_and_rejects_mismatch ... ok
+test media::hls::tests::vod_playlist_concatenates_ts_segments ... ok
+test media::hls::tests::vod_resume_never_reuses_a_segment_with_no_checkpoint_record ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 607 filtered out; finished in 0.60s

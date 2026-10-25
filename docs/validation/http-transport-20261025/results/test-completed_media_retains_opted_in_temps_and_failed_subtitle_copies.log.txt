@@ -1,0 +1,17 @@
+
+running 1 test
+core-tests.exe : v7 task task-1 subtitle copy failed: copy subtitle C:\HlsQA\tr
+ansport-temp\hls-publish-media-preserve-1504-1792913344013259800\subs\zh.srt:
+拒绝访问。 (os error 5)
+At C:\HlsQA\command.ps1:35 char:5
++     & C:\HlsQA\core-tests.exe @($case.args) *> ('C:\HlsExchange\test- ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (v7 task task-1 ...问。 (os error 5)
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+v7 task task-1 subtitle copy failed: copy subtitle C:\HlsQA\transport-temp\hls-
+publish-media-preserve-1504-1792913344056925900\subs\zh.srt: 拒绝访问。 (os error 5)
+test download_worker::completed_media_retains_opted_in_temps_and_failed_subtitle_copies ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 632 filtered out; finished in 0.08s

@@ -1,0 +1,111 @@
+[
+    {
+        "args":  [
+                     "http_engine::tests::",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "http",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "http_engine::tests::curl_transport_",
+                     "--ignored",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "curl",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "media::hls::tests::",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "hls",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::tests::automatic_http_retry_respects_permanent_failure_and_keeps_queue_running",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "retry",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::tests::refreshed_url_resumes_paused_task_and_publishes_new_response",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "refresh",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::tests::structured_request_refresh_vaults_cookie_and_never_puts_it_in_snapshot",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "credentials",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::task_deletion_cleans_incomplete_cache_and_preserves_other_tasks_and_outputs",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "task_deletion_cleans_incomplete_cache_and_preserves_other_tasks_and_outputs",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::completion_persists_renamed_output_before_removing_all_cache_metadata",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "completion_persists_renamed_output_before_removing_all_cache_metadata",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::locked_cache_prevents_task_record_deletion",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "locked_cache_prevents_task_record_deletion",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::completed_media_cleans_segments_and_keeps_published_files",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "completed_media_cleans_segments_and_keeps_published_files",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::completed_media_retains_opted_in_temps_and_failed_subtitle_copies",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "completed_media_retains_opted_in_temps_and_failed_subtitle_copies",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "download_worker::media_cleanup_preserves_a_published_file_inside_the_work_directory",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "media_cleanup_preserves_a_published_file_inside_the_work_directory",
+        "exit_code":  0
+    }
+]
