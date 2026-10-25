@@ -1,0 +1,24 @@
+core_startup stage=entry elapsed_us=13
+core_startup stage=registration elapsed_us=2137
+core_startup stage=instance_lock elapsed_us=4457
+core_sqlite_open stage=directory_ready elapsed_us=68
+core_sqlite_open stage=connection_ready elapsed_us=2668
+core_sqlite_open stage=version_read elapsed_us=5615
+core_sqlite_initialize stage=pragmas_ready elapsed_us=329
+core_sqlite_initialize stage=schema_ready elapsed_us=2023
+core_sqlite_initialize stage=committed elapsed_us=3324
+core_sqlite_open stage=initialized elapsed_us=11389
+core_store_startup stage=database_open elapsed_us=12865
+core_store_startup stage=bootstrap elapsed_us=15174
+core_store_startup stage=recovery_watchers elapsed_us=16291
+core_startup stage=store_ready elapsed_us=24072
+core_startup stage=tray elapsed_us=25543
+core_startup stage=ipc_ready elapsed_us=29662
+download engine listening on 127.0.0.1:50594
+v7 task task-2 failed: HTTP 403
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-6 failed: resource identity changed: ETag differs from the saved download
+v7 task task-8 failed: HLS media HTTP 403
+v7 task task-9 failed: HTTP 403: byte range requires status 206
