@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\request-control-20261025\\boundary-candidate.msi",
+  "original_product_code": "{3286AD45-812F-4ED0-84C5-43ED7304D6C2}",
+  "verified_product_code": "{0BDEB6CB-0249-410F-B306-CA9EA25C706E}",
+  "original_package_code": "{ED148428-E793-40EF-AAFB-EB5D8A02B0B5}",
+  "verified_package_code": "{0E3D58E9-0765-4AEE-830C-D5BCD76B0BEF}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "A677EED1C3396F7B16E66F9D15967E307D44DD68FFAA2F08571C7A75FB2D29C2",
+  "sha256_after": "1946505C19D7412E51D9D43B7D02B7759095423B1D43EBA0E894853B30064E82"
+}

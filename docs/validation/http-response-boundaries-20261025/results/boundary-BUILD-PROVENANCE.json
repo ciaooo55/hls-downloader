@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "record_scope": "build_snapshot",
+  "product_version": "7.0.3",
+  "source_commit": "ed391dc6d5e96dfa10abf266d2696a205f247007",
+  "source_branch": "main",
+  "git_worktree_clean": true,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "source_patch_sha256": null,
+  "source_files_sha256": {
+    "extension/entrypoints/background.ts": "426169f22c038c79d6460336e68561dfea6e0df43e4c966b3a454435de63b74f",
+    "extension/entrypoints/content.ts": "6061dd4558ccc9413e0cba7a4d47887a8200bd98ada55e472342e47df346b509",
+    "extension/entrypoints/popup/main.ts": "504ca93049e275e677b0dcfb1a910575258f4fe1f51965e08e20f863859b73a4",
+    "extension/lib/mediaOverlay.ts": "470db30eda89bb10d3072733e2be84b0d66de67cec118cbb3c2c383c2b76b083",
+    "native_shell/src/core_runtime.rs": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+    "native_shell/src/download_worker.rs": "99819411b24b344235edcfc999a5e36c7385f36408dcdfe06e41b7b3b08c27c6",
+    "native_shell/src/media/hls.rs": "e924a98dd56f1f0ebcbcfe19a69239dad30d17d83c5af2f94949445bd7daec81",
+    "presenter_ui/src/hot_main.rs": "dd465b94150a2d4dc00d16a2e99942f2eda825d876d84eaa25fc8087567497e7",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "39346ac89e9cdb2a071508bc1f855911d718f4cbce23c9ccd27b0a4c0d76b6aa",
+    "native_shell/src/bin/hls_downloader_engine.rs": "ab23b50eafe70e18ec35cd199dc930c89c909e0c194c4d6f714a710ff2fbd7e7",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/SidebarNavigationUiTest.kt": "ef0e470cb2e6e3150c513ef9beb16e80f4b03d18476be257aa85e4ddadc06412",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/WorkbenchWindowTest.kt": "6206f87a4fc7c0861115290f2960fd65b81ded1bb49aa3be4be1367e4ada8d36",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt": "7139ed7833948eb1c823d3c26450fb1975ec244e30187e18b598a84387acc60c",
+    "native_shell/src/http_engine.rs": "d7dc8e38fb720513b05b233e99687640989aa9caadecd506f23d79599c32b223",
+    "native_shell/src/net_policy.rs": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998",
+    "native_shell/src/core_ipc.rs": "d7792e86ba0caf1fbc23887fe23a80772c6c965bebdf032c175173114af8b251",
+    "scripts/validation/smoke_v7_installed_footprint.py": "e4f3b165d986b37e051f489fed52083f00cef624fa0b6bc058f2ccbbb96d2bbe",
+    "native_shell/src/core_service.rs": "88e1b175014da24e5bc9dfd37d337cf34c6027ad937decfb5e22f3ef3b5df05b",
+    "scripts/validation/compare_v7_player_events.py": "b45cfe8f3d8765c2323eb879dbc59cd2621e34d8bb92fa3e79c7cac1886553c1",
+    "scripts/validation/compare_v7_http_headers.py": "10c569408776226ff0c6d840e00039ac00a44f94183784df7b467f734830a46f",
+    "scripts/validation/compare_v7_sequential_io.py": "f826de7a8f6e529f12a3798b0d77a1c46bc218a9cb27400dfcfd9fd8e396c592",
+    "scripts/validation/smoke_v7_range_response_faults.py": "3467041563363ca7d67272e58da2f25ebb00a0c006a29e03469f67326a3e7a28"
+  },
+  "base_msi_sha256": "b1c1010f56896d3351ecc590f83c729b5ec25bd0a0c8ec0f179d3c4dc14c5afd",
+  "replaced_components": [
+    "Engine",
+    "Build provenance"
+  ],
+  "reused_components": [
+    "NativeHost/Updater/Presenter/Desktop UI/JRE/player/extension archives from the verified base MSI"
+  ],
+  "validation_limits": [
+    "Core and explicit transport regressions passed; malformed range queue/cache acceptance and same-baseline WinHTTP pool comparison recorded; final MSI pending at build snapshot",
+    "No new UI/browser/cloud/device acceptance or performance parity claim",
+    "First installed Engine startup timeout, specified live-site HTTP 403 and original HLS hang scene remain open"
+  ]
+}
