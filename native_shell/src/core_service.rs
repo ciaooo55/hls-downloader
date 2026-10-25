@@ -149,12 +149,13 @@ impl PersistentCore {
     }
 
     pub fn emit(&mut self, event: crate::CoreEvent) -> Result<Vec<EventEnvelope>, String> {
-        let before = self.runtime.clone();
-        let events = self.runtime.emit(event);
-        if let Err(error) = self.store.apply_events_and_spec(&events, None) {
-            self.runtime = before;
-            return Err(error);
-        }
+        let envelope = EventEnvelope {
+            sequence: self.runtime.latest_sequence() + 1,
+            event,
+        };
+        // 单事件发布只改变事件环和序号；先提交数据库，无需复制整个运行态来回滚。
+        self.store.apply_events(std::slice::from_ref(&envelope))?;
+        let events = self.runtime.emit(envelope.event);
         self.notify_committed(&events);
         Ok(events)
     }
@@ -491,6 +492,28 @@ mod tests {
         // 在快照和日志已写入事务后再失败，二者仍必须与事件检查点一起回滚。
         connection.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON event_checkpoints BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END;").unwrap();
         assert!(core.handle(progress.clone()).is_err());
+        let player_event = serde_json::from_value(serde_json::json!({
+            "kind": "player_session", "active": true, "title": "Video",
+            "task_id": "task-1", "status": "PAUSED", "paused": true,
+            "position_seconds": 12.5, "duration_seconds": 100.0
+        }))
+        .unwrap();
+        assert!(core.emit(player_event).is_err());
+        assert!(core
+            .emit(crate::CoreEvent::MediaPushRequested {
+                request: crate::MediaPushRequest {
+                    id: "must-not-persist".into(),
+                    push_kind: "tvbox".into(),
+                    url: "https://example.test/video.mp4".into(),
+                    title: "Video".into(),
+                    status: "pending".into(),
+                    message: String::new(),
+                    location: String::new(),
+                    created_at_ms: 1,
+                },
+            })
+            .is_err());
+        assert!(core.store().load_handoffs().unwrap().is_empty());
         assert_eq!(core.tasks(), tasks);
         assert_eq!(core.store().load_tasks().unwrap(), tasks);
         assert!(core.store().load_task_log("task-1", 500).unwrap().is_empty());
