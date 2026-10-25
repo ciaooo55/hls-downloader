@@ -99,7 +99,7 @@ def stop_isolated_engine(executable: Path) -> None:
         "$ErrorActionPreference = 'Stop'; "
         "Get-Process -Name HLSDownloaderEngine -ErrorAction SilentlyContinue | "
         "Where-Object { $_.Path -eq $env:HLS_V7_SMOKE_ENGINE } | "
-        "ForEach-Object { Stop-Process -InputObject $_ -PassThru | Wait-Process -Timeout 5 }"
+        "ForEach-Object { Stop-Process -InputObject $_ -PassThru | Wait-Process -Timeout 5 }; exit 0"
     )
     environment = os.environ.copy()
     environment["HLS_V7_SMOKE_ENGINE"] = str(executable)
@@ -139,6 +139,9 @@ def main() -> int:
     try:
         shutil.copy2(args.host.resolve(), host)
         shutil.copy2(args.engine.resolve(), engine)
+        runtime = args.engine.resolve().parent / 'vcruntime140.dll'
+        if runtime.is_file():
+            shutil.copy2(runtime, root / runtime.name)
         # 夹具先落盘，以免将复制文件的延迟写入计入已安装程序的启动时间。
         for binary in (host, engine):
             with binary.open("rb+") as staged:

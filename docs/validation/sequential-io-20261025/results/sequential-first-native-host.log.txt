@@ -1,0 +1,74 @@
+python.exe : Traceback (most recent call last):
+At C:\HlsExchange\sequential-run-comparison.ps1:18 char:5
++     & C:\HlsSource\.tool-cache\live-presenter-20261024\python\python. ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last) 
+   ::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 74, in 
+responses
+    raise RuntimeError("Native Host returned a truncated frame header")
+RuntimeError: Native Host returned a truncated frame header
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 159, in 
+main
+    results = list(executor.map(lambda _: start_host(), 
+range(args.concurrent_hosts)))
+              
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\HlsSource\.tool-cache\live-presenter-20261024\python\Lib\concurrent\
+futures\_base.py", line 619, in result_iterator
+    yield _result_or_cancel(fs.pop())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\HlsSource\.tool-cache\live-presenter-20261024\python\Lib\concurrent\
+futures\_base.py", line 317, in _result_or_cancel
+    return fut.result(timeout)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\HlsSource\.tool-cache\live-presenter-20261024\python\Lib\concurrent\
+futures\_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\HlsSource\.tool-cache\live-presenter-20261024\python\Lib\concurrent\
+futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\HlsSource\.tool-cache\live-presenter-20261024\python\Lib\concurrent\
+futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 159, in 
+<lambda>
+    results = list(executor.map(lambda _: start_host(), 
+range(args.concurrent_hosts)))
+                                          ^^^^^^^^^^^^
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 156, in 
+start_host
+    return responses(host, environment)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 87, in 
+responses
+    raise RuntimeError(f"Native Host response failed: {error}; startup 
+diagnostics: {diagnostics}") from error
+RuntimeError: Native Host response failed: Native Host returned a truncated 
+frame header; startup diagnostics: [{'received_ms': 43.07, 'message': 
+'native_host_startup stage=entry elapsed_us=0'}, {'received_ms': 10072.77, 
+'message': 'v7 Core startup failed: �ȴ������������� Core ��ʱ��������'}]
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 220, in 
+<module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 215, in 
+main
+    stop_isolated_engine(engine)
+  File "C:\HlsSource\scripts\validation\smoke_v7_native_host.py", line 115, in 
+stop_isolated_engine
+    raise RuntimeError(completed.stderr.strip() or "Could not stop isolated 
+engine")
+RuntimeError: Could not stop isolated engine

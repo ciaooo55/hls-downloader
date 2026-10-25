@@ -816,7 +816,9 @@ impl NamedPipeClient {
     pub fn connect(name: &str, timeout_ms: u32) -> Result<Self, String> {
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
-        use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Foundation::{
+            ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE,
+        };
         use windows_sys::Win32::Storage::FileSystem::{
             CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
             OPEN_EXISTING,
@@ -841,19 +843,26 @@ impl NamedPipeClient {
                     stream: unsafe { File::from_raw_handle(handle as _) },
                 });
             }
-            let error = std::io::Error::last_os_error();
+            let mut error = std::io::Error::last_os_error();
+            let mut operation = "CreateFileW pipe";
             let remaining = timeout_ms
                 .saturating_sub(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
-            if error.raw_os_error() != Some(ERROR_PIPE_BUSY as i32) || remaining == 0 {
-                return Err(format!("CreateFileW pipe failed: {error}"));
-            }
             // WaitNamedPipe 不预留实例；其他客户端可能抢先打开，必须在同一总时限内重试。
-            if unsafe { WaitNamedPipeW(wide_name.as_ptr(), remaining) } == 0 {
-                return Err(format!(
-                    "WaitNamedPipeW failed: {}",
-                    std::io::Error::last_os_error()
-                ));
+            if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && remaining > 0 {
+                if unsafe { WaitNamedPipeW(wide_name.as_ptr(), remaining) } != 0 {
+                    continue;
+                }
+                error = std::io::Error::last_os_error();
+                operation = "WaitNamedPipeW";
             }
+            let remaining = timeout_ms
+                .saturating_sub(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
+            if error.raw_os_error() != Some(ERROR_FILE_NOT_FOUND as i32) || remaining == 0 {
+                return Err(format!("{operation} failed: {error}"));
+            }
+            // 最后一个旧实例关闭到服务端创建下一实例之间，WaitNamedPipe 会立即返回找不到文件。
+            // 等待原期限内的新实例，不能在这个窗口提前报错，也不能空转占满 CPU。
+            thread::sleep(Duration::from_millis(u64::from(remaining.min(10))));
         }
     }
 
@@ -1788,5 +1797,9 @@ mod tests {
             errors.is_empty(),
             "competing connections failed: {errors:?}"
         );
+        let missing = format!("{name}.missing");
+        let started = std::time::Instant::now();
+        assert!(NamedPipeClient::connect(&missing, 40).is_err());
+        assert!(started.elapsed() >= Duration::from_millis(40));
     }
 }

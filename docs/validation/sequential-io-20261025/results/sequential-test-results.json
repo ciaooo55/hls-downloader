@@ -1,0 +1,40 @@
+[
+    {
+        "args":  [
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "full-core",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "http_engine::tests::curl_transport_",
+                     "--ignored",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "curl",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "http_engine::tests::winhttp_",
+                     "--ignored",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "winhttp",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "media::merge::tests::real_ffmpeg_pause_and_cancel_reap_the_child",
+                     "--ignored",
+                     "--exact",
+                     "--nocapture"
+                 ],
+        "name":  "ffmpeg-control",
+        "exit_code":  0
+    }
+]

@@ -1,0 +1,218 @@
+[
+  {
+    "case": "GET, 4096, baseline-a",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.25,
+      "median": 0.25,
+      "min": 0.234375
+    },
+    "elapsed_seconds": {
+      "max": 0.2938720000001922,
+      "median": 0.29369850000011866,
+      "min": 0.2925198000000364
+    },
+    "read_count": {
+      "max": 5255,
+      "median": 5219,
+      "min": 5141
+    },
+    "write_count": {
+      "max": 2665,
+      "median": 2647,
+      "min": 2608
+    }
+  },
+  {
+    "case": "GET, 4096, baseline-b",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.28125,
+      "median": 0.25,
+      "min": 0.234375
+    },
+    "elapsed_seconds": {
+      "max": 0.3468361999998706,
+      "median": 0.3452307000000019,
+      "min": 0.29148430000009284
+    },
+    "read_count": {
+      "max": 5991,
+      "median": 5033,
+      "min": 4677
+    },
+    "write_count": {
+      "max": 3033,
+      "median": 2553,
+      "min": 2375
+    }
+  },
+  {
+    "case": "GET, 4096, candidate",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.25,
+      "median": 0.203125,
+      "min": 0.1875
+    },
+    "elapsed_seconds": {
+      "max": 0.2927455000001373,
+      "median": 0.2926044999999249,
+      "min": 0.29163040000003093
+    },
+    "read_count": {
+      "max": 47,
+      "median": 47,
+      "min": 47
+    },
+    "write_count": {
+      "max": 20012,
+      "median": 19181,
+      "min": 18063
+    }
+  },
+  {
+    "case": "GET, 65536, baseline-a",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.296875,
+      "median": 0.296875,
+      "min": 0.28125
+    },
+    "elapsed_seconds": {
+      "max": 0.9670389000000341,
+      "median": 0.3437894999999571,
+      "min": 0.34351569999989806
+    },
+    "read_count": {
+      "max": 4133,
+      "median": 4133,
+      "min": 4129
+    },
+    "write_count": {
+      "max": 2103,
+      "median": 2103,
+      "min": 2091
+    }
+  },
+  {
+    "case": "GET, 65536, baseline-b",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.28125,
+      "median": 0.265625,
+      "min": 0.265625
+    },
+    "elapsed_seconds": {
+      "max": 0.3436673000001065,
+      "median": 0.34268629999996847,
+      "min": 0.34250360000010005
+    },
+    "read_count": {
+      "max": 4133,
+      "median": 4133,
+      "min": 4133
+    },
+    "write_count": {
+      "max": 2103,
+      "median": 2103,
+      "min": 2103
+    }
+  },
+  {
+    "case": "GET, 65536, candidate",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.21875,
+      "median": 0.21875,
+      "min": 0.1875
+    },
+    "elapsed_seconds": {
+      "max": 0.2663469999999961,
+      "median": 0.24144599999999627,
+      "min": 0.23972759999992377
+    },
+    "read_count": {
+      "max": 43,
+      "median": 43,
+      "min": 43
+    },
+    "write_count": {
+      "max": 2103,
+      "median": 2103,
+      "min": 2103
+    }
+  },
+  {
+    "case": "POST, 4096, baseline-a",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.34375,
+      "median": 0.21875,
+      "min": 0.21875
+    },
+    "elapsed_seconds": {
+      "max": 0.9449660999998741,
+      "median": 0.42321539999989,
+      "min": 0.29290340000011383
+    },
+    "read_count": {
+      "max": 5593,
+      "median": 4891,
+      "min": 4731
+    },
+    "write_count": {
+      "max": 2834,
+      "median": 2483,
+      "min": 2401
+    }
+  },
+  {
+    "case": "POST, 4096, baseline-b",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.265625,
+      "median": 0.234375,
+      "min": 0.234375
+    },
+    "elapsed_seconds": {
+      "max": 0.31810959999984334,
+      "median": 0.29380940000010014,
+      "min": 0.2915401000000202
+    },
+    "read_count": {
+      "max": 5177,
+      "median": 5095,
+      "min": 4669
+    },
+    "write_count": {
+      "max": 2626,
+      "median": 2585,
+      "min": 2371
+    }
+  },
+  {
+    "case": "POST, 4096, candidate",
+    "count": 3,
+    "cpu_seconds": {
+      "max": 0.25,
+      "median": 0.21875,
+      "min": 0.171875
+    },
+    "elapsed_seconds": {
+      "max": 0.2924794999998994,
+      "median": 0.29175050000003466,
+      "min": 0.29165549999993345
+    },
+    "read_count": {
+      "max": 45,
+      "median": 45,
+      "min": 45
+    },
+    "write_count": {
+      "max": 20027,
+      "median": 18360,
+      "min": 18189
+    }
+  }
+]

@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "host_sha256": "27d6c619e6489fd46aa61a5598dff8a79779621364d43b1b0a4d8f65ab6e7c92",
+  "engine_sha256": "ad501a7afeb6d152c131a918977ccd5b2ba03af5c19a33924c67ec2199a4e99e",
+  "staged_binaries_flushed": true,
+  "stage_volume": "C:",
+  "stage_root": "C:\\HlsQA",
+  "cold_first_response_ms": 167.55,
+  "two_response_total_ms": 212.45,
+  "threshold_ms": 1500,
+  "passed": true,
+  "migration_skipped": true,
+  "diagnostics": [
+    {
+      "received_ms": 24.86,
+      "message": "native_host_startup stage=entry elapsed_us=0"
+    },
+    {
+      "received_ms": 117.16,
+      "message": "native_host_startup stage=session_ready elapsed_us=92295"
+    }
+  ],
+  "diagnostics_by_host": [
+    [
+      {
+        "received_ms": 24.86,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 117.16,
+        "message": "native_host_startup stage=session_ready elapsed_us=92295"
+      }
+    ],
+    [
+      {
+        "received_ms": 21.47,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 114.16,
+        "message": "native_host_startup stage=session_ready elapsed_us=92654"
+      }
+    ],
+    [
+      {
+        "received_ms": 22.18,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 114.73,
+        "message": "native_host_startup stage=session_ready elapsed_us=92660"
+      }
+    ],
+    [
+      {
+        "received_ms": 25.57,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 117.46,
+        "message": "native_host_startup stage=session_ready elapsed_us=91864"
+      }
+    ],
+    [
+      {
+        "received_ms": 22.16,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 55.68,
+        "message": "core_spawn stage=before_spawn elapsed_us=145"
+      },
+      {
+        "received_ms": 61.58,
+        "message": "core_spawn stage=spawn_return elapsed_us=6083"
+      },
+      {
+        "received_ms": 79.35,
+        "message": "core_startup stage=entry elapsed_us=22"
+      },
+      {
+        "received_ms": 79.37,
+        "message": "core_startup stage=registration elapsed_us=185"
+      },
+      {
+        "received_ms": 79.94,
+        "message": "core_startup stage=instance_lock elapsed_us=679"
+      },
+      {
+        "received_ms": 92.02,
+        "message": "core_store_startup stage=database_open elapsed_us=11992"
+      },
+      {
+        "received_ms": 92.45,
+        "message": "core_store_startup stage=bootstrap elapsed_us=12441"
+      },
+      {
+        "received_ms": 92.95,
+        "message": "core_store_startup stage=recovery_watchers elapsed_us=12925"
+      },
+      {
+        "received_ms": 93.16,
+        "message": "core_startup stage=store_ready elapsed_us=13917"
+      },
+      {
+        "received_ms": 93.48,
+        "message": "core_startup stage=tray elapsed_us=14225"
+      },
+      {
+        "received_ms": 97.14,
+        "message": "core_startup stage=ipc_ready elapsed_us=17822"
+      },
+      {
+        "received_ms": 97.16,
+        "message": "download engine listening on 127.0.0.1:18765"
+      },
+      {
+        "received_ms": 113.83,
+        "message": "native_host_startup stage=session_ready elapsed_us=91634"
+      }
+    ],
+    [
+      {
+        "received_ms": 22.33,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 115.37,
+        "message": "native_host_startup stage=session_ready elapsed_us=93066"
+      }
+    ],
+    [
+      {
+        "received_ms": 23.51,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 116.79,
+        "message": "native_host_startup stage=session_ready elapsed_us=93363"
+      }
+    ],
+    [
+      {
+        "received_ms": 23.91,
+        "message": "native_host_startup stage=entry elapsed_us=0"
+      },
+      {
+        "received_ms": 116.84,
+        "message": "native_host_startup stage=session_ready elapsed_us=92945"
+      }
+    ]
+  ],
+  "core_spawn_attempts": 1,
+  "concurrent_hosts": 8,
+  "resident_engine_count": 1,
+  "host_first_response_ms": [
+    167.55,
+    161.19,
+    159.45,
+    166.35,
+    158.14,
+    165.11,
+    163.85,
+    161.52
+  ]
+}

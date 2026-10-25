@@ -1073,8 +1073,13 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     let mut downloaded = resume_from;
     let mut rate = TransferRate::new(resume_from);
     let mut last_progress = Instant::now();
+    let mut last_control = Instant::now() - Duration::from_millis(50);
     loop {
-        check_control(&job.control)?;
+        // 与分段路径一致：按时间检查控制，避免短网络读取反复打开同一控制文件。
+        if last_control.elapsed() >= Duration::from_millis(50) {
+            last_control = Instant::now();
+            check_control(&job.control)?;
+        }
         let count = match reader.read(&mut buffer) {
             Ok(count) => count,
             Err(err) => {
@@ -1100,6 +1105,7 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
             last_progress = Instant::now();
         }
     }
+    check_control(&job.control)?;
     file.flush()
         .map_err(|err| EngineError::Failed(err.to_string()))?;
     if let Some(expected) = expected_downloaded {
