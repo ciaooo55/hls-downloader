@@ -1,0 +1,18 @@
+
+running 13 tests
+test net_policy::tests::allowed_hosts_support_exact_and_subdomain_patterns ... ok
+test net_policy::tests::local_clock_stays_in_day ... ok
+test net_policy::tests::overnight_window_wraps_midnight ... ok
+test net_policy::tests::queue_limit_sync_removes_deleted_profiles ... ok
+test net_policy::tests::rolling_hourly_quota_releases_only_expired_bytes ... ok
+test net_policy::tests::running_workers_switch_the_shared_global_bucket_at_schedule_boundaries ... ok
+test net_policy::tests::saturated_connection_budget_can_stop_without_leaking_a_slot ... ok
+test net_policy::tests::scoped_queue_bucket_enforces_aggregate_bytes_across_workers ... ok
+test net_policy::tests::scoped_throttle_shares_queue_bucket_and_separates_tasks ... ok
+test net_policy::tests::task_schedule_accepts_daily_and_absolute_times_without_fail_open ... ok
+test net_policy::tests::throttle_unlimited_does_not_sleep ... ok
+test net_policy::tests::throttle_wait_can_stop_and_recheck_live_configuration ... ok
+test net_policy::tests::weekday_and_proxy_bypass ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 626 filtered out; finished in 0.30s
+

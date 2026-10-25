@@ -1,0 +1,87 @@
+diff --git a/native_shell/src/http_engine.rs b/native_shell/src/http_engine.rs
+index dbe3d5b..b251eec 100644
+--- a/native_shell/src/http_engine.rs
++++ b/native_shell/src/http_engine.rs
+@@ -5381,6 +5381,82 @@ mod tests {
+         let _ = fs::remove_dir_all(dir);
+     }
+ 
++    #[test]
++    fn changed_206_identity_never_stitches_into_a_saved_prefix() {
++        for (validator, response_validator, changed) in [
++            ("etag", "\"new-entity\"", true),
++            ("etag", "W/\"native-test\"", true),
++            ("etag", "\"native-test\"", false),
++            ("etag", "", false),
++            ("modified", "Thu, 22 Oct 2026 10:00:00 GMT", true),
++            ("modified", "Wed, 21 Oct 2026 10:00:00 GMT", false),
++            ("modified", "", false),
++        ] {
++            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++            let url = format!("http://{}/file.bin", listener.local_addr().unwrap());
++            let (job, dir) = temp_job(&url, false, 96 * 1024, 1);
++            let mut job = job;
++            let prefix_len = 64 * 1024;
++            let old_prefix = vec![b'a'; prefix_len];
++            let tail = vec![b'b'; 32 * 1024];
++            if validator == "modified" {
++                job.etag.clear();
++                job.last_modified = "Wed, 21 Oct 2026 10:00:00 GMT".into();
++            }
++            fs::write(&job.output, &old_prefix).unwrap();
++            save_completed_ranges(&job, &[(0, prefix_len as u64 - 1)]).unwrap();
++            let server_tail = tail.clone();
++            let server = thread::spawn(move || {
++                let (stream, _) = listener.accept().unwrap();
++                let mut reader = BufReader::new(stream);
++                let mut headers = String::new();
++                loop {
++                    let mut line = String::new();
++                    reader.read_line(&mut line).unwrap();
++                    if line.trim().is_empty() {
++                        break;
++                    }
++                    headers.push_str(&line);
++                }
++                assert!(headers.contains("Range: bytes=65536-98303"), "{headers}");
++                assert!(headers.contains("If-Range:"), "{headers}");
++                let field = if validator == "etag" {
++                    "ETag"
++                } else {
++                    "Last-Modified"
++                };
++                let header = if response_validator.is_empty() {
++                    String::new()
++                } else {
++                    format!("{field}: {response_validator}\r\n")
++                };
++                let mut stream = reader.into_inner();
++                let _ = write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 65536-98303/98304\r\nContent-Length: 32768\r\n{header}Connection: close\r\n\r\n");
++                let _ = stream.write_all(&server_tail);
++            });
++            let result = run_job(&job);
++            server.join().unwrap();
++            let output = fs::read(&job.output).unwrap();
++            assert_eq!(&output[..prefix_len], old_prefix);
++            if changed {
++                assert!(matches!(result, Err(EngineError::RangeUnsupported(ref message)) if message.starts_with("resource identity changed:")),
++                    "{validator}/{response_validator}: changed entity must not be accepted: {result:?}");
++                assert!(
++                    output[prefix_len..].iter().all(|byte| *byte == 0),
++                    "changed entity bytes were written"
++                );
++                assert_eq!(
++                    load_completed_ranges(&job),
++                    Some(vec![(0, prefix_len as u64 - 1)])
++                );
++            } else {
++                result.unwrap();
++                assert_eq!(&output[prefix_len..], tail);
++            }
++            fs::remove_dir_all(dir).unwrap();
++        }
++    }
++
+     #[test]
+     fn mirrors_fall_back_when_primary_fails() {
+         let body: &'static [u8] = b"mirror-payload";

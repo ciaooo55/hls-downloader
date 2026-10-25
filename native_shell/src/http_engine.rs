@@ -1034,6 +1034,9 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     if fetched.status == 206 {
         require_content_range_start(fetched.content_range.as_deref(), resume_from)?;
         require_content_range_total(fetched.content_range.as_deref(), job.total)?;
+        if resume_from > 0 {
+            require_response_identity(job, &fetched)?;
+        }
     }
     // Only the response may describe its own size.  `job.total` can be a stale
     // caller-supplied expected size or a `bytes=0-0` probe result, so it is trusted
@@ -1783,6 +1786,9 @@ fn fetch_range(
                 continue;
             }
             return Err(EngineErrorCode::Failed(format!("HTTP {}", fetched.status)));
+        }
+        if let Err(error) = require_response_identity(job, &fetched) {
+            return Err(EngineErrorCode::RangeUnsupported(error.to_string()));
         }
         if let Err(err) = require_content_range_start(fetched.content_range.as_deref(), cursor) {
             return Err(match err {
@@ -2790,6 +2796,26 @@ fn require_content_range_total(
             "Range response missing valid Content-Range".into(),
         )),
     }
+}
+
+fn require_response_identity(job: &Job, response: &FetchResult) -> Result<(), EngineError> {
+    let etag = strong_etag(&job.etag);
+    let (field, expected, received) = if header_token_ok(&etag) {
+        ("ETag", etag.as_str(), response.etag.trim())
+    } else {
+        (
+            "Last-Modified",
+            job.last_modified.trim(),
+            response.last_modified.trim(),
+        )
+    };
+    // If-Range 响应可省略表示元数据，但不能用明确冲突的身份拼接已保存的字节。
+    if header_token_ok(expected) && !received.is_empty() && received != expected {
+        return Err(EngineError::RangeUnsupported(format!(
+            "resource identity changed: {field} differs from the saved download"
+        )));
+    }
+    Ok(())
 }
 
 fn request_method(job: &Job) -> &'static str {
@@ -5379,6 +5405,82 @@ mod tests {
             "If-Range miss stitched the new identity into the reserved file: {output:?}"
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn changed_206_identity_never_stitches_into_a_saved_prefix() {
+        for (validator, response_validator, changed) in [
+            ("etag", "\"new-entity\"", true),
+            ("etag", "W/\"native-test\"", true),
+            ("etag", "\"native-test\"", false),
+            ("etag", "", false),
+            ("modified", "Thu, 22 Oct 2026 10:00:00 GMT", true),
+            ("modified", "Wed, 21 Oct 2026 10:00:00 GMT", false),
+            ("modified", "", false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/file.bin", listener.local_addr().unwrap());
+            let (job, dir) = temp_job(&url, false, 96 * 1024, 1);
+            let mut job = job;
+            let prefix_len = 64 * 1024;
+            let old_prefix = vec![b'a'; prefix_len];
+            let tail = vec![b'b'; 32 * 1024];
+            if validator == "modified" {
+                job.etag.clear();
+                job.last_modified = "Wed, 21 Oct 2026 10:00:00 GMT".into();
+            }
+            fs::write(&job.output, &old_prefix).unwrap();
+            save_completed_ranges(&job, &[(0, prefix_len as u64 - 1)]).unwrap();
+            let server_tail = tail.clone();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    headers.push_str(&line);
+                }
+                assert!(headers.contains("Range: bytes=65536-98303"), "{headers}");
+                assert!(headers.contains("If-Range:"), "{headers}");
+                let field = if validator == "etag" {
+                    "ETag"
+                } else {
+                    "Last-Modified"
+                };
+                let header = if response_validator.is_empty() {
+                    String::new()
+                } else {
+                    format!("{field}: {response_validator}\r\n")
+                };
+                let mut stream = reader.into_inner();
+                let _ = write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 65536-98303/98304\r\nContent-Length: 32768\r\n{header}Connection: close\r\n\r\n");
+                let _ = stream.write_all(&server_tail);
+            });
+            let result = run_job(&job);
+            server.join().unwrap();
+            let output = fs::read(&job.output).unwrap();
+            assert_eq!(&output[..prefix_len], old_prefix);
+            if changed {
+                assert!(matches!(result, Err(EngineError::RangeUnsupported(ref message)) if message.starts_with("resource identity changed:")),
+                    "{validator}/{response_validator}: changed entity must not be accepted: {result:?}");
+                assert!(
+                    output[prefix_len..].iter().all(|byte| *byte == 0),
+                    "changed entity bytes were written"
+                );
+                assert_eq!(
+                    load_completed_ranges(&job),
+                    Some(vec![(0, prefix_len as u64 - 1)])
+                );
+            } else {
+                result.unwrap();
+                assert_eq!(&output[prefix_len..], tail);
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

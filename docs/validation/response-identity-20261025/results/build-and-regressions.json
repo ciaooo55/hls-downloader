@@ -1,0 +1,19 @@
+{
+  "baseline_commit": "3642b43",
+  "red_test_exit": 101,
+  "tests_build_exit": 0,
+  "engine_build_exit": 0,
+  "sandbox_regressions": 115,
+  "sandbox_regression_exit": 0,
+  "hashes": {
+    "native_shell/src/http_engine.rs": "bfe3c3feb98b28c68d41d169e325060fb23130e7c9df2d9f9dda2abc9ddd8220",
+    "native_shell/src/download_worker.rs": "736adc432dbd3858dd1fd44ec0a469274578b86179a9d597a7cfd3104ab3a1de",
+    "scripts/validation/smoke_v7_installed_footprint.py": "fd7f9ba4dad174b95fbdf9c96ea22f6fce3c195516ccc5bfaa033f0bba488b85",
+    ".tool-cache/request-control-20261025/identity-red-tests.exe": "cf3e13f1bced9de216f2375557e01b719140efa5e096ed128f554d0135d7bd9b",
+    ".tool-cache/request-control-20261025/identity-core-tests.exe": "361286222a14c06a1a5e3fe07e10ff7e7eaab8d5ca2a138bee857d25851237e5",
+    ".tool-cache/live-presenter-20261024/target/release/hls-downloader-engine.exe": "c0aba12f14fc1358870d98c1a58c2c19f1ff1d610707550ee5bc836467b14c14"
+  },
+  "host_product_run": false,
+  "cloud_called": false,
+  "final_installer_pending": true
+}

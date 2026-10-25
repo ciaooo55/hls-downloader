@@ -1,0 +1,72 @@
+
+running 67 tests
+test http_engine::tests::a_file_backed_body_dropped_early_still_cleans_up_its_temp_dir ... ok
+test http_engine::tests::a_file_backed_body_streams_from_disk_and_cleans_up_its_temp_dir ... ok
+test http_engine::tests::adaptive_connections_ramp_gradually_and_back_off_immediately ... ok
+test http_engine::tests::adaptive_connections_respect_single_connection_limit ... ok
+test http_engine::tests::adaptive_scheduler_parks_excess_workers_without_duplicate_ranges ... ok
+test http_engine::tests::browser_profile_fills_chrome_ua ... ok
+test http_engine::tests::cancel_control_stops_before_writing ... ok
+test http_engine::tests::capped_range_responses_resume_at_the_next_byte ... ok
+test http_engine::tests::changed_206_identity_never_stitches_into_a_saved_prefix ... ok
+test http_engine::tests::checkpoint_replace_keeps_latest_ranges ... ok
+test http_engine::tests::chunked_body_is_decoded_without_writing_framing ... ok
+test http_engine::tests::cloudflare_403_retries_without_cf_bm ... ok
+test http_engine::tests::completed_checkpoint_is_removed_without_network_work ... ok
+test http_engine::tests::concurrent_checkpoint_prefixes_commit_together_and_failed_commit_stays_untrusted ... ok
+test http_engine::tests::content_range_parser_accepts_rfc_and_bare_forms ... ok
+test http_engine::tests::cross_origin_redirect_does_not_forward_cookie ... ok
+test http_engine::tests::curl_impersonate_uses_the_bundled_v7_layout ... ok
+test http_engine::tests::curl_request_args_preserve_post_body_without_inventing_content_type ... ok
+test http_engine::tests::curl_transport_preserves_browser_cookies_and_rejects_truncated_body ... ignored, Requires bundled curl-impersonate; run explicitly in Windows Sandbox
+test http_engine::tests::curl_transport_stalled_headers_and_body_obey_pause_and_cancel ... ignored, Requires bundled curl-impersonate; run explicitly in Windows Sandbox
+test http_engine::tests::empty_range_responses_stop_after_bounded_retries ... ok
+test http_engine::tests::etag_change_range_200_does_not_stitch_new_body ... ok
+test http_engine::tests::fresh_download_falls_back_to_sequential_when_server_ignores_range ... ok
+test http_engine::tests::head_job_with_a_total_uses_the_sequential_path ... ok
+test http_engine::tests::head_method_with_surrounding_whitespace_still_completes ... ok
+test http_engine::tests::head_response_with_content_length_completes_without_a_body ... ok
+test http_engine::tests::header_injection_values_are_not_wire_safe ... ok
+test http_engine::tests::hls_byte_range_fetch_validates_and_returns_only_the_requested_bytes ... ok
+test http_engine::tests::hls_entity_fetch_rejects_a_truncated_successful_http_response ... ok
+test http_engine::tests::host_header_omits_default_ports ... ok
+test http_engine::tests::invalid_checkpoint_restarts_sequentially_when_server_ignores_range ... ok
+test http_engine::tests::known_size_without_strong_validator_probes_before_reusing_checkpoint ... ok
+test http_engine::tests::media_entity_stop_preserves_pause_and_cancel ... ok
+test http_engine::tests::mirrors_fall_back_when_primary_fails ... ok
+test http_engine::tests::mirrors_skip_identity_mismatch ... ok
+test http_engine::tests::mismatched_content_range_start_is_range_unsupported ... ok
+test http_engine::tests::mismatched_content_range_total_is_range_unsupported ... ok
+test http_engine::tests::mismatched_resource_checkpoint_is_discarded ... ok
+test http_engine::tests::missing_content_range_on_206_is_range_unsupported ... ok
+test http_engine::tests::origin_connect_pool_does_not_share_live_handles ... ok
+test http_engine::tests::parse_header_meta_recognises_a_decoded_content_encoding ... ok
+test http_engine::tests::partial_download_still_fails_when_server_ignores_range ... ok
+test http_engine::tests::partial_range_checkpoint_tracks_durable_cursor ... ok
+test http_engine::tests::pause_control_stops_before_writing ... ok
+test http_engine::tests::playback_seek_splits_pending_range_without_losing_or_overlapping_bytes ... ok
+test http_engine::tests::poisoned_etag_is_not_sent_as_if_range ... ok
+test http_engine::tests::post_job_stays_sequential_and_does_not_send_range ... ok
+test http_engine::tests::range_request_sends_strong_etag_as_if_range ... ok
+test http_engine::tests::range_resume_skips_sidecar_covered_chunks ... ok
+test http_engine::tests::range_success_path_transfers_zero_extra_payload_bytes ... ok
+test http_engine::tests::range_workers_write_one_file_by_seek ... ok
+test http_engine::tests::raw_http_requests_close_connection_for_body_end_detection ... ok
+test http_engine::tests::relative_redirect_joins_path_directory ... ok
+test http_engine::tests::request_method_is_allowlisted ... ok
+test http_engine::tests::sequential_ignores_a_stale_total_when_the_body_has_no_content_length ... ok
+test http_engine::tests::sequential_job_deletes_range_sidecar ... ok
+test http_engine::tests::sequential_rejects_truncated_content_length ... ok
+test http_engine::tests::sequential_writes_identity_body ... ok
+test http_engine::tests::stalled_http_headers_body_and_chunked_reads_can_stop ... ok
+test http_engine::tests::transient_429_backoff_recovers_without_duplicate_payload_bytes ... ok
+test http_engine::tests::truncated_checkpoint_downloads_missing_data_instead_of_publishing_zeroes ... ok
+test http_engine::tests::unknown_size_probe_enables_range_workers ... ok
+test http_engine::tests::winhttp_media_entity_stop_preserves_pause_and_cancel ... ignored, Run explicitly in Windows Sandbox
+test http_engine::tests::winhttp_posts_the_job_body_bytes ... ok
+test http_engine::tests::winhttp_proxy_downloads_ranges_posts_and_head_without_changing_bytes ... ignored, Run explicitly in Windows Sandbox
+test http_engine::tests::winhttp_reads_content_range_header ... ok
+test http_engine::tests::winhttp_stalled_headers_body_and_chunked_reads_can_stop ... ignored, Run explicitly in Windows Sandbox
+
+test result: ok. 62 passed; 0 failed; 5 ignored; 0 measured; 572 filtered out; finished in 20.50s
+

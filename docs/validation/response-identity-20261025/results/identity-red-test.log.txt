@@ -1,0 +1,23 @@
+
+running 1 test
+identity-red-tests.exe : 
+At C:\HlsQA\identity-command.ps1:9 char:1
++ & C:\HlsQA\identity-red-tests.exe http_engine::tests::changed_206_ide ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+thread 
+'http_engine::tests::changed_206_identity_never_stitches_into_a_saved_prefix' 
+(5592) panicked at src\http_engine.rs:5442:17:
+etag/"new-entity": changed entity must not be accepted: Ok(())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test http_engine::tests::changed_206_identity_never_stitches_into_a_saved_prefix ... FAILED
+
+failures:
+
+failures:
+    http_engine::tests::changed_206_identity_never_stitches_into_a_saved_prefix
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 638 filtered out; finished in 0.21s
+

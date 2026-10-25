@@ -2823,6 +2823,7 @@ impl CoreCoordinator {
                     // 整任务调度不能绕过相同的判定，再用原请求重复下载。
                     if u64::from(attempt) <= max
                         && max > 0
+                        && !error.starts_with("resource identity changed:")
                         && extract_http_status(&error)
                             .is_none_or(crate::http_engine::retryable_http_status)
                     {
@@ -3494,6 +3495,11 @@ fn task_failure_from_error(
             _ => "服务器拒绝了下载请求，请检查资源地址和站点规则",
         };
         (format!("HTTP_{status}"), hint.to_string())
+    } else if lower.starts_with("resource identity changed:") {
+        (
+            "RESOURCE_CHANGED".into(),
+            "服务端文件内容已变化，已保存的片段不会与新内容拼接。请新建任务下载当前文件，原任务缓存已保留".into(),
+        )
     } else if lower.starts_with("ffmpeg ") {
         (
             "MEDIA_MERGE_FAILED".into(),
@@ -7209,7 +7215,7 @@ mod tests {
     #[test]
     fn automatic_http_retry_respects_permanent_failure_and_keeps_queue_running() {
         // 后续任务完成证明前一任务已走完整个收尾/重排队过程，不能只观察短暂的 failed 状态。
-        for (status, expected_attempts) in [(401, 1), (403, 1), (404, 1), (503, 3)] {
+        for (status, expected_attempts) in [(401, 1), (403, 1), (404, 1), (503, 3), (206, 1)] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
@@ -7229,7 +7235,11 @@ mod tests {
                         stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx").unwrap();
                         break;
                     }
-                    let _ = write!(stream, "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    if status == 206 {
+                        let _ = stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\nETag: \"changed-entity\"\r\nConnection: close\r\n\r\ny");
+                    } else {
+                        let _ = write!(stream, "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    }
                 }
             });
             let download_dir = std::env::temp_dir().join(format!(
@@ -7263,7 +7273,12 @@ mod tests {
                 if tasks.iter().any(|task| task.task_id == "task-2" && task.status == "completed") {
                     let failed = tasks.iter().find(|task| task.task_id == "task-1").unwrap();
                     assert_eq!(failed.status, "failed", "HTTP {status}");
-                    assert_eq!(failed.http_status, Some(status));
+                    assert_eq!(failed.http_status, (status != 206).then_some(status));
+                    if status == 206 {
+                        assert_eq!(failed.error_code.as_deref(), Some("RESOURCE_CHANGED"));
+                        assert!(failed.error_hint.contains("新建任务"));
+                        assert!(!download_dir.join("expired.bin").exists());
+                    }
                     assert_eq!(failed.error_attempt, expected_attempts, "HTTP {status} automatic attempts");
                     assert!(failed.available_actions.iter().any(|action| action == "retry"));
                     assert_eq!(fs::read(download_dir.join("next.bin")).unwrap(), b"x");

@@ -54,12 +54,14 @@ def verify_http_retry(ipc, download_dir):
         def do_GET(self):
             status = int(self.path.strip('/').split('-')[0])
             self.send_response(206 if status == 200 else status)
-            if status == 200:
+            if status in (200, 206):
                 self.send_header('Content-Range', 'bytes 0-0/1')
-            self.send_header('Content-Length', '1' if status == 200 else '0')
+            if status == 206:
+                self.send_header('ETag', '"changed-entity"')
+            self.send_header('Content-Length', '1' if status in (200, 206) else '0')
             self.send_header('Connection', 'close')
             self.end_headers()
-            if status == 200:
+            if status in (200, 206):
                 self.wfile.write(b'x')
 
         def log_message(self, *_):
@@ -72,7 +74,7 @@ def verify_http_retry(ipc, download_dir):
     try:
         send(ipc, {'type': 'store_settings', 'request_id': 100, 'values': {
             'auto_retry_failed_max': 2, 'queue_max_active': 1}})
-        for status, attempts in ((403, 1), (503, 3)):
+        for status, attempts in ((403, 1), (503, 3), (206, 1)):
             ids = []
             for code in (status, 200):
                 created = send(ipc, {'type': 'command', 'request_id': 101, 'command': {
@@ -88,7 +90,13 @@ def verify_http_retry(ipc, download_dir):
             assert Path(completed['output_path']).read_bytes() == b'x'
             snapshots = send(ipc, {'type': 'snapshot', 'request_id': 103})['tasks']
             failed = next(task for task in snapshots if task['task_id'] == ids[0])
-            assert failed['status'] == 'failed' and failed['http_status'] == status, failed
+            assert failed['status'] == 'failed', failed
+            if status == 206:
+                assert failed['error_code'] == 'RESOURCE_CHANGED', failed
+                assert '新建任务' in failed['error_hint'], failed
+                assert not (download_dir/f'retry-{status}-{status}.bin').exists()
+            else:
+                assert failed['http_status'] == status, failed
             assert failed['error_attempt'] == attempts and 'retry' in failed['available_actions'], failed
             for tid in ids:
                 send(ipc, {'type': 'command', 'request_id': 104, 'command': {
