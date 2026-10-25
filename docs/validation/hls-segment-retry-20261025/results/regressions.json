@@ -1,5 +1,5 @@
 {
-  "installer_pending": true,
+  "installer_pending": false,
   "explicit_curl_passed": 2,
   "distinct_regressions_passed": 637,
   "host_install_performed": false,
@@ -8,5 +8,8 @@
   "core_ignored": 9,
   "baseline_observation": "HTTP 401 segment requested three times",
   "baseline_exit_code": 101,
-  "remaining_unrun_ignored_tests": 4
+  "remaining_unrun_ignored_tests": 4,
+  "final_installer_passed": true,
+  "installed_hls_fault_cases": 6,
+  "final_msi_sha256": "1b94c1a77c1f8aeb341e41c13db3de4e3366ee3f527aeaa1b953f039f18d0926"
 }
