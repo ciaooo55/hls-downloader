@@ -3024,10 +3024,12 @@ fn http_get(
         control: job.control.clone(),
         last_control: Instant::now() - Duration::from_millis(50),
     };
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
+    let mut buf = Vec::with_capacity(4096);
+    let mut block = [0u8; 4096];
+    let mut split = None;
     while buf.len() < 64 * 1024 {
-        let count = match stream.read(&mut byte) {
+        let want = block.len().min(64 * 1024 - buf.len());
+        let count = match stream.read(&mut block[..want]) {
             Ok(count) => count,
             Err(err) => {
                 check_control(&job.control)?;
@@ -3037,15 +3039,18 @@ fn http_get(
         if count == 0 {
             break;
         }
-        buf.push(byte[0]);
-        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+        // 只检查新增字节及跨块边界；同次读取的正文由 Body::Tcp 的 prefix 保留。
+        let scan_from = buf.len().saturating_sub(3);
+        buf.extend_from_slice(&block[..count]);
+        if let Some(offset) = buf[scan_from..]
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+        {
+            split = Some(scan_from + offset);
             break;
         }
     }
-    let split = buf
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| EngineError::Failed("response headers truncated".into()))?;
+    let split = split.ok_or_else(|| EngineError::Failed("response headers truncated".into()))?;
     let head = String::from_utf8_lossy(&buf[..split]);
     let leftover = buf[split + 4..].to_vec();
     let status = head
@@ -3968,6 +3973,50 @@ mod tests {
         run_job(&job).unwrap();
         assert_eq!(fs::read(&job.output).unwrap(), body);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn raw_http_header_boundaries_preserve_the_exact_body_and_size_limit() {
+        for delimiter_at in [4093, 4094, 4095, 8191, 65532, 65533] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let payload = b"body\0\r\n\r\nbytes";
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"boundary\"\r\nX-Padding: ",
+                payload.len()
+            )
+            .into_bytes();
+            response.resize(delimiter_at, b'x');
+            response.extend_from_slice(b"\r\n\r\n");
+            response.extend_from_slice(payload);
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(&response);
+            });
+            let (job, dir) = temp_job(&url, true, 0, 1);
+            let result = http_get(&job, &parse_http_url(&url).unwrap(), None);
+            if delimiter_at == 65533 {
+                let error = result.err().expect("oversized headers must be rejected");
+                assert!(error.to_string().contains("response headers truncated"));
+            } else {
+                let (status, _, _, length, etag, _, _, mut body) = result.unwrap();
+                assert_eq!(status, 200);
+                assert_eq!(length, Some(payload.len() as u64));
+                assert_eq!(etag, "\"boundary\"");
+                let mut received = Vec::new();
+                body.read_to_end(&mut received).unwrap();
+                assert_eq!(received, payload, "delimiter at {delimiter_at}");
+            }
+            server.join().unwrap();
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

@@ -5332,10 +5332,6 @@ fn harvest_page(
         if probe_urls.len() > 100 {
             return Err("一次最多读取 100 个链接的大小".into());
         }
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
         let links = probe_urls
             .iter()
             .filter_map(|candidate| {
@@ -5346,14 +5342,11 @@ fn harvest_page(
                 if reject_task_url(candidate).is_err() {
                     return None;
                 }
-                let base = std::env::temp_dir().join(format!(
-                    "hls-v7-harvest-probe-{}-{stamp}",
-                    simple_hash(candidate)
-                ));
                 let job = crate::http_engine::Job {
                     url: candidate.to_string(),
                     headers: headers.clone(),
-                    output: base.with_extension("bin"),
+                    // 大小探测没有成品，留空以跳过下载后缀元数据落盘。
+                    output: PathBuf::new(),
                     connections: 1,
                     chunk_bytes: 1024 * 1024,
                     total: 0,
@@ -5363,8 +5356,8 @@ fn harvest_page(
                     resource_key: candidate.to_string(),
                     etag: String::new(),
                     last_modified: String::new(),
-                    control: base.with_extension("control"),
-                    progress: base.with_extension("progress"),
+                    control: PathBuf::new(),
+                    progress: PathBuf::new(),
                     method: "GET".into(),
                     body_path: PathBuf::new(),
                     mirrors: Vec::new(),

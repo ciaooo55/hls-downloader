@@ -19,7 +19,7 @@ SIZE = 128 * 1024 * 1024
 PATTERN = bytes(range(256)) * 256
 
 
-def transfer(engine, root, method, block_size):
+def transfer(engine, root, method, block_size, header_bytes=0):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -42,6 +42,8 @@ def transfer(engine, root, method, block_size):
             self.send_header('Content-Type', 'application/octet-stream')
             self.send_header('ETag', '"sequential-io-fixture"')
             self.send_header('Connection', 'close')
+            if header_bytes:
+                self.send_header('X-Fixture-Padding', 'x' * header_bytes)
             self.end_headers()
             try:
                 for _ in range(SIZE // block_size):
@@ -92,7 +94,7 @@ def transfer(engine, root, method, block_size):
             wait(lambda: not (root/'downloads/.hls-tasks'/tid).exists())
             core.command({'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'})
             assert not output.exists()
-            return {'elapsed_seconds': elapsed, 'cpu_seconds': cpu,
+            return {'elapsed_seconds': elapsed, 'cpu_seconds': cpu, 'header_padding_bytes': header_bytes,
                     'rss_bytes': core.ps.memory_info().rss,
                     'io_delta': {field: getattr(io_after, field)-getattr(io_before, field)
                                  for field in ('read_count', 'write_count', 'read_bytes', 'write_bytes')},

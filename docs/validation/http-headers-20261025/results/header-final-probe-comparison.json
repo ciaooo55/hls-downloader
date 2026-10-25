@@ -1,0 +1,245 @@
+{
+  "passed": true,
+  "samples": [
+    {
+      "variant": "baseline-a",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.10196880000012243,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12771328,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "baseline-b",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.0811730999998872,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 12787712,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "candidate",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.06157379999990553,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 12718080,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-b",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.08720119999998133,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12750848,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "candidate",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.3308472000001075,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 12701696,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-a",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.09053220000009787,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12759040,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "candidate",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.0630842999999004,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12726272,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-a",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.08343079999986003,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12775424,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "baseline-b",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 0,
+      "probes": 20,
+      "elapsed_seconds": 0.117014700000027,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12775424,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "baseline-a",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 7.5036751000000095,
+      "cpu_seconds": 7.328125,
+      "rss_bytes": 13148160,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "baseline-b",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 7.5568475000000035,
+      "cpu_seconds": 7.3125,
+      "rss_bytes": 12791808,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "candidate",
+      "round": 1,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 0.0651121000000785,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 12779520,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-b",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 7.543648400000166,
+      "cpu_seconds": 7.359375,
+      "rss_bytes": 12783616,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "candidate",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 0.06666829999994661,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 12795904,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-a",
+      "round": 2,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 7.5757835000001705,
+      "cpu_seconds": 7.421875,
+      "rss_bytes": 12787712,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "candidate",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 0.0663253000000168,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 12750848,
+      "temp_files_created": 0
+    },
+    {
+      "variant": "baseline-a",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 7.626065100000005,
+      "cpu_seconds": 7.46875,
+      "rss_bytes": 12881920,
+      "temp_files_created": 23
+    },
+    {
+      "variant": "baseline-b",
+      "round": 3,
+      "method": "PROBE",
+      "header_padding_bytes": 32768,
+      "probes": 20,
+      "elapsed_seconds": 7.482240300000058,
+      "cpu_seconds": 7.34375,
+      "rss_bytes": 13217792,
+      "temp_files_created": 23
+    }
+  ],
+  "medians": {
+    "PROBE-0": {
+      "baseline-a": {
+        "elapsed_seconds": 0.09053220000009787,
+        "cpu_seconds": 0.0,
+        "rss_bytes": 12771328
+      },
+      "baseline-b": {
+        "elapsed_seconds": 0.08720119999998133,
+        "cpu_seconds": 0.0,
+        "rss_bytes": 12775424
+      },
+      "candidate": {
+        "elapsed_seconds": 0.0630842999999004,
+        "cpu_seconds": 0.015625,
+        "rss_bytes": 12718080
+      }
+    },
+    "PROBE-32768": {
+      "baseline-a": {
+        "elapsed_seconds": 7.5757835000001705,
+        "cpu_seconds": 7.421875,
+        "rss_bytes": 12881920
+      },
+      "baseline-b": {
+        "elapsed_seconds": 7.543648400000166,
+        "cpu_seconds": 7.34375,
+        "rss_bytes": 12791808
+      },
+      "candidate": {
+        "elapsed_seconds": 0.0663253000000168,
+        "cpu_seconds": 0.015625,
+        "rss_bytes": 12779520
+      }
+    }
+  },
+  "scope": "Core-only resource size probes; real IPC and SQLite commits; loopback; not TLS, full-product or IDM/AB parity",
+  "sha256": {
+    "baseline-a": "f925ca4a0f54e88437ed104016ee81c0c045e6c4edb475659d328d20ffc70fbe",
+    "baseline-b": "f925ca4a0f54e88437ed104016ee81c0c045e6c4edb475659d328d20ffc70fbe",
+    "candidate": "61b3959a123f4e83bcbeecd99603ec1d5873fd641d27907c90bb4145bfb3bdf2"
+  }
+}
