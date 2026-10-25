@@ -1,0 +1,17 @@
+{
+  "task_sandbox_closed": true,
+  "cleanup_executed": false,
+  "automatic_approval_result": "blocked by policy; no specific reason provided",
+  "new_blocked_directory": ".tool-cache/http-transport-20261025",
+  "prior_blocked_paths_not_retried_reference": "docs/validation/http-retry-20261025/cleanup.json",
+  "manual_cache_cleanup_script": "docs/validation/live-presenter-20261025/finish-cleanup.ps1",
+  "manual_script_scope": "Nine build/dependency/validation directories; prior fixture control files, empty stderr logs and empty hang-diagnosis directory remain outside the script",
+  "preserved_user_backup": {
+    "path": "outputs/private-user-backup/uninstall-20261021",
+    "files": 17,
+    "bytes": 4600017
+  },
+  "host_installation_touched": false,
+  "desktop_delivery": "HLSDownloader/最新-20261025",
+  "desktop_msi_sha256": "fd1a36730dcc15ee600f7384efa3f0bdcc44fb81d8c3c0d1b35d05e210d80009"
+}
