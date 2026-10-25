@@ -1,0 +1,389 @@
+{
+  "cases": [
+    {
+      "case": "cookie",
+      "expected_status": "completed",
+      "requests": 4,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "request_headers",
+      "expected_status": "completed",
+      "requests": 4,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "scoped",
+      "expected_status": "completed",
+      "requests": 4,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "cookie_jar",
+      "expected_status": "completed",
+      "requests": 4,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "path_redirect",
+      "expected_status": "completed",
+      "requests": 6,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "scoped_cross_origin",
+      "expected_status": "completed",
+      "requests": 6,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "unscoped_cross_origin",
+      "expected_status": "completed",
+      "requests": 4,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "permanent_403",
+      "expected_status": "failed",
+      "requests": 2,
+      "output_and_cache_cleaned": true
+    },
+    {
+      "case": "following_queue",
+      "expected_status": "completed",
+      "requests": 2,
+      "output_and_cache_cleaned": true
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/path/start",
+      "port": 50525,
+      "status": 302,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/path/start",
+      "port": 50525,
+      "status": 302,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/cross",
+      "port": 50525,
+      "status": 302,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50526,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50526,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/cross",
+      "port": 50525,
+      "status": 302,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50526,
+      "status": 403,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/target/file",
+      "port": 50526,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/cross-unscoped",
+      "port": 50525,
+      "status": 302,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/unscoped",
+      "port": 50526,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": false,
+      "has_authorization": false
+    },
+    {
+      "method": "GET",
+      "path": "/cross-unscoped",
+      "port": 50525,
+      "status": 302,
+      "stale_cookie": true,
+      "has_cookie": true,
+      "has_authorization": true
+    },
+    {
+      "method": "GET",
+      "path": "/unscoped",
+      "port": 50526,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": false,
+      "has_authorization": false
+    },
+    {
+      "method": "GET",
+      "path": "/denied",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": false,
+      "has_cookie": false,
+      "has_authorization": false
+    },
+    {
+      "method": "GET",
+      "path": "/denied",
+      "port": 50525,
+      "status": 403,
+      "stale_cookie": false,
+      "has_cookie": false,
+      "has_authorization": false
+    },
+    {
+      "method": "GET",
+      "path": "/good",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": false,
+      "has_authorization": false
+    },
+    {
+      "method": "GET",
+      "path": "/good",
+      "port": 50525,
+      "status": 200,
+      "stale_cookie": false,
+      "has_cookie": false,
+      "has_authorization": false
+    }
+  ],
+  "persisted_dpapi_after_restart": true,
+  "saved_replay_unchanged": true,
+  "payload_sha256": "d4975d0196f34c8aa9456cf5692252b684c3498d79b9c299721686af50a4cecb",
+  "passed": true,
+  "engine_sha256": "e406c0485567f3ee1dc2ee25853176e6cf44aed31bc6b310e87eaafa54396c75"
+}

@@ -2191,20 +2191,7 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     if first.status != 403 {
         return Ok(first);
     }
-    if let Some(stripped) = strip_stale_cloudflare_cookies(&prepared.headers) {
-        drop(first);
-        prepared.headers = stripped;
-        apply_browser_profile(&mut prepared.headers);
-        let second = fetch_follow(&prepared, range)?;
-        if second.status != 403 {
-            return Ok(second);
-        }
-        if let Some(via_curl) = fetch_via_curl_impersonate(&prepared, range) {
-            return via_curl;
-        }
-        return Ok(second);
-    }
-    if let Some(via_curl) = fetch_via_curl_impersonate(&prepared, range) {
+    if let Some(via_curl) = fetch_curl_follow(&prepared, range) {
         return via_curl;
     }
     Ok(first)
@@ -2235,15 +2222,25 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
         let mut hop = job.clone();
         hop.url = url.clone();
         hop.headers = headers.clone();
-        hop.replay_json = replay.clone();
         let parsed = match parse_http_url(&url) {
             Ok(parsed) => parsed,
             Err(error) => return Some(Err(error)),
         };
-        let fetched = match fetch_via_curl_impersonate(&hop, range)? {
+        let mut fetched = match fetch_via_curl_impersonate(&hop, range)? {
             Ok(fetched) => fetched,
             Err(error) => return Some(Err(error)),
         };
+        if fetched.status == 403 {
+            if let Some(stripped) = strip_stale_cloudflare_cookies(&headers) {
+                drop(fetched);
+                headers = stripped;
+                hop.headers = headers.clone();
+                fetched = match fetch_via_curl_impersonate(&hop, range)? {
+                    Ok(fetched) => fetched,
+                    Err(error) => return Some(Err(error)),
+                };
+            }
+        }
         if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
             let next = match fetched.location.clone() {
                 Some(location) => resolve_location(&parsed, &location),
@@ -2267,68 +2264,52 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
     let replay = job_replay_json(job);
     let mut headers = headers_for_request(job, &url);
     for _ in 0..16 {
-        let mut hop = job.clone();
-        hop.url = url.clone();
-        hop.headers = headers.clone();
-        hop.replay_json = replay.clone();
         let parsed = parse_http_url(&url)?;
-        let use_winhttp = parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct);
-        if use_winhttp {
-            #[cfg(windows)]
-            {
-                let fetched = winhttp::get(&hop, &url, range)?;
-                if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
-                    let next = fetched
-                        .location
-                        .clone()
-                        .ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
-                    let next = resolve_location(&parsed, &next);
-                    if !http_fetch_url_allowed(&next) {
-                        return Err(EngineError::Failed("redirect is not http(s)".into()));
-                    }
-                    drop(fetched);
-                    drop_cross_origin_secrets(&mut headers, &replay, &url, &next);
-                    url = next;
-                    continue;
+        let request = |headers: &HashMap<String, String>| {
+            let mut hop = job.clone();
+            hop.url = url.clone();
+            hop.headers = headers.clone();
+            if parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct) {
+                #[cfg(windows)]
+                {
+                    return winhttp::get(&hop, &url, range);
                 }
-                return Ok(fetched);
+                #[cfg(not(windows))]
+                {
+                    return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
+                }
             }
-            #[cfg(not(windows))]
-            {
-                return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
+            let (status, location, content_range, content_length, etag, last_modified,
+                accept_ranges, body) = http_get(&hop, &parsed, range)?;
+            Ok(FetchResult {
+                status, location, content_range, content_length, etag,
+                last_modified, accept_ranges, body,
+            })
+        };
+        let mut fetched = request(&headers)?;
+        // 修正当前响应对应的 Cookie；不能重新重放上下文而把刚移除的值加回来。
+        if fetched.status == 403 {
+            if let Some(stripped) = strip_stale_cloudflare_cookies(&headers) {
+                drop(fetched);
+                headers = stripped;
+                fetched = request(&headers)?;
             }
         }
-        let (
-            status,
-            location,
-            content_range,
-            content_length,
-            etag,
-            last_modified,
-            accept_ranges,
-            body,
-        ) = http_get(&hop, &parsed, range)?;
-        if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            let next =
-                location.ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
+        if matches!(fetched.status, 301 | 302 | 303 | 307 | 308) {
+            let next = fetched
+                .location
+                .clone()
+                .ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
             let next = resolve_location(&parsed, &next);
             if !http_fetch_url_allowed(&next) {
                 return Err(EngineError::Failed("redirect is not http(s)".into()));
             }
+            drop(fetched);
             drop_cross_origin_secrets(&mut headers, &replay, &url, &next);
             url = next;
             continue;
         }
-        return Ok(FetchResult {
-            status,
-            location: None,
-            content_range,
-            content_length,
-            etag,
-            last_modified,
-            accept_ranges,
-            body,
-        });
+        return Ok(fetched);
     }
     Err(EngineError::Failed("too many redirects".into()))
 }
@@ -2398,8 +2379,8 @@ fn fetch_via_curl_impersonate(
     if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
         return None;
     }
-    // 首次浏览器传输必须保留实际请求身份，不能预先假定 Cookie 已失效。
-    let headers = headers_for_request(job, &job.url);
+    // 逐跳入口已匹配域/路径并处理重试；底层传输不能再次重放而覆盖当前请求头。
+    let headers = &job.headers;
     let dir = std::env::temp_dir().join(format!(
         "hls-curl-impersonate-{}-{}",
         std::process::id(),
@@ -2439,12 +2420,12 @@ fn fetch_via_curl_impersonate(
             .arg(&body_path)
             .arg("-w")
             .arg("%{http_code}");
-        command.arg("-A").arg(request_user_agent(&headers));
+        command.arg("-A").arg(request_user_agent(headers));
         if job.curl_body_limit.is_some() {
             // 让既有进程等待循环能看到已解码正文，不能留在 curl 的写缓冲中。
             command.arg("--no-buffer");
         }
-        for (key, value) in &headers {
+        for (key, value) in headers {
             if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
                 continue;
             }
@@ -2453,7 +2434,7 @@ fn fetch_via_curl_impersonate(
         if let Some(range) = range {
             command.arg("-H").arg(format!("Range: {range}"));
         }
-        command.args(curl_request_args(job, &headers));
+        command.args(curl_request_args(job, headers));
         match proxy_route(&job.proxy) {
             ProxyRoute::Direct => {
                 command.arg("--noproxy").arg("*");
@@ -5748,69 +5729,123 @@ mod tests {
 
     #[test]
     fn cloudflare_403_retries_without_cf_bm() {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let recorded = Arc::clone(&seen);
-        thread::spawn(move || {
-            while let Ok((stream, _)) = listener.accept() {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request_line = String::new();
-                if reader.read_line(&mut request_line).is_err() {
-                    continue;
-                }
-                let mut cookie = String::new();
-                let mut ua = String::new();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
-                        break;
+        check_cloudflare_replay_retry("http");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    fn curl_transport_403_retries_replayed_cookies() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        assert!(curl_impersonate_exe().is_some(), "bundled curl required");
+        check_cloudflare_replay_retry("curl");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Run explicitly in Windows Sandbox"]
+    fn winhttp_403_retries_replayed_cookies() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        check_cloudflare_replay_retry("winhttp");
+    }
+
+    fn check_cloudflare_replay_retry(transport: &str) {
+        for context in ["headers", "cookie", "request_headers", "scoped", "cookie_jar"] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let recorded = Arc::clone(&seen);
+            thread::spawn(move || {
+                while let Ok((stream, _)) = listener.accept() {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() {
+                        continue;
                     }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("cookie:") {
-                        cookie = value.trim().to_string();
+                    let mut cookie = String::new();
+                    let mut ua = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("cookie:") {
+                            cookie = value.trim().to_string();
+                        }
+                        if let Some(value) = line.to_ascii_lowercase().strip_prefix("user-agent:") {
+                            ua = value.trim().to_string();
+                        }
                     }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("user-agent:") {
-                        ua = value.trim().to_string();
+                    recorded
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .push((cookie.clone(), ua));
+                    let mut stream = reader.into_inner();
+                    if cookie.contains("__cf_bm") {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    } else {
+                        let body = b"ok";
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(header.as_bytes());
+                        let _ = stream.write_all(body);
                     }
                 }
-                recorded
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .push((cookie.clone(), ua));
-                let mut stream = reader.into_inner();
-                if cookie.contains("__cf_bm") {
-                    let _ = stream.write_all(
-                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                    );
-                } else {
-                    let body = b"ok";
-                    let header = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    let _ = stream.write_all(header.as_bytes());
-                    let _ = stream.write_all(body);
-                }
+            });
+            let url = format!("http://127.0.0.1:{}/file.bin", addr.port());
+            let mut headers = HashMap::new();
+            headers.insert(
+                "Cookie".into(),
+                "__cf_bm=stale; __cflb=pool-a; session=ok".into(),
+            );
+            let (mut job, dir) = temp_job(&url, true, 0, 1);
+            job.headers = headers.clone();
+            if context != "headers" {
+                let cookie = headers.get("Cookie").unwrap();
+                let origin = crate::credentials::request_origin(&url);
+                let value = match context {
+                    "cookie" => serde_json::json!({"cookie": cookie}),
+                    "request_headers" => serde_json::json!({"request_headers": {"Cookie": cookie}}),
+                    "scoped" => serde_json::json!({"request_contexts": {origin: {"cookie": cookie}}}),
+                    "cookie_jar" => serde_json::json!({"request_contexts": {origin: {"cookies": [
+                        {"name":"__cf_bm", "value":"stale", "domain":"127.0.0.1", "path":"/"},
+                        {"name":"__cflb", "value":"pool-a", "domain":"127.0.0.1", "path":"/"},
+                        {"name":"session", "value":"ok", "domain":"127.0.0.1", "path":"/"}
+                    ]}}}),
+                    _ => unreachable!(),
+                };
+                job.replay_json = crate::credentials::bind_replay_source_url(&value.to_string(), &url);
             }
-        });
-        let url = format!("http://127.0.0.1:{}/file.bin", addr.port());
-        let mut headers = HashMap::new();
-        headers.insert(
-            "Cookie".into(),
-            "__cf_bm=stale; __cflb=pool-a; session=ok".into(),
-        );
-        let (status, body) = fetch_bytes(&url, &headers, "").unwrap();
-        assert_eq!(status, 200);
-        assert_eq!(body, b"ok");
-        let seen = seen.lock().unwrap_or_else(|err| err.into_inner());
-        assert!(seen.len() >= 2);
-        assert!(seen[0].0.contains("__cf_bm"));
-        assert!(!seen[1].0.contains("__cf_bm"));
-        assert!(seen[1].0.contains("__cflb=pool-a"));
-        assert!(seen[1].0.contains("session=ok"));
-        assert!(seen[0].1.contains("chrome/146") || seen[0].1.contains("Chrome/146"));
-        let stripped = strip_stale_cloudflare_cookies(&headers).unwrap();
-        assert_eq!(stripped.get("Cookie").unwrap(), "__cflb=pool-a; session=ok");
+            let replay = job.replay_json.clone();
+            if transport == "winhttp" {
+                job.proxy = format!("http://{addr}");
+            }
+            let result = if transport == "curl" {
+                fetch_curl_follow(&job, None).expect("curl transport available")
+            } else {
+                fetch_follow(&job, None)
+            };
+            let mut fetched = result.unwrap_or_else(|error| panic!("{transport}/{context}: {error:?}"));
+            assert_eq!(fetched.status, 200, "{transport}/{context}");
+            let mut body = Vec::new();
+            fetched.body.read_to_end(&mut body).unwrap();
+            assert_eq!(body, b"ok", "{transport}/{context}");
+            assert_eq!(job.replay_json, replay, "saved replay must remain unchanged");
+            let seen = seen.lock().unwrap_or_else(|err| err.into_inner());
+            assert_eq!(seen.len(), 2, "{transport}/{context}");
+            assert!(seen[0].0.contains("__cf_bm"));
+            assert!(!seen[1].0.contains("__cf_bm"));
+            assert!(seen[1].0.contains("__cflb=pool-a"));
+            assert!(seen[1].0.contains("session=ok"));
+            assert!(seen[0].1.contains("chrome/146") || seen[0].1.contains("Chrome/146"));
+            let stripped = strip_stale_cloudflare_cookies(&headers).unwrap();
+            assert_eq!(stripped.get("Cookie").unwrap(), "__cflb=pool-a; session=ok");
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     #[cfg(windows)]
@@ -5855,7 +5890,7 @@ mod tests {
                 "user_agent": "Browser fixture",
             })
             .to_string();
-            let result = fetch_via_curl_impersonate(&job, None).expect("curl transport available");
+            let result = fetch_curl_follow(&job, None).expect("curl transport available");
             let request = server.join().unwrap().to_ascii_lowercase();
             assert!(
                 request.contains("cookie: __cf_bm=valid; __cflb=pool-a; session=ok\r\n"),
