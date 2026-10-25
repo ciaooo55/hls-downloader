@@ -13,6 +13,9 @@ if (-not (Test-Path -LiteralPath $installer) -or
 if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyContinue) {
     throw '请先关闭 Windows 沙盒，避免清理正在使用的映射文件。'
 }
+if (Get-Process -Name HLSDownloader,HLSDownloaderEngine,HLSDownloaderNativeHost,HLSDownloaderPresenter,HLSDownloaderUpdater -ErrorAction SilentlyContinue) {
+    throw '本项目仍在运行，停止清理。'
+}
 $scratch = Join-Path $repo '.tool-cache\live-presenter-20261024'
 $relativePaths = @(
     '.tool-cache'
@@ -63,9 +66,31 @@ foreach ($relative in $relativePaths) {
     }
     $targets += $target
 }
+$stateRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'HLSDownloader'
+$stateFiles = @()
+if (Test-Path -LiteralPath $stateRoot) {
+    $stateDirectory = Get-Item -LiteralPath $stateRoot -Force
+    if (-not $stateDirectory.PSIsContainer -or ($stateDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw '本项目窗口状态目录被重定向，停止清理。'
+    }
+    $stateFiles = @(Get-ChildItem -LiteralPath $stateRoot -Force)
+    foreach ($file in $stateFiles) {
+        if ($file.PSIsContainer -or $file.Name -notin @('window-geometry.properties', 'workbench.lock', 'workbench.wake') -or
+            ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "窗口状态目录存在未确认文件，停止清理：$($file.Name)"
+        }
+    }
+}
 foreach ($link in $sourceLinks) { Remove-Item -LiteralPath $link -Force }
 foreach ($target in $targets) {
     Remove-Item -LiteralPath $target -Recurse -Force
     Write-Host "已清理：$target"
+}
+foreach ($file in $stateFiles) {
+    Remove-Item -LiteralPath $file.FullName -Force
+    Write-Host "已清理本项目窗口状态：$($file.Name)"
+}
+if ((Test-Path -LiteralPath $stateRoot) -and @(Get-ChildItem -LiteralPath $stateRoot -Force).Count -eq 0) {
+    Remove-Item -LiteralPath $stateRoot -Force
 }
 Write-Host '指定生成目录已清理；源码、Git、桌面成品、用户下载及 outputs/private-user-backup 备份均保留。'

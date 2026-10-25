@@ -1,0 +1,7 @@
+{
+  "checked_at": "2026-10-26T01:11:15.5727188+08:00",
+  "scope": "HKCU/HKLM, Registry32/Registry64: browser Native Messaging, product settings/protocol, uninstall, Installer Products, App Paths, Run/RunOnce",
+  "registry_writes_performed": false,
+  "findings": [],
+  "read_errors": []
+}

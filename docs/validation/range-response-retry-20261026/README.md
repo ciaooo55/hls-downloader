@@ -50,3 +50,9 @@ HTTP 引擎已经拒绝缺少或不匹配 Content-Range 的响应，避免拼接
 
 已更新现有的 [手动清理脚本](../live-presenter-20261025/finish-cleanup.ps1)，没有增加新的收尾脚本。脚本核对当前桌面安装包哈希、项目范围、全部目标的 Git 跟踪情况和链接边界后才删除明确列出的生成目录，保留用户备份、桌面成品和全部源码。代理仅完成静态语法和差异检查，未执行此脚本；用户手动执行前不能将清理记录为完成。
 
+### 本机注册表和安装集成复核
+
+随后按源码中的注册名称和旧安装备份核对 HKCU/HKLM 的 32/64 位 Native Messaging、卸载记录、Installer Products、App Paths、产品设置、协议及 Run/RunOnce。没有匹配条目，读取无错误，没有注册表写入。开始菜单及启动目录的快捷方式、按产品名称匹配的服务/计划任务和按已知产品可执行文件匹配的持久防火墙规则也未发现残留。范围及结果见 results/host-registry-cleanup-audit.json、results/host-startup-integration-audit.json 和 results/host-firewall-audit.json；没有扫描或修改整个系统的历史使用记录。
+
+发现 LocalAppData/HLSDownloader 仍有 window-geometry.properties、workbench.lock、workbench.wake 三个本产品窗口状态文件，源码已确认归属，未发现该目录有任务库或下载文件。删除这三个文件及空目录的命令在启动前再次被自动审批拒绝，只返回 blocked by policy；没有删除发生或换通道重试。已将这三项加入同一手动脚本：预先拒绝运行中的产品、目录链接、未知文件，删除后仅移除空目录。脚本只做过静态语法检查，仍未执行。见 results/host-state-cleanup.json。
+
