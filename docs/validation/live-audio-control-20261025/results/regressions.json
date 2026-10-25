@@ -1,0 +1,17 @@
+{
+  "hashes": {
+    "native_shell/src/media/hls.rs": "cc68471490c44e662cb4a409f0610f2af6b12b3b667580c86f7952c3471985a3",
+    ".tool-cache/request-control-20261025/audio-red-tests.exe": "ab0f1b797fdf3939d1963ba22181aeb1830b9bf38040087b96d0d355a7f5affc",
+    ".tool-cache/request-control-20261025/audio-green-tests.exe": "1017b0f2087d72c50d7957ff37775882c28009edf20843e8d9eb109abaee6920",
+    ".tool-cache/live-presenter-20261024/target/release/hls-downloader-engine.exe": "878153306de45ec79981d515daa0ac654a55479c0ea3f5cf394bec26a4d01f56"
+  },
+  "curl_passed": 2,
+  "baseline_commit": "0368c3e",
+  "red_exit": 101,
+  "winhttp_passed": 3,
+  "host_product_run": false,
+  "hls_passed": 27,
+  "red_failure": "audio worker waited for the server instead of its own cancel signal",
+  "cloud_called": false,
+  "full_suite_rerun": false
+}

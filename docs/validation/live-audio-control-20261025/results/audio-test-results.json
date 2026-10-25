@@ -1,0 +1,31 @@
+[
+    {
+        "args":  [
+                     "media::hls::tests::",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "hls",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "http_engine::tests::curl_transport_",
+                     "--ignored",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "curl",
+        "exit_code":  0
+    },
+    {
+        "args":  [
+                     "http_engine::tests::winhttp_",
+                     "--ignored",
+                     "--test-threads=1",
+                     "--nocapture"
+                 ],
+        "name":  "winhttp",
+        "exit_code":  0
+    }
+]

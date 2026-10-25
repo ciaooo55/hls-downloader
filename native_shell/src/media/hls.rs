@@ -1767,9 +1767,11 @@ impl LiveAudioRecorder {
         let audio_dir = task_dir.join("audio");
         let thread_control = control.clone();
         let replay = crate::credentials::scoped_replay_json();
-        let throttle = crate::net_policy::current_throttle_context();
+        let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
+        // 保留主任务的限速/配额，但子请求须读取音轨自己的取消信号，否则 Drop 会等到网络超时。
+        throttle.control = thread_control.clone();
         let handle = std::thread::spawn(move || {
-            crate::net_policy::with_throttle_context(throttle, || {
+            crate::net_policy::with_throttle_context(Some(throttle), || {
                 crate::with_replay_json(&replay, || {
                     download_hls(&uri, &headers, &proxy, &audio_dir, &thread_control, true)
                 })
@@ -2802,6 +2804,72 @@ mod tests {
             assert!(!dir.join("muxed.mp4").exists());
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn dropping_live_audio_interrupts_its_request_without_canceling_the_parent() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let root = std::env::temp_dir().join(format!(
+            "hls-live-audio-stop-{}-{port}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let parent_control = root.join("control");
+        fs::write(&parent_control, "run").unwrap();
+        let (requested_tx, requested_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            requested_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let _ = reader.get_mut().write_all(
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let (drop_tx, drop_rx) = mpsc::sync_channel(1);
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let worker_root = root.clone();
+        let context = crate::net_policy::ThrottleContext {
+            control: parent_control.clone(),
+            ..Default::default()
+        };
+        let worker = std::thread::spawn(move || {
+            let recorder = crate::net_policy::with_throttle_context(Some(context), || {
+                LiveAudioRecorder::start(
+                    &format!("http://127.0.0.1:{port}/audio.m3u8"),
+                    &HashMap::new(),
+                    "hls-downloader://direct-proxy",
+                    &worker_root,
+                )
+            });
+            drop_rx.recv().unwrap();
+            drop(recorder);
+            done_tx.send(()).unwrap();
+        });
+        requested_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        drop_tx.send(()).unwrap();
+        // 服务端保持阻塞，不能通过关闭连接使停止检查偶然通过。
+        let stopped = done_rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+        worker.join().unwrap();
+        let parent_state = fs::read_to_string(&parent_control).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(stopped, "audio worker waited for the server instead of its own cancel signal");
+        assert_eq!(parent_state, "run", "audio cleanup must not cancel the parent task");
     }
 
     #[test]
