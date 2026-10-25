@@ -1,0 +1,6 @@
+{
+  "checked_utc": "2026-10-25T12:13:27.5300043Z",
+  "host_product_processes": [],
+  "host_common_uninstall_records": [],
+  "scope": "Read-only product-named processes and three common uninstall roots; not a full registry absence assertion"
+}

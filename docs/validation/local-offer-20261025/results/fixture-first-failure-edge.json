@@ -1,0 +1,953 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49700/opaque"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "media-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49700/media-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "audio-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 3,
+            "url": "http://127.0.0.1:49700/audio-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "image-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 4,
+            "url": "http://127.0.0.1:49700/image-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "json-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 5,
+            "url": "http://127.0.0.1:49700/json-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "html-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 6,
+            "url": "http://127.0.0.1:49700/html-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-attachment: Core saved unknown file type with exact bytes",
+      "actual": {
+        "created_events": [
+          {
+            "id": 7,
+            "url": "http://127.0.0.1:49700/unknown-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "redirect-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 8,
+            "url": "http://127.0.0.1:49700/redirect-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "form-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 9,
+            "url": "http://127.0.0.1:49700/media-attachment?"
+          }
+        ]
+      }
+    },
+    {
+      "name": "newtab-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "id": 10,
+            "url": "http://127.0.0.1:49700/media-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "post-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "id": 11,
+            "url": "http://127.0.0.1:49700/post-export"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "388fabe2853922c0a996545c0736f67a7e65ebd988fcec263b17ce1e7ea6c617",
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 291, in run\n    offered = pending(before)\n              ^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 205, in pending\n    return wait(lambda: next((h for h in handoffs() if h['id'] not in before and h['status'] == 'pending'), None), 'No new desktop offer', 40)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: No new desktop offer\n",
+  "failure_background_console": [
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader observed a browser download candidate"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    }
+  ],
+  "failure_targets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49706/devtools/page/0ECAD105FA74E25055E7CCD3F56330D8",
+      "id": "0ECAD105FA74E25055E7CCD3F56330D8",
+      "title": "Takeover ownership",
+      "type": "page",
+      "url": "http://127.0.0.1:49700/",
+      "webSocketDebuggerUrl": "ws://localhost:49706/devtools/page/0ECAD105FA74E25055E7CCD3F56330D8"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49706/devtools/page/5A41C4F74B1BF7491046F2E330198D52",
+      "id": "5A41C4F74B1BF7491046F2E330198D52",
+      "title": "HLS Downloader",
+      "type": "page",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "webSocketDebuggerUrl": "ws://localhost:49706/devtools/page/5A41C4F74B1BF7491046F2E330198D52"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:49706/devtools/page/14DB2E3A20C0F5F6C67B8E274D99141B",
+      "id": "14DB2E3A20C0F5F6C67B8E274D99141B",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "type": "service_worker",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "webSocketDebuggerUrl": "ws://localhost:49706/devtools/page/14DB2E3A20C0F5F6C67B8E274D99141B"
+    }
+  ],
+  "failure_screenshot": true,
+  "failure_url": "http://127.0.0.1:49700/",
+  "failure_html": "<html data-hls-downloader-extension=\"1\"><head><title>Takeover ownership</title></head><body><a id=\"direct\" href=\"/direct.zip\">direct.zip</a> <a id=\"cancel\" href=\"/cancel.zip\">cancel.zip</a> <a id=\"opaque\" href=\"/opaque\">opaque attachment</a> <a id=\"disabled\" href=\"/disabled.zip\">disabled.zip</a> <a id=\"excluded\" href=\"/excluded.zip\">excluded.zip</a> <a id=\"offline\" href=\"/offline.zip\">offline.zip</a> <a id=\"preview\" href=\"/preview.pdf\">preview</a> <a id=\"github\" href=\"https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe\">GitHub portable EXE</a><form method=\"POST\" action=\"/post-export\"><input type=\"hidden\" name=\"export\" value=\"once\"><button id=\"post-export\">Export POST</button></form><button id=\"blob-export\" onclick=\"fetch('/blob-payload').then(r=&gt;r.blob()).then(blob=&gt;{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='blob-export.bin';document.body.append(a);a.click();a.remove()})\">Export Blob</button></body></html>",
+  "failure_handoffs": [
+    {
+      "id": "handoff-1a172e8d212-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:49700/direct.zip"
+    },
+    {
+      "id": "handoff-1a172e8d571-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/cancel.zip"
+    },
+    {
+      "id": "handoff-1a172e8da92-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:49700/opaque"
+    },
+    {
+      "id": "handoff-1a172e8debd-4",
+      "status": "rejected",
+      "url": "https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe"
+    },
+    {
+      "id": "handoff-1a172e8e1ab-6",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/media-attachment"
+    },
+    {
+      "id": "handoff-1a172e8e566-8",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/audio-attachment"
+    },
+    {
+      "id": "handoff-1a172e8ea9f-a",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/image-attachment"
+    },
+    {
+      "id": "handoff-1a172e8f0e2-2",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/json-attachment"
+    },
+    {
+      "id": "handoff-1a172e8f522-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/html-attachment"
+    },
+    {
+      "id": "handoff-1a172e8f8fa-6",
+      "status": "accepted",
+      "url": "http://127.0.0.1:49700/unknown-attachment"
+    },
+    {
+      "id": "handoff-1a172e8fd30-8",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/unknown-attachment"
+    },
+    {
+      "id": "handoff-1a172e900f0-a",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/media-attachment?"
+    },
+    {
+      "id": "handoff-1a172e9055c-c",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49700/media-attachment"
+    },
+    {
+      "id": "handoff-1a172e90b21-d",
+      "status": "accepted",
+      "url": "data:application/octet-stream,"
+    }
+  ],
+  "failure_downloads": [],
+  "failure_storage": [
+    {
+      "enabled": true,
+      "excludedHosts": [],
+      "minimumBytes": 0
+    },
+    {
+      "click-intents": [
+        {
+          "altBypass": false,
+          "at": 1792929238632,
+          "controlHint": true,
+          "ctrlForce": false,
+          "downloadAttribute": false,
+          "frameId": 0,
+          "generic": true,
+          "href": "",
+          "opensNewTab": false,
+          "pageUrl": "http://127.0.0.1:49700/",
+          "tabId": 446757472
+        }
+      ],
+      "handoff-tracker-v1": [
+        {
+          "checkedAt": 1792929225424,
+          "failures": 0,
+          "id": "handoff-1a172e8d212-2",
+          "presentation": "presented",
+          "resourceId": "0610e975ec62713fbf80d8437d40926e",
+          "selectionKey": "90696135d9054bbd5e65d910a5a8c016",
+          "status": "accepted",
+          "tabId": 446757472
+        },
+        {
+          "checkedAt": 1792929226461,
+          "failures": 0,
+          "id": "handoff-1a172e8d571-4",
+          "presentation": "presented",
+          "resourceId": "d41742a37096c2ac8734c3346e4078d9",
+          "selectionKey": "ca44d42b5513472ef65e7b3aba4a3a2f",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "161",
+          "checkedAt": 1792929229514,
+          "failures": 0,
+          "id": "handoff-1a172e8da92-2",
+          "presentation": "presented",
+          "resourceId": "a288c07ab98b264cd9ff84f5b4e16081",
+          "selectionKey": "03c0ec42d8f70486b266cc6f0bb23057",
+          "status": "accepted",
+          "tabId": 446757472
+        },
+        {
+          "checkedAt": 1792929231104,
+          "failures": 0,
+          "id": "handoff-1a172e8debd-4",
+          "presentation": "presented",
+          "resourceId": "757441c92ef2c17b1bbc02606eedb7ea",
+          "selectionKey": "bf7852dee69844e9df92447f59ca5f02",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "217",
+          "checkedAt": 1792929227546,
+          "failures": 0,
+          "id": "handoff-1a172e8e1ab-6",
+          "presentation": "presented",
+          "resourceId": "ba8750f5c9e074a921414b17f9c6d588",
+          "selectionKey": "a881c094e5e506af0851efe6149edfa6",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "270",
+          "checkedAt": 1792929232188,
+          "failures": 0,
+          "id": "handoff-1a172e8e566-8",
+          "presentation": "presented",
+          "resourceId": "867e7b8cba1777378fb50493862f8296",
+          "selectionKey": "dd2056f23fbd7871ee8900715c1c0b08",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "321",
+          "checkedAt": 1792929234197,
+          "failures": 0,
+          "id": "handoff-1a172e8ea9f-a",
+          "presentation": "presented",
+          "resourceId": "a87b1d70f720d05e5cb3b901672f4abf",
+          "selectionKey": "34acdc039f30c8f05a0b68c7cb92f821",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "360",
+          "checkedAt": 1792929238896,
+          "failures": 0,
+          "id": "handoff-1a172e8f0e2-2",
+          "presentation": "presented",
+          "resourceId": "29596021a911122560344ae20259184e",
+          "selectionKey": "36b4c3f190a8b46fffc0bee011b5e476",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "410",
+          "checkedAt": 1792929239807,
+          "failures": 0,
+          "id": "handoff-1a172e8f522-4",
+          "presentation": "presented",
+          "resourceId": "e7d032447044ff88decd5b853aca06a5",
+          "selectionKey": "07f391833ef9284ae14e1467778a766b",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "447",
+          "checkedAt": 1792929240742,
+          "failures": 0,
+          "id": "handoff-1a172e8f8fa-6",
+          "presentation": "presented",
+          "resourceId": "6a243380c5f1fcd37399fd94f914981a",
+          "selectionKey": "ec91532fc9ca5781f60345a8b463a232",
+          "status": "accepted",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "486",
+          "checkedAt": 1792929235134,
+          "failures": 0,
+          "id": "handoff-1a172e8fd30-8",
+          "presentation": "presented",
+          "resourceId": "6a243380c5f1fcd37399fd94f914981a",
+          "selectionKey": "ec91532fc9ca5781f60345a8b463a232",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "520",
+          "checkedAt": 1792929236079,
+          "failures": 0,
+          "id": "handoff-1a172e900f0-a",
+          "presentation": "presented",
+          "resourceId": "d46327a608661ae209a7a53c9d431313",
+          "selectionKey": "2aecc5f5580eb34f917ac05fc070072c",
+          "status": "rejected",
+          "tabId": 446757472
+        },
+        {
+          "browserRequestId": "560",
+          "checkedAt": 1792929237035,
+          "failures": 0,
+          "id": "handoff-1a172e9055c-c",
+          "presentation": "presented",
+          "resourceId": "ba8750f5c9e074a921414b17f9c6d588",
+          "selectionKey": "a881c094e5e506af0851efe6149edfa6",
+          "status": "rejected",
+          "tabId": 446757518
+        },
+        {
+          "checkedAt": 1792929237969,
+          "failures": 0,
+          "id": "handoff-1a172e90b21-d",
+          "presentation": "presenting",
+          "resourceId": "",
+          "status": "accepted",
+          "taskDownloadedBytes": 1048576,
+          "taskStage": "finished",
+          "taskStatus": "completed",
+          "taskTotalBytes": 1048576
+        }
+      ],
+      "resources:tab:446757472:page:3e2e4120c6486b170a0265f0810790f2": [
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "867e7b8cba1777378fb50493862f8296",
+          "kind": "media",
+          "method": "GET",
+          "mimeType": "audio/mpeg",
+          "owner": "tab:446757472:frame:0:270",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/audio-attachment",
+            "method": "GET",
+            "request_id": "270"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929227792,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/audio-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "ba8750f5c9e074a921414b17f9c6d588",
+          "kind": "media",
+          "method": "GET",
+          "mimeType": "video/mp4",
+          "owner": "tab:446757472:frame:0:217",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/media-attachment",
+            "method": "GET",
+            "request_id": "217"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929226854,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/media-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "post-export.bin",
+          "frameId": 0,
+          "id": "25ca384aabfdabca5e00f37fb46e243b",
+          "kind": "file",
+          "method": "POST",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:446757472:frame:0:609",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/post-export",
+            "method": "POST",
+            "request_id": "609"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "content-type": "application/x-www-form-urlencoded",
+            "origin": "http://127.0.0.1:49700",
+            "referer": "http://127.0.0.1:49700/",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929237123,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/post-export"
+        },
+        {
+          "confidence": 0.84,
+          "evidence": [
+            "response_headers",
+            "request_chain"
+          ],
+          "filename": "",
+          "frameId": 0,
+          "id": "d46327a608661ae209a7a53c9d431313",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:446757472:frame:0:520",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/media-attachment?",
+            "method": "GET",
+            "request_id": "520"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "referer": "http://127.0.0.1:49700/",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929235024,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/media-attachment?"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "6a243380c5f1fcd37399fd94f914981a",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/x-unknown-export",
+          "owner": "tab:446757472:frame:0:486",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/unknown-attachment",
+            "method": "GET",
+            "request_id": "486"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929234039,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/unknown-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "e7d032447044ff88decd5b853aca06a5",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "text/html",
+          "owner": "tab:446757472:frame:0:410",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/html-attachment",
+            "method": "GET",
+            "request_id": "410"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929231979,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/html-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "29596021a911122560344ae20259184e",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/json",
+          "owner": "tab:446757472:frame:0:360",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/json-attachment",
+            "method": "GET",
+            "request_id": "360"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929230372,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/json-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "export.data",
+          "frameId": 0,
+          "id": "a87b1d70f720d05e5cb3b901672f4abf",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "image/png",
+          "owner": "tab:446757472:frame:0:321",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/image-attachment",
+            "method": "GET",
+            "request_id": "321"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "none",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929229251,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/image-attachment"
+        },
+        {
+          "confidence": 0.99,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "opaque.zip",
+          "frameId": 0,
+          "id": "a288c07ab98b264cd9ff84f5b4e16081",
+          "kind": "file",
+          "method": "GET",
+          "mimeType": "application/octet-stream",
+          "owner": "tab:446757472:frame:0:161",
+          "pageUrl": "http://127.0.0.1:49700/",
+          "playbackPatterns": [],
+          "playbackUrls": [],
+          "renditionUrls": [],
+          "replayContext": {
+            "final_url": "http://127.0.0.1:49700/opaque",
+            "method": "GET",
+            "request_id": "161"
+          },
+          "requestHeaders": {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "referer": "http://127.0.0.1:49700/",
+            "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\"",
+            "sec-fetch-dest": "document",
+            "sec-fetch-mode": "navigate",
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-user": "?1",
+            "upgrade-insecure-requests": "1",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0"
+          },
+          "seenAt": 1792929224651,
+          "size": 1048576,
+          "statusCode": 200,
+          "tabId": 446757472,
+          "title": "Takeover ownership",
+          "url": "http://127.0.0.1:49700/opaque"
+        }
+      ],
+      "subtitle-sessions": {}
+    }
+  ],
+  "requests": {
+    "/": 16,
+    "/favicon.ico": 16,
+    "/direct.zip": 2,
+    "/opaque": 3,
+    "/media-attachment": 2,
+    "/audio-attachment": 1,
+    "/image-attachment": 1,
+    "/json-attachment": 1,
+    "/html-attachment": 1,
+    "/unknown-attachment": 4,
+    "/redirect-attachment": 1,
+    "/media-attachment?": 1,
+    "POST /post-export": 1,
+    "/blob-payload": 1
+  }
+}

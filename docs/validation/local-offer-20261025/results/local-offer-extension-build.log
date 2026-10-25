@@ -1,0 +1,97 @@
+$ wxt build -b chrome && wxt build -b firefox
+
+WXT 0.21.4
+i Building chrome-mv3 for production with Vite 8.1.5
+[?25l
+⠋ Preparing...[K
+⠋ [1/6] background[K
+⠙ [1/6] background[K
+⠹ [1/6] background[K
+⠸ [1/6] background[K
+⠼ [1/6] background[K
+⠴ [1/6] background[K
+⠦ [1/6] background[K
+⠧ [1/6] background[K
+⠇ [1/6] background[K
+⠏ [1/6] background[K
+⠋ [1/6] background[K
+⠙ [1/6] background[K
+⠙ [2/6] content[K
+⠹ [2/6] content[K
+⠸ [2/6] content[K
+⠼ [2/6] content[K
+⠴ [2/6] content[K
+⠦ [2/6] content[K
+⠦ [3/6] hooks[K
+⠧ [3/6] hooks[K
+⠇ [3/6] hooks[K
+⠇ [4/6] popup, subtitle-offscreen[K
+⠏ [4/6] popup, subtitle-offscreen[K
+⠋ [4/6] popup, subtitle-offscreen[K
+⠙ [4/6] popup, subtitle-offscreen[K
+⠙ [5/6] subtitle-pcm[K
+⠹ [5/6] subtitle-pcm[K
+⠹ [6/6] takeover[K
+⠸ [6/6] takeover[K
+⠼ [6/6] takeover[K
+[K[?25h
+[K[?25h√ Built extension in 5.087 s
+  ├─ .output\chrome-mv3\manifest.json                          1.64 kB  
+  ├─ .output\chrome-mv3\popup.html                             2.19 kB  
+  ├─ .output\chrome-mv3\subtitle-offscreen.html                281 B    
+  ├─ .output\chrome-mv3\background.js                          381.18 kB
+  ├─ .output\chrome-mv3\chunks\browser-B79nNR8W.js             788 B    
+  ├─ .output\chrome-mv3\chunks\popup-P9xw0Pcv.js               208.74 kB
+  ├─ .output\chrome-mv3\chunks\subtitle-offscreen-Duzk67A_.js  3.11 kB  
+  ├─ .output\chrome-mv3\content-scripts\content.js             90.77 kB 
+  ├─ .output\chrome-mv3\content-scripts\hooks.js               25.77 kB 
+  ├─ .output\chrome-mv3\content-scripts\takeover.js            13.59 kB 
+  ├─ .output\chrome-mv3\subtitle-pcm.js                        1.47 kB  
+  ├─ .output\chrome-mv3\assets\popup-DC57h4ym.css              11.57 kB 
+  ├─ .output\chrome-mv3\icon-128.png                           6.35 kB  
+  ├─ .output\chrome-mv3\icon-16.png                            729 B    
+  ├─ .output\chrome-mv3\icon-32.png                            1.50 kB  
+  ├─ .output\chrome-mv3\icon-48.png                            2.49 kB  
+  └─ .output\chrome-mv3\icon.png                               22.17 kB 
+Σ Total size: 774.34 kB                                      
+√ Finished in 5.583 s
+
+WXT 0.21.4
+i Building firefox-mv3 for production with Vite 8.1.5
+[?25l
+⠋ Preparing...[K
+⠋ [1/6] background[K
+⠙ [1/6] background[K
+⠹ [1/6] background[K
+⠹ [2/6] content[K
+⠸ [2/6] content[K
+⠼ [2/6] content[K
+⠼ [3/6] hooks[K
+⠴ [3/6] hooks[K
+⠴ [4/6] popup, subtitle-offscreen[K
+⠦ [4/6] popup, subtitle-offscreen[K
+⠧ [4/6] popup, subtitle-offscreen[K
+⠧ [5/6] subtitle-pcm[K
+⠧ [6/6] takeover[K
+⠇ [6/6] takeover[K
+[K[?25h
+[K[?25h√ Built extension in 2.023 s
+  ├─ .output\firefox-mv3\manifest.json                          1.61 kB  
+  ├─ .output\firefox-mv3\popup.html                             2.19 kB  
+  ├─ .output\firefox-mv3\subtitle-offscreen.html                281 B    
+  ├─ .output\firefox-mv3\background.js                          381.79 kB
+  ├─ .output\firefox-mv3\chunks\browser-B79nNR8W.js             788 B    
+  ├─ .output\firefox-mv3\chunks\popup-P9xw0Pcv.js               208.74 kB
+  ├─ .output\firefox-mv3\chunks\subtitle-offscreen-Duzk67A_.js  3.11 kB  
+  ├─ .output\firefox-mv3\content-scripts\content.js             90.77 kB 
+  ├─ .output\firefox-mv3\content-scripts\hooks.js               25.77 kB 
+  ├─ .output\firefox-mv3\content-scripts\takeover.js            11.59 kB 
+  ├─ .output\firefox-mv3\subtitle-pcm.js                        1.47 kB  
+  ├─ .output\firefox-mv3\assets\popup-DC57h4ym.css              11.57 kB 
+  ├─ .output\firefox-mv3\icon-128.png                           6.35 kB  
+  ├─ .output\firefox-mv3\icon-16.png                            729 B    
+  ├─ .output\firefox-mv3\icon-32.png                            1.50 kB  
+  ├─ .output\firefox-mv3\icon-48.png                            2.49 kB  
+  └─ .output\firefox-mv3\icon.png                               22.17 kB 
+Σ Total size: 772.91 kB                                       
+√ Finished in 2.532 s

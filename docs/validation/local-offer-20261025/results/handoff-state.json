@@ -1,0 +1,36 @@
+{
+  "sandbox": {
+    "checked_utc": "2026-10-25T12:13:28.7601789Z",
+    "sandbox_product_processes": [],
+    "shutdown_requested": true
+  },
+  "host_sandbox_processes": [
+    {
+      "Id": 18960,
+      "ProcessName": "WindowsSandboxClient"
+    }
+  ],
+  "retained_generated_paths": [
+    ".tool-cache/request-control-20261025",
+    ".tool-cache/http-transport-20261025",
+    ".tool-cache/build-cache",
+    ".tool-cache/navigation-20261025",
+    "desktop_ui/.gradle",
+    "desktop_ui/.kotlin",
+    "extension/node_modules",
+    "extension/.output",
+    "extension/.wxt",
+    ".tool-cache/live-presenter-20261024"
+  ],
+  "cleanup": "Historical automatic review rejection retained; no retry through alternative deletion channel",
+  "desktop_checksum_entries": 8,
+  "branches": [
+    "main"
+  ],
+  "worktrees": [
+    "worktree A:/Ubuntu/测试/hls-downloader",
+    "HEAD a28ead341e20986b39e777ada1f773f1d4b0642c",
+    "branch refs/heads/main",
+    ""
+  ]
+}

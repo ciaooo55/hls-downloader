@@ -1,0 +1,30 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > rejects overload without losing queued downloads and accepts new work after draining 11ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > reopens an idle subtitle port before sending a new start request 4ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > keeps a long in-flight request and measures idle time from its response 6ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > drops a broken Core pipe without replaying the failed audio request 2ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > keeps subtitle PCM on the same host while an earlier poll is pending 2ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > reuses one native port and serializes requests 2ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > reconciles an immediate media-push rejection before resolving the browser call 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > normalizes an explicit media-push status error into a terminal failure 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > falls back to the accepted media-push response if the immediate status check disconnects 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > snapshots queued resource metadata before caller mutation 2ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > preempts an active status request for an interactive offer 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > lets local-file handoff preempt a stalled heartbeat and then resumes the read 2ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > does not interrupt or replay a local-file handoff when status reads arrive 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > rejects the active request and reconnects after host disconnect 2ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > supports a longer timeout for a desktop confirmation request 3ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > retries an idempotent request once after a disconnect 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > retries when opening the native port itself fails transiently 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > ignores a stale response from a replaced native port 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > ignores a response without the active v7 request id 1ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > disconnects a port whose initial postMessage throws before retrying 3ms
+ ✓ lib/nativeBridge.test.ts > persistent native bridge > gives a replacement native port a fresh timeout after postMessage throws 1ms
+
+ Test Files  1 passed (1)
+      Tests  21 passed (21)
+   Start at  19:49:19
+   Duration  469ms (transform 54%, tests 25%, import 16%, worker 5%)
+
