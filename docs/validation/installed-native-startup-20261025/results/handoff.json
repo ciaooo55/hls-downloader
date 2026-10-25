@@ -1,0 +1,9 @@
+{
+  "desktop_assets_unchanged": true,
+  "tested_fixture_sha256": "f0c20f548140086307a4e3d533cf149d087b2f6902bb60743ec140b2f8c4994f",
+  "remaining_relevant_processes": [],
+  "matching_host_uninstall_records": [],
+  "cache_deletion_executed": false,
+  "host_install_performed": false,
+  "checked_at": "2026-10-25T19:20:24.3735801+08:00"
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -25,6 +26,8 @@ from PIL import Image
 
 from msi_checkpoint_fixture import connect, send, wait_task
 from smoke_v7_download_playback import wait
+from smoke_v7_native_host import responses
+from smoke_v7_portable_app import Pipe
 
 
 def downloads_folder():
@@ -193,6 +196,60 @@ def verify_hls_retry(ipc, download_dir, media_bytes):
     return cases
 
 
+def verify_native_host_startup(resources, result, save):
+    # 不传测试 IPC/数据目录，核对实际安装用户的默认命名管道和首次任务库。
+    environment = {key: value for key, value in os.environ.items() if not key.startswith('HLS_')}
+    environment['HLS_V7_STARTUP_PROFILE'] = '1'
+    result.update(transport='default Windows named pipe', concurrent_hosts=4, rounds=[])
+    engine = resources/'HLSDownloaderEngine.exe'
+    previous_pid = None
+    for phase in ('first-installed-launch', 'resident-core', 'relaunch-after-shutdown'):
+        barrier = threading.Barrier(4)
+
+        def ping():
+            barrier.wait(timeout=10)
+            return responses(resources/'HLSDownloaderNativeHost.exe', environment)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            replies = list(executor.map(lambda _: ping(), range(4)))
+        resident = [proc for proc in psutil.process_iter(['pid', 'exe'])
+                    if proc.info['exe'] and Path(proc.info['exe']) == engine]
+        diagnostics = [reply[3] for reply in replies]
+        spawns = sum('core_spawn stage=before_spawn' in line['message']
+                     for host in diagnostics for line in host)
+        sample = {'phase': phase, 'first_response_ms': [round(reply[1], 2) for reply in replies],
+                  'responses': [reply[0] for reply in replies], 'startup_diagnostics': diagnostics,
+                  'core_spawn_attempts': spawns, 'resident_pids': [proc.pid for proc in resident]}
+        result['rounds'].append(sample)
+        save()
+        assert len(resident) == 1, sample
+        assert spawns == (0 if phase == 'resident-core' else 1), sample
+        assert all(len(reply[0]) == 2 and all(message.get('ok') is True and
+                   message.get('protocol_version') == 1 for message in reply[0]) for reply in replies), sample
+        # 沿用已有 Native Host 冷启动验收的 1.5 秒目标，不放宽期限掩盖超时。
+        assert max(reply[1] for reply in replies) <= 1500, sample
+        if phase == 'resident-core':
+            assert resident[0].pid == previous_pid, sample
+        pipe = Pipe()
+        try:
+            hello = pipe.request({'type': 'hello', 'protocol': 'hls-downloader-v7-core', 'version': 1})
+            assert hello['type'] == 'hello' and hello['pid'] == resident[0].pid, hello
+            settings = pipe.request({'type': 'load_settings', 'request_id': 1})
+            assert Path(settings['download_dir']) == downloads_folder(), settings
+            sample['hello_pid'] = hello['pid']
+            sample['download_dir'] = settings['download_dir']
+            if phase != 'first-installed-launch':
+                pipe.request({'type': 'command', 'request_id': 2, 'command': {'kind': 'shutdown'}})
+        finally:
+            pipe.close()
+        if phase != 'first-installed-launch':
+            wait(lambda: not resident[0].is_running(), 'Native-started Core did not shut down', 10)
+        previous_pid = resident[0].pid
+        save()
+    result['passed'] = True
+    save()
+
+
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +340,10 @@ def run(args):
                 'unpacked_directory_present': root.exists(),
                 'archives_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in archives}}
         record('installed extension ZIPs are valid; unpacked copies match when present', extensions)
+        if args.verify_native_host_startup:
+            report['native_host_startup'] = {}
+            verify_native_host_startup(resources, report['native_host_startup'], save)
+            record('installed Native Host cold/concurrent/resident/restart paths use one Core over the default pipe')
         port, ui_port = free_port(), free_port()
         token = uuid.uuid4().hex
         # 安装验收必须加载真实任务库，不能继承前一轮离线界面夹具。
@@ -456,4 +517,5 @@ if __name__ == '__main__':
     parser.add_argument('--verify-browser-color', action='store_true', help='Verify footer pixels before/after a simulated browser handshake')
     parser.add_argument('--verify-http-retry', action='store_true', help='Verify permanent/transient HTTP failures and queue continuation with the installed Engine')
     parser.add_argument('--verify-hls-retry', action='store_true', help='Verify full/range HLS segment errors, recovery and cache cleanup with the installed Engine')
+    parser.add_argument('--verify-native-host-startup', action='store_true', help='Verify installed default-pipe cold/concurrent/resident/restart Native Host startup')
     raise SystemExit(run(parser.parse_args()))
