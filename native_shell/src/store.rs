@@ -33,13 +33,25 @@ pub enum CredentialWrite<'a> {
 }
 impl CoreStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        let started = std::time::Instant::now();
+        let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
+        let mark = |stage: &str| {
+            if profile {
+                eprintln!(
+                    "core_sqlite_open stage={stage} elapsed_us={}",
+                    started.elapsed().as_micros()
+                );
+            }
+        };
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("create Core data directory: {error}"))?;
         }
+        mark("directory_ready");
         let connection = Connection::open(path)
             .map_err(|error| format!("open Core database {}: {error}", path.display()))?;
+        mark("connection_ready");
         // initialize() would silently re-stamp user_version, so an unexpected
         // existing version must be refused before the schema batch runs.
         let existing: u32 = connection
@@ -51,11 +63,13 @@ impl CoreStore {
                 path.display()
             ));
         }
+        mark("version_read");
         let mut store = Self {
             connection,
             path: Some(path.to_path_buf()),
         };
         store.initialize()?;
+        mark("initialized");
         Ok(store)
     }
 
@@ -540,6 +554,16 @@ impl CoreStore {
     }
 
     fn initialize(&mut self) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
+        let mark = |stage: &str| {
+            if profile {
+                eprintln!(
+                    "core_sqlite_initialize stage={stage} elapsed_us={}",
+                    started.elapsed().as_micros()
+                );
+            }
+        };
         // 先应用既定同步策略，避免首次切换 WAL 时沿用 SQLite 默认 FULL 产生额外慢盘同步。
         self.connection
             .execute_batch(
@@ -548,6 +572,7 @@ impl CoreStore {
                  PRAGMA journal_mode = WAL;",
             )
             .map_err(|error| format!("initialize Core pragmas: {error}"))?;
+        mark("pragmas_ready");
         // 建表、索引和版本标记一次提交，避免慢盘上的逐表提交及失败后的半初始化状态。
         let transaction = self
             .connection
@@ -616,9 +641,12 @@ impl CoreStore {
                  PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"
             ))
             .map_err(|error| format!("initialize Core schema: {error}"))?;
+        mark("schema_ready");
         transaction
             .commit()
-            .map_err(|error| format!("commit Core schema: {error}"))
+            .map_err(|error| format!("commit Core schema: {error}"))?;
+        mark("committed");
+        Ok(())
     }
 }
 

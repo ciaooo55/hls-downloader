@@ -31,3 +31,19 @@
 历史首次启动超时仍未复现并确定根因，不能记为已修复；指定直播站点 403、原始 HLS 卡死现场、浏览器 MV3/POST/Blob、设备/云端和长期负载边界仍保留。不能宣称全功能与 IDM/AB 全面对等。
 
 宿主只读核查及本批进程收尾另见 results。构建缓存删除此前被自动审批拒绝（`blocked by policy`），本批不换方法重试；任务创建的运行脚本与报告暂存仍在项目 `.tool-cache/request-control-20261025`，不声称目录只剩源码。没有创建分支或 worktree，没有改动用户下载、密钥、备份或其他项目。
+
+## 后续：拆分 SQLite 初始化耗时
+
+[本地文件交接包](../local-offer-20261025/README.md)首次安装验收出现 1645.09ms 超标。随后旧包→新包对照复用了已有任务库，不能作为首次初始化故障已修复的证据。本轮保留原 1500ms 门槛和 SQLite 事务、同步策略，仅在 `HLS_V7_STARTUP_PROFILE` 既有开关下增加目录、连接、版本读取、PRAGMA、建表与提交的计时；正常模式不输出这些阶段信息，没有增加依赖、播放引擎、配置项或常驻线程。
+
+诊断 Engine SHA-256 为 `9a86196a97ecbd46130435ba5a4ee0dc9c3e65db7283fb9fb51e0df6e52ed4aa`，在宿主完成离线 release 编译，产品仅在沙盒运行。既有 `smoke_v7_native_host.py` 按预定诊断版→原版→诊断版→原版顺序执行四组，每组复制并 flush 二进制、创建独立新任务库，四个 Host 并发各发两个 ping。四组首响应最慢分别为 300.11、166.04、169.38、167.84ms，均保持唯一 Core；两组诊断任务库初始化分别为 13.985、12.006ms。记录为 [执行结果](results/sqlite-stage-v2-results.json)及同前缀的四份逐 Host JSON。样本少且首次执行有缓存差异，不据此声称诊断版更快或更慢。
+
+首次独立夹具没有生成有效测量：Windows PowerShell 的 `ErrorActionPreference=Stop` 只保留 Python traceback 首行，见[失败原文](results/sqlite-stage-harness-first-failure.txt)。随后修正原生命令的错误采集，并在独立测试输入旁补上安装包既有的 `vcruntime140.dll`，再执行上述固定四组。第一次完整异常未被采集，不能确定缺少运行库就是该次失败的唯一原因，也不将它计算为产品功能失败或通过。
+
+同一沙盒的默认任务目录及默认管道另测三阶段，通过首启 245.78ms、常驻 75.80ms、正常关闭后重启 140.68ms，见[独立运行记录](results/sqlite-stage-default.json)。它不经过 MSI，且执行前已有四组独立运行，不能代替安装现场。
+
+因此另开全新 Windows 沙盒，先记录[安装前默认数据库不存在](results/sqlite-stage-pristine-before-install.json)，再安装仅替换诊断 Engine 和 provenance 的 MSI。诊断 MSI SHA-256 为 `36b9d7912ddd8d7584bb6f7acc745677234f91f0c3794acdf32db52f55042a14`。安装夹具现在记录 `database_existed_before_first_launch`，本次在安装完成、首次 Host 启动前仍为 `false`，避免将安装后第一次启动和新任务库混为一谈。
+
+最终[安装现场记录](results/sqlite-stage-pristine-installer.json)通过自选含空格路径、五组件与双插件 ZIP 一致性、默认 Downloads、并发唯一 Core、公开 MDN 成品字节和 SHA-256、完成缓存清理、测试成品删除、闲置测量及卸载注销。首启最慢 1309.48ms、常驻 75.83ms、正常关闭后重启 185.53ms。首次 SQLite 连接和版本读取累计 0.878ms，PRAGMA 阶段 465.107ms、建表阶段另 104.235ms、事务提交另 604.791ms，整个打开/初始化 1175.117ms；同一任务库重开为 2.389ms。这将慢点进一步收窄到新库初始化写入，不能证明具体文件同步调用、虚拟磁盘、缓存或杀毒是根因。没有降低持久化保护、提前伪报就绪、延长门槛或认定先前 1645.09ms 及历史 15 秒超时已经解决。
+
+本轮不是性能优化包，也没有再次运行完整 Core/UI/插件回归或 UI、云端、实体设备、长期负载验收。诊断 MSI 未交付到桌面或 GitHub Release；桌面 MSI 仍为 `2c87bdc8af83100538350809befae63324540e0b430e23acd8b2ce7408432946`。两个沙盒及产品进程均已退出，见[收尾记录](results/sqlite-stage-handoff.json)；任务生成物仍集中于既有 `.tool-cache`，没有绕过历史删除拒绝。本轮代码改动仅诊断计时与夹具的数据库存在性记录，未修改下载或持久化行为。

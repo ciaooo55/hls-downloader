@@ -200,7 +200,9 @@ def verify_native_host_startup(resources, result, save):
     # 不传测试 IPC/数据目录，核对实际安装用户的默认命名管道和首次任务库。
     environment = {key: value for key, value in os.environ.items() if not key.startswith('HLS_')}
     environment['HLS_V7_STARTUP_PROFILE'] = '1'
-    result.update(transport='default Windows named pipe', concurrent_hosts=4, rounds=[])
+    database = Path(environment['LOCALAPPDATA'])/'HLS Downloader/v7/data.db'
+    result.update(transport='default Windows named pipe', concurrent_hosts=4,
+                  database_existed_before_first_launch=database.exists(), rounds=[])
     engine = resources/'HLSDownloaderEngine.exe'
     previous_pid = None
     for phase in ('first-installed-launch', 'resident-core', 'relaunch-after-shutdown'):

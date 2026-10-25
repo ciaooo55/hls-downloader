@@ -1,0 +1,18 @@
+[
+    {
+        "exit_code":  0,
+        "name":  "instrumented-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "baseline-1"
+    },
+    {
+        "exit_code":  0,
+        "name":  "instrumented-2"
+    },
+    {
+        "exit_code":  0,
+        "name":  "baseline-2"
+    }
+]

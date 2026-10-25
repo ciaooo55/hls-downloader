@@ -1,0 +1,9 @@
+python.exe : Traceback (most recent call last):
+At C:\HlsQA\sequential-command.ps1:12 char:2
++  & $python C:\HlsSource\scripts\validation\smoke_v7_native_host.py -- ...
++  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last) 
+   ::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+

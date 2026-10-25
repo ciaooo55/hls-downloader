@@ -1,0 +1,8 @@
+{
+  "checked_utc": "2026-10-25T12:31:39.0293956Z",
+  "sandbox_processes": [],
+  "host_product_processes": [],
+  "desktop_msi_sha256": "2c87bdc8af83100538350809befae63324540e0b430e23acd8b2ce7408432946",
+  "diagnostic_only": true,
+  "generated_files_retained": "Project .tool-cache/request-control-20261025 and prior build caches; historical deletion rejection not retried"
+}
