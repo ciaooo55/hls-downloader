@@ -1,0 +1,38 @@
+{
+  "executed_tests": 114,
+  "all_product_execution": "Windows Sandbox",
+  "failed": 0,
+  "ui_exercised": false,
+  "passed": 114,
+  "groups": {
+    "winhttp": 3,
+    "net_policy": 13,
+    "hls": 26,
+    "http": 61,
+    "retry_refresh_credentials": 3,
+    "cache": 6,
+    "real_curl": 2
+  },
+  "artifacts": [
+    {
+      "path": "native_shell/src/http_engine.rs",
+      "bytes": 227011,
+      "sha256": "2db0c6a48147025a8b8c6dd833401b2bbd78f5af089ccdf470714fcbe5c2aef8"
+    },
+    {
+      "path": "native_shell/src/net_policy.rs",
+      "bytes": 37480,
+      "sha256": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998"
+    },
+    {
+      "path": ".tool-cache/request-control-20261025/core-tests.exe",
+      "bytes": 21003776,
+      "sha256": "2fbe7b68c39cec9846ed7f0493399d2fc8d6ec87dbcd9d187d77b99665c6bff6"
+    },
+    {
+      "path": ".tool-cache/live-presenter-20261024/target/release/hls-downloader-engine.exe",
+      "bytes": 14709760,
+      "sha256": "4bc6658670e787612b92e226a68f6b639e14225234c52337bec606f11644de47"
+    }
+  ]
+}

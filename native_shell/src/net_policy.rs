@@ -213,20 +213,28 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
     pattern_index == pattern.len()
 }
 
-pub fn acquire(url: &str) -> Result<ConnectionGuard, String> {
+pub fn acquire<E: From<String>>(
+    url: &str,
+    mut check: impl FnMut() -> Result<(), E>,
+) -> Result<ConnectionGuard, E> {
     let host = host_key(url);
-    let mut state = budget().lock().map_err(|_| "connection budget poisoned")?;
     loop {
+        // 控制检查不能持有全局预算锁，避免慢文件 I/O 阻止其他任务释放名额。
+        check()?;
+        let mut state = budget()
+            .lock()
+            .map_err(|_| E::from("connection budget poisoned".to_string()))?;
         let host_used = state.hosts.get(&host).copied().unwrap_or(0);
         if state.global < GLOBAL_CONNECTION_LIMIT && host_used < PER_HOST_CONNECTION_LIMIT {
             state.global += 1;
             state.hosts.insert(host.clone(), host_used + 1);
             return Ok(ConnectionGuard { host });
         }
-        state = BUDGET_PULSE
-            .wait_timeout(state, Duration::from_millis(50))
-            .map_err(|_| "connection budget wait")?
-            .0;
+        drop(
+            BUDGET_PULSE
+                .wait_timeout(state, Duration::from_millis(50))
+                .map_err(|_| E::from("connection budget wait".to_string()))?,
+        );
     }
 }
 
@@ -835,6 +843,46 @@ fn chrono_minutes_now() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturated_connection_budget_can_stop_without_leaking_a_slot() {
+        use std::sync::mpsc;
+        let url = "http://budget-stop.invalid/fixture";
+        let mut guards: Vec<_> = (0..PER_HOST_CONNECTION_LIMIT)
+            .map(|_| acquire(url, || Ok::<(), String>(())).unwrap())
+            .collect();
+        for action in ["paused", "canceled"] {
+            let (waiting_tx, waiting_rx) = mpsc::channel();
+            let (stop_tx, stop_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let mut checks = 0;
+                acquire(url, || {
+                    checks += 1;
+                    if checks > 1 {
+                        // 第二次检查说明确实等过满额预算；检查期间预算锁须已释放。
+                        waiting_tx.send(()).unwrap();
+                        return Err(stop_rx.recv().unwrap());
+                    }
+                    Ok::<(), String>(())
+                })
+            });
+            waiting_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(
+                budget().lock().unwrap().hosts[&host_key(url)],
+                PER_HOST_CONNECTION_LIMIT
+            );
+            stop_tx.send(action.to_string()).unwrap();
+            assert!(matches!(worker.join().unwrap(), Err(message) if message == action));
+            assert_eq!(
+                budget().lock().unwrap().hosts[&host_key(url)],
+                PER_HOST_CONNECTION_LIMIT
+            );
+        }
+        guards.pop();
+        guards.push(acquire(url, || Ok::<(), String>(())).unwrap());
+        drop(guards);
+        assert!(!budget().lock().unwrap().hosts.contains_key(&host_key(url)));
+    }
 
     #[test]
     fn overnight_window_wraps_midnight() {

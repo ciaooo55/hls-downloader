@@ -158,6 +158,12 @@ pub enum EngineError {
     Failed(String),
 }
 
+impl From<String> for EngineError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpMirrorReport {
     pub url: String,
@@ -760,7 +766,7 @@ fn run_job_once(job: &Job) -> Result<(), EngineError> {
         Control::Cancel => return Err(EngineError::Cancel),
         Control::Run => {}
     }
-    let _slot = crate::net_policy::acquire(&job.url).map_err(EngineError::Failed)?;
+    let _slot = crate::net_policy::acquire(&job.url, || check_control(&job.control))?;
     // A HEAD job must take the sequential path even when it carries a total: a
     // HEAD range response is 206 + Content-Range with no body, so the range
     // workers read zero bytes forever and the job dies as "made no progress
@@ -849,15 +855,17 @@ fn fetch_bytes_with_transport(
         let expected_length = fetched.content_length;
         let mut body = Vec::new();
         let mut reader = fetched.body;
-        reader
-            .read_to_end(&mut body)
-            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        if let Err(error) = reader.read_to_end(&mut body) {
+            check_control(&job.control)?;
+            return Err(EngineError::Failed(error.to_string()));
+        }
         if matches!(status, 200 | 206)
             && expected_length.is_some_and(|expected| expected != body.len() as u64)
         {
             return Err(EngineError::Failed(format!(
                 "incomplete response body: received {} bytes, expected {}",
-                body.len(), expected_length.unwrap()
+                body.len(),
+                expected_length.unwrap()
             )));
         }
         crate::net_policy::consume(body.len(), || check_control(&job.control))?;
@@ -955,9 +963,10 @@ fn fetch_bytes_range_with_transport(
         }
         let mut body = Vec::new();
         let mut reader = fetched.body;
-        reader
-            .read_to_end(&mut body)
-            .map_err(|err| EngineError::Failed(err.to_string()))?;
+        if let Err(error) = reader.read_to_end(&mut body) {
+            check_control(&job.control)?;
+            return Err(EngineError::Failed(error.to_string()));
+        }
         if body.len() as u64 != length {
             return Err(EngineError::RangeUnsupported(format!(
                 "byte range length {} != {length}",
@@ -2399,10 +2408,10 @@ fn fetch_via_curl_impersonate(
         }
         command.arg(&job.url);
         // 输出写文件，避免等待退出时 stderr 管道填满；暂停/取消须能中止在途请求。
-        let status_file = File::create(&status_path)
-            .map_err(|error| EngineError::Failed(error.to_string()))?;
-        let error_file = File::create(&error_path)
-            .map_err(|error| EngineError::Failed(error.to_string()))?;
+        let status_file =
+            File::create(&status_path).map_err(|error| EngineError::Failed(error.to_string()))?;
+        let error_file =
+            File::create(&error_path).map_err(|error| EngineError::Failed(error.to_string()))?;
         let mut child = command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(status_file))
@@ -3032,13 +3041,22 @@ fn http_get(
 mod winhttp {
     use super::{Body, EngineError, Job};
     use std::io::Read;
+    use std::path::PathBuf;
     use std::ptr::null_mut;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
     use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Networking::WinHttp::{
         WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
         WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
-        WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
-        WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD, WINHTTP_FLAG_SECURE,
+        WinHttpSendRequest, WinHttpSetOption, WinHttpSetStatusCallback, WinHttpSetTimeouts,
+        WINHTTP_ACCESS_TYPE_NAMED_PROXY, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_ADDREQ_FLAG_ADD,
+        WINHTTP_ASYNC_RESULT, WINHTTP_CALLBACK_FLAG_HEADERS_AVAILABLE,
+        WINHTTP_CALLBACK_FLAG_READ_COMPLETE, WINHTTP_CALLBACK_FLAG_REQUEST_ERROR,
+        WINHTTP_CALLBACK_FLAG_SENDREQUEST_COMPLETE, WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING,
+        WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, WINHTTP_CALLBACK_STATUS_READ_COMPLETE,
+        WINHTTP_CALLBACK_STATUS_REQUEST_ERROR, WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE,
+        WINHTTP_FLAG_ASYNC, WINHTTP_FLAG_SECURE, WINHTTP_OPTION_CONTEXT_VALUE,
         WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
         WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_RANGE, WINHTTP_QUERY_ETAG,
         WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LAST_MODIFIED, WINHTTP_QUERY_LOCATION,
@@ -3048,24 +3066,70 @@ mod winhttp {
     // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY (stable WinHTTP ABI value).
     const SYSTEM_PROXY_ACCESS_TYPE: u32 = 4;
 
+    #[derive(Default)]
+    struct RequestStatus {
+        completed: Option<Result<u32, u32>>,
+        closed: bool,
+    }
+
+    #[derive(Default)]
+    struct RequestSignal {
+        status: Mutex<RequestStatus>,
+        pulse: Condvar,
+    }
+
+    unsafe extern "system" fn status_callback(
+        _handle: *mut core::ffi::c_void,
+        context: usize,
+        notification: u32,
+        information: *mut core::ffi::c_void,
+        length: u32,
+    ) {
+        if context == 0 {
+            return;
+        }
+        let signal = &*(context as *const RequestSignal);
+        {
+            let mut status = signal
+                .status
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match notification {
+                WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE
+                | WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE => {
+                    status.completed = Some(Ok(0));
+                }
+                WINHTTP_CALLBACK_STATUS_READ_COMPLETE => status.completed = Some(Ok(length)),
+                WINHTTP_CALLBACK_STATUS_REQUEST_ERROR => {
+                    status.completed =
+                        Some(Err((*(information as *const WINHTTP_ASYNC_RESULT)).dwError));
+                }
+                WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING => status.closed = true,
+                _ => return,
+            }
+            signal.pulse.notify_all();
+        }
+        if notification == WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING {
+            // WinHTTP 的最后一次通知释放其专用引用；请求所有者另持一份引用。
+            drop(Arc::from_raw(context as *const RequestSignal));
+        }
+    }
+
     pub struct WinHttpBody {
-        session: *mut core::ffi::c_void,
         connect: *mut core::ffi::c_void,
         request: *mut core::ffi::c_void,
-        keep_session: bool,
         recycle_connect: bool,
         connect_key: String,
+        signal: Option<Arc<RequestSignal>>,
+        control: PathBuf,
     }
 
     unsafe impl Send for WinHttpBody {}
 
     impl Drop for WinHttpBody {
         fn drop(&mut self) {
+            self.close_request();
             unsafe {
-                if !self.request.is_null() {
-                    WinHttpCloseHandle(self.request);
-                    self.request = null_mut();
-                }
                 if !self.connect.is_null() {
                     if self.recycle_connect && put_connect(&self.connect_key, self.connect) {
                         self.connect = null_mut();
@@ -3074,8 +3138,57 @@ mod winhttp {
                         self.connect = null_mut();
                     }
                 }
-                if !self.keep_session && !self.session.is_null() {
-                    WinHttpCloseHandle(self.session);
+            }
+        }
+    }
+
+    impl WinHttpBody {
+        fn close_request(&mut self) {
+            if self.request.is_null() {
+                return;
+            }
+            unsafe {
+                WinHttpCloseHandle(std::mem::replace(&mut self.request, null_mut()));
+            }
+            if let Some(signal) = &self.signal {
+                // 取消异步 I/O 后仍须等最终关闭通知，才能释放正在使用的读写缓冲区。
+                let mut status = signal
+                    .status
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                while !status.closed {
+                    status = signal
+                        .pulse
+                        .wait(status)
+                        .unwrap_or_else(|error| error.into_inner());
+                }
+            }
+        }
+
+        fn wait(&self, operation: &str) -> Result<u32, EngineError> {
+            let signal = self.signal.as_ref().expect("registered WinHTTP callback");
+            let mut status = signal
+                .status
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            loop {
+                if let Some(result) = status.completed.take() {
+                    return result
+                        .map_err(|code| EngineError::Failed(format!("{operation} {code}")));
+                }
+                // 已完成的读直接返回；仅网络仍在等待时检查控制，且不持回调锁做文件 I/O。
+                drop(status);
+                super::check_control(&self.control)?;
+                status = signal
+                    .status
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if status.completed.is_none() {
+                    status = signal
+                        .pulse
+                        .wait_timeout(status, Duration::from_millis(100))
+                        .unwrap_or_else(|error| error.into_inner())
+                        .0;
                 }
             }
         }
@@ -3083,13 +3196,15 @@ mod winhttp {
 
     impl Read for WinHttpBody {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let mut got: u32 = 0;
+            if buf.is_empty() {
+                return Ok(0);
+            }
             let ok = unsafe {
                 WinHttpReadData(
                     self.request,
                     buf.as_mut_ptr() as *mut _,
-                    buf.len() as u32,
-                    &mut got,
+                    buf.len().min(u32::MAX as usize) as u32,
+                    null_mut(),
                 )
             };
             if ok == 0 {
@@ -3098,7 +3213,14 @@ mod winhttp {
                     unsafe { GetLastError() }
                 )));
             }
-            Ok(got as usize)
+            match self.wait("WinHttpReadData") {
+                Ok(got) => Ok(got as usize),
+                Err(error) => {
+                    self.recycle_connect = false;
+                    self.close_request();
+                    Err(std::io::Error::other(error.to_string()))
+                }
+            }
         }
     }
 
@@ -3124,21 +3246,21 @@ mod winhttp {
                     WINHTTP_ACCESS_TYPE_NO_PROXY,
                     null_mut(),
                     null_mut(),
-                    0,
+                    WINHTTP_FLAG_ASYNC,
                 ),
                 super::ProxyRoute::System => WinHttpOpen(
                     wide(super::CHROME_UA).as_ptr(),
                     SYSTEM_PROXY_ACCESS_TYPE,
                     null_mut(),
                     null_mut(),
-                    0,
+                    WINHTTP_FLAG_ASYNC,
                 ),
                 super::ProxyRoute::Manual(proxy_url) => WinHttpOpen(
                     wide(super::CHROME_UA).as_ptr(),
                     WINHTTP_ACCESS_TYPE_NAMED_PROXY,
                     wide(proxy_url).as_ptr(),
                     wide("").as_ptr(),
-                    0,
+                    WINHTTP_FLAG_ASYNC,
                 ),
             };
             if session.is_null() {
@@ -3182,7 +3304,12 @@ mod winhttp {
         url: &str,
         range: Option<&str>,
     ) -> Result<super::FetchResult, EngineError> {
+        super::check_control(&job.control)?;
         let parsed = super::parse_http_url(url)?;
+        // 必须先于 body 声明，错误返回时先取消并关闭请求，再释放异步发送缓冲区。
+        let mut request_body = super::post_body(job)?;
+        let request_body_len = u32::try_from(request_body.len())
+            .map_err(|_| EngineError::Failed("HTTP request body exceeds WinHTTP limit".into()))?;
         unsafe {
             let proxy = job.proxy.trim();
             let session = cached_session(proxy)?;
@@ -3213,6 +3340,46 @@ mod winhttp {
                     GetLastError()
                 )));
             }
+            let mut body = WinHttpBody {
+                connect,
+                request,
+                recycle_connect: false,
+                connect_key,
+                signal: None,
+                control: job.control.clone(),
+            };
+            let previous = WinHttpSetStatusCallback(
+                request,
+                Some(status_callback),
+                WINHTTP_CALLBACK_FLAG_SENDREQUEST_COMPLETE
+                    | WINHTTP_CALLBACK_FLAG_HEADERS_AVAILABLE
+                    | WINHTTP_CALLBACK_FLAG_READ_COMPLETE
+                    | WINHTTP_CALLBACK_FLAG_REQUEST_ERROR
+                    | WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING,
+                0,
+            );
+            if previous.is_some_and(|callback| callback as usize == usize::MAX) {
+                return Err(EngineError::Failed(format!(
+                    "WinHttpSetStatusCallback {}",
+                    GetLastError()
+                )));
+            }
+            let signal = Arc::new(RequestSignal::default());
+            let mut context = Arc::into_raw(Arc::clone(&signal)) as usize;
+            if WinHttpSetOption(
+                request,
+                WINHTTP_OPTION_CONTEXT_VALUE,
+                &mut context as *mut _ as *mut _,
+                std::mem::size_of_val(&context) as u32,
+            ) == 0
+            {
+                let error = GetLastError();
+                drop(Arc::from_raw(context as *const RequestSignal));
+                return Err(EngineError::Failed(format!(
+                    "WinHttpSetOption context {error}"
+                )));
+            }
+            body.signal = Some(signal);
             let mut policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
             if WinHttpSetOption(
                 request,
@@ -3222,8 +3389,6 @@ mod winhttp {
             ) == 0
             {
                 let err = GetLastError();
-                WinHttpCloseHandle(request);
-                WinHttpCloseHandle(connect);
                 return Err(EngineError::Failed(format!(
                     "WinHttpSetOption redirect {err}"
                 )));
@@ -3250,10 +3415,6 @@ mod winhttp {
                     WINHTTP_ADDREQ_FLAG_ADD,
                 );
             }
-            let mut request_body = super::post_body(job)?;
-            let request_body_len = u32::try_from(request_body.len()).map_err(|_| {
-                EngineError::Failed("HTTP request body exceeds WinHTTP limit".into())
-            })?;
             let request_body_ptr = if request_body.is_empty() {
                 null_mut()
             } else {
@@ -3266,20 +3427,18 @@ mod winhttp {
                 request_body_ptr,
                 request_body_len,
                 request_body_len,
-                0,
+                context,
             ) == 0
             {
                 let err = GetLastError();
-                WinHttpCloseHandle(request);
-                WinHttpCloseHandle(connect);
                 return Err(EngineError::Failed(format!("WinHttpSendRequest {err}")));
             }
+            body.wait("WinHttpSendRequest")?;
             if WinHttpReceiveResponse(request, null_mut()) == 0 {
                 let err = GetLastError();
-                WinHttpCloseHandle(request);
-                WinHttpCloseHandle(connect);
                 return Err(EngineError::Failed(format!("WinHttpReceiveResponse {err}")));
             }
+            body.wait("WinHttpReceiveResponse")?;
             let mut status: u32 = 0;
             let mut status_size = std::mem::size_of::<u32>() as u32;
             if WinHttpQueryHeaders(
@@ -3292,8 +3451,6 @@ mod winhttp {
             ) == 0
             {
                 let err = GetLastError();
-                WinHttpCloseHandle(request);
-                WinHttpCloseHandle(connect);
                 return Err(EngineError::Failed(format!("WinHttpQueryHeaders {err}")));
             }
             let content_range = query_header_string(request, WINHTTP_QUERY_CONTENT_RANGE);
@@ -3313,6 +3470,7 @@ mod winhttp {
                         .split(',')
                         .any(|part| part.trim().eq_ignore_ascii_case("bytes"))
                 }) || content_range.is_some();
+            body.recycle_connect = true;
             Ok(super::FetchResult {
                 status: status as u16,
                 location,
@@ -3321,14 +3479,7 @@ mod winhttp {
                 etag,
                 last_modified,
                 accept_ranges,
-                body: Body::WinHttp(WinHttpBody {
-                    session,
-                    connect,
-                    request,
-                    keep_session: true,
-                    recycle_connect: true,
-                    connect_key,
-                }),
+                body: Body::WinHttp(body),
             })
         }
     }
@@ -3945,6 +4096,18 @@ mod tests {
 
     #[test]
     fn stalled_http_headers_body_and_chunked_reads_can_stop() {
+        stalled_transport_reads_can_stop(false);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Run explicitly in Windows Sandbox"]
+    fn winhttp_stalled_headers_body_and_chunked_reads_can_stop() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        stalled_transport_reads_can_stop(true);
+    }
+
+    fn stalled_transport_reads_can_stop(via_proxy: bool) {
         use std::sync::mpsc;
         for phase in ["headers", "body", "chunked"] {
             for action in ["pause", "cancel"] {
@@ -3974,7 +4137,11 @@ mod tests {
                     // 主线程在断言前释放连接，即使回归也不会留下阻塞的服务线程。
                     let _ = release_rx.recv();
                 });
-                let (job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+                let (mut job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+                if via_proxy {
+                    job.proxy = format!("http://{addr}");
+                    job.url = "http://hls-control.example/media.bin".into();
+                }
                 let worker_job = job.clone();
                 let (done_tx, done_rx) = mpsc::channel();
                 let worker = thread::spawn(move || {
@@ -3983,8 +4150,13 @@ mod tests {
                 ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
                 if phase != "headers" {
                     let deadline = Instant::now() + Duration::from_secs(5);
-                    while fs::metadata(&job.output).map(|m| m.len()).unwrap_or(0) != 3 {
-                        assert!(Instant::now() < deadline, "prefix not written: {phase}");
+                    // WinHTTP 可能等待读缓冲区填满；输出创建表示响应头已返回，后续为正文等待。
+                    while if via_proxy {
+                        !job.output.exists()
+                    } else {
+                        fs::metadata(&job.output).map(|m| m.len()).unwrap_or(0) != 3
+                    } {
+                        assert!(Instant::now() < deadline, "body read not reached: {phase}");
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
@@ -4003,7 +4175,7 @@ mod tests {
                     ),
                     "{phase}/{action}: {error}"
                 );
-                if phase != "headers" {
+                if phase != "headers" && !via_proxy {
                     assert_eq!(fs::read(&job.output).unwrap(), b"abc");
                 }
                 let _ = fs::remove_dir_all(dir);
@@ -5328,7 +5500,10 @@ mod tests {
         });
         let url = format!("http://127.0.0.1:{}/file.bin", addr.port());
         let mut headers = HashMap::new();
-        headers.insert("Cookie".into(), "__cf_bm=stale; __cflb=pool-a; session=ok".into());
+        headers.insert(
+            "Cookie".into(),
+            "__cf_bm=stale; __cflb=pool-a; session=ok".into(),
+        );
         let (status, body) = fetch_bytes(&url, &headers, "").unwrap();
         assert_eq!(status, 200);
         assert_eq!(body, b"ok");
@@ -5348,18 +5523,25 @@ mod tests {
     #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
     fn curl_transport_preserves_browser_cookies_and_rejects_truncated_body() {
         assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
-        assert!(curl_impersonate_exe().is_some(), "bundled curl-impersonate required");
+        assert!(
+            curl_impersonate_exe().is_some(),
+            "bundled curl-impersonate required"
+        );
         for truncated in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
             let server = thread::spawn(move || {
                 let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
                 let mut reader = BufReader::new(stream);
                 let mut request = String::new();
                 loop {
                     let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() { break; }
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
                     request.push_str(&line);
                 }
                 let response: &[u8] = if truncated {
@@ -5376,23 +5558,38 @@ mod tests {
                 "cookie": "__cf_bm=valid; __cflb=pool-a; session=ok",
                 "referer": "https://page.test/watch",
                 "user_agent": "Browser fixture",
-            }).to_string();
+            })
+            .to_string();
             let result = fetch_via_curl_impersonate(&job, None).expect("curl transport available");
             let request = server.join().unwrap().to_ascii_lowercase();
-            assert!(request.contains("cookie: __cf_bm=valid; __cflb=pool-a; session=ok\r\n"), "{request}");
-            assert!(request.contains("referer: https://page.test/watch\r\n"), "{request}");
+            assert!(
+                request.contains("cookie: __cf_bm=valid; __cflb=pool-a; session=ok\r\n"),
+                "{request}"
+            );
+            assert!(
+                request.contains("referer: https://page.test/watch\r\n"),
+                "{request}"
+            );
             if truncated {
-                assert!(result.is_err(), "HTTP 200 with an incomplete body must fail");
+                assert!(
+                    result.is_err(),
+                    "HTTP 200 with an incomplete body must fail"
+                );
             } else {
                 let mut fetched = result.unwrap();
                 assert_eq!(fetched.status, 200);
                 let mut body = Vec::new();
                 fetched.body.read_to_end(&mut body).unwrap();
                 assert_eq!(body, b"ok");
-                let Body::File { temp_dir, .. } = &fetched.body else { panic!("expected file body"); };
+                let Body::File { temp_dir, .. } = &fetched.body else {
+                    panic!("expected file body");
+                };
                 let temporary = temp_dir.clone();
                 drop(fetched);
-                assert!(!temporary.exists(), "successful curl temp directory must be released");
+                assert!(
+                    !temporary.exists(),
+                    "successful curl temp directory must be released"
+                );
             }
             fs::remove_dir_all(dir).unwrap();
         }
@@ -5404,7 +5601,10 @@ mod tests {
     fn curl_transport_stalled_headers_and_body_obey_pause_and_cancel() {
         use std::sync::mpsc;
         assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
-        assert!(curl_impersonate_exe().is_some(), "bundled curl-impersonate required");
+        assert!(
+            curl_impersonate_exe().is_some(),
+            "bundled curl-impersonate required"
+        );
         for action in ["pause", "cancel"] {
             for phase in ["headers", "body"] {
                 let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -5413,11 +5613,15 @@ mod tests {
                 let (release_tx, release_rx) = mpsc::channel();
                 let server = thread::spawn(move || {
                     let (stream, _) = listener.accept().unwrap();
-                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
                     let mut reader = BufReader::new(stream);
                     loop {
                         let mut line = String::new();
-                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() { break; }
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
                     }
                     let mut stream = reader.into_inner();
                     let response: &[u8] = if phase == "headers" {
@@ -5442,12 +5646,20 @@ mod tests {
                 let _ = release_tx.send(());
                 server.join().unwrap();
                 worker.join().unwrap();
-                let error = match result.expect("stalled curl did not stop promptly").expect("curl available") {
+                let error = match result
+                    .expect("stalled curl did not stop promptly")
+                    .expect("curl available")
+                {
                     Err(error) => error,
                     Ok(_) => panic!("control signal was ignored"),
                 };
-                assert!(matches!((&error, action),
-                    (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")), "{phase}/{action}: {error}");
+                assert!(
+                    matches!(
+                        (&error, action),
+                        (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")
+                    ),
+                    "{phase}/{action}: {error}"
+                );
                 fs::remove_dir_all(dir).unwrap();
             }
         }
@@ -5459,19 +5671,193 @@ mod tests {
         let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut reader = BufReader::new(stream);
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() { break; }
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
             }
-            reader.get_mut().write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nok"
-            ).unwrap();
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nok")
+                .unwrap();
         });
         let result = fetch_hls_bytes(&url, &HashMap::new(), "");
         server.join().unwrap();
-        assert!(result.is_err(), "a truncated media entity cannot be published as a complete segment");
+        assert!(
+            result.is_err(),
+            "a truncated media entity cannot be published as a complete segment"
+        );
+    }
+
+    #[test]
+    fn media_entity_stop_preserves_pause_and_cancel() {
+        media_entity_stop(false);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Run explicitly in Windows Sandbox"]
+    fn winhttp_media_entity_stop_preserves_pause_and_cancel() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        media_entity_stop(true);
+    }
+
+    fn media_entity_stop(via_proxy: bool) {
+        use std::sync::mpsc;
+        for ranged in [false, true] {
+            for action in ["pause", "cancel"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let (ready_tx, ready_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let server = thread::spawn(move || {
+                    let (stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let response: &[u8] = if ranged {
+                        b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-5/6\r\nContent-Length: 6\r\n\r\nabc"
+                    } else {
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc"
+                    };
+                    reader.get_mut().write_all(response).unwrap();
+                    ready_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                });
+                let (job, dir) = temp_job(&format!("http://{address}/media.ts"), true, 0, 1);
+                let control = job.control.clone();
+                let proxy = if via_proxy {
+                    format!("http://{address}")
+                } else {
+                    String::new()
+                };
+                let url = if via_proxy {
+                    "http://hls-control.example/media.ts".to_string()
+                } else {
+                    job.url
+                };
+                let (done_tx, done_rx) = mpsc::channel();
+                let worker = thread::spawn(move || {
+                    let context = crate::net_policy::ThrottleContext {
+                        control,
+                        ..Default::default()
+                    };
+                    let result = crate::net_policy::with_throttle_context(Some(context), || {
+                        if ranged {
+                            fetch_hls_bytes_range(&url, &HashMap::new(), &proxy, 0, 6)
+                        } else {
+                            fetch_hls_bytes(&url, &HashMap::new(), &proxy).map(|(_, bytes)| bytes)
+                        }
+                    });
+                    let _ = done_tx.send(result);
+                });
+                ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                fs::write(&job.control, action).unwrap();
+                let result = done_rx.recv_timeout(Duration::from_secs(3));
+                let _ = release_tx.send(());
+                server.join().unwrap();
+                worker.join().unwrap();
+                let error = result
+                    .expect("media entity did not stop before server release")
+                    .unwrap_err();
+                assert!(
+                    matches!(
+                        (&error, action),
+                        (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")
+                    ),
+                    "range={ranged}, proxy={via_proxy}, action={action}: {error}"
+                );
+                fs::remove_dir_all(dir).unwrap();
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Run explicitly in Windows Sandbox"]
+    fn winhttp_proxy_downloads_ranges_posts_and_head_without_changing_bytes() {
+        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
+        let bytes: &'static [u8] = Box::leak(
+            (0..180_000)
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        for sequential in [true, false] {
+            let proxy = serve_body(bytes);
+            let (mut job, dir) = temp_job(
+                "http://hls-control.example/file.bin",
+                sequential,
+                bytes.len() as u64,
+                4,
+            );
+            job.proxy = proxy;
+            run_job(&job).unwrap();
+            assert_eq!(fs::read(&job.output).unwrap(), bytes);
+            fs::remove_dir_all(dir).unwrap();
+        }
+        for method in ["POST", "HEAD"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap();
+                assert!(first.starts_with(method));
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = header_value(&line, "Content-Length") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                if method == "POST" {
+                    let mut sent = vec![0; length];
+                    reader.read_exact(&mut sent).unwrap();
+                    assert_eq!(sent, b"payload=actual-request");
+                }
+                reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+                if method == "POST" {
+                    reader.get_mut().write_all(b"ok").unwrap();
+                }
+            });
+            let (mut job, dir) = temp_job("http://hls-control.example/method", true, 0, 1);
+            job.proxy = format!("http://{address}");
+            job.method = method.into();
+            if method == "POST" {
+                job.body_path = dir.join("request-body");
+                fs::write(&job.body_path, b"payload=actual-request").unwrap();
+            }
+            let result = run_job(&job);
+            server.join().unwrap();
+            result.unwrap();
+            assert_eq!(
+                fs::read(&job.output).unwrap(),
+                if method == "POST" {
+                    b"ok".as_slice()
+                } else {
+                    b""
+                }
+            );
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
