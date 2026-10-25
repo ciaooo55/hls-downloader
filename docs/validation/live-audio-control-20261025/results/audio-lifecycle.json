@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\request-control-20261025\\audio-candidate.msi",
+  "original_product_code": "{D152A80C-FB46-49B2-A287-9E0D2DF71738}",
+  "verified_product_code": "{3C5E5201-FAE6-4EAE-BA3E-3C32A9523A49}",
+  "original_package_code": "{D6D79799-CA0C-48FE-93E6-3BA7AC89546B}",
+  "verified_package_code": "{E7270178-5346-47F9-BB9B-A8DAE2EC9759}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "7F66B6C39C67FD10223EDFCFCD6A703E1E8AD6E7809AF4E0ACC41357E01264BB",
+  "sha256_after": "011B1874C9EBCEE342D3E4AD1F65143488049BAB5A84791073B996B3D29F630B"
+}

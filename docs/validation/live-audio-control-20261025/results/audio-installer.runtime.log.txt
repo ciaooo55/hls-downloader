@@ -1,0 +1,15 @@
+core_startup stage=entry elapsed_us=13
+core_startup stage=registration elapsed_us=1862
+core_startup stage=instance_lock elapsed_us=5383
+core_store_startup stage=database_open elapsed_us=15247
+core_store_startup stage=bootstrap elapsed_us=19043
+core_store_startup stage=recovery_watchers elapsed_us=23576
+core_startup stage=store_ready elapsed_us=33101
+core_startup stage=tray elapsed_us=34959
+core_startup stage=ipc_ready elapsed_us=41649
+download engine listening on 127.0.0.1:49809
+v7 task task-2 failed: HTTP 403
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-6 failed: resource identity changed: ETag differs from the saved download
