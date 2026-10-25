@@ -52,8 +52,7 @@ impl CoreStore {
         let connection = Connection::open(path)
             .map_err(|error| format!("open Core database {}: {error}", path.display()))?;
         mark("connection_ready");
-        // initialize() would silently re-stamp user_version, so an unexpected
-        // existing version must be refused before the schema batch runs.
+        // 不支持的版本必须在建表之前拒绝，不能把未知布局当成当前版本。
         let existing: u32 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| format!("read Core database {}: {error}", path.display()))?;
@@ -68,7 +67,7 @@ impl CoreStore {
             connection,
             path: Some(path.to_path_buf()),
         };
-        store.initialize()?;
+        store.initialize(existing)?;
         mark("initialized");
         Ok(store)
     }
@@ -80,7 +79,7 @@ impl CoreStore {
             connection,
             path: None,
         };
-        store.initialize()?;
+        store.initialize(0)?;
         Ok(store)
     }
 
@@ -553,7 +552,7 @@ impl CoreStore {
             .collect()
     }
 
-    fn initialize(&mut self) -> Result<(), String> {
+    fn initialize(&mut self, existing_version: u32) -> Result<(), String> {
         let started = std::time::Instant::now();
         let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
         let mark = |stage: &str| {
@@ -579,7 +578,7 @@ impl CoreStore {
             .transaction()
             .map_err(|error| format!("begin Core schema initialization: {error}"))?;
         transaction
-            .execute_batch(&format!(
+            .execute_batch(
                 "CREATE TABLE IF NOT EXISTS tasks (\
                    task_id TEXT PRIMARY KEY,\
                    snapshot_json TEXT NOT NULL,\
@@ -637,10 +636,15 @@ impl CoreStore {
                  );\
                  CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at_ms DESC);\
                  CREATE INDEX IF NOT EXISTS idx_task_ranges_task ON task_ranges(task_id);\
-                 CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);\
-                 PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"
-            ))
+                 CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);",
+            )
             .map_err(|error| format!("initialize Core schema: {error}"))?;
+        // 同值赋值也会产生写事务；已是当前版本时，只补齐实际缺少的表和索引。
+        if existing_version != CURRENT_SCHEMA_VERSION {
+            transaction
+                .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
+                .map_err(|error| format!("set Core schema version: {error}"))?;
+        }
         mark("schema_ready");
         transaction
             .commit()
@@ -864,11 +868,28 @@ mod tests {
 
     #[test]
     fn settings_are_typed_and_persistent() {
-        let mut store = CoreStore::in_memory().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-settings-reopen-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let database = root.join("data.db");
+        let mut store = CoreStore::open(&database).unwrap();
         store.set_setting("takeover_enabled", false).unwrap();
         store.set_setting("minimum_bytes", 42_u64).unwrap();
-        assert!(!store.setting_bool("takeover_enabled", true).unwrap());
-        assert_eq!(store.setting_u64("minimum_bytes", 0).unwrap(), 42);
+        let observer = Connection::open(&database).unwrap();
+        let data_version = || observer.query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0)).unwrap();
+        // 先建立观察连接，关闭写连接后再取基线，避免把关闭时的 checkpoint 算成重开写入。
+        let _ = data_version();
+        drop(store);
+        let before = data_version();
+        let reopened = CoreStore::open(&database).unwrap();
+        assert!(!reopened.setting_bool("takeover_enabled", true).unwrap());
+        assert_eq!(reopened.setting_u64("minimum_bytes", 0).unwrap(), 42);
+        assert_eq!(data_version(), before, "reopening the current schema must not commit a write");
+        drop(reopened);
+        drop(observer);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -881,7 +902,7 @@ mod tests {
             connection,
             path: None,
         };
-        assert!(store.initialize().is_err());
+        assert!(store.initialize(0).is_err());
         assert_eq!(store.schema_version().unwrap(), 0);
         let tables: i64 = store
             .connection

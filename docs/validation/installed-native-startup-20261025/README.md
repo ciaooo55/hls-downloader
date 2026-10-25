@@ -47,3 +47,13 @@
 最终[安装现场记录](results/sqlite-stage-pristine-installer.json)通过自选含空格路径、五组件与双插件 ZIP 一致性、默认 Downloads、并发唯一 Core、公开 MDN 成品字节和 SHA-256、完成缓存清理、测试成品删除、闲置测量及卸载注销。首启最慢 1309.48ms、常驻 75.83ms、正常关闭后重启 185.53ms。首次 SQLite 连接和版本读取累计 0.878ms，PRAGMA 阶段 465.107ms、建表阶段另 104.235ms、事务提交另 604.791ms，整个打开/初始化 1175.117ms；同一任务库重开为 2.389ms。这将慢点进一步收窄到新库初始化写入，不能证明具体文件同步调用、虚拟磁盘、缓存或杀毒是根因。没有降低持久化保护、提前伪报就绪、延长门槛或认定先前 1645.09ms 及历史 15 秒超时已经解决。
 
 本轮不是性能优化包，也没有再次运行完整 Core/UI/插件回归或 UI、云端、实体设备、长期负载验收。诊断 MSI 未交付到桌面或 GitHub Release；桌面 MSI 仍为 `2c87bdc8af83100538350809befae63324540e0b430e23acd8b2ce7408432946`。两个沙盒及产品进程均已退出，见[收尾记录](results/sqlite-stage-handoff.json)；任务生成物仍集中于既有 `.tool-cache`，没有绕过历史删除拒绝。本轮代码改动仅诊断计时与夹具的数据库存在性记录，未修改下载或持久化行为。
+
+## 后续：当前版本任务库重开不再重复写版本
+
+进一步检查发现：每次打开现有版本 6 的任务库，`CREATE ... IF NOT EXISTS` 后仍无条件执行 `PRAGMA user_version=6`，即使表和版本完全一致，也会产生写提交。扩展既有 `settings_are_typed_and_persistent` 回归，在沙盒用真实文件保存设置、建立独立观察连接、关闭再打开任务库，检查设置恢复及同一观察连接的 `PRAGMA data_version`。旧代码实际失败，观察值由 2 变 3，见[失败原文](results/store-reopen-red.log.txt)。[SQLite 文档](https://www.sqlite.org/pragma.html#pragma_data_version)说明同一连接的该值可用于检测其他连接的写提交；没有用延迟阈值或 sleeps 推测发生了写入。
+
+修复复用打开时已经读到的版本号，只在初始化版本不匹配时在同一建表事务写入当前版本。未知版本仍在建表前被拒绝；当前版本仍执行既有的缺失表/索引补建；事务提交、WAL 和 NORMAL 同步策略均保留，没有新增依赖或配置。初次新库仍需要可靠落盘，这个改动不解决先前约 2.25 秒的新库初始化慢样本。
+
+宿主离线编译成功，产品仅在沙盒运行：634 项常规 Core 回归、4 项 curl 和 4 项 WinHTTP 回归通过；还有 4 项 ignored 未执行。文件重开回归包含在上述 634 项中，不能重复计数。见[分组结果](results/store-reopen-test-results.json)及同前缀构建和测试日志。本轮尚未测得实际启动延迟的改善幅度；最终安装包和桌面交付状态后续单独记录。
+
+对照资料仅用于理解取舍：[AB 作者的历史架构说明](https://github.com/amir1376/ab-download-manager/discussions/318)描述使用文件系统保存数据，不能据此推断当前版本所有持久化实现或性能；[IDM 官方选项说明](https://www.internetdownloadmanager.com/support/using_idm/options.html)提供自动启动等用户选项，未披露其存储实现。本项目需要保持现有 SQLite 任务、设置和凭据的一致性，不因竞品使用不同存储就整体迁移。以上不是实际竞品性能对测。

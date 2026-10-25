@@ -1,0 +1,3 @@
+   Compiling hls-native-shell v7.0.3 (A:\Ubuntu\测试\hls-downloader\native_shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.15s
+  Executable unittests src\lib.rs (.tool-cache\live-presenter-20261024\target\debug\deps\hls_native_shell-100fa787ddcb0e38.exe)
