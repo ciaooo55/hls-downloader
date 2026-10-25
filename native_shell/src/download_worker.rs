@@ -3944,6 +3944,10 @@ fn finish_published_task(
             );
         }
     }
+    // 完成状态和成品路径在播放器锁内持久化；后续播放只能挂载成品。
+    // 递归清理可能被慢盘或杀毒扫描拖住，不能继续占用所有播放控制共用的锁。
+    drop(player_state);
+    drop(thumbnail_guard);
     let keep_temp = core
         .lock()
         .ok()
@@ -3951,8 +3955,17 @@ fn finish_published_task(
         .unwrap_or(true);
     if !keep_temp {
         let cleanup = playback_released.and_then(|_| {
+            if !recorded {
+                return Err("成品状态未能保存，保留缓存以便恢复".to_string());
+            }
+            #[cfg(test)]
+            BEFORE_COMPLETED_CACHE_CLEANUP.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().take() {
+                    hook();
+                }
+            });
             cleanup_completed_media(paths, published, keep_subtitles)?;
-            if recorded && !keep_subtitles {
+            if !keep_subtitles {
                 cleanup_task_metadata(paths)?;
             }
             Ok(())
@@ -3972,8 +3985,6 @@ fn finish_published_task(
             }
         }
     }
-    drop(player_state);
-    drop(thumbnail_guard);
     if let Err(error) = maybe_schedule_power(core, spec) {
         let _ = writeln!(
             std::io::stderr(),
@@ -9962,6 +9973,12 @@ fn stopping_cast_revokes_the_active_media_mount() {
 }
 
 #[cfg(test)]
+std::thread_local! {
+    static BEFORE_COMPLETED_CACHE_CLEANUP: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
 fn published_task_fixture(
     label: &str,
 ) -> (Arc<Mutex<PersistentCore>>, TaskPaths, PathBuf, PathBuf) {
@@ -9998,6 +10015,50 @@ fn published_task_fixture(
     };
     let core = Arc::clone(&core);
     (core, paths, published, root)
+}
+
+#[test]
+fn completed_cache_cleanup_releases_player_after_recording_the_output() {
+    let (core, paths, published, root) = published_task_fixture("player-cleanup");
+    let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+    let spec = task_spec_for(&core, &task_id);
+    fs::create_dir_all(root.join("segments")).unwrap();
+    fs::write(root.join("segments/one.ts"), b"temporary segment").unwrap();
+    let saved_core = Arc::clone(&core);
+    let saved_id = task_id.clone();
+    let saved_output = published.clone();
+    let reached_cleanup = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = Arc::clone(&reached_cleanup);
+    BEFORE_COMPLETED_CACHE_CLEANUP.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let snapshot = saved_core
+                .lock()
+                .unwrap()
+                .snapshot(&saved_id)
+                .unwrap()
+                .clone();
+            assert_eq!(snapshot.status, "completed");
+            assert_eq!(snapshot.output_path, saved_output.to_string_lossy());
+            // 在清理入口阻住完成线程，另一个线程必须仍能进入播放器。
+            let (sent, received) = std::sync::mpsc::channel();
+            let player_request = std::thread::spawn(move || {
+                let _player = player_ui_state().lock().unwrap();
+                let _ = sent.send(());
+            });
+            let available = received.recv_timeout(Duration::from_secs(5));
+            assert!(
+                available.is_ok(),
+                "cache cleanup held the global player lock"
+            );
+            player_request.join().unwrap();
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+    });
+    finish_published_task(&core, &task_id, &paths, &published, None, &spec, false).unwrap();
+    assert!(reached_cleanup.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!root.join("segments").exists());
+    assert_eq!(fs::read(&published).unwrap(), b"a complete payload");
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

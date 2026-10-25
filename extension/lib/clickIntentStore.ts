@@ -11,6 +11,7 @@ export interface IntentDownload {
   referrer?: string
   chainUrls?: string[]
   tabId?: number
+  frameId?: number
   downloadAttributeOnly?: boolean
 }
 
@@ -115,7 +116,7 @@ export class ClickIntentStore {
     const now = this.now()
     const previousCount = this.intents.length
     this.intents = normalizeIntents(this.intents, now)
-    const index = this.intents.findIndex(intent => {
+    const matches = this.intents.filter(intent => {
       if (!matchesDownloadClick(intent, download, now)) return false
       if (!download.downloadAttributeOnly) return true
       // 跨域 download 属性会被浏览器忽略，不能据此在响应到达前认定为下载。
@@ -126,14 +127,16 @@ export class ClickIntentStore {
         return false
       }
     })
-    if (index < 0) {
+    const matched = matches[0]
+    // 请求链缺少来源时，点击队列也不能按时间猜测另一个标签页或播放器。
+    if (!matched || matches.some(intent => intent.tabId !== matched.tabId || intent.frameId !== matched.frameId)) {
       // Waiting for the content-script message is a hot 50 ms poll. Persist
       // only when pruning changed state, never once per miss. If hydration is
       // still unavailable, leave the unknown durable queue untouched.
       if (this.hydrated && this.intents.length !== previousCount) void this.persist()
       return undefined
     }
-    const [matched] = this.intents.splice(index, 1)
+    this.intents.splice(this.intents.indexOf(matched), 1)
     if (this.hydrated) await this.persist()
     return matched
   }

@@ -2217,9 +2217,9 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
     let replay = job_replay_json(job);
     let mut url = job.url.clone();
     let mut headers = headers_for_request(job, &url);
+    let mut hop = job.clone();
     apply_browser_profile(&mut headers);
     for _ in 0..16 {
-        let mut hop = job.clone();
         hop.url = url.clone();
         hop.headers = headers.clone();
         let parsed = match parse_http_url(&url) {
@@ -2249,8 +2249,10 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
             if !http_fetch_url_allowed(&next) {
                 return Some(Err(EngineError::Failed("redirect is not http(s)".into())));
             }
+            let status = fetched.status;
             drop(fetched);
             drop_cross_origin_secrets(&mut headers, &replay, &url, &next);
+            apply_redirect_method(&mut hop, request_method(job), status, &mut headers);
             url = next;
             continue;
         }
@@ -2263,11 +2265,12 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
     let mut url = job.url.clone();
     let replay = job_replay_json(job);
     let mut headers = headers_for_request(job, &url);
+    let mut hop = job.clone();
     for _ in 0..16 {
         let parsed = parse_http_url(&url)?;
+        hop.url = url.clone();
         let request = |headers: &HashMap<String, String>| {
-            let mut hop = job.clone();
-            hop.url = url.clone();
+            let mut hop = hop.clone();
             hop.headers = headers.clone();
             if parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct) {
                 #[cfg(windows)]
@@ -2279,11 +2282,25 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
                     return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
                 }
             }
-            let (status, location, content_range, content_length, etag, last_modified,
-                accept_ranges, body) = http_get(&hop, &parsed, range)?;
+            let (
+                status,
+                location,
+                content_range,
+                content_length,
+                etag,
+                last_modified,
+                accept_ranges,
+                body,
+            ) = http_get(&hop, &parsed, range)?;
             Ok(FetchResult {
-                status, location, content_range, content_length, etag,
-                last_modified, accept_ranges, body,
+                status,
+                location,
+                content_range,
+                content_length,
+                etag,
+                last_modified,
+                accept_ranges,
+                body,
             })
         };
         let mut fetched = request(&headers)?;
@@ -2304,14 +2321,44 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
             if !http_fetch_url_allowed(&next) {
                 return Err(EngineError::Failed("redirect is not http(s)".into()));
             }
+            let status = fetched.status;
             drop(fetched);
             drop_cross_origin_secrets(&mut headers, &replay, &url, &next);
+            apply_redirect_method(&mut hop, request_method(job), status, &mut headers);
             url = next;
             continue;
         }
         return Ok(fetched);
     }
     Err(EngineError::Failed("too many redirects".into()))
+}
+
+fn apply_redirect_method(
+    job: &mut Job,
+    original_method: &str,
+    status: u16,
+    headers: &mut HashMap<String, String>,
+) {
+    let method = request_method(job);
+    if (status == 303 && method != "HEAD") || (matches!(status, 301 | 302) && method == "POST") {
+        job.method = "GET".into();
+        job.body_path.clear();
+    }
+    // 后续跳转可能重新应用原请求上下文，不能把已丢弃的 POST 正文头加回 GET。
+    if original_method == "POST" && request_method(job) == "GET" {
+        headers.retain(|key, _| {
+            !matches!(
+                key.to_ascii_lowercase().as_str(),
+                "content-encoding"
+                    | "content-language"
+                    | "content-location"
+                    | "content-type"
+                    | "content-length"
+                    | "digest"
+                    | "last-modified"
+            )
+        });
+    }
 }
 
 fn job_replay_json(job: &Job) -> String {
@@ -4481,6 +4528,102 @@ mod tests {
             resolve_location(&rooted, "next.bin"),
             "http://cdn.test:8080/next.bin"
         );
+    }
+
+    #[test]
+    fn post_redirects_preserve_or_discard_the_body_across_transports() {
+        let mut transports = vec!["raw"];
+        #[cfg(windows)]
+        transports.push("winhttp");
+        if curl_impersonate_exe().is_some() {
+            transports.push("curl");
+        }
+        for transport in transports {
+            for status in [301, 302, 303, 307, 308] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let (sent, received) = std::sync::mpsc::channel();
+                let server = thread::spawn(move || {
+                    let mut requests = Vec::new();
+                    for index in 0..3 {
+                        let (stream, _) = listener.accept().unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut reader = BufReader::new(stream);
+                        let mut head = String::new();
+                        loop {
+                            let mut line = String::new();
+                            assert!(reader.read_line(&mut line).unwrap() > 0);
+                            if line == "\r\n" {
+                                break;
+                            }
+                            head.push_str(&line);
+                        }
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        let mut body = vec![0; length];
+                        reader.read_exact(&mut body).unwrap();
+                        requests.push((head, body));
+                        let response = match index {
+                            0 => format!("HTTP/1.1 {status} Redirect\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+                            1 => "HTTP/1.1 308 Redirect\r\nLocation: /file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                            _ => "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfile".into(),
+                        };
+                        reader.get_mut().write_all(response.as_bytes()).unwrap();
+                    }
+                    let _ = sent.send(requests);
+                });
+                let (_, dir) = temp_job("http://example.test/", true, 0, 1);
+                let body_path = dir.join("request.bin");
+                fs::write(&body_path, b"export=one").unwrap();
+                let url = format!("http://{address}/export");
+                let mut job = post_test_job(url, body_path);
+                if transport == "winhttp" {
+                    job.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into();
+                }
+                job.replay_json = serde_json::json!({
+                    "_task_url": job.url,
+                    "request_headers": { "Content-Type": "application/x-www-form-urlencoded" }
+                })
+                .to_string();
+                let mut fetched = if transport == "curl" {
+                    fetch_curl_follow(&job, None)
+                        .expect("curl transport available")
+                        .unwrap()
+                } else {
+                    fetch_follow(&job, None).unwrap()
+                };
+                assert_eq!(fetched.status, 200, "{transport} {status}");
+                let mut output = Vec::new();
+                fetched.body.read_to_end(&mut output).unwrap();
+                assert_eq!(output, b"file");
+                let requests = received.recv_timeout(Duration::from_secs(10)).unwrap();
+                server.join().unwrap();
+                assert!(requests[0].0.starts_with("POST "));
+                assert_eq!(requests[0].1, b"export=one");
+                for (head, body) in &requests[1..] {
+                    if status <= 303 {
+                        assert!(head.starts_with("GET "), "{transport} {status}: {head}");
+                        assert!(body.is_empty(), "{transport} {status}: body replayed");
+                        assert!(
+                            !head.to_ascii_lowercase().contains("content-type:"),
+                            "{transport} {status}: stale body header"
+                        );
+                    } else {
+                        assert!(head.starts_with("POST "), "{transport} {status}: {head}");
+                        assert_eq!(body, b"export=one");
+                    }
+                }
+                fs::remove_dir_all(dir).unwrap();
+            }
+        }
     }
 
     #[test]

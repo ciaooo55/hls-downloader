@@ -76,6 +76,8 @@ export interface DownloadLike {
   url: string
   finalUrl?: string
   referrer?: string
+  tabId?: number
+  frameId?: number
 }
 
 function headers(values: HeaderLike[] | undefined): Record<string, string> {
@@ -300,15 +302,22 @@ export class RequestChainStore {
       .filter((value): value is string => Boolean(value))
       .map(mediaRequestKey)
     const referrer = download.referrer ? normalized(download.referrer) : ''
-    return [...this.chains.values()]
+    const tabId = preferredTabId ?? (typeof download.tabId === 'number' && Number.isInteger(download.tabId) && download.tabId >= 0 ? download.tabId : undefined)
+    const frameId = typeof download.frameId === 'number' && Number.isInteger(download.frameId) && download.frameId >= 0 ? download.frameId : undefined
+    let matches = [...this.chains.values()]
       .filter(chain => chain.urls.some(url => candidates.includes(mediaRequestKey(url))))
       .filter(chain => !successfulOnly || (chain.statusCode >= 200 && chain.statusCode < 400))
-      .filter(chain => preferredTabId === undefined || chain.tabId === preferredTabId)
-      .sort((left, right) => {
-        const leftPageMatch = referrer && normalized(left.pageUrl) === referrer ? 1 : 0
-        const rightPageMatch = referrer && normalized(right.pageUrl) === referrer ? 1 : 0
-        return rightPageMatch - leftPageMatch || right.updatedAt - left.updatedAt
-      })[0]
+      .filter(chain => tabId === undefined || chain.tabId === tabId)
+      .filter(chain => tabId === undefined || frameId === undefined || chain.frameId === frameId)
+    if (referrer) {
+      const pageMatches = matches.filter(chain => normalized(chain.pageUrl) === referrer)
+      if (pageMatches.length) matches = pageMatches
+    }
+    // 相同地址不代表相同登录身份；缺少来源证据时不能选另一标签页的最新请求。
+    const first = matches[0]
+    if (!first) return undefined
+    if (matches.some(chain => chain.tabId !== first.tabId || chain.frameId !== first.frameId)) return undefined
+    return matches.sort((left, right) => right.updatedAt - left.updatedAt)[0]
   }
 
   contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 32): RequestChain[] {

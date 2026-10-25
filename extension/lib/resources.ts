@@ -983,7 +983,7 @@ export function capturedRequestIdentity(
 
 export function matchesDownloadClick(
   intent: DownloadClickIntent,
-  download: { url: string; finalUrl?: string; referrer?: string; chainUrls?: string[]; tabId?: number },
+  download: { url: string; finalUrl?: string; referrer?: string; chainUrls?: string[]; tabId?: number; frameId?: number },
   now = Date.now(),
 ): boolean {
   if (isAuthenticationNavigation(intent.href)
@@ -991,6 +991,7 @@ export function matchesDownloadClick(
   const age = now - intent.at
   if (age < 0 || age > 7000) return false
   const sameTab = intent.tabId !== undefined && download.tabId !== undefined && intent.tabId === download.tabId
+  if (sameTab && intent.frameId !== undefined && download.frameId !== undefined && intent.frameId !== download.frameId) return false
   const permittedNewTab = Boolean(intent.opensNewTab)
   if (intent.tabId !== undefined && download.tabId !== undefined && !sameTab && !permittedNewTab) return false
   const tabCompatible = sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined

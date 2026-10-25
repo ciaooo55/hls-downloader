@@ -175,6 +175,25 @@ describe('browser request chains', () => {
     expect(store.find({ url: 'https://cdn.test/shared.bin' }, 1200, 3)).toBeUndefined()
   })
 
+  it('uses download-item identity and refuses ambiguous tabs and frames', () => {
+    const store = new RequestChainStore()
+    const url = 'https://cdn.test/shared.bin'
+    for (const [requestId, tabId, frameId, timeStamp] of [
+      ['one', 1, 0, 1000], ['two', 2, 0, 1100], ['frame', 1, 4, 1200],
+    ] as const) {
+      store.observeRequest({ requestId, url, tabId, frameId, timeStamp,
+        documentUrl: 'https://site.test/page',
+        requestHeaders: [{ name: 'Authorization', value: requestId }],
+      })
+    }
+    expect(store.find({ url }, 1300)).toBeUndefined()
+    expect(store.find({ url, referrer: 'https://site.test/page' }, 1300)).toBeUndefined()
+    expect(store.find({ url, tabId: 1 }, 1300)).toBeUndefined()
+    expect(store.find({ url, tabId: 1, frameId: 0 }, 1300)?.requestHeaders.authorization).toBe('one')
+    expect(store.find({ url, tabId: 2 }, 1300)?.requestHeaders.authorization).toBe('two')
+    expect(store.find({ url, tabId: 3 }, 1300)).toBeUndefined()
+  })
+
   it('collects only recent media contexts from the active tab and page', () => {
     const store = new RequestChainStore()
     store.observeRequest({

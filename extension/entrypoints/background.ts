@@ -873,8 +873,8 @@ function successfulChainForResource(resource: MediaResource, explicitChain?: Req
   }
   if (isMatchingSuccess(explicitChain)) return explicitChain
   const found = resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.find({ url: resource.url, referrer: resource.pageUrl || '' }, Date.now(), resource.tabId, true)
-    : requestChains.find({ url: resource.url, referrer: resource.pageUrl || '' }, Date.now(), undefined, true)
+    ? requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId }, Date.now(), resource.tabId, true)
+    : requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId }, Date.now(), undefined, true)
   return isMatchingSuccess(found) ? found : undefined
 }
 
@@ -903,8 +903,8 @@ async function resourceRequest(
   let chain = usesShortLivedMediaSignature(resource)
     ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
     : explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
-      ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, requireSuccessfulRequest)
-      : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, requireSuccessfulRequest)
+      ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), resource.tabId, requireSuccessfulRequest)
+      : requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), undefined, requireSuccessfulRequest)
     )
   if (!chain && !options.allowUnverified && resource.kind !== 'magnet') {
     // A visible URL is not by itself a browser request. Replaying a page
@@ -914,8 +914,8 @@ async function resourceRequest(
     for (let attempt = 0; !chain && attempt < 8; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 75))
       chain = resource.tabId !== undefined && resource.tabId >= 0
-        ? requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), resource.tabId, true)
-        : requestChains.find({ url: resource.url, referrer: pageUrl }, Date.now(), undefined, true)
+        ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), resource.tabId, true)
+        : requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), undefined, true)
     }
     const successfulResponse = resource.statusCode !== undefined
       && resource.statusCode >= 200 && resource.statusCode < 400
@@ -1271,6 +1271,7 @@ async function waitForClickIntent(
       referrer: referrer || chain?.pageUrl || '',
       chainUrls: chain?.urls,
       tabId: chain?.tabId,
+      frameId: chain?.frameId,
       downloadAttributeOnly,
     })
     if (intent) return intent
@@ -1647,10 +1648,8 @@ export default defineBackground(() => {
     try {
       const config = await settings()
       if (!config.enabled) return
-      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId)
-      // Prefer the request chain first so click matching can use tabId even when
-      // Chrome leaves DownloadItem.referrer empty. After a click is known, re-bind
-      // the chain to that tab so we never replay another page's auth headers.
+      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId ?? downloadIdentity(item).tabId)
+      // 优先使用浏览器来源或唯一请求链。Chrome 缺少来源时，也不能按时间猜标签页。
       const earlyTakeover = (provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
         : undefined)
@@ -1716,7 +1715,7 @@ export default defineBackground(() => {
       if (!item.filename && !classified.filename) {
         actualBrowser = await refreshedDownload(item.id, item)
         if (!canContinueTakeover(actualBrowser.state, paused)) return
-        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId) || provisionalChain
+        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId ?? downloadIdentity(actualBrowser).tabId)
         classified = classifyBrowserItem(actualBrowser, provisionalChain)
       } else {
         const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
@@ -1731,9 +1730,10 @@ export default defineBackground(() => {
         provisionalChain,
         clickIntentPollsForKind(classified.kind),
       )
-      let chain = intent?.tabId === undefined
-        ? provisionalChain
-        : requestChains.find(classified.actual, Date.now(), intent.tabId) || provisionalChain
+      // 新标签页下载的点击属于父标签页，不能覆盖已确认的请求来源。
+      let chain = provisionalChain ?? (intent?.tabId === undefined
+        ? undefined
+        : requestChains.find(classified.actual, Date.now(), downloadIdentity(actualBrowser).tabId ?? intent.tabId))
       if (chain && chain !== provisionalChain) {
         classified = classifyBrowserItem(actualBrowser, chain)
         if (!classified.kind) return

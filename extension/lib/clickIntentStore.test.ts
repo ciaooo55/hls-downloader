@@ -69,6 +69,21 @@ function matchingDownload() {
 }
 
 describe('persistent click-intent store', () => {
+  it('does not consume another tab or frame when a shared download has no source', async () => {
+    const store = new ClickIntentStore(new MemoryStorage(), 'intents', () => 10_100)
+    const href = 'https://cdn.test/shared.zip'
+    await store.remember(intent({ href, tabId: 1 }))
+    await store.remember(intent({ href, tabId: 2, at: 10_050 }))
+    expect(await store.consume({ url: href })).toBeUndefined()
+    expect(await store.consume({ url: href, tabId: 1 })).toMatchObject({ tabId: 1 })
+    expect(await store.consume({ url: href, tabId: 2 })).toMatchObject({ tabId: 2 })
+    await store.remember(intent({ href, tabId: 1, frameId: 0 }))
+    await store.remember(intent({ href, tabId: 1, frameId: 4, at: 10_050 }))
+    expect(await store.consume({ url: href, tabId: 1 })).toBeUndefined()
+    expect(await store.consume({ url: href, tabId: 1, frameId: 0 })).toMatchObject({ frameId: 0 })
+    expect(await store.consume({ url: href, tabId: 1, frameId: 4 })).toMatchObject({ frameId: 4 })
+  })
+
   it('reserves early offers for persisted same-origin download links without consuming ordinary or cross-origin clicks', async () => {
     const storage = new MemoryStorage()
     const store = new ClickIntentStore(storage, 'intents', () => 10_100)
