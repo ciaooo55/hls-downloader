@@ -1,0 +1,78 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "2e0effa9f148869b3b51fc6b57857e81378b7a528000b8396bb88e86ed3df873",
+    "HLSDownloaderNativeHost.exe": "c0d3e28df3ddf129b02eec59f864564baffe1f9abae02403365f35452b5f3140"
+  },
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "b6575951b02073a339ff8af7784718a398ed4e7a2923b0ff94f3ce489e4b68ad",
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 220, in run\n    before = {h['id'] for h in handoffs()}\n                               ^^^^^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 126, in handoffs\n    return [json.loads(item) for item in core({'type': 'load_handoffs', 'request_id': 2})['items']]\n                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_extension_download_ownership.py\", line 116, in core\n    pipe = Pipe()\n           ^^^^^^\n  File \"C:\\HlsSource\\scripts\\validation\\smoke_v7_portable_app.py\", line 46, in __init__\n    raise ctypes.WinError(error)\nFileNotFoundError: [WinError 2] 系统找不到指定的文件。\n",
+  "failure_background_console": [],
+  "failure_created_events": [],
+  "failure_page_state": {
+    "activation": false,
+    "blobStage": null,
+    "errors": []
+  },
+  "failure_targets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:50625/devtools/page/78476C90F51211FA24ABA9F922E8C4FA",
+      "id": "78476C90F51211FA24ABA9F922E8C4FA",
+      "title": "Takeover ownership",
+      "type": "page",
+      "url": "http://127.0.0.1:50621/",
+      "webSocketDebuggerUrl": "ws://localhost:50625/devtools/page/78476C90F51211FA24ABA9F922E8C4FA"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:50625/devtools/page/FFA2FBED44D31416AA5BB089F0D211B4",
+      "id": "FFA2FBED44D31416AA5BB089F0D211B4",
+      "title": "HLS Downloader",
+      "type": "page",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "webSocketDebuggerUrl": "ws://localhost:50625/devtools/page/FFA2FBED44D31416AA5BB089F0D211B4"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:50625/devtools/page/4072C06CF01460C97B79EDB6AB904557",
+      "id": "4072C06CF01460C97B79EDB6AB904557",
+      "title": "Service Worker https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&amp;bundles=latest&amp;riverAgeMinutes=2880&amp;navAgeMinutes=2880&amp;networkTimeoutSeconds=5&amp;bgTaskNetworkTimeoutSeconds=8&amp;enableNetworkFirst=true&amp;enableEmptySectionRoute=true&amp;enableNavPreload=true&amp;enableStaticAdsRouting=true",
+      "type": "service_worker",
+      "url": "https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&bundles=latest&riverAgeMinutes=2880&navAgeMinutes=2880&networkTimeoutSeconds=5&bgTaskNetworkTimeoutSeconds=8&enableNetworkFirst=true&enableEmptySectionRoute=true&enableNavPreload=true&enableStaticAdsRouting=true",
+      "webSocketDebuggerUrl": "ws://localhost:50625/devtools/page/4072C06CF01460C97B79EDB6AB904557"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:50625/devtools/page/F318D5B3082D2C3259FA31D5696B9F1B",
+      "id": "F318D5B3082D2C3259FA31D5696B9F1B",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "type": "service_worker",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "webSocketDebuggerUrl": "ws://localhost:50625/devtools/page/F318D5B3082D2C3259FA31D5696B9F1B"
+    }
+  ],
+  "failure_screenshot": true,
+  "failure_url": "http://127.0.0.1:50621/",
+  "failure_html": "<html data-hls-downloader-extension=\"1\"><head><title>Takeover ownership</title><script>window.fixtureErrors=[];addEventListener('error',e=>fixtureErrors.push(e.message));addEventListener('unhandledrejection',e=>fixtureErrors.push(String(e.reason)))</script></head><body><a id=\"direct\" href=\"/direct.zip\">direct.zip</a> <a id=\"cancel\" href=\"/cancel.zip\">cancel.zip</a> <a id=\"opaque\" href=\"/opaque\">opaque attachment</a> <a id=\"disabled\" href=\"/disabled.zip\">disabled.zip</a> <a id=\"excluded\" href=\"/excluded.zip\">excluded.zip</a> <a id=\"offline\" href=\"/offline.zip\">offline.zip</a> <a id=\"preview\" href=\"/preview.pdf\">preview</a> <a id=\"github\" href=\"https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe\">GitHub portable EXE</a><form method=\"POST\" action=\"/post-export\"><input type=\"hidden\" name=\"export\" value=\"once\"><button id=\"post-export\">Export POST</button></form><button id=\"blob-export\" onclick=\"window.fixtureBlobStage='fetch';fetch('/blob-payload').then(r=&gt;r.blob()).then(blob=&gt;{const a=document.createElement('a');window.fixtureUrlTypes=[typeof URL,typeof window.URL];a.href=window.URL.createObjectURL(blob);a.download='blob-export.bin';document.body.append(a);window.fixtureBlobStage='click';a.click();a.remove();window.fixtureBlobStage='clicked'})\">Export Blob</button></body></html>",
+  "failure_handoffs_error": "[WinError 2] 系统找不到指定的文件。",
+  "failure_downloads": [],
+  "failure_storage": [
+    {
+      "enabled": true,
+      "excludedHosts": [],
+      "minimumBytes": 0
+    },
+    {
+      "resources:tab:2010064185:page:4d8e76d3ffab65d3fe77017e6d54461e": []
+    }
+  ],
+  "requests": {
+    "/": 1,
+    "/favicon.ico": 1
+  }
+}

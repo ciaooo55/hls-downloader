@@ -1,0 +1,4 @@
+Starting final MSI/browser suite
+Installed final delivery components verified
+{"browser": "edge", "exit": 0, "passed": true, "checks": 18, "runtime_component_sha256": {"HLSDownloaderEngine.exe": "b72a5e83edb87a9c5e1e754d0c48489658edd467cc6c236bced7ad7f9008c283", "HLSDownloaderNativeHost.exe": "bbcc0dd0fba23334b7955cb2f9dd65e99e1f870884e24f4258e1d0f0e15bc5a7"}}
+{"browser": "firefox", "exit": 0, "passed": true, "checks": 18, "runtime_component_sha256": {"HLSDownloaderEngine.exe": "b72a5e83edb87a9c5e1e754d0c48489658edd467cc6c236bced7ad7f9008c283", "HLSDownloaderNativeHost.exe": "bbcc0dd0fba23334b7955cb2f9dd65e99e1f870884e24f4258e1d0f0e15bc5a7"}}

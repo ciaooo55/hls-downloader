@@ -1,0 +1,7 @@
+{
+  "checked_at": "2026-10-26T00:53:11.6789725+08:00",
+  "scope": "Known product uninstall and browser native-host keys only; no registry writes",
+  "product_processes": [],
+  "uninstall_entries": [],
+  "native_host_keys": []
+}

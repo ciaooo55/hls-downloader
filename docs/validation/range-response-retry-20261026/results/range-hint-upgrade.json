@@ -1,0 +1,10 @@
+{
+  "old_product": "{3F21E2B6-AB08-4263-8CE8-245A8E821DF1}",
+  "new_product": "{2657A7CF-164B-4F55-BB73-D86D7F5E7E76}",
+  "old_state_before": 5,
+  "installer_exit": 0,
+  "old_state_after": -1,
+  "new_state_after": -1,
+  "old_executable_remaining": false,
+  "passed": true
+}

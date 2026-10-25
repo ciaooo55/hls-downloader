@@ -1,0 +1,8 @@
+{
+  "passed": false,
+  "source_msi_sha256": "f1e92a17a6ba3108697fc4851f250192cc3ec2f70fd119a5e653b558edda215c",
+  "browsers": [],
+  "ui_chrome_visual_acceptance": false,
+  "error": "Traceback (most recent call last):\n  File \"C:\\HlsExchange\\newcore-browser-suite.py\", line 31, in <module>\n    code = subprocess.run(['msiexec.exe','/i',str(local_msi),'/qn','/norestart',f'INSTALLDIR={runtime}',\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\.tool-cache\\live-presenter-20261024\\python\\Lib\\subprocess.py\", line 550, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\.tool-cache\\live-presenter-20261024\\python\\Lib\\subprocess.py\", line 1228, in communicate\n    sts = self.wait(timeout=self._remaining_time(endtime))\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\.tool-cache\\live-presenter-20261024\\python\\Lib\\subprocess.py\", line 1264, in wait\n    return self._wait(timeout=timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\HlsSource\\.tool-cache\\live-presenter-20261024\\python\\Lib\\subprocess.py\", line 1593, in _wait\n    raise TimeoutExpired(self.args, timeout)\nsubprocess.TimeoutExpired: Command '['msiexec.exe', '/i', 'C:\\\\HlsQA\\\\ownership-final.msi', '/qn', '/norestart', 'INSTALLDIR=C:\\\\HlsQA\\\\Ownership App', '/l*v', 'C:\\\\HlsQA\\\\newcore-browser-install.log']' timed out after 180.0 seconds\n",
+  "product_processes_remaining": []
+}

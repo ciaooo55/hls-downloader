@@ -1,0 +1,13 @@
+{
+  "closed_owned_sandbox_pid": 8304,
+  "closed_owned_client_pid": 20388,
+  "checked_at": "2026-10-26T00:57:05.8032690+08:00",
+  "parent_close_remaining_processes": [
+    {
+      "Id": 20388,
+      "ProcessName": "WindowsSandboxClient",
+      "StartTime": "2026-10-26T00:33:00.1252718+08:00"
+    }
+  ],
+  "remaining_owned_processes": []
+}
