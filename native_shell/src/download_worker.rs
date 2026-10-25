@@ -2819,7 +2819,13 @@ impl CoreCoordinator {
                             guard.store().setting_u64("auto_retry_failed_max", 0).ok()
                         })
                         .unwrap_or(0);
-                    if u64::from(attempt) <= max && max > 0 {
+                    // HTTP 引擎已经完成传输级重试。鉴权、失效地址等错误需要用户更新请求，
+                    // 整任务调度不能绕过相同的判定，再用原请求重复下载。
+                    if u64::from(attempt) <= max
+                        && max > 0
+                        && extract_http_status(&error)
+                            .is_none_or(crate::http_engine::retryable_http_status)
+                    {
                         let (downloaded, total) = current_progress(&core, &task_id);
                         let _ =
                             mark_progress(&core, &task_id, downloaded, total, "waiting", "queued");
@@ -7198,6 +7204,81 @@ mod tests {
             "不得出现已发布的产物"
         );
         let _ = fs::remove_dir_all(download_dir);
+    }
+
+    #[test]
+    fn automatic_http_retry_respects_permanent_failure_and_keeps_queue_running() {
+        // 后续任务完成证明前一任务已走完整个收尾/重排队过程，不能只观察短暂的 failed 状态。
+        for (status, expected_attempts) in [(401, 1), (403, 1), (404, 1), (503, 3)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                while let Ok((mut stream, _)) = listener.accept() {
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut request = String::new();
+                    reader.read_line(&mut request).unwrap();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    stream = reader.into_inner();
+                    if request.contains("/next.bin ") {
+                        stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx").unwrap();
+                        break;
+                    }
+                    let _ = write!(stream, "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            });
+            let download_dir = std::env::temp_dir().join(format!(
+                "hls-http-retry-{}-{status}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            ));
+            let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+            coordinator.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
+            coordinator.set_setting("queue_max_active", serde_json::json!(1)).unwrap();
+            coordinator.set_setting("auto_retry_failed_max", serde_json::json!(2)).unwrap();
+            for filename in ["expired.bin", "next.bin"] {
+                coordinator.dispatch_created(TaskSpec {
+                    url: format!("http://{address}/{filename}"),
+                    filename: filename.into(),
+                    resource_kind: crate::ResourceKind::File,
+                    download_dir: download_dir.to_string_lossy().into_owned(),
+                    expected_size: Some(1),
+                    etag: "\"retry-fixture\"".into(),
+                    concurrency: 1,
+                    ..Default::default()
+                }).unwrap();
+            }
+            let notify = coordinator.event_notify().unwrap();
+            let mut sequence = coordinator.latest_sequence().unwrap();
+            coordinator.dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(), action: "start".into(),
+            }).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let tasks = coordinator.tasks().unwrap();
+                if tasks.iter().any(|task| task.task_id == "task-2" && task.status == "completed") {
+                    let failed = tasks.iter().find(|task| task.task_id == "task-1").unwrap();
+                    assert_eq!(failed.status, "failed", "HTTP {status}");
+                    assert_eq!(failed.http_status, Some(status));
+                    assert_eq!(failed.error_attempt, expected_attempts, "HTTP {status} automatic attempts");
+                    assert!(failed.available_actions.iter().any(|action| action == "retry"));
+                    assert_eq!(fs::read(download_dir.join("next.bin")).unwrap(), b"x");
+                    break;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(!remaining.is_zero(), "HTTP {status}: queue did not finish: {tasks:?}");
+                let guard = notify.0.lock().unwrap();
+                let (guard, _) = notify.1.wait_timeout_while(guard, remaining, |current| *current <= sequence).unwrap();
+                sequence = *guard;
+            }
+            server.join().unwrap();
+            coordinator.wait_for_worker_stop("task-2").unwrap();
+            fs::remove_dir_all(download_dir).unwrap();
+        }
     }
 
     #[test]

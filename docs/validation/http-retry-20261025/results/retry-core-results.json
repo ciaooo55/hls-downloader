@@ -1,0 +1,14 @@
+[
+    {
+        "exit_code":  0,
+        "test":  "download_worker::tests::automatic_http_retry_respects_permanent_failure_and_keeps_queue_running"
+    },
+    {
+        "exit_code":  0,
+        "test":  "download_worker::tests::refreshed_url_resumes_paused_task_and_publishes_new_response"
+    },
+    {
+        "exit_code":  0,
+        "test":  "download_worker::tests::structured_request_refresh_vaults_cookie_and_never_puts_it_in_snapshot"
+    }
+]

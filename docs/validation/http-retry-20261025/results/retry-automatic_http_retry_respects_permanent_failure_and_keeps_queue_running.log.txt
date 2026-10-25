@@ -1,0 +1,18 @@
+
+running 1 test
+retry-core-tests.exe : v7 task task-1 failed: HTTP 401
+At C:\HlsQA\command.ps1:19 char:2
++  & C:\HlsQA\retry-core-tests.exe --exact $case --nocapture *> "C:\Hls ...
++  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (v7 task task-1 failed: HTTP 401:S
+   tring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+v7 task task-1 failed: HTTP 403
+v7 task task-1 failed: HTTP 404
+v7 task task-1 failed: HTTP 503 after 5 attempts
+v7 task task-1 failed: HTTP 503 after 5 attempts
+v7 task task-1 failed: HTTP 503 after 5 attempts
+test download_worker::tests::automatic_http_retry_respects_permanent_failure_and_keeps_queue_running ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 629 filtered out; finished in 2.54s

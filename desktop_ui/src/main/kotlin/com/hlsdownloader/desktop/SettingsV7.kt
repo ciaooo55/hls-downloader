@@ -249,6 +249,7 @@ internal fun FullSettingsDialog(
                         V7NumberField("滚动每小时流量配额 MiB（0 不限制）", hourlyQuota) { hourlyQuota = it }
                         V7NumberField("HTTP 分段大小 MiB", chunkMb) { chunkMb = it }
                         V7NumberField("失败自动重试次数", retryMax) { retryMax = it }
+                        Text("登录或地址失效等 HTTP 错误不会自动重试；更新请求后可手动继续。", color = muted, fontSize = TypeScale.micro)
                         V7Choice("同名文件处理", listOf("rename" to "自动重命名", "overwrite" to "覆盖", "skip" to "跳过"), draft.existingFilePolicy) { draft = draft.copy(existingFilePolicy = it) }
                         SettingRow("默认允许重复", "相同链接可以创建独立任务", draft.allowDuplicate) { draft = draft.copy(allowDuplicate = it) }
                         SettingRow("保留过程文件", "保留分片、清单和调试文件", draft.keepTempFiles) { draft = draft.copy(keepTempFiles = it) }

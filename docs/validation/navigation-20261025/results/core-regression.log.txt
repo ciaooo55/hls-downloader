@@ -7,4 +7,3 @@ test tests::engine_entry_wires_the_resident_tray ... ok
 test tests::installed_engine_resolves_the_compose_launcher ... ok
 
 test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-

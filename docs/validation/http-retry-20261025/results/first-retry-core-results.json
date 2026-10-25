@@ -1,0 +1,4 @@
+{
+    "exit_code":  -1073741515,
+    "test":  "download_worker::tests::automatic_http_retry_respects_permanent_failure_and_keeps_queue_running"
+}

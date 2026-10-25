@@ -1684,7 +1684,7 @@ fn wait_before_range_retry(job: &Job, failed_attempts: u32) -> Result<(), Engine
     Ok(())
 }
 
-fn retryable_http_status(status: u16) -> bool {
+pub(crate) fn retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
 }
 
