@@ -1,0 +1,29 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+ ❯ lib/takeover.test.ts (18 tests | 1 failed) 29ms
+   ❯ browser transfer parking before desktop takeover (8)
+     × removes an acknowledged browser copy while follow-up storage is still writing 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  lib/takeover.test.ts > browser transfer parking before desktop takeover > removes an acknowledged browser copy while follow-up storage is still writing
+AssertionError: expected "vi.fn()" to be called with arguments: [ { id: 42 } ]
+
+Number of calls: 0
+
+ ❯ lib/takeover.test.ts:119:39
+    117|     try {
+    118|       await vi.advanceTimersByTimeAsync(0)
+    119|       expect(browser.downloads.erase).toHaveBeenCalledWith({ id: 42 })
+       |                                       ^
+    120|     } finally {
+    121|       release()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 17 passed (18)
+   Start at  02:46:35
+   Duration  875ms (transform 80%, import 15%, tests 4%, worker 1%)

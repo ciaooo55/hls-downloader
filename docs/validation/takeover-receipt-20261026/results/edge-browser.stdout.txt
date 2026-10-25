@@ -1,0 +1,512 @@
+real-host-connected
+plain-before-decision
+plain-Core-output
+plain-after-decision
+attribute-before-decision
+attribute-Core-output
+attribute-after-decision
+redirect-before-decision
+redirect-Core-output
+redirect-after-decision
+inline-before-decision
+inline-Core-output
+inline-after-decision
+opaque-before-decision
+opaque-Core-output
+opaque-after-decision
+stream-before-decision
+stream-Core-output
+stream-after-decision
+image-before-decision
+image-Core-output
+image-after-decision
+export-before-decision
+export-Core-output
+export-after-decision
+XHR-response-left-to-page
+cancel-before-decision
+cancel-after-decision
+failed-before-decision
+failed-Core-visible-failure
+failed-after-failure
+public-before-decision
+public-Core-output
+public-after-decision
+disabled-browser-bypass-no-desktop-offer
+excluded-browser-bypass-no-desktop-offer
+offline-fault-confirmed
+offline-browser-bypass-no-desktop-offer
+alt-click-does-not-create-desktop-offer
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "real-host-connected",
+      "actual": true
+    },
+    {
+      "name": "plain-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": null
+      }
+    },
+    {
+      "name": "plain-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "plain-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": null
+      }
+    },
+    {
+      "name": "attribute-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": null
+      }
+    },
+    {
+      "name": "attribute-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "attribute-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": null
+      }
+    },
+    {
+      "name": "redirect-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "redirect-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "redirect-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "inline-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "inline-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "inline-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "opaque-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "opaque-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "opaque-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "stream-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "stream-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "stream-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "image-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "image-Core-output",
+      "actual": {
+        "bytes": 68,
+        "sha256": "6af484b8a73288a07fec730818a6de8bebce88aa915b52f66a8769bfb865f434"
+      }
+    },
+    {
+      "name": "image-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "export-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "export-Core-output",
+      "actual": {
+        "bytes": 32,
+        "sha256": "8cc6d67e9c047e92fa51eadb250504c11471cec93c4864cb2e66a96ae0b2361f"
+      }
+    },
+    {
+      "name": "export-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "XHR-response-left-to-page",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "cancel-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "cancel-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "failed-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "failed-Core-visible-failure",
+      "actual": "HTTP 403"
+    },
+    {
+      "name": "failed-after-failure",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "public-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "public-Core-output",
+      "actual": {
+        "bytes": 102535433,
+        "sha256": "3f98533c3ff1c0fcea635358a1c8b79dd5df94668ae03df723230901ec05bbd6"
+      }
+    },
+    {
+      "name": "public-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:49805/redirect"
+          },
+          {
+            "id": 2,
+            "url": "http://127.0.0.1:49805/opaque"
+          }
+        ],
+        "panel": null
+      }
+    },
+    {
+      "name": "disabled-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "excluded-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "offline-fault-confirmed",
+      "actual": {
+        "stopped": [
+          1468
+        ],
+        "host_executable_absent": true
+      }
+    },
+    {
+      "name": "offline-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "alt-click-does-not-create-desktop-offer",
+      "actual": {
+        "events": [
+          {
+            "id": 6,
+            "url": "http://127.0.0.1:49805/alt.bin"
+          }
+        ],
+        "items": [
+          {
+            "bytesReceived": 2097152,
+            "canResume": false,
+            "danger": "safe",
+            "endTime": "2026-10-25T19:04:19.470Z",
+            "exists": true,
+            "fileSize": 2097152,
+            "filename": "C:\\QAWork\\tmp\\firefox-response-73l7lo9w\\browser-downloads\\alt.bin",
+            "finalUrl": "http://127.0.0.1:49805/alt.bin",
+            "id": 6,
+            "incognito": false,
+            "mime": "application/octet-stream",
+            "paused": false,
+            "referrer": "http://127.0.0.1:49805/page",
+            "startTime": "2026-10-25T19:04:19.061Z",
+            "state": "complete",
+            "totalBytes": 2097152,
+            "url": "http://127.0.0.1:49805/alt.bin"
+          }
+        ]
+      }
+    }
+  ],
+  "browser": "edge",
+  "decision_transport": "Core protocol",
+  "background_sha256": "d361519f6c984e76ae6840d15a95de6c77a375ee9b640590d7cf063a1305d370",
+  "browser_version": "156.0.4314.42",
+  "original_tasks_preserved": true
+}

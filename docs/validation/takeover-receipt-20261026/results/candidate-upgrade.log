@@ -1,0 +1,35 @@
+Excerpt: final 35 lines; complete captured log SHA256: 8634884ccc07d488bfb5c2c5f7b9810d99e9bc26c340754967897293fb54430c
+Property(S): INSTALLLEVEL = 1
+Property(S): SOURCEDIR = C:\QAWork\
+Property(S): SourcedirProduct = {4CD910F7-CCFA-4647-BECA-19DFF19C9B20}
+Property(S): ProductToBeRegistered = 1
+MSI (s) (20:A0) [02:59:54:065]: Note: 1: 1707
+MSI (s) (20:A0) [02:59:54:065]: Note: 1: 2205 2:  3: Error
+MSI (s) (20:A0) [02:59:54:065]: Note: 1: 2228 2:  3: Error 4: SELECT `Message` FROM `Error` WHERE `Error` = 1707
+MSI (s) (20:A0) [02:59:54:065]: Note: 1: 2205 2:  3: Error
+MSI (s) (20:A0) [02:59:54:065]: Note: 1: 2228 2:  3: Error 4: SELECT `Message` FROM `Error` WHERE `Error` = 1709
+MSI (s) (20:A0) [02:59:54:065]: 产品: HLSDownloader -- 成功地完成了安装。
+
+MSI (s) (20:A0) [02:59:54:065]: Windows Installer 已安装产品。产品名称: HLSDownloader。产品版本: 7.0.3。产品语言: 2052。制造商: HLS Downloader。安装成功或错误状态: 0。
+
+MSI (s) (20:A0) [02:59:54:541]: Deferring clean up of packages/files, if any exist
+MSI (s) (20:A0) [02:59:54:541]: MainEngineThread is returning 0
+MSI (s) (20:D8) [02:59:54:541]: RESTART MANAGER: Session closed.
+MSI (s) (20:D8) [02:59:54:541]: RESTART MANAGER: Session closed.
+MSI (s) (20:D8) [02:59:54:541]: No System Restore sequence number for this installation.
+=== 记录停止: 10/26/2026  2:59:54 ===
+MSI (s) (20:D8) [02:59:54:603]: User policy value 'DisableRollback' is 0
+MSI (s) (20:D8) [02:59:54:603]: Machine policy value 'DisableRollback' is 0
+MSI (s) (20:D8) [02:59:54:603]: Incrementing counter to disable shutdown. Counter after increment: 0
+MSI (s) (20:D8) [02:59:54:603]: Note: 1: 1402 2: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Installer\Rollback\Scripts 3: 2
+MSI (s) (20:D8) [02:59:54:681]: Note: 1: 2265 2:  3: -2147287035
+MSI (s) (20:D8) [02:59:54:681]: Note: 1: 1402 2: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Installer\Rollback\Scripts 3: 2
+MSI (s) (20:D8) [02:59:54:681]: Decrementing counter to disable shutdown. If counter >= 0, shutdown will be denied.  Counter after decrement: -1
+MSI (s) (20:D8) [02:59:54:681]: Post-install cleanup: removing installer file 'C:\Windows\Installer\fd9c.msi'
+MSI (s) (20:D8) [02:59:54:712]: Post-install cleanup: removing installer file 'C:\Users\WDAGUtilityAccount\AppData\Roaming\Microsoft\Installer\{83EEE747-04FF-47E9-B973-E934B32C5F70}\JpARPPRODUCTICON'
+MSI (s) (20:D8) [02:59:55:025]: Post-install cleanup: removing installer folder 'C:\Users\WDAGUtilityAccount\AppData\Roaming\Microsoft\Installer\{83EEE747-04FF-47E9-B973-E934B32C5F70}\' (if empty)
+MSI (s) (20:D8) [02:59:55:025]: Note: 1: 2318 2:
+MSI (s) (20:D8) [02:59:55:025]: Note: 1: 2318 2:
+MSI (c) (7C:B8) [02:59:55:041]: Decrementing counter to disable shutdown. If counter >= 0, shutdown will be denied.  Counter after decrement: -1
+MSI (c) (7C:B8) [02:59:55:041]: MainEngineThread is returning 0
+=== Verbose logging stopped: 10/26/2026  2:59:55 ===

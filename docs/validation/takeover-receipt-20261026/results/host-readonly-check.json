@@ -1,0 +1,32 @@
+{
+  "exact_native_host_keys": [
+    {
+      "key": "HKCU:\\Software\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "exists": false
+    },
+    {
+      "key": "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "exists": false
+    },
+    {
+      "key": "HKCU:\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "exists": false
+    },
+    {
+      "key": "HKLM:\\Software\\Mozilla\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "exists": false
+    },
+    {
+      "key": "HKLM:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "exists": false
+    },
+    {
+      "key": "HKLM:\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.ciaooo55.hls_downloader",
+      "exists": false
+    }
+  ],
+  "uninstall_entries": [],
+  "product_processes": [],
+  "read_only": true,
+  "all_disk_residue_claimed": false
+}

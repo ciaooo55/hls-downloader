@@ -1,0 +1,35 @@
+Excerpt: final 35 lines; complete captured log SHA256: 0ff9cc6191e17f12bfdf2af08ee55c84371531d4fca7c4942a109c97566825b8
+Property(S): CostingComplete = 1
+Property(S): OutOfDiskSpace = 0
+Property(S): OutOfNoRbDiskSpace = 0
+Property(S): PrimaryVolumeSpaceAvailable = 0
+Property(S): PrimaryVolumeSpaceRequired = 0
+Property(S): PrimaryVolumeSpaceRemaining = 0
+Property(S): INSTALLLEVEL = 1
+Property(S): SOURCEDIR = C:\QAWork\
+Property(S): SourcedirProduct = {83EEE747-04FF-47E9-B973-E934B32C5F70}
+Property(S): ProductToBeRegistered = 1
+MSI (s) (20:EC) [02:59:00:118]: Note: 1: 1707
+MSI (s) (20:EC) [02:59:00:118]: Note: 1: 2205 2:  3: Error
+MSI (s) (20:EC) [02:59:00:118]: Note: 1: 2228 2:  3: Error 4: SELECT `Message` FROM `Error` WHERE `Error` = 1707
+MSI (s) (20:EC) [02:59:00:118]: Note: 1: 2205 2:  3: Error
+MSI (s) (20:EC) [02:59:00:118]: Note: 1: 2228 2:  3: Error 4: SELECT `Message` FROM `Error` WHERE `Error` = 1709
+MSI (s) (20:EC) [02:59:00:118]: 产品: HLSDownloader -- 成功地完成了安装。
+
+MSI (s) (20:EC) [02:59:00:118]: Windows Installer 已安装产品。产品名称: HLSDownloader。产品版本: 7.0.3。产品语言: 2052。制造商: HLS Downloader。安装成功或错误状态: 0。
+
+MSI (s) (20:EC) [02:59:00:165]: Deferring clean up of packages/files, if any exist
+MSI (s) (20:EC) [02:59:00:165]: MainEngineThread is returning 0
+MSI (s) (20:D8) [02:59:00:165]: RESTART MANAGER: Session closed.
+MSI (s) (20:D8) [02:59:00:165]: No System Restore sequence number for this installation.
+=== 记录停止: 10/26/2026  2:59:00 ===
+MSI (s) (20:D8) [02:59:00:181]: User policy value 'DisableRollback' is 0
+MSI (s) (20:D8) [02:59:00:181]: Machine policy value 'DisableRollback' is 0
+MSI (s) (20:D8) [02:59:00:181]: Incrementing counter to disable shutdown. Counter after increment: 0
+MSI (s) (20:D8) [02:59:00:181]: Note: 1: 1402 2: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Installer\Rollback\Scripts 3: 2
+MSI (s) (20:D8) [02:59:00:181]: Note: 1: 2265 2:  3: -2147287035
+MSI (s) (20:D8) [02:59:00:181]: Note: 1: 1402 2: HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Installer\Rollback\Scripts 3: 2
+MSI (s) (20:D8) [02:59:00:181]: Decrementing counter to disable shutdown. If counter >= 0, shutdown will be denied.  Counter after decrement: -1
+MSI (c) (00:04) [02:59:00:181]: Decrementing counter to disable shutdown. If counter >= 0, shutdown will be denied.  Counter after decrement: -1
+MSI (c) (00:04) [02:59:00:181]: MainEngineThread is returning 0
+=== Verbose logging stopped: 10/26/2026  2:59:00 ===

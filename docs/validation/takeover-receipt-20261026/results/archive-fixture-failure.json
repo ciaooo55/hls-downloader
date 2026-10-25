@@ -1,0 +1,22 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "candidate-uninstall",
+    "checks":  [
+                   {
+                       "name":  "running-Core upgrade",
+                       "actual":  {
+                                      "product_code":  "{4CD910F7-CCFA-4647-BECA-19DFF19C9B20}",
+                                      "source_commit":  "1b5efac80c91a06c23202278f0a8ae5d0b233404",
+                                      "sha256":  "140b9774ebcb457dd7875b384de055568321a171a493e7cbf2972f50d72fce96"
+                                  }
+                   },
+                   {
+                       "name":  "candidate uninstalled",
+                       "actual":  true
+                   }
+               ],
+    "error":  "The \u0027Expand-Archive\u0027 command was found in the module \u0027Microsoft.PowerShell.Archive\u0027, but the module could not be loaded. For more information, run \u0027Import-Module Microsoft.PowerShell.Archive\u0027.",
+    "position":  "At C:\\QAInput\\guest.ps1:38 char:9\r\n+         Expand-Archive -LiteralPath $zip -DestinationPath \"C:\\QAWork\\ ...\r\n+         ~~~~~~~~~~~~~~",
+    "stack":  "at \u003cScriptBlock\u003e, C:\\QAInput\\guest.ps1: line 38"
+}

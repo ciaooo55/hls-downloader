@@ -1,0 +1,64 @@
+{
+  "verified_production_source_commit": "1b5efac80c91a06c23202278f0a8ae5d0b233404",
+  "unsigned": true,
+  "release_ready": false,
+  "package_tier": "candidate",
+  "host_install_performed": false,
+  "github_release_assets_updated": false,
+  "validation_report": "docs/validation/takeover-receipt-20261026/README.md",
+  "validation": {
+    "extension_tests": 403,
+    "sandbox_upgrade": true,
+    "public_github_exe_digest": true,
+    "edge_real_browser": true,
+    "firefox_lint_warnings": 0,
+    "installed_extension_hashes": true,
+    "firefox_real_browser": true,
+    "native_ui_visual": false,
+    "firefox_lint_errors": 0,
+    "typecheck": true,
+    "uninstall": true
+  },
+  "known_limits": [
+    "No universal Chromium zero-download-item takeover; POST/Blob use browser import",
+    "Specified live-site 403, original HLS hang and historical startup outliers remain open",
+    "No new real-browser multi-tab/native UI/cloud/devices/long-run certification"
+  ],
+  "assets": [
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 5651,
+      "sha256": "b4efbefe48d49bf87db36feae0b1bfceac9cf6756c9889cb915c7635852c0074"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261026-未签名.msi",
+      "bytes": 203448320,
+      "sha256": "140b9774ebcb457dd7875b384de055568321a171a493e7cbf2972f50d72fce96"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 327501,
+      "sha256": "997aeeec32495f30bcf5d1b90736e62b477c502235473522f002a02ae8a1738b"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 282447,
+      "sha256": "832a10b6c032152b17f1518dba1c1ffa28614e52724762fdf72b06c13f36379f"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 326826,
+      "sha256": "a18273131b7a9ef13a83f166f3b1bce265ec74e521d541491344d6f73d956248"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-插件完整源码.zip",
+      "bytes": 362418,
+      "sha256": "ea62ae7579da421159f64534567a32b008af1744691393f773352ebcaf489718"
+    },
+    {
+      "name": "验收说明.txt",
+      "bytes": 1020,
+      "sha256": "7812068aecfa9d7dabd751d215e4be451fc58dfa7530414394eebd5c0260f521"
+    }
+  ]
+}

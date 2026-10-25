@@ -1,0 +1,9 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "setup",
+    "checks":  [
+
+               ],
+    "error":  "Cannot find path \u0027C:\\QAWork\\candidate.msi\u0027 because it does not exist."
+}

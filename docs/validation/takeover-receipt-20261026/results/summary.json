@@ -1,0 +1,44 @@
+﻿{
+    "passed":  true,
+    "finished":  true,
+    "current":  "candidate-uninstall",
+    "checks":  [
+                   {
+                       "name":  "running-Core upgrade",
+                       "actual":  {
+                                      "product_code":  "{4CD910F7-CCFA-4647-BECA-19DFF19C9B20}",
+                                      "source_commit":  "1b5efac80c91a06c23202278f0a8ae5d0b233404",
+                                      "sha256":  "140b9774ebcb457dd7875b384de055568321a171a493e7cbf2972f50d72fce96"
+                                  }
+                   },
+                   {
+                       "name":  "Firefox installed extension identity",
+                       "actual":  "A18273131B7A9EF13A83F166F3B1BCE265EC74E521D541491344D6F73D956248"
+                   },
+                   {
+                       "name":  "Chromium installed extension identity",
+                       "actual":  "997AEEEC32495F30BCF5D1B90736E62B477C502235473522F002A02AE8A1738B"
+                   },
+                   {
+                       "name":  "browser versions",
+                       "actual":  {
+                                      "edge_driver_sha256":  "B59373240DC039BAF425AC53969F8037EFCDF2F14D7AA6AC40011EF56545B1FC",
+                                      "edge":  "156.0.4314.42",
+                                      "firefox":  "158.0.1"
+                                  }
+                   },
+                   {
+                       "name":  "firefox real-browser acceptance",
+                       "actual":  true
+                   },
+                   {
+                       "name":  "edge real-browser acceptance",
+                       "actual":  true
+                   },
+                   {
+                       "name":  "candidate uninstalled",
+                       "actual":  true
+                   }
+               ],
+    "error":  ""
+}
