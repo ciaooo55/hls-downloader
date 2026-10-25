@@ -1,0 +1,157 @@
+{
+  "passed": true,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "media-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "audio-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "image-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "json-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "html-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "unknown-attachment: Core saved unknown file type with exact bytes",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "redirect-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "form-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "newtab-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "post-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "C:\\Users\\WDAGUtilityAccount\\Downloads\\post-export.bin",
+            "id": 1,
+            "observed_at_ms": 1792934192311,
+            "url": "http://127.0.0.1:52615/post-export"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    },
+    {
+      "name": "blob-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "C:\\Users\\WDAGUtilityAccount\\Downloads\\blob-export.bin",
+            "id": 2,
+            "observed_at_ms": 1792934198042,
+            "url": "blob:http://127.0.0.1:52615/24304ee9-bd16-4e86-8754-485c5b959669"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "offline: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "WebDriver element click",
+  "browser_version": "158.0.1",
+  "extension_background_sha256": "6bd1813ecbdcfd2da2ee9dcea3e4b2dc01d3c0efe668e9a53913743ab228f159",
+  "offline_probe": {
+    "error": "Error: 下载器连接已断开",
+    "ok": false,
+    "reconnecting": true
+  },
+  "requests": {
+    "/": 19,
+    "/favicon.ico": 1,
+    "/direct.zip": 3,
+    "/cancel.zip": 1,
+    "/opaque": 3,
+    "/media-attachment": 2,
+    "/audio-attachment": 1,
+    "/image-attachment": 1,
+    "/json-attachment": 1,
+    "/html-attachment": 1,
+    "/unknown-attachment": 4,
+    "/redirect-attachment": 1,
+    "/media-attachment?": 1,
+    "POST /post-export": 1,
+    "/blob-payload": 1,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1,
+    "/offline.zip": 1
+  }
+}

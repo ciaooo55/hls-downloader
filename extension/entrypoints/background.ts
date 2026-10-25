@@ -1127,9 +1127,9 @@ async function reportDownloadError(tabId: number | undefined, reason: unknown): 
   await browser.tabs.sendMessage(tabId, { type: 'download-error', error }, { frameId: 0 }).catch(() => undefined)
 }
 
-async function refreshedDownload(downloadId: number, original: Browser.downloads.DownloadItem) {
+export async function refreshedDownload(downloadId: number, original: Browser.downloads.DownloadItem) {
   let determined = determinedDownloads.get(downloadId)
-  if (!determined) {
+  if (!determined && filenameDeterminationEvent(import.meta.env.CHROME, browser.downloads as any)) {
     determined = await new Promise<Browser.downloads.DownloadItem | undefined>(resolve => {
       const timeout = setTimeout(() => {
         determinationWaiters.delete(downloadId)
@@ -1691,9 +1691,7 @@ export default defineBackground(() => {
           return
         }
       }
-      // Filename determination is useful for generated downloads but can take
-      // hundreds of milliseconds. A zip/exe/pdf URL is already a file: skip
-      // that wait so the confirm window can appear as soon as Chrome pauses.
+      // 响应头已提供附件名时，无需等浏览器再次确定文件名；无名下载仍读取最终元数据。
       const classifyBrowserItem = (
         browserItem: Browser.downloads.DownloadItem,
         chain?: RequestChain,
@@ -1715,7 +1713,7 @@ export default defineBackground(() => {
       }
       let classified = classifyBrowserItem(item, provisionalChain)
       let actualBrowser = item
-      if (!item.filename) {
+      if (!item.filename && !classified.filename) {
         actualBrowser = await refreshedDownload(item.id, item)
         if (!canContinueTakeover(actualBrowser.state, paused)) return
         provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId) || provisionalChain

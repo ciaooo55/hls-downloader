@@ -181,7 +181,7 @@ def run(args):
             assert ping.get('ok'), ping
             _extension_call(driver, "chrome.runtime.sendMessage({type:'set-takeover-settings',enabled:true,minimumBytes:0}).then(done)")
             _extension_call(driver, "chrome.storage.local.set({excludedHosts:[]}).then(()=>done(true))")
-            driver.execute_script('window.createdDownloads=[];chrome.downloads.onCreated.addListener(item=>window.createdDownloads.push({id:item.id,url:item.url}));')
+            driver.execute_script('window.createdDownloads=[];chrome.downloads.onCreated.addListener(item=>window.createdDownloads.push({id:item.id,url:item.url,filename:item.filename,observed_at_ms:Date.now()}));')
             report['browser_version'] = driver.capabilities.get('browserVersion')
             report['extension_background_sha256'] = hashlib.sha256((args.extension/'background.js').read_bytes()).hexdigest()
 

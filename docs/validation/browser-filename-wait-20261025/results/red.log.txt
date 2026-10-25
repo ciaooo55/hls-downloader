@@ -1,0 +1,40 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+ ❯ lib/takeover.test.ts (17 tests | 1 failed) 31ms
+   ❯ browser transfer parking before desktop takeover (7)
+     × reads current download metadata without waiting for an unsupported filename event 9ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  lib/takeover.test.ts > browser transfer parking before desktop takeover > reads current download metadata without waiting for an unsupported filename event
+AssertionError: expected undefined to deeply equal { id: 42, state: 'in_progress', …(3) }
+
+- Expected:
+{
+  "bytesReceived": 0,
+  "filename": "export.zip",
+  "id": 42,
+  "paused": false,
+  "state": "in_progress",
+}
+
++ Received:
+undefined
+
+ ❯ lib/takeover.test.ts:92:22
+     90|     try {
+     91|       await vi.advanceTimersByTimeAsync(0)
+     92|       expect(result).toEqual(current)
+       |                      ^
+     93|     } finally {
+     94|       await vi.runAllTimersAsync()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 16 passed (17)
+   Start at  21:10:50
+   Duration  1.62s (transform 75%, import 11%, worker 10%, tests 3%)
+

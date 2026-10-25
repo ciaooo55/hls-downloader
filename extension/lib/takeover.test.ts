@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { findEarlyBrowserTakeoverByUrl, pauseBrowserDownload, type EarlyBrowserTakeover } from '../entrypoints/background'
+import { findEarlyBrowserTakeoverByUrl, pauseBrowserDownload, refreshedDownload, type EarlyBrowserTakeover } from '../entrypoints/background'
 
 vi.hoisted(() => {
   ;(globalThis as Record<string, unknown>).defineBackground = (main: unknown) => ({ main })
@@ -78,6 +78,22 @@ describe('browser transfer parking before desktop takeover', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     expect(await parking).toBeNull()
     expect(browser.downloads.pause).not.toHaveBeenCalled()
+  })
+
+  it('reads current download metadata without waiting for an unsupported filename event', async () => {
+    vi.stubEnv('CHROME', '')
+    vi.useFakeTimers()
+    const current = item({ filename: 'export.zip' })
+    vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([current]))
+    let result: unknown
+    const refresh = refreshedDownload(42, item()).then(value => { result = value })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(result).toEqual(current)
+    } finally {
+      await vi.runAllTimersAsync()
+      await refresh
+    }
   })
 })
 
