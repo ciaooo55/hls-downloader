@@ -1,0 +1,13 @@
+{
+  "task_sandbox_closed": true,
+  "task_sandbox_client_closed": true,
+  "cleanup_executed": false,
+  "prior_automatic_approval_result": "blocked by policy; no specific reason provided",
+  "blocked_paths_not_retried_reference": "docs/validation/request-control-20261025/cleanup.json",
+  "reused_qa_directory": ".tool-cache/request-control-20261025",
+  "manual_cache_cleanup_script": "docs/validation/live-presenter-20261025/finish-cleanup.ps1",
+  "manual_script_executed": false,
+  "host_installation_and_user_data_touched": false,
+  "desktop_delivery": "HLSDownloader/最新-20261025",
+  "desktop_msi_sha256": "49d144357b438f8b66c1d28ed5be6cebbd0a07132020da0104295ffb1ffd7c68"
+}

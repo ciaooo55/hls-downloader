@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "record_scope": "build_snapshot",
+  "product_version": "7.0.3",
+  "source_commit": "0d88a130231027b5f5fd83dd4fbfcc0de91fc2cc",
+  "source_branch": "main",
+  "git_worktree_clean": true,
+  "package_tier": "candidate",
+  "release_ready": false,
+  "source_patch_sha256": null,
+  "source_files_sha256": {
+    "extension/entrypoints/background.ts": "426169f22c038c79d6460336e68561dfea6e0df43e4c966b3a454435de63b74f",
+    "extension/entrypoints/content.ts": "6061dd4558ccc9413e0cba7a4d47887a8200bd98ada55e472342e47df346b509",
+    "extension/entrypoints/popup/main.ts": "504ca93049e275e677b0dcfb1a910575258f4fe1f51965e08e20f863859b73a4",
+    "extension/lib/mediaOverlay.ts": "470db30eda89bb10d3072733e2be84b0d66de67cec118cbb3c2c383c2b76b083",
+    "native_shell/src/core_runtime.rs": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+    "native_shell/src/download_worker.rs": "736adc432dbd3858dd1fd44ec0a469274578b86179a9d597a7cfd3104ab3a1de",
+    "native_shell/src/media/hls.rs": "97d722ff130ebc618abfd495b45a0b688b45ddb9dd498eda76ccd9594382cca8",
+    "presenter_ui/src/hot_main.rs": "dd465b94150a2d4dc00d16a2e99942f2eda825d876d84eaa25fc8087567497e7",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt": "39346ac89e9cdb2a071508bc1f855911d718f4cbce23c9ccd27b0a4c0d76b6aa",
+    "native_shell/src/bin/hls_downloader_engine.rs": "ab23b50eafe70e18ec35cd199dc930c89c909e0c194c4d6f714a710ff2fbd7e7",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/SidebarNavigationUiTest.kt": "ef0e470cb2e6e3150c513ef9beb16e80f4b03d18476be257aa85e4ddadc06412",
+    "desktop_ui/src/test/kotlin/com/hlsdownloader/desktop/WorkbenchWindowTest.kt": "6206f87a4fc7c0861115290f2960fd65b81ded1bb49aa3be4be1367e4ada8d36",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt": "7139ed7833948eb1c823d3c26450fb1975ec244e30187e18b598a84387acc60c",
+    "native_shell/src/http_engine.rs": "bfe3c3feb98b28c68d41d169e325060fb23130e7c9df2d9f9dda2abc9ddd8220",
+    "native_shell/src/net_policy.rs": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998"
+  },
+  "base_msi_sha256": "f20b3b68f1153cbd96d820f3e2a5425816f7549e6c6fb498167e47637652a7bd",
+  "replaced_components": [
+    "Engine",
+    "Build provenance"
+  ],
+  "reused_components": [
+    "Desktop UI JAR/NativeHost/Presenter/Updater/JRE/player/extension archives from the tested base MSI"
+  ],
+  "validation_limits": [
+    "Final MSI validation pending at build snapshot; changed-206-identity/HTTP/WinHTTP/HLS/cache regressions passed in Sandbox (115 executed)",
+    "UI and extension binaries unchanged; not rebuilt this batch",
+    "Specified live-site HTTP 403 remains unverified",
+    "No full feature/cloud/device rerun"
+  ]
+}

@@ -15,5 +15,6 @@
   },
   "host_product_run": false,
   "cloud_called": false,
-  "final_installer_pending": true
+  "final_installer_pending": false,
+  "final_installer_report": "installer.json"
 }
