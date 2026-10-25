@@ -1,0 +1,10 @@
+core_startup stage=entry elapsed_us=12
+core_startup stage=registration elapsed_us=175204
+core_startup stage=instance_lock elapsed_us=259892
+core_store_startup stage=database_open elapsed_us=778997
+core_store_startup stage=bootstrap elapsed_us=863993
+core_store_startup stage=recovery_watchers elapsed_us=948054
+core_startup stage=store_ready elapsed_us=1373409
+core_startup stage=tray elapsed_us=1457826
+core_startup stage=ipc_ready elapsed_us=1543836
+download engine listening on 127.0.0.1:39917

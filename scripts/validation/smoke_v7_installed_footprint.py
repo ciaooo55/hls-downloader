@@ -209,6 +209,7 @@ def run(args):
         # 安装验收必须加载真实任务库，不能继承前一轮离线界面夹具。
         env = {**{key: value for key, value in os.environ.items() if not key.startswith('HLS_UI_AUDIT_')},
                'HLS_V7_CORE_TCP': '1', 'HLS_V7_CORE_BIND': f'127.0.0.1:{port}',
+               'HLS_V7_STARTUP_PROFILE': '1',
                'HLS_UI_TEST_API': '1', 'HLS_UI_TEST_PORT': str(ui_port), 'HLS_UI_TEST_TOKEN': token}
         for key in ('HLS_V7_DATA_DIR', 'HLS_V7_DOWNLOAD_DIR', 'HLS_V7_PIPE', 'HLS_ENGINE_PATH'):
             env.pop(key, None)
@@ -346,6 +347,8 @@ def run(args):
         report['passed'] = True
     except Exception:
         report['error'] = traceback.format_exc()
+        report['launched_processes'] = [{'pid': proc.pid, 'exit_code': proc.poll()}
+                                        for proc in processes]
     finally:
         terminate()
         if installed:
