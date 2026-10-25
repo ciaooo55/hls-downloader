@@ -1,0 +1,139 @@
+diff --git a/native_shell/src/http_engine.rs b/native_shell/src/http_engine.rs
+index 1d44113..67a66ab 100644
+--- a/native_shell/src/http_engine.rs
++++ b/native_shell/src/http_engine.rs
+@@ -18,6 +18,7 @@ use std::thread;
+ use std::time::{Duration, Instant};
+ 
+ const WRITE_BATCH: usize = 256 * 1024;
++const MIN_HELPER_RANGE_BYTES: u64 = 4 * WRITE_BATCH as u64;
+ const FILE_WRITE_BUFFER: usize = 1024 * 1024;
+ const DURABLE_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
+ const MAX_RANGE_ATTEMPTS: u32 = 5;
+@@ -1145,10 +1146,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
+         return download_sequential(job);
+     }
+     let workers = job.connections.clamp(1, 64);
+-    // Keep several unrequested ranges available per worker. Splitting an HTTP
+-    // request after it has been sent only shortens the file write; the origin
+-    // still transmits the old tail, wasting bandwidth. Queue-level balancing
+-    // lets idle workers help without overlapping any network request.
++    // 先分配未发出的范围；队列耗尽时才允许空闲连接帮助较大的活动尾段。
++    // 接手后原请求会提前关闭，可能有在途额外字节，不能对小段反复拆分。
+     let balanced_chunk = total.div_ceil((workers * 4) as u64).max(256 * 1024);
+     let chunk = job.chunk_bytes.max(64 * 1024).min(balanced_chunk);
+     let mut ranges = Vec::new();
+@@ -1204,7 +1203,13 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
+     // 续传偏移也为 0，整包 body 可以安全地作为完整资源重新下载。
+     // 失效检查点的残留文件不会复用，也属于从零开始；文件存在本身不代表有效断点。
+     let fresh_start = loaded.is_empty() && job.resume_from == 0;
+-    let workers = workers.min(pending.len());
++    let capacity = pending.iter().fold(0usize, |capacity, range| {
++        let useful = ((range.end - range.start + 1) / MIN_HELPER_RANGE_BYTES)
++            .max(1)
++            .min(workers as u64) as usize;
++        capacity.saturating_add(useful)
++    });
++    let workers = workers.min(capacity);
+     let scheduler = Arc::new(RangeScheduler::new(pending, workers));
+     let downloaded = Arc::new(AtomicU64::new(already));
+     let completed = Arc::new(RangeCheckpoints::new(loaded));
+@@ -1467,9 +1472,29 @@ impl RangeScheduler {
+                 .iter()
+                 .position(|item| item.start <= priority && priority <= item.end)
+         };
++        let mut active_ranges = self.active.lock().unwrap_or_else(|err| err.into_inner());
+         let mut range = match priority_index {
+             Some(index) => pending.remove(index),
+-            None => pending.pop()?,
++            None => match pending.pop() {
++                Some(range) => range,
++                None => {
++                    let largest = active_ranges.iter().max_by_key(|item| {
++                        let state = item.progress.lock().unwrap_or_else(|err| err.into_inner());
++                        state.stop.saturating_add(1).saturating_sub(state.cursor)
++                    })?;
++                    let mut state = largest.progress.lock().unwrap_or_else(|err| err.into_inner());
++                    let remaining = state.stop.saturating_add(1).saturating_sub(state.cursor);
++                    if remaining < 2 * MIN_HELPER_RANGE_BYTES {
++                        return None;
++                    }
++                    let split = state.cursor + remaining / 2;
++                    let tail = WorkRange { start: split, end: state.stop };
++                    // cursor 在写入后发布；锁外最多还有一个 WRITE_BATCH 正在限速或落盘。
++                    // 两边最少 4 个批次，给在途写保留空间，接手范围不会与其重叠。
++                    state.stop = split - 1;
++                    tail
++                }
++            },
+         };
+         if priority_index.is_some() && priority > range.start {
+             let head = WorkRange {
+@@ -1486,7 +1511,6 @@ impl RangeScheduler {
+             pending.insert(index, head);
+             range.start = priority;
+         }
+-        drop(pending);
+         let active = ActiveRange {
+             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+             progress: Arc::new(Mutex::new(ActiveProgress {
+@@ -1494,10 +1518,7 @@ impl RangeScheduler {
+                 stop: range.end,
+             })),
+         };
+-        self.active
+-            .lock()
+-            .unwrap_or_else(|err| err.into_inner())
+-            .push(ActiveRange {
++        active_ranges.push(ActiveRange {
+                 id: active.id,
+                 progress: Arc::clone(&active.progress),
+             });
+@@ -3923,6 +3944,47 @@ mod tests {
+         scheduler.complete(third.id);
+     }
+ 
++    #[test]
++    fn idle_range_worker_helps_large_active_tail_without_overlapping_a_pending_write() {
++        let mib = 1024 * 1024u64;
++        let scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 8 * mib - 1 }], 2);
++        let first = scheduler.claim(0).unwrap();
++        first.progress.lock().unwrap().cursor = 128 * 1024;
++        // 写线程可能仍在锁外限速/落盘，已取出的最多一个 WRITE_BATCH 也必须保留。
++        let reserved_end = 128 * 1024 + WRITE_BATCH as u64 - 1;
++        let second = scheduler.claim(1).expect("idle worker must help a large active tail");
++        let first_state = first.progress.lock().unwrap();
++        let second_state = second.progress.lock().unwrap();
++        assert!(first_state.stop >= reserved_end);
++        assert_eq!(first_state.stop + 1, second_state.cursor);
++        assert_eq!(second_state.stop, 8 * mib - 1);
++        drop(second_state);
++        drop(first_state);
++        scheduler.complete(second.id);
++
++        // 允许多次帮助，但最后小段不能被继续拆出大量细碎请求。
++        let mut right = Vec::new();
++        loop {
++            let Some(helper) = scheduler.claim(1) else { break };
++            let state = helper.progress.lock().unwrap();
++            assert!(state.stop - state.cursor + 1 >= mib);
++            right.push((state.cursor, state.stop));
++            drop(state);
++            scheduler.complete(helper.id);
++        }
++        let first_state = first.progress.lock().unwrap();
++        assert!(first_state.stop >= reserved_end);
++        right.push((0, first_state.stop));
++        drop(first_state);
++        // 第二个 worker 的首段也属于完整覆盖。
++        let state = second.progress.lock().unwrap();
++        right.push((state.cursor, state.stop));
++        right.sort_unstable();
++        assert_eq!(right.first().unwrap().0, 0);
++        assert_eq!(right.last().unwrap().1, 8 * mib - 1);
++        assert!(right.windows(2).all(|pair| pair[0].1 + 1 == pair[1].0));
++    }
++
+     #[test]
+     fn playback_seek_splits_pending_range_without_losing_or_overlapping_bytes() {
+         let scheduler = RangeScheduler::new(

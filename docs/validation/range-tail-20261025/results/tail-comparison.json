@@ -1,0 +1,3670 @@
+{
+  "passed": true,
+  "samples": [
+    {
+      "round": 1,
+      "label": "baseline-a",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 1.8819771000000287,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14573568,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "baseline-b",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 1.914108399999975,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 14041088,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 1.6528460999999766,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14544896,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 2818048,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67829761,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "baseline-a",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 5.3364444999999705,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14069760,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "baseline-b",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 5.325122599999986,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14082048,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 3.507577500000025,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 14077952,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 2162688,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67174401,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "baseline-a",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 5.340801199999987,
+      "cpu_seconds": 0.0625,
+      "rss_bytes": 16130048,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "baseline-b",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 5.33958100000001,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 16257024,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 2.297825399999965,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 16236544,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 1114112,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        },
+        {
+          "start": 63963136,
+          "end": 65011711,
+          "sent": 1048576,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67174401,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "baseline-b",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 12.263512900000023,
+      "cpu_seconds": 0.125,
+      "rss_bytes": 14065664,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "candidate",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 7.1950522000000205,
+      "cpu_seconds": 0.046875,
+      "rss_bytes": 14077952,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 2359296,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 1507328,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 66060288,
+          "end": 67108863,
+          "sent": 1048576,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67829761,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "baseline-a",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 1.8849104999999895,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14012416,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "baseline-b",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 5.58766700000001,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 14123008,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "candidate",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 3.3254243000000088,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14090240,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 2162688,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67174401,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "baseline-a",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 9.637280900000007,
+      "cpu_seconds": 0.0625,
+      "rss_bytes": 14036992,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "baseline-b",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 9.799218399999972,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 16019456,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "candidate",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 2.511676399999999,
+      "cpu_seconds": 0.109375,
+      "rss_bytes": 16130048,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 1114112,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        },
+        {
+          "start": 63963136,
+          "end": 65011711,
+          "sent": 1048576,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67174401,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 2,
+      "label": "baseline-a",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 5.564535299999989,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 15994880,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "candidate",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 1.6769498000000453,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 13996032,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 2883584,
+          "slow_connection": false,
+          "client_closed_early": true
+        }
+      ],
+      "server_payload_bytes_written": 67895297,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "baseline-a",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 1.8871115000000032,
+      "cpu_seconds": 0.078125,
+      "rss_bytes": 13991936,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "baseline-b",
+      "mode": "uniform",
+      "transport": "raw-http",
+      "elapsed_seconds": 6.183381900000029,
+      "cpu_seconds": 0.0625,
+      "rss_bytes": 14176256,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "candidate",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 14.36746919999996,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 14163968,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "baseline-a",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 6.091683200000034,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14073856,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "baseline-b",
+      "mode": "slow-last-connection",
+      "transport": "raw-http",
+      "elapsed_seconds": 5.33413829999995,
+      "cpu_seconds": 0.03125,
+      "rss_bytes": 14135296,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "candidate",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 2.4874578999999812,
+      "cpu_seconds": 0.015625,
+      "rss_bytes": 16113664,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 2097152,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 1114112,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 63963136,
+          "end": 65011711,
+          "sent": 1048576,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67174401,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "baseline-a",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 5.339649699999995,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 16162816,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    },
+    {
+      "round": 3,
+      "label": "baseline-b",
+      "mode": "slow-last-connection",
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 5.333038199999919,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 15863808,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 4194304,
+          "slow_connection": true
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 4194304,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 67108865,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": null
+    }
+  ],
+  "medians": {
+    "uniform/raw-http": {
+      "baseline-a": {
+        "elapsed_seconds": 1.8849104999999895,
+        "cpu_seconds": 0.03125,
+        "rss_bytes": 14012416,
+        "server_payload_bytes_written": 67108865
+      },
+      "baseline-b": {
+        "elapsed_seconds": 6.183381900000029,
+        "cpu_seconds": 0.0625,
+        "rss_bytes": 14065664,
+        "server_payload_bytes_written": 67108865
+      },
+      "candidate": {
+        "elapsed_seconds": 1.6769498000000453,
+        "cpu_seconds": 0.03125,
+        "rss_bytes": 14077952,
+        "server_payload_bytes_written": 67829761
+      }
+    },
+    "slow-last-connection/raw-http": {
+      "baseline-a": {
+        "elapsed_seconds": 6.091683200000034,
+        "cpu_seconds": 0.03125,
+        "rss_bytes": 14069760,
+        "server_payload_bytes_written": 67108865
+      },
+      "baseline-b": {
+        "elapsed_seconds": 5.33413829999995,
+        "cpu_seconds": 0.03125,
+        "rss_bytes": 14123008,
+        "server_payload_bytes_written": 67108865
+      },
+      "candidate": {
+        "elapsed_seconds": 3.507577500000025,
+        "cpu_seconds": 0.015625,
+        "rss_bytes": 14090240,
+        "server_payload_bytes_written": 67174401
+      }
+    },
+    "slow-last-connection/winhttp-proxy": {
+      "baseline-a": {
+        "elapsed_seconds": 5.340801199999987,
+        "cpu_seconds": 0.015625,
+        "rss_bytes": 16130048,
+        "server_payload_bytes_written": 67108865
+      },
+      "baseline-b": {
+        "elapsed_seconds": 5.33958100000001,
+        "cpu_seconds": 0.015625,
+        "rss_bytes": 16019456,
+        "server_payload_bytes_written": 67108865
+      },
+      "candidate": {
+        "elapsed_seconds": 2.4874578999999812,
+        "cpu_seconds": 0.03125,
+        "rss_bytes": 16130048,
+        "server_payload_bytes_written": 67174401
+      }
+    }
+  },
+  "scope": "Core-only 64MiB loopback HTTP ranges with 4 connections; not TLS/Internet or IDM-AB parity",
+  "engine_sha256": {
+    "baseline-a": "8d9200cb821c899f604cf8b420eb742e6650df3a840f55dbcab9f37ab3e77f9e",
+    "baseline-b": "8d9200cb821c899f604cf8b420eb742e6650df3a840f55dbcab9f37ab3e77f9e",
+    "candidate": "80df0bca7b92288830739c1065a6eb98bcab1915eeb2a38f971de2abea96ade9"
+  },
+  "pause_resume_during_tail_help": [
+    {
+      "transport": "raw-http",
+      "elapsed_seconds": 1.9169403999999304,
+      "cpu_seconds": 0.0,
+      "rss_bytes": 14077952,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 1376256,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 1245184,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 65536,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 196608,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 55377920,
+          "end": 58720255,
+          "sent": 3342336,
+          "slow_connection": false
+        },
+        {
+          "start": 63045632,
+          "end": 67108863,
+          "sent": 4063232,
+          "slow_connection": false
+        },
+        {
+          "start": 59637760,
+          "end": 62914559,
+          "sent": 2031616,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 61374464,
+          "end": 62914559,
+          "sent": 1540096,
+          "slow_connection": false
+        }
+      ],
+      "server_payload_bytes_written": 68386818,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": {
+        "paused_downloaded_bytes": 54525952,
+        "durable_checkpoint_preserved": true,
+        "resume_request_index": 18,
+        "server_bytes_after_resume": 10977281
+      }
+    },
+    {
+      "transport": "winhttp-proxy",
+      "elapsed_seconds": 2.9839948999999706,
+      "cpu_seconds": 0.046875,
+      "rss_bytes": 16396288,
+      "requests": [
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 4194304,
+          "end": 8388607,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 0,
+          "end": 4194303,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 12582912,
+          "end": 16777215,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 8388608,
+          "end": 12582911,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 16777216,
+          "end": 20971519,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 25165824,
+          "end": 29360127,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 20971520,
+          "end": 25165823,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 33554432,
+          "end": 37748735,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 29360128,
+          "end": 33554431,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 41943040,
+          "end": 46137343,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 37748736,
+          "end": 41943039,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 46137344,
+          "end": 50331647,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 50331648,
+          "end": 54525951,
+          "sent": 4194304,
+          "slow_connection": false
+        },
+        {
+          "start": 54525952,
+          "end": 58720255,
+          "sent": 262144,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 58720256,
+          "end": 62914559,
+          "sent": 262144,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 62914560,
+          "end": 67108863,
+          "sent": 131072,
+          "slow_connection": true,
+          "client_closed_early": true
+        },
+        {
+          "start": 65011712,
+          "end": 67108863,
+          "sent": 262144,
+          "slow_connection": false,
+          "client_closed_early": true
+        },
+        {
+          "start": 0,
+          "end": 0,
+          "sent": 1,
+          "slow_connection": false
+        },
+        {
+          "start": 58982400,
+          "end": 62914559,
+          "sent": 3932160,
+          "slow_connection": false
+        },
+        {
+          "start": 54788096,
+          "end": 58720255,
+          "sent": 3932160,
+          "slow_connection": false
+        },
+        {
+          "start": 65273856,
+          "end": 67108863,
+          "sent": 1835008,
+          "slow_connection": false
+        },
+        {
+          "start": 63963136,
+          "end": 65011711,
+          "sent": 1048576,
+          "slow_connection": false
+        },
+        {
+          "start": 62914560,
+          "end": 65011711,
+          "sent": 1114112,
+          "slow_connection": true,
+          "client_closed_early": true
+        }
+      ],
+      "server_payload_bytes_written": 67305474,
+      "bytes": 67108864,
+      "sha256": "7357f049fecbdeda42c24168a8caa5948314f88b73fa1ccc27b671d87e4b1cf2",
+      "task_and_cache_removed": true,
+      "resume_validation": {
+        "paused_downloaded_bytes": 53477376,
+        "durable_checkpoint_preserved": true,
+        "resume_request_index": 18,
+        "server_bytes_after_resume": 11862017
+      }
+    }
+  ]
+}

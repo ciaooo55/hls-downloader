@@ -1,0 +1,14 @@
+{
+  "checked_at": "2026-10-25T19:43:29.3204803+08:00",
+  "host_product_process_count": 0,
+  "host_uninstall_record_count": 0,
+  "sandbox_process_count": 0,
+  "desktop_manifest_assets_checked": 7,
+  "desktop_manifest_assets_match": true,
+  "production_code_restored_to": "82b0f9f",
+  "new_msi_published": false,
+  "build_cache_removed": false,
+  "cleanup_block": "Automatic approval returned blocked by policy; rejected removals not retried",
+  "branches_created": 0,
+  "worktrees_created": 0
+}
