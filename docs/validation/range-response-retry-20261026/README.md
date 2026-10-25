@@ -4,7 +4,7 @@
 
 HTTP 引擎已经拒绝缺少或不匹配 Content-Range 的响应，避免拼接不可信数据。但任务层直接把 EngineError 转为字符串，丢失 RangeUnsupported 分类，调度器把它当作普通失败进行整任务自动重试。
 
-复用现有自动重试与队列回归，增加返回 206、ETag 匹配但缺少 Content-Range 的真实本地 HTTP 场景。旧代码实际失败：任务尝试三次，错误码为 DOWNLOAD_FAILED，而不是 RANGE_UNSUPPORTED。见 results/range-hint-red.log。
+复用现有自动重试与队列回归，增加返回 206、ETag 匹配但缺少 Content-Range 的真实本地 HTTP 场景。旧代码实际失败：任务尝试三次，错误码为 DOWNLOAD_FAILED，而不是 RANGE_UNSUPPORTED。见 results/range-hint-red.log.txt。
 
 修复在现有错误转换位置保留范围拒绝分类，调度停止这种无法安全续传的自动重试，任务提供明确错误及重取地址提示。资源身份变化仍使用 RESOURCE_CHANGED。没有忽略范围校验、拼接错误字节或修改续传缓存格式；手动重试入口保留，普通暂时性 HTTP 错误继续重试。
 
@@ -23,3 +23,4 @@ HTTP 引擎已经拒绝缺少或不匹配 Content-Range 的响应，避免拼接
 本轮不重建未修改的 UI/插件，不调用云端，不在宿主安装，不更新 GitHub Release。指定直播站点 403、原始 HLS 卡死现场、新库初始化历史慢点、Chromium 通用附件零下载项及 POST/Blob 边界、完整 UI/实体设备/长期负载与 IDM/AB 全面对等均未因此获得证明。
 
 历史构建缓存删除被自动审批拒绝，本轮未换通道重试；生成物仍集中在项目 .tool-cache，不能称工作目录只剩源码。继续保留 main 单分支、单 worktree。
+
