@@ -7,7 +7,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml'))) {
 $delivery = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader\最新-20261025'
 $installer = Join-Path $delivery 'HLSDownloader-7.0.3-20261025-未签名.msi'
 if (-not (Test-Path -LiteralPath $installer) -or
-    (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne '902182be8f45a770c70ece13395d816e546d57d85d0588a5aded6e6a67f7dcf1') {
+    (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b1c1010f56896d3351ecc590f83c729b5ec25bd0a0c8ec0f179d3c4dc14c5afd') {
     throw '桌面成品不存在或哈希不同，停止清理。'
 }
 if (Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyContinue) {
