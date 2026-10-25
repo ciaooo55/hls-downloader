@@ -1,0 +1,71 @@
+{
+  "verified_production_source_commit": "80675669d3d13b335019f9f4e90db7401f9cda8a",
+  "unsigned": true,
+  "release_ready": false,
+  "package_tier": "candidate",
+  "host_install_performed": false,
+  "github_release_assets_updated": false,
+  "validation_report": "docs/validation/player-event-20261025/README.md",
+  "validation": {
+    "player_event_comparison": true,
+    "player_event_task_counts": [
+      10,
+      1000
+    ],
+    "player_event_samples": 18,
+    "core": 632,
+    "core_default_ignored": 9,
+    "real_curl": 2,
+    "winhttp": 3,
+    "executed_distinct_regressions": 637,
+    "remaining_unrun_ignored_tests": 4,
+    "full_core_rerun": true,
+    "final_installer": true,
+    "installed_hls_fault_cases": 6,
+    "installed_ui_this_batch": false,
+    "extension_rebuilt_this_batch": false
+  },
+  "known_limits": [
+    "Previous first installed Engine startup timeout root cause remains open",
+    "Specified live-site HTTP 403 and original HLS hang scene remain open",
+    "Player-event IPC comparison only; no full UI/browser/cloud/device/long-run or IDM-AB performance comparison",
+    "Historical build-cache cleanup blocked by automatic approval"
+  ],
+  "assets": [
+    {
+      "name": "验收说明.txt",
+      "bytes": 2598,
+      "sha256": "b7cb08fe9cc154a62ac4194c53d42e65b59a8fdfcd023e6b4c1b6a84455ec265"
+    },
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 3290,
+      "sha256": "4e8acb7e9680331dbba7aafd6383e14a6c4472f3511b869b14dcb61163f6b591"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-20261025-未签名.msi",
+      "bytes": 203448320,
+      "sha256": "902182be8f45a770c70ece13395d816e546d57d85d0588a5aded6e6a67f7dcf1"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-插件完整源码.zip",
+      "bytes": 362332,
+      "sha256": "c734993f64b2522b09e9e94bd52c973f45187d80fcd3096e3bdc1ede7e707694"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 330059,
+      "sha256": "22cc3b1f5940fb4c8f46d2639ccb3634781d0bd1820bb078949f0d2ebdbea7f3"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+      "bytes": 362332,
+      "sha256": "c734993f64b2522b09e9e94bd52c973f45187d80fcd3096e3bdc1ede7e707694"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-未签名.zip",
+      "bytes": 329389,
+      "sha256": "dc91cf574f7859c9b2521ec570cc196fd414ac69956a0be6dfaa55021968f63e"
+    }
+  ]
+}

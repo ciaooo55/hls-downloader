@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\request-control-20261025\\event-candidate.msi",
+  "original_product_code": "{BE45FF82-4463-4BC4-88AE-2CAA1A9C91E3}",
+  "verified_product_code": "{494DE8DD-3CEF-4014-867D-6C7AA1967018}",
+  "original_package_code": "{48A6BE7C-079B-4F45-A686-3C13616AF5B5}",
+  "verified_package_code": "{3523FD0B-BA6B-4F10-8DAC-8A18B89D3530}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "1B8284A543AC7C5BAC0CBEC35C2D01738E8DC4473B46544052C80890006165DD",
+  "sha256_after": "902182BE8F45A770C70ECE13395D816E546D57D85D0588A5ADED6E6A67F7DCF1"
+}
