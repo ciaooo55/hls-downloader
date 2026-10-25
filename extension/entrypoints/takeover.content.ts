@@ -168,6 +168,7 @@ export default defineContentScript({
     // earliest trusted phase so onHeadersReceived can present immediately.
     ctx.addEventListener(window, 'pointerdown', recordIntent, { capture: true })
     ctx.addEventListener(window, 'click', recordIntent, { capture: true })
+    // 在冒泡末端接管：网页可能先取消默认导航，生成附件地址或更新签名链接。
     ctx.addEventListener(window, 'click', (event: MouseEvent) => {
       if (!interceptLinks || !event.isTrusted || !event.cancelable || event.defaultPrevented
         || event.button !== 0 || event.altKey || event.shiftKey || event.metaKey || event.ctrlKey) return
@@ -178,7 +179,6 @@ export default defineContentScript({
       const target = link.target || '_self'
       const filename = link.getAttribute('download')
       event.preventDefault()
-      event.stopImmediatePropagation()
       const fallback = async () => {
         // 本次交接未发生；让原链接恢复一次，并防止响应/onCreated 再次接管。
         await browser.runtime.sendMessage({
@@ -204,6 +204,6 @@ export default defineContentScript({
         // 发送后连接中断不能证明桌面没收到；自动导航可能造成第二份下载。
         console.warn('HLS Downloader 无法确认链接交接，请检查主程序后重试')
       })
-    }, { capture: true })
+    })
   },
 })

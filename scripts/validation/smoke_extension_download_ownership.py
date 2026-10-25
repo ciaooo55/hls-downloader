@@ -71,6 +71,11 @@ def run(args):
                         "<a id='direct' href='/direct.zip'>direct.zip</a> "
                         "<a id='cancel' href='/cancel.zip'>cancel.zip</a> "
                         "<a id='opaque' href='/opaque'>opaque attachment</a> "
+                        "<a id='scripted-link' href='/stale.zip' onclick=\"event.preventDefault();"
+                        "location.assign('/scripted-export')\">scripted download</a> "
+                        "<a id='delegated-link' href='/stale-delegated.zip'>delegated download</a> "
+                        "<script>document.addEventListener('click',e=>{if(e.target.id==='delegated-link'){"
+                        "e.preventDefault();location.assign('/delegated-export')}})</script>"
                         "<a id='disabled' href='/disabled.zip'>disabled.zip</a> "
                         "<a id='excluded' href='/excluded.zip'>excluded.zip</a> "
                         "<a id='offline' href='/offline.zip'>offline.zip</a> "
@@ -97,7 +102,7 @@ def run(args):
             self.send_response(200)
             self.send_header('Content-Type', mime)
             self.send_header('Content-Length', str(len(body)))
-            if self.path == '/opaque':
+            if self.path in ('/opaque', '/scripted-export', '/delegated-export'):
                 self.send_header('Content-Disposition', 'attachment; filename="opaque.zip"')
             if self.path in attachment_mime:
                 self.send_header('Content-Disposition', 'attachment; filename="export.data"')
@@ -188,6 +193,7 @@ def run(args):
             driver.execute_script('window.createdDownloads=[];chrome.downloads.onCreated.addListener(item=>window.createdDownloads.push({id:item.id,url:item.url,filename:item.filename,observed_at_ms:Date.now()}));')
             report['browser_version'] = driver.capabilities.get('browserVersion')
             report['extension_background_sha256'] = hashlib.sha256((args.extension/'background.js').read_bytes()).hexdigest()
+            report['extension_takeover_sha256'] = hashlib.sha256((args.extension/'content-scripts/takeover.js').read_bytes()).hexdigest()
 
             def events():
                 driver.switch_to.window(inspector)
@@ -202,7 +208,9 @@ def run(args):
                     document = driver.execute_cdp_cmd('DOM.getDocument', {})['root']['nodeId']
                     node = driver.execute_cdp_cmd('DOM.querySelector', {'nodeId': document, 'selector': '#'+name})['nodeId']
                     assert node, name
-                    quad = driver.execute_cdp_cmd('DOM.getBoxModel', {'nodeId': node})['model']['content']
+                    driver.execute_cdp_cmd('DOM.scrollIntoViewIfNeeded', {'nodeId': node})
+                    # 换行链接的包围框中心可能落在文本之外；点击实际行片段。
+                    quad = driver.execute_cdp_cmd('DOM.getContentQuads', {'nodeId': node})['quads'][0]
                     point = {'x': sum(quad[::2])/4, 'y': sum(quad[1::2])/4, 'button':'left', 'clickCount':1}
                     driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type':'mousePressed', 'buttons':1, **point})
                     driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type':'mouseReleased', 'buttons':0, **point})
@@ -216,14 +224,18 @@ def run(args):
                 return not _download_items(driver, inspector)
 
             # 对明确链接和服务器附件分别验证；零创建事件与事后删除是不同的验收结果。
-            for name in ('direct', 'cancel', 'opaque', 'github'):
+            for name in ('direct', 'cancel', 'opaque', 'github', 'scripted-link', 'delegated-link'):
                 before = {h['id'] for h in handoffs()}
                 prior_events = len(events())
                 click(name)
                 offered = pending(before)
+                if name in ('scripted-link', 'delegated-link'):
+                    export = 'scripted-export' if name == 'scripted-link' else 'delegated-export'
+                    assert offered['offer']['url'] == url+export, offered
+                    assert requests['/stale.zip'] == requests['/stale-delegated.zip'] == 0, requests
                 wait(absent, 'Browser copy remained while confirmation pending', 15)
                 delta = events()[prior_events:]
-                if name != 'opaque' or args.browser == 'firefox':
+                if name not in ('opaque', 'scripted-link', 'delegated-link') or args.browser == 'firefox':
                     assert not delta, delta
                 if name in ('cancel', 'github'):
                     command({'kind': 'reject_handoff', 'handoff_id': offered['id'], 'suppress_site_kind': False})
@@ -234,7 +246,9 @@ def run(args):
                 else:
                     command({'kind': 'accept_handoff', 'handoff_id': offered['id'], 'filename': name+'.zip', 'download_dir': ''})
                     def finished():
-                        matches = [t for t in core({'type':'snapshot','request_id':3})['tasks'] if t['url'].endswith('/'+name if name == 'opaque' else '/direct.zip')]
+                        path = {'scripted-link': '/scripted-export', 'delegated-link': '/delegated-export',
+                                'opaque': '/opaque'}.get(name, '/direct.zip')
+                        matches = [t for t in core({'type':'snapshot','request_id':3})['tasks'] if t['url'] == url.rstrip('/')+path]
                         if matches and matches[-1]['status'] == 'failed':
                             raise AssertionError(matches[-1])
                         return matches[-1] if matches and matches[-1]['status'] == 'completed' else None
@@ -385,7 +399,7 @@ def run(args):
 
             for name, capture in (
                 ('failure_background_console', background_console),
-                ('failure_created_events', events),
+                ('failure_created_events', lambda: events()),
                 ('failure_page_state', page_state),
                 ('failure_targets', lambda: _debug_targets(driver) if args.browser == 'edge' else []),
                 ('failure_screenshot', lambda: driver.save_screenshot(str(args.report.with_suffix('.png')))),
