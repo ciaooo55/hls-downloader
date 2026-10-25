@@ -43,6 +43,19 @@ def run(args):
         def log_message(self, *_args):
             pass
 
+        def do_POST(self):
+            requests['POST ' + self.path] += 1
+            body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
+            if self.path != '/post-export' or body != b'export=once':
+                self.send_error(400)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Disposition', 'attachment; filename="post-export.bin"')
+            self.send_header('Content-Length', str(len(PAYLOAD)))
+            self.end_headers()
+            self.wfile.write(PAYLOAD)
+
         def do_GET(self):
             requests[self.path] += 1
             if self.path == '/redirect-attachment':
@@ -53,6 +66,8 @@ def run(args):
                 return
             if self.path == '/':
                 body = ("<title>Takeover ownership</title>"
+                        "<script>window.fixtureErrors=[];addEventListener('error',e=>fixtureErrors.push(e.message));"
+                        "addEventListener('unhandledrejection',e=>fixtureErrors.push(String(e.reason)))</script>"
                         "<a id='direct' href='/direct.zip'>direct.zip</a> "
                         "<a id='cancel' href='/cancel.zip'>cancel.zip</a> "
                         "<a id='opaque' href='/opaque'>opaque attachment</a> "
@@ -60,7 +75,14 @@ def run(args):
                         "<a id='excluded' href='/excluded.zip'>excluded.zip</a> "
                         "<a id='offline' href='/offline.zip'>offline.zip</a> "
                         "<a id='preview' href='/preview.pdf'>preview</a> "
-                        "<a id='github' href='https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe'>GitHub portable EXE</a>").encode()
+                        "<a id='github' href='https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe'>GitHub portable EXE</a>"
+                        "<form method='POST' action='/post-export'><input type='hidden' name='export' value='once'>"
+                        "<button id='post-export'>Export POST</button></form>"
+                        "<button id='blob-export' onclick=\"window.fixtureBlobStage='fetch';fetch('/blob-payload').then(r=>r.blob()).then(blob=>{"
+                        "const a=document.createElement('a');window.fixtureUrlTypes=[typeof URL,typeof window.URL];"
+                        "a.href=window.URL.createObjectURL(blob);"
+                        "a.download='blob-export.bin';document.body.append(a);window.fixtureBlobStage='click';"
+                        "a.click();a.remove();window.fixtureBlobStage='clicked'})\">Export Blob</button>").encode()
                 mime = 'text/html'
             elif self.path == '/preview.pdf':
                 body, mime = b'%PDF-1.4\n%%EOF', 'application/pdf'
@@ -263,6 +285,37 @@ def run(args):
                     driver.switch_to.window(extra)
                     driver.close()
 
+            # POST 不重复提交；Blob 不尝试在 Core 中访问网页内存 URL。
+            # 两者均在浏览器保存后交接本地文件，完成复制后才移除浏览器源文件。
+            for name in ('post-export', 'blob-export'):
+                before = {h['id'] for h in handoffs()}
+                before_tasks = {t['task_id'] for t in core({'type':'snapshot','request_id':3})['tasks']}
+                prior_events = len(events())
+                click(name)
+                offered = pending(before)
+                command({'kind':'accept_handoff','handoff_id':offered['id'],
+                         'filename':name+'.bin','download_dir':''})
+
+                def imported():
+                    matches = [t for t in core({'type':'snapshot','request_id':3})['tasks']
+                               if t['task_id'] not in before_tasks]
+                    if matches and matches[-1]['status'] == 'failed':
+                        raise AssertionError(matches[-1])
+                    return matches[-1] if len(matches) == 1 and matches[-1]['status'] == 'completed' else None
+
+                task = wait(imported, 'Local-file handoff did not complete', 70)
+                output = Path(task['output_path'])
+                assert output.read_bytes() == PAYLOAD
+                wait(absent, 'Browser source remained after local-file import', 20)
+                delta = events()[prior_events:]
+                assert len(delta) == 1, delta
+                request_key = 'POST /post-export' if name == 'post-export' else '/blob-payload'
+                assert requests[request_key] == 1, requests
+                record(f'{name}: one request, one local-file import, browser source removed',
+                       {'created_events':delta,'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),
+                        'request_count':requests[request_key]})
+                command({'kind':'task_action','task_id':task['task_id'],'action':'delete_files'})
+
             # 明确的禁用、排除、离线都保留原浏览器功能，且只恢复一次。
             for name in ('disabled', 'excluded', 'offline'):
                 driver.switch_to.window(inspector)
@@ -321,8 +374,15 @@ def run(args):
                 finally:
                     connection.close()
                 return messages[-60:]
+
+            def page_state():
+                driver.switch_to.window(page)
+                return driver.execute_script('return {errors:window.fixtureErrors,blobStage:window.fixtureBlobStage,activation:navigator.userActivation.isActive}')
+
             for name, capture in (
                 ('failure_background_console', background_console),
+                ('failure_created_events', events),
+                ('failure_page_state', page_state),
                 ('failure_targets', lambda: _debug_targets(driver) if args.browser == 'edge' else []),
                 ('failure_screenshot', lambda: driver.save_screenshot(str(args.report.with_suffix('.png')))),
                 ('failure_url', lambda: driver.current_url),

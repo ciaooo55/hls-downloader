@@ -270,6 +270,39 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
+  it('lets local-file handoff preempt a stalled heartbeat and then resumes the read', async () => {
+    const first = new FakePort(), second = new FakePort()
+    const bridge = new NativeBridge(vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second))
+    const heartbeat = bridge.request({ op: 'ping' })
+    const handoff = bridge.request({ op: 'offer_local_file', resource: { client_request_id: 'local-1' } })
+    try {
+      expect(first.disconnect).toHaveBeenCalledOnce()
+      expect(second.posted[0]).toMatchObject({ op: 'offer_local_file' })
+      first.onMessage.emit({ ok: true, __request_id: first.posted[0].__request_id })
+      second.onMessage.emit({ ok: true, handoff: { id: 'local-handoff' }, __request_id: second.posted[0].__request_id })
+      await expect(handoff).resolves.toMatchObject({ handoff: { id: 'local-handoff' } })
+      expect(second.posted[1]).toMatchObject({ op: 'ping', __request_id: first.posted[0].__request_id })
+      second.onMessage.emit({ ok: true, __request_id: second.posted[1].__request_id })
+      await expect(heartbeat).resolves.toMatchObject({ ok: true })
+    } finally { bridge.close(); await Promise.allSettled([heartbeat, handoff]) }
+  })
+
+  it('does not interrupt or replay a local-file handoff when status reads arrive', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const handoff = bridge.request({ op: 'offer_local_file', resource: { client_request_id: 'local-2' } })
+    const status = bridge.request({ op: 'handoff_status', handoff_id: 'existing' })
+    try {
+      expect(port.disconnect).not.toHaveBeenCalled()
+      expect(port.posted).toHaveLength(1)
+      port.onMessage.emit({ ok: true, handoff: { id: 'local-handoff' }, __request_id: port.posted[0].__request_id })
+      await expect(handoff).resolves.toMatchObject({ handoff: { id: 'local-handoff' } })
+      expect(port.posted.map(message => message.op)).toEqual(['offer_local_file', 'handoff_status'])
+      port.onMessage.emit({ ok: true, __request_id: port.posted[1].__request_id })
+      await expect(status).resolves.toMatchObject({ ok: true })
+    } finally { bridge.close(); await Promise.allSettled([handoff, status]) }
+  })
+
   it('rejects the active request and reconnects after host disconnect', async () => {
     const firstPort = new FakePort()
     const secondPort = new FakePort()

@@ -148,13 +148,15 @@ export class NativeBridge {
   }
 
   private requestPriority(message: Record<string, unknown>): number {
-    const operation = String(message.op || '')
-    // 字幕使用独立连接且 poll 不阻塞；PCM 不能抢占它，否则每次轮询都会重启 Host。
-    if (operation === 'subtitle') return 30
-    if (new Set(['offer', 'download', 'activate', 'media_push', 'set_takeover_settings']).has(operation)) return 30
-    if (new Set(['handoff_status', 'media_push_status']).has(operation)) return 20
-    if (operation === 'wait_handoff') return 10
-    return 0
+    // 只有已知只读请求能被抢占；本地文件交接等写操作不能因遗漏分类而断线重放。
+    // 字幕使用独立连接，所有动作保持同优先级，PCM 不抢断正在进行的 poll。
+    switch (String(message.op || '')) {
+      case 'ping': return 0
+      case 'wait_handoff': return 10
+      case 'handoff_status':
+      case 'media_push_status': return 20
+      default: return 30
+    }
   }
 
   close(): void {
