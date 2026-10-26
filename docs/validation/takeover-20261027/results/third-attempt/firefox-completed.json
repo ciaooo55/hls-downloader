@@ -1,0 +1,69 @@
+{
+  "passed": true,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "controlled settings-read delay",
+      "actual": {
+        "milliseconds": 750
+      }
+    },
+    {
+      "name": "accepted: local source retained before decision",
+      "actual": {
+        "requests": 1,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9"
+      }
+    },
+    {
+      "name": "accepted: no URL replay, correct source ownership",
+      "actual": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "rejected: local source retained before decision",
+      "actual": {
+        "requests": 1,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9"
+      }
+    },
+    {
+      "name": "rejected: no URL replay, correct source ownership",
+      "actual": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "source-unavailable: local source retained before decision",
+      "actual": {
+        "requests": 1,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9"
+      }
+    },
+    {
+      "name": "missing source rejected before task creation",
+      "actual": {
+        "type": "error",
+        "request_id": 3,
+        "code": "core_command_failed",
+        "message": "无法读取本地源文件: 系统找不到指定的文件。 (os error 2)"
+      }
+    },
+    {
+      "name": "source-unavailable: no URL replay, correct source ownership",
+      "actual": {
+        "requests": 1
+      }
+    }
+  ],
+  "decision_transport": "Core IPC",
+  "download_start": "browser extension downloads API",
+  "background_sha256": "35cd17691aaa0aea68e3c48f3938329bd586a160a9a0dc1aa97122d091c69685",
+  "browser_version": "158.0.1",
+  "requests": {
+    "/accepted": 1,
+    "/rejected": 1,
+    "/source-unavailable": 1
+  }
+}

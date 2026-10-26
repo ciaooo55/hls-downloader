@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "controlled settings-read delay",
+      "actual": {
+        "milliseconds": 750
+      }
+    }
+  ],
+  "decision_transport": "Core IPC",
+  "download_start": "browser extension downloads API",
+  "background_sha256": "6e728ae27f68a14df5026baec5a76b18ab1250e1f5a19d2fcbf27cd4fee211ea",
+  "browser_version": "156.0.4314.42",
+  "error": "Completed GET was replayed as URL: {'created_at_ms': 1793041970735, 'filename': 'accepted', 'id': 'handoff-1a179a1362e-2', 'mime_type': 'application/octet-stream', 'offer': {'confidence': 0.0, 'credential_ref': 'cred-1a179a13629-1', 'evidence': [], 'filename': 'accepted', 'handoff_id': 'handoff-1a179a1362e-2', 'local_source_path': None, 'mime_type': 'application/octet-stream', 'owner': '', 'preferred_bandwidth': 0, 'preferred_height': 0, 'replay_context_ref': None, 'request_method': 'GET', 'resource_kind': 'file', 'size': 1024, 'source_page_url': 'chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla', 'title': 'accepted', 'url': 'http://127.0.0.1:49740/accepted'}, 'presentation': 'presenting', 'presentation_lease_until_ms': 1793041985763, 'presentation_owner': 'presenter-6672-1793041943044', 'request_id': 'download:08bde04e-72e7-44d3-9b7c-b84e42125cc9', 'size': 1024, 'status': 'pending', 'suppression': None, 'task_id': None, 'title': 'accepted'}",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_completed_browser_download.py\", line 139, in run\n    assert source_path, 'Completed GET was replayed as URL: '+str(handoff)\n           ^^^^^^^^^^^\nAssertionError: Completed GET was replayed as URL: {'created_at_ms': 1793041970735, 'filename': 'accepted', 'id': 'handoff-1a179a1362e-2', 'mime_type': 'application/octet-stream', 'offer': {'confidence': 0.0, 'credential_ref': 'cred-1a179a13629-1', 'evidence': [], 'filename': 'accepted', 'handoff_id': 'handoff-1a179a1362e-2', 'local_source_path': None, 'mime_type': 'application/octet-stream', 'owner': '', 'preferred_bandwidth': 0, 'preferred_height': 0, 'replay_context_ref': None, 'request_method': 'GET', 'resource_kind': 'file', 'size': 1024, 'source_page_url': 'chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla', 'title': 'accepted', 'url': 'http://127.0.0.1:49740/accepted'}, 'presentation': 'presenting', 'presentation_lease_until_ms': 1793041985763, 'presentation_owner': 'presenter-6672-1793041943044', 'request_id': 'download:08bde04e-72e7-44d3-9b7c-b84e42125cc9', 'size': 1024, 'status': 'pending', 'suppression': None, 'task_id': None, 'title': 'accepted'}\n",
+  "requests": {
+    "/accepted": 1
+  }
+}

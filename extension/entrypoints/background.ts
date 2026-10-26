@@ -84,6 +84,34 @@ async function persistLocalDownloads(): Promise<void> {
   await localDownloadsWrite
 }
 
+async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<void> {
+  await hydrateLocalDownloads()
+  localDownloadHandoffs.set(record.downloadId, record)
+  await persistLocalDownloads()
+  void continueLocalDownloadHandoffs().catch(error => console.warn('HLS Downloader local file handoff failed', error))
+}
+
+async function importCompletedBrowserDownload(
+  item: Browser.downloads.DownloadItem,
+  resource: MediaResource,
+  intent?: DownloadClickIntent,
+): Promise<boolean> {
+  // HLS/DASH 下载的是完整媒体，不能用浏览器保存的单个清单替代。
+  if (resource.kind !== 'file' && resource.kind !== 'media') return false
+  const [current] = await browser.downloads.search({ id: item.id })
+  if (!current || current.state === 'interrupted' && current.error === 'USER_CANCELED' && !current.canResume) {
+    throw new Error('浏览器下载已取消，不再创建桌面任务')
+  }
+  if (current.state !== 'complete') return false
+  // 已完成的响应可能来自一次性链接。复制唯一的成功文件，不能重新请求后删源。
+  await queueLocalBrowserDownload({
+    downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
+    sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
+    importUrl: 'data:application/octet-stream,',
+  })
+  return true
+}
+
 async function continueLocalDownloadHandoffs(): Promise<void> {
   if (localDownloadsPass) return
   localDownloadsPass = true
@@ -164,7 +192,7 @@ export interface EarlyBrowserTakeover {
   urls: string[]
   tabId: number
   frameId: number
-  promise: Promise<{ resource: MediaResource, bypass?: boolean } | null>
+  promise: Promise<{ resource: MediaResource, intent?: DownloadClickIntent, bypass?: boolean } | null>
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const activeDownloadOffers = new Map<string, Promise<any>>()
@@ -1245,6 +1273,7 @@ async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, pause
   }
   if (!current) return true
   if (current.state === 'complete' || (current.state === 'in_progress' && current.paused === false)) return true
+  if (current.state === 'interrupted' && current.error === 'USER_CANCELED' && !current.canResume) return true
   // Edge/Chrome may report a just-paused response as `interrupted` while it is
   // still resumable. Refusing that state left excluded downloads and failed or
   // rejected handoffs stuck forever at 0 B.
@@ -1421,7 +1450,7 @@ async function prepareEarlyBrowserTakeover(details: any, chain: RequestChain | u
       explicitClick: Boolean(intent),
       strongEvidence: true,
     }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) return null
-    return { resource }
+    return { resource, intent }
   } catch (error) {
     console.debug('HLS Downloader early browser takeover unavailable', error)
     return null
@@ -1644,10 +1673,7 @@ export default defineBackground(() => {
       const pageUrl = await topLevelPageUrl(intent?.tabId ?? blobSource?.tabId ?? downloadIdentity(item).tabId ?? -1,
         intent?.pageUrl || blobSource?.pageUrl || item.referrer || (blobOrigin !== 'null' ? blobOrigin : ''))
       if (!pageUrl && config.excludedHosts.length) return
-      await hydrateLocalDownloads()
-      localDownloadHandoffs.set(item.id, { downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`, sourceKey, pageUrl, intent })
-      await persistLocalDownloads()
-      void continueLocalDownloadHandoffs()
+      await queueLocalBrowserDownload({ downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`, sourceKey, pageUrl, intent })
       return
     }
     console.debug('HLS Downloader observed a browser download candidate')
@@ -1684,6 +1710,8 @@ export default defineBackground(() => {
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
+          if (!restored && earlyResult
+            && await importCompletedBrowserDownload(item, earlyResult.resource, earlyResult.intent)) return
           const response = earlyResult
             ? await offer(earlyResult.resource, provisionalChain) : undefined
           if (!restored && !desktopAcceptedHandoff(response)) return
@@ -1781,19 +1809,17 @@ export default defineBackground(() => {
       if (!chain) return
       if (chain.method.toUpperCase() === 'POST') {
         // 复用本地导入，复制成功前保留浏览器源文件。
-        await hydrateLocalDownloads()
-        localDownloadHandoffs.set(item.id, {
+        await queueLocalBrowserDownload({
           downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
           sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
           importUrl: 'data:application/octet-stream,',
         })
-        await persistLocalDownloads()
-        void continueLocalDownloadHandoffs()
         return
       }
       const pauseResult = await pauseBrowserDownload(actualBrowser)
       if (pauseResult === null) return
       paused = pauseResult
+      if (await importCompletedBrowserDownload(actualBrowser, resource, intent)) return
       console.debug('HLS Downloader offering a verified browser download')
       const response = await offer(resource, chain)
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')

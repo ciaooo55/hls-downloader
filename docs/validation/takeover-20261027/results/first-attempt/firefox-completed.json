@@ -1,0 +1,14 @@
+{
+  "passed": false,
+  "browser": "firefox",
+  "checks": [],
+  "decision_transport": "Core IPC",
+  "download_start": "browser extension downloads API",
+  "background_sha256": "f20334107e9bbf6536fc73224b086723b5c02972ec46a1f349c71b330e334795",
+  "browser_version": "158.0.1",
+  "error": "Completed GET was replayed as URL: {'id': 'handoff-1a1799a6130-2', 'offer': {'url': 'http://127.0.0.1:49706/accepted', 'resource_kind': 'file', 'local_source_path': None, 'owner': '', 'evidence': [], 'confidence': 0.0, 'source_page_url': '', 'credential_ref': 'cred-1a1799a612b-1', 'replay_context_ref': None, 'request_method': 'GET', 'handoff_id': 'handoff-1a1799a6130-2', 'filename': 'accepted.bin', 'title': 'accepted.bin', 'mime_type': '', 'size': 0, 'preferred_bandwidth': 0, 'preferred_height': 0}, 'filename': 'accepted.bin', 'title': 'accepted.bin', 'mime_type': '', 'size': 0, 'status': 'pending', 'presentation': 'queued', 'task_id': None, 'created_at_ms': 1793041522992, 'request_id': 'download:677d6658-0363-410f-96d4-01f575afa061', 'suppression': None}",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_completed_browser_download.py\", line 121, in run\n    assert source_path, 'Completed GET was replayed as URL: '+str(handoff)\n           ^^^^^^^^^^^\nAssertionError: Completed GET was replayed as URL: {'id': 'handoff-1a1799a6130-2', 'offer': {'url': 'http://127.0.0.1:49706/accepted', 'resource_kind': 'file', 'local_source_path': None, 'owner': '', 'evidence': [], 'confidence': 0.0, 'source_page_url': '', 'credential_ref': 'cred-1a1799a612b-1', 'replay_context_ref': None, 'request_method': 'GET', 'handoff_id': 'handoff-1a1799a6130-2', 'filename': 'accepted.bin', 'title': 'accepted.bin', 'mime_type': '', 'size': 0, 'preferred_bandwidth': 0, 'preferred_height': 0}, 'filename': 'accepted.bin', 'title': 'accepted.bin', 'mime_type': '', 'size': 0, 'status': 'pending', 'presentation': 'queued', 'task_id': None, 'created_at_ms': 1793041522992, 'request_id': 'download:677d6658-0363-410f-96d4-01f575afa061', 'suppression': None}\n",
+  "requests": {
+    "/accepted": 1
+  }
+}

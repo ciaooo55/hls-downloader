@@ -1,0 +1,121 @@
+$ wxt zip -b firefox --sources
+
+WXT 0.21.4
+i Building firefox-mv3 for production with Vite 8.1.5
+[?25l
+⠋ Preparing...[K
+⠋ [1/6] background[K
+⠙ [1/6] background[K
+⠹ [1/6] background[K
+⠹ [2/6] content[K
+⠸ [2/6] content[K
+⠼ [2/6] content[K
+⠼ [3/6] hooks[K
+⠴ [3/6] hooks[K
+⠴ [4/6] popup, subtitle-offscreen[K
+⠦ [4/6] popup, subtitle-offscreen[K
+⠧ [4/6] popup, subtitle-offscreen[K
+⠧ [5/6] subtitle-pcm[K
+⠇ [5/6] subtitle-pcm[K
+⠇ [6/6] takeover[K
+⠏ [6/6] takeover[K
+[K[?25h
+[K[?25h√ Built extension in 2.393 s
+  ├─ .output\firefox-mv3\manifest.json                          1.61 kB  
+  ├─ .output\firefox-mv3\popup.html                             2.19 kB  
+  ├─ .output\firefox-mv3\subtitle-offscreen.html                281 B    
+  ├─ .output\firefox-mv3\background.js                          383.17 kB
+  ├─ .output\firefox-mv3\chunks\browser-B79nNR8W.js             788 B    
+  ├─ .output\firefox-mv3\chunks\popup-P9xw0Pcv.js               208.74 kB
+  ├─ .output\firefox-mv3\chunks\subtitle-offscreen-Duzk67A_.js  3.11 kB  
+  ├─ .output\firefox-mv3\content-scripts\content.js             90.77 kB 
+  ├─ .output\firefox-mv3\content-scripts\hooks.js               25.77 kB 
+  ├─ .output\firefox-mv3\content-scripts\takeover.js            11.57 kB 
+  ├─ .output\firefox-mv3\subtitle-pcm.js                        1.47 kB  
+  ├─ .output\firefox-mv3\assets\popup-DC57h4ym.css              11.57 kB 
+  ├─ .output\firefox-mv3\icon-128.png                           6.35 kB  
+  ├─ .output\firefox-mv3\icon-16.png                            729 B    
+  ├─ .output\firefox-mv3\icon-32.png                            1.50 kB  
+  ├─ .output\firefox-mv3\icon-48.png                            2.49 kB  
+  └─ .output\firefox-mv3\icon.png                               22.17 kB 
+Σ Total size: 774.27 kB                                       
+i Zipping extension...
+i Sources included in hls-downloader-extension-7.0.3-sources.zip
+  ├─ \AMO-BUILD.md                               5.61 kB  
+  ├─ \PRIVACY.md                                 2.53 kB  
+  ├─ \README.md                                  3.66 kB  
+  ├─ \entrypoints\background.ts                  101.28 kB
+  ├─ \entrypoints\content.ts                     92.35 kB 
+  ├─ \entrypoints\hooks.content.ts               26.24 kB 
+  ├─ \entrypoints\popup\index.html               2.02 kB  
+  ├─ \entrypoints\popup\main.ts                  45.56 kB 
+  ├─ \entrypoints\popup\style.css                13.29 kB 
+  ├─ \entrypoints\subtitle-offscreen\index.html  161 B    
+  ├─ \entrypoints\subtitle-offscreen\main.ts     3.19 kB  
+  ├─ \entrypoints\subtitle-pcm.ts                865 B    
+  ├─ \entrypoints\takeover.content.ts            10.29 kB 
+  ├─ \lib\asyncDeadline.ts                       578 B    
+  ├─ \lib\blobOwnership.ts                       2.87 kB  
+  ├─ \lib\blobSourceStore.ts                     1.81 kB  
+  ├─ \lib\boundedResponse.ts                     1.50 kB  
+  ├─ \lib\browserCapabilities.ts                 2.03 kB  
+  ├─ \lib\browserClient.ts                       1.91 kB  
+  ├─ \lib\browserCookies.ts                      4.98 kB  
+  ├─ \lib\clickIntent.ts                         10.75 kB 
+  ├─ \lib\clickIntentStore.ts                    5.99 kB  
+  ├─ \lib\contentDisposition.ts                  2.26 kB  
+  ├─ \lib\contextMenuActions.ts                  1.42 kB  
+  ├─ \lib\dashInspection.ts                      12.35 kB 
+  ├─ \lib\directLink.ts                          843 B    
+  ├─ \lib\directResponse.ts                      2.90 kB  
+  ├─ \lib\downloadConfirmation.ts                1.34 kB  
+  ├─ \lib\fileTakeover.ts                        1.50 kB  
+  ├─ \lib\format.ts                              1.82 kB  
+  ├─ \lib\handoffSuppression.ts                  1.43 kB  
+  ├─ \lib\hlsInspection.ts                       6.55 kB  
+  ├─ \lib\hlsManifest.ts                         6.64 kB  
+  ├─ \lib\hlsWorkerOwnership.ts                  1.24 kB  
+  ├─ \lib\inspectionCache.ts                     1.85 kB  
+  ├─ \lib\manifestSniff.ts                       4.03 kB  
+  ├─ \lib\mediaOverlay.ts                        3.75 kB  
+  ├─ \lib\mediaPush.ts                           831 B    
+  ├─ \lib\nativeBridge.ts                        13.78 kB 
+  ├─ \lib\pausedHandoffFollowups.ts              7.76 kB  
+  ├─ \lib\productCopy.ts                         367 B    
+  ├─ \lib\requestChain.ts                        17.12 kB 
+  ├─ \lib\resources.ts                           51.04 kB 
+  ├─ \lib\selectionLinks.ts                      3.13 kB  
+  ├─ \lib\sessionListStore.ts                    1.04 kB  
+  ├─ \lib\sniffCommand.ts                        487 B    
+  ├─ \lib\storeIdentity.ts                       414 B    
+  ├─ \lib\subtitleAudio.ts                       3.35 kB  
+  ├─ \lib\subtitleBackground.ts                  23.67 kB 
+  ├─ \lib\subtitleContent.ts                     24.33 kB 
+  ├─ \lib\subtitlePcm.ts                         1.40 kB  
+  ├─ \lib\subtitlePopup.ts                       9.43 kB  
+  ├─ \lib\subtitlePrefetch.ts                    5.07 kB  
+  ├─ \lib\subtitleSettings.ts                    2.97 kB  
+  ├─ \lib\takeover.ts                            4.50 kB  
+  ├─ \lib\takeoverSettingsSync.ts                7.22 kB  
+  ├─ \lib\theme.ts                               10.23 kB 
+  ├─ \lib\urlQuery.ts                            2.60 kB  
+  ├─ \lib\version.ts                             697 B    
+  ├─ \native-host\chrome.json                    240 B    
+  ├─ \native-host\firefox.json                   232 B    
+  ├─ \package.json                               838 B    
+  ├─ \patches\node-forge@1.4.0.patch             812 B    
+  ├─ \pnpm-lock.yaml                             146.53 kB
+  ├─ \pnpm-workspace.yaml                        640 B    
+  ├─ \public\icon-128.png                        6.35 kB  
+  ├─ \public\icon-16.png                         729 B    
+  ├─ \public\icon-32.png                         1.50 kB  
+  ├─ \public\icon-48.png                         2.49 kB  
+  ├─ \public\icon.png                            22.17 kB 
+  ├─ \tsconfig.json                              440 B    
+  └─ \wxt.config.ts                              2.21 kB  
+Σ Total size: 766.00 kB                        
+√ Zipped extension in 1.139 s
+  ├─ .output\hls-downloader-extension-7.0.3-firefox.zip  326.99 kB
+  └─ .output\hls-downloader-extension-7.0.3-sources.zip  282.83 kB
+Σ Total size: 609.82 kB                                
+√ Finished in 4.074 s

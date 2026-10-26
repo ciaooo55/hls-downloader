@@ -1,0 +1,65 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a completed GET without replay, early response=false
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a completed GET without replay, early response=true
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > retains the completed source when desktop import fails
+HLS Downloader observed a browser download candidate
+
+ ❯ lib/downloadOwnership.test.ts (7 tests | 3 failed) 497ms
+   ❯ browser download ownership through registered event listeners (7)
+     × imports a completed GET without replay, early response=false 442ms
+     × imports a completed GET without replay, early response=true 9ms
+     × retains the completed source when desktop import fails 8ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a completed GET without replay, early response=false
+ FAIL  lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a completed GET without replay, early response=true
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ lib/downloadOwnership.test.ts:92:81
+     90|     await takeover
+     91|     await flush()
+     92|     expect(mocks.native.mock.calls.some(([message]) => message.op === …
+       |                                                                                 ^
+     93|     const imported = mocks.native.mock.calls.find(([message]) => messa…
+     94|     expect(imported?.resource.local_source_path).toBe('C:\\Downloads\\…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > retains the completed source when desktop import fails
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ lib/downloadOwnership.test.ts:110:92
+    108|     await vi.advanceTimersByTimeAsync(500)
+    109|     await takeover
+    110|     expect(mocks.native.mock.calls.some(([message]) => message.op === …
+       |                                                                                            ^
+    111|     expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalled()
+    112|     expect(mocks.browser.downloads.erase).not.toHaveBeenCalled()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 4 passed (7)
+   Start at  03:01:22
+   Duration  826ms (tests 80%, transform 12%, import 7%, worker 1%)
+
