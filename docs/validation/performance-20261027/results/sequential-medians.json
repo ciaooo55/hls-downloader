@@ -1,0 +1,164 @@
+[
+  {
+    "Run": "sequential",
+    "Group": "GET, 4096, baseline-a",
+    "Samples": 3,
+    "Seconds": 0.3230362000000184,
+    "CPU": 0.21875,
+    "Writes": 15355,
+    "RSSMiB": 13.051
+  },
+  {
+    "Run": "sequential",
+    "Group": "GET, 4096, baseline-b",
+    "Samples": 3,
+    "Seconds": 0.32078189999998585,
+    "CPU": 0.140625,
+    "Writes": 20770,
+    "RSSMiB": 13.078
+  },
+  {
+    "Run": "sequential",
+    "Group": "GET, 4096, candidate",
+    "Samples": 3,
+    "Seconds": 0.45636639999997897,
+    "CPU": 0.25,
+    "Writes": 573,
+    "RSSMiB": 13.074
+  },
+  {
+    "Run": "sequential",
+    "Group": "GET, 65536, baseline-a",
+    "Samples": 3,
+    "Seconds": 0.21604429999996455,
+    "CPU": 0.171875,
+    "Writes": 2090,
+    "RSSMiB": 13.066
+  },
+  {
+    "Run": "sequential",
+    "Group": "GET, 65536, baseline-b",
+    "Samples": 3,
+    "Seconds": 0.3287985000000049,
+    "CPU": 0.265625,
+    "Writes": 2093,
+    "RSSMiB": 13.09
+  },
+  {
+    "Run": "sequential",
+    "Group": "GET, 65536, candidate",
+    "Samples": 3,
+    "Seconds": 0.27137530000004517,
+    "CPU": 0.1875,
+    "Writes": 557,
+    "RSSMiB": 13.051
+  },
+  {
+    "Run": "sequential",
+    "Group": "POST, 4096, baseline-a",
+    "Samples": 3,
+    "Seconds": 0.34916520000001583,
+    "CPU": 0.25,
+    "Writes": 23735,
+    "RSSMiB": 13.09
+  },
+  {
+    "Run": "sequential",
+    "Group": "POST, 4096, baseline-b",
+    "Samples": 3,
+    "Seconds": 0.3232026000000019,
+    "CPU": 0.21875,
+    "Writes": 15697,
+    "RSSMiB": 13.086
+  },
+  {
+    "Run": "sequential",
+    "Group": "POST, 4096, candidate",
+    "Samples": 3,
+    "Seconds": 1.0987024000000076,
+    "CPU": 0.203125,
+    "Writes": 584,
+    "RSSMiB": 13.102
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "GET, 4096, baseline-a",
+    "Samples": 3,
+    "Seconds": 0.32055859999996983,
+    "CPU": 0.265625,
+    "Writes": 13241,
+    "RSSMiB": 13.074
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "GET, 4096, baseline-b",
+    "Samples": 3,
+    "Seconds": 0.3240774000000215,
+    "CPU": 0.171875,
+    "Writes": 20043,
+    "RSSMiB": 13.082
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "GET, 4096, candidate",
+    "Samples": 3,
+    "Seconds": 0.42946990000001506,
+    "CPU": 0.265625,
+    "Writes": 572,
+    "RSSMiB": 13.066
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "GET, 65536, baseline-a",
+    "Samples": 3,
+    "Seconds": 0.2973893999999859,
+    "CPU": 0.234375,
+    "Writes": 2091,
+    "RSSMiB": 13.035
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "GET, 65536, baseline-b",
+    "Samples": 3,
+    "Seconds": 0.24238200000002053,
+    "CPU": 0.203125,
+    "Writes": 2092,
+    "RSSMiB": 13.051
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "GET, 65536, candidate",
+    "Samples": 3,
+    "Seconds": 0.2726378000000409,
+    "CPU": 0.234375,
+    "Writes": 557,
+    "RSSMiB": 13.09
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "POST, 4096, baseline-a",
+    "Samples": 3,
+    "Seconds": 0.9164740999999594,
+    "CPU": 0.234375,
+    "Writes": 24712,
+    "RSSMiB": 13.094
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "POST, 4096, baseline-b",
+    "Samples": 3,
+    "Seconds": 0.33114469999998164,
+    "CPU": 0.234375,
+    "Writes": 16161,
+    "RSSMiB": 13.059
+  },
+  {
+    "Run": "sequential-repeat",
+    "Group": "POST, 4096, candidate",
+    "Samples": 3,
+    "Seconds": 0.4263750000000073,
+    "CPU": 0.21875,
+    "Writes": 574,
+    "RSSMiB": 13.094
+  }
+]

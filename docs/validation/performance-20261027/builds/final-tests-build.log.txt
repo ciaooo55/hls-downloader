@@ -1,0 +1,3 @@
+   Compiling hls-native-shell v7.0.3 (A:\Ubuntu\测试\hls-downloader\native_shell)
+    Finished `release` profile [optimized] target(s) in 2m 04s
+  Executable unittests src\lib.rs (.tool-cache\performance-20261027\cargo-target\release\deps\hls_native_shell-d284350c1bac6bdd.exe)

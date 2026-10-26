@@ -1,0 +1,66 @@
+﻿{
+    "finished":  true,
+    "current":  "player-events",
+    "checks":  [
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "core-regression",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "curl-regression",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "winhttp-regression",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "ffmpeg-regression",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "sequential-comparison",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "sequential-repeat",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "baseline-playback",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  false,
+                       "timed_out":  false,
+                       "name":  "candidate-playback",
+                       "exit":  1
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "installed",
+                       "exit":  0
+                   },
+                   {
+                       "passed":  true,
+                       "timed_out":  false,
+                       "name":  "player-events",
+                       "exit":  0
+                   }
+               ]
+}

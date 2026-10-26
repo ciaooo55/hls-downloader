@@ -1,0 +1,358 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "ts: pause preserves cache and resume restores playable download",
+      "actual": true
+    }
+  ],
+  "requests": [
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 358.125
+    },
+    {
+      "path": "/ts/s000.jpeg",
+      "range": null,
+      "at": 358.203
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 358.875
+    },
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 359.125
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 359.156
+    },
+    {
+      "path": "/ts/s002.jpeg",
+      "range": null,
+      "at": 359.828
+    },
+    {
+      "path": "/ts/s003.jpeg",
+      "range": null,
+      "at": 360.484
+    },
+    {
+      "path": "/ts/s004.jpeg",
+      "range": null,
+      "at": 361.187
+    },
+    {
+      "path": "/ts/s005.jpeg",
+      "range": null,
+      "at": 361.859
+    },
+    {
+      "path": "/ts/s006.jpeg",
+      "range": null,
+      "at": 362.531
+    },
+    {
+      "path": "/ts/s007.jpeg",
+      "range": null,
+      "at": 363.187
+    },
+    {
+      "path": "/ts/s008.jpeg",
+      "range": null,
+      "at": 363.859
+    },
+    {
+      "path": "/ts/s009.jpeg",
+      "range": null,
+      "at": 364.515
+    },
+    {
+      "path": "/ts/s010.jpeg",
+      "range": null,
+      "at": 365.265
+    },
+    {
+      "path": "/ts/s011.jpeg",
+      "range": null,
+      "at": 365.937
+    },
+    {
+      "path": "/ts/s012.jpeg",
+      "range": null,
+      "at": 366.609
+    },
+    {
+      "path": "/ts/s013.jpeg",
+      "range": null,
+      "at": 367.265
+    },
+    {
+      "path": "/ts/s014.jpeg",
+      "range": null,
+      "at": 367.937
+    },
+    {
+      "path": "/ts/s048.jpeg",
+      "range": null,
+      "at": 368.609
+    },
+    {
+      "path": "/ts/s049.jpeg",
+      "range": null,
+      "at": 369.265
+    },
+    {
+      "path": "/ts/s050.jpeg",
+      "range": null,
+      "at": 369.921
+    },
+    {
+      "path": "/ts/s015.jpeg",
+      "range": null,
+      "at": 370.578
+    },
+    {
+      "path": "/ts/s016.jpeg",
+      "range": null,
+      "at": 371.25
+    },
+    {
+      "path": "/ts/s017.jpeg",
+      "range": null,
+      "at": 371.921
+    },
+    {
+      "path": "/ts/s018.jpeg",
+      "range": null,
+      "at": 372.578
+    },
+    {
+      "path": "/ts/s019.jpeg",
+      "range": null,
+      "at": 373.25
+    },
+    {
+      "path": "/ts/s051.jpeg",
+      "range": null,
+      "at": 373.906
+    },
+    {
+      "path": "/ts/s052.jpeg",
+      "range": null,
+      "at": 374.578
+    },
+    {
+      "path": "/ts/s053.jpeg",
+      "range": null,
+      "at": 375.234
+    },
+    {
+      "path": "/ts/s054.jpeg",
+      "range": null,
+      "at": 375.89
+    },
+    {
+      "path": "/ts/s055.jpeg",
+      "range": null,
+      "at": 376.546
+    },
+    {
+      "path": "/ts/s056.jpeg",
+      "range": null,
+      "at": 378.093
+    },
+    {
+      "path": "/ts/s057.jpeg",
+      "range": null,
+      "at": 379.515
+    },
+    {
+      "path": "/ts/s058.jpeg",
+      "range": null,
+      "at": 380.781
+    },
+    {
+      "path": "/ts/s059.jpeg",
+      "range": null,
+      "at": 381.703
+    },
+    {
+      "path": "/ts/s020.jpeg",
+      "range": null,
+      "at": 382.468
+    },
+    {
+      "path": "/ts/s021.jpeg",
+      "range": null,
+      "at": 387.546
+    },
+    {
+      "path": "/ts/s022.jpeg",
+      "range": null,
+      "at": 388.203
+    },
+    {
+      "path": "/ts/s023.jpeg",
+      "range": null,
+      "at": 388.875
+    },
+    {
+      "path": "/ts/s024.jpeg",
+      "range": null,
+      "at": 389.546
+    },
+    {
+      "path": "/ts/s025.jpeg",
+      "range": null,
+      "at": 390.218
+    },
+    {
+      "path": "/ts/s026.jpeg",
+      "range": null,
+      "at": 390.875
+    },
+    {
+      "path": "/ts/s027.jpeg",
+      "range": null,
+      "at": 391.546
+    },
+    {
+      "path": "/ts/s028.jpeg",
+      "range": null,
+      "at": 392.203
+    },
+    {
+      "path": "/ts/s029.jpeg",
+      "range": null,
+      "at": 392.875
+    },
+    {
+      "path": "/ts/s030.jpeg",
+      "range": null,
+      "at": 393.546
+    },
+    {
+      "path": "/ts/s031.jpeg",
+      "range": null,
+      "at": 394.203
+    },
+    {
+      "path": "/ts/s032.jpeg",
+      "range": null,
+      "at": 394.875
+    },
+    {
+      "path": "/ts/s033.jpeg",
+      "range": null,
+      "at": 395.546
+    },
+    {
+      "path": "/ts/s034.jpeg",
+      "range": null,
+      "at": 396.218
+    },
+    {
+      "path": "/ts/s035.jpeg",
+      "range": null,
+      "at": 396.875
+    },
+    {
+      "path": "/ts/s036.jpeg",
+      "range": null,
+      "at": 397.546
+    },
+    {
+      "path": "/ts/s037.jpeg",
+      "range": null,
+      "at": 398.218
+    },
+    {
+      "path": "/ts/s038.jpeg",
+      "range": null,
+      "at": 398.875
+    },
+    {
+      "path": "/ts/s039.jpeg",
+      "range": null,
+      "at": 399.546
+    },
+    {
+      "path": "/ts/s040.jpeg",
+      "range": null,
+      "at": 400.203
+    },
+    {
+      "path": "/ts/s041.jpeg",
+      "range": null,
+      "at": 400.875
+    },
+    {
+      "path": "/ts/s042.jpeg",
+      "range": null,
+      "at": 401.546
+    },
+    {
+      "path": "/ts/s043.jpeg",
+      "range": null,
+      "at": 402.203
+    },
+    {
+      "path": "/ts/s044.jpeg",
+      "range": null,
+      "at": 402.875
+    },
+    {
+      "path": "/ts/s045.jpeg",
+      "range": null,
+      "at": 403.546
+    },
+    {
+      "path": "/ts/s046.jpeg",
+      "range": null,
+      "at": 404.218
+    },
+    {
+      "path": "/ts/s047.jpeg",
+      "range": null,
+      "at": 404.875
+    }
+  ],
+  "performance": {
+    "core_idle": {
+      "elapsed_seconds": 3.0,
+      "cpu_one_core_percent": 0.0,
+      "cpu_machine_percent": 0.0,
+      "rss_sum_bytes": 12431360,
+      "processes": {
+        "5432": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.0,
+          "rss": 12431360,
+          "private": 2953216
+        }
+      }
+    },
+    "downloading": {
+      "elapsed_seconds": 3.0,
+      "cpu_one_core_percent": 0.0,
+      "cpu_machine_percent": 0.0,
+      "rss_sum_bytes": 15618048,
+      "processes": {
+        "5432": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.046875,
+          "rss": 15618048,
+          "private": 5537792
+        }
+      }
+    }
+  },
+  "engine_sha256": "8629b1bdd5d0eaa279362a6a3a13f58459e5efa0632b31fc1d28ec185c470138",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_v7_download_playback.py\", line 304, in run\n    wait(lambda: player()['position_seconds'] > seek['position_seconds']+.3,\n  File \"C:\\QAScripts\\smoke_v7_download_playback.py\", line 31, in wait\n    value = predicate()\n            ^^^^^^^^^^^\n  File \"C:\\QAScripts\\smoke_v7_download_playback.py\", line 304, in <lambda>\n    wait(lambda: player()['position_seconds'] > seek['position_seconds']+.3,\n                 ^^^^^^^^\n  File \"C:\\QAScripts\\smoke_v7_download_playback.py\", line 229, in player\n    value = command({'kind': 'player_control', 'action': action})\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\smoke_v7_download_playback.py\", line 218, in command\n    response = send(ipc, {'type': 'command', 'request_id': 2, 'command': value})\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\msi_checkpoint_fixture.py\", line 84, in send\n    return json.loads(read_exact(stream, struct.unpack(\"<I\", read_exact(stream, 4))[0]))\n                                                             ^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\msi_checkpoint_fixture.py\", line 74, in read_exact\n    chunk = stream.recv(size - len(data))\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTimeoutError: timed out\n"
+}

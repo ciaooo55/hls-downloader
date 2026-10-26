@@ -1,0 +1,71 @@
+diff --git a/native_shell/src/net_policy.rs b/native_shell/src/net_policy.rs
+index 008e564..a62722a 100644
+--- a/native_shell/src/net_policy.rs
++++ b/native_shell/src/net_policy.rs
+@@ -494,13 +494,18 @@ fn consume_bucket<E>(
+             return Ok(());
+         };
+         if scope == Some("global") {
+-            refresh_global_limit_at(&mut state, chrono_minutes_now());
++            let now = if state.global_schedule.enabled {
++                chrono_minutes_now()
++            } else {
++                0
++            };
++            refresh_global_limit_at(&mut state, now);
+         }
+         let bucket = match scope {
+-            Some(scope) => state
+-                .scoped
+-                .entry(scope.to_string())
+-                .or_insert_with(TokenBucket::new),
++            Some(scope) => match state.scoped.get_mut(scope) {
++                Some(bucket) => bucket,
++                None => return Ok(()),
++            },
+             None => &mut state.legacy,
+         };
+         if bucket.limit_bps <= 0.0 {
+@@ -555,20 +560,20 @@ fn consume_hourly_quota<E>(
+
+ // 仅在限速/配额实际等待时轮询控制；无上限的热路径不增加控制文件 I/O。
+ pub fn consume<E>(nbytes: usize, mut check: impl FnMut() -> Result<(), E>) -> Result<(), E> {
+-    let Some(context) = current_throttle_context() else {
++    let scopes = THROTTLE_CONTEXT.with(|slot| {
++        slot.borrow().as_ref().map(|context| {
++            (
++                format!("queue:{}", context.queue_id),
++                format!("task:{}", context.task_id),
++            )
++        })
++    });
++    let Some((queue, task)) = scopes else {
+         return consume_bucket(None, nbytes, &mut check);
+     };
+     consume_bucket(Some("global"), nbytes, &mut check)?;
+-    consume_bucket(
+-        Some(&format!("queue:{}", context.queue_id)),
+-        nbytes,
+-        &mut check,
+-    )?;
+-    consume_bucket(
+-        Some(&format!("task:{}", context.task_id)),
+-        nbytes,
+-        &mut check,
+-    )?;
++    consume_bucket(Some(&queue), nbytes, &mut check)?;
++    consume_bucket(Some(&task), nbytes, &mut check)?;
+     consume_hourly_quota(nbytes, &mut check)
+ }
+
+@@ -604,6 +609,10 @@ fn refresh_global_limit_at(state: &mut ThrottleState, now: u32) {
+         schedule.schedule_limit_kib,
+         now,
+     );
++    if let Some(bucket) = state.scoped.get_mut("global") {
++        bucket.set_limit_kib(limit);
++        return;
++    }
+     state
+         .scoped
+         .entry("global".into())

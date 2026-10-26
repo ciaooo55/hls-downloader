@@ -1,0 +1,5 @@
+{
+  "production_changes_retained": false,
+  "scope": "Core and download performance results belong to rejected prototype SHA ce983add1a882178b9ae87a732a0e7c83594f632a49f49060cf6f58e61aab18f; installed.json belongs to unchanged desktop MSI 140b9774ebcb457dd7875b384de055568321a171a493e7cbf2972f50d72fce96. No prototype was shipped.",
+  "host_install_performed": false
+}

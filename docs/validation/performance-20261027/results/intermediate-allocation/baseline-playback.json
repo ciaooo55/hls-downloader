@@ -1,0 +1,5751 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "ts: pause preserves cache and resume restores playable download",
+      "actual": true
+    },
+    {
+      "name": "ts: thumbnail leaves playback position, pause and speed unchanged",
+      "actual": true
+    },
+    {
+      "name": "ts: unfinished download decodes, exposes full duration and seeks to 80%",
+      "actual": {
+        "kind": "player_session",
+        "active": true,
+        "title": "ts.mp4",
+        "task_id": "task-1",
+        "status": "PAUSED",
+        "paused": true,
+        "speed": 1.5,
+        "position_seconds": 48.0,
+        "duration_seconds": 60.0,
+        "position_available": true,
+        "audio_tracks": 1,
+        "subtitle_tracks": 0,
+        "volume": 100.0,
+        "muted": false,
+        "buffered_end_seconds": 48.0,
+        "buffering": false,
+        "tracks": [
+          {
+            "id": "1",
+            "kind": "audio",
+            "title": "",
+            "language": "",
+            "selected": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ts: same-window final switch; complete decode; cache removed; delete preserves output",
+      "actual": {
+        "window": [
+          {
+            "hwnd": 131770,
+            "pid": 7120,
+            "rect": [
+              254,
+              85,
+              959,
+              482
+            ]
+          }
+        ],
+        "final": {
+          "kind": "player_session",
+          "active": true,
+          "title": "ts.mp4",
+          "task_id": "task-1",
+          "status": "PAUSED",
+          "paused": true,
+          "speed": 1.5,
+          "position_seconds": 51.541,
+          "duration_seconds": 60.032,
+          "position_available": true,
+          "audio_tracks": 1,
+          "subtitle_tracks": 0,
+          "volume": 100.0,
+          "muted": false,
+          "buffered_end_seconds": 52.301333,
+          "buffering": false,
+          "tracks": [
+            {
+              "id": "1",
+              "kind": "audio",
+              "title": "",
+              "language": "",
+              "selected": true
+            }
+          ]
+        },
+        "output_sha256": "a9d51d6c417457498bef47b7495374e4efe53336eb5dfcc38c95248c99b5941f",
+        "origin_requests": [
+          {
+            "path": "/ts/index.m3u8",
+            "range": null,
+            "at": 261.468
+          },
+          {
+            "path": "/ts/s000.jpeg",
+            "range": null,
+            "at": 261.718
+          },
+          {
+            "path": "/ts/s001.jpeg",
+            "range": null,
+            "at": 262.39
+          },
+          {
+            "path": "/ts/index.m3u8",
+            "range": null,
+            "at": 262.625
+          },
+          {
+            "path": "/ts/s001.jpeg",
+            "range": null,
+            "at": 262.656
+          },
+          {
+            "path": "/ts/s002.jpeg",
+            "range": null,
+            "at": 263.312
+          },
+          {
+            "path": "/ts/s003.jpeg",
+            "range": null,
+            "at": 264.0
+          },
+          {
+            "path": "/ts/s004.jpeg",
+            "range": null,
+            "at": 264.671
+          },
+          {
+            "path": "/ts/s005.jpeg",
+            "range": null,
+            "at": 265.328
+          },
+          {
+            "path": "/ts/s006.jpeg",
+            "range": null,
+            "at": 266.015
+          },
+          {
+            "path": "/ts/s007.jpeg",
+            "range": null,
+            "at": 266.687
+          },
+          {
+            "path": "/ts/s008.jpeg",
+            "range": null,
+            "at": 267.375
+          },
+          {
+            "path": "/ts/s009.jpeg",
+            "range": null,
+            "at": 268.046
+          },
+          {
+            "path": "/ts/s010.jpeg",
+            "range": null,
+            "at": 268.718
+          },
+          {
+            "path": "/ts/s012.jpeg",
+            "range": null,
+            "at": 269.39
+          },
+          {
+            "path": "/ts/s013.jpeg",
+            "range": null,
+            "at": 270.062
+          },
+          {
+            "path": "/ts/s014.jpeg",
+            "range": null,
+            "at": 270.718
+          },
+          {
+            "path": "/ts/s048.jpeg",
+            "range": null,
+            "at": 271.468
+          },
+          {
+            "path": "/ts/s049.jpeg",
+            "range": null,
+            "at": 272.14
+          },
+          {
+            "path": "/ts/s050.jpeg",
+            "range": null,
+            "at": 272.812
+          },
+          {
+            "path": "/ts/s051.jpeg",
+            "range": null,
+            "at": 273.468
+          },
+          {
+            "path": "/ts/s052.jpeg",
+            "range": null,
+            "at": 274.14
+          },
+          {
+            "path": "/ts/s053.jpeg",
+            "range": null,
+            "at": 274.812
+          },
+          {
+            "path": "/ts/s054.jpeg",
+            "range": null,
+            "at": 275.468
+          },
+          {
+            "path": "/ts/s055.jpeg",
+            "range": null,
+            "at": 276.171
+          },
+          {
+            "path": "/ts/s056.jpeg",
+            "range": null,
+            "at": 276.828
+          },
+          {
+            "path": "/ts/s057.jpeg",
+            "range": null,
+            "at": 277.484
+          },
+          {
+            "path": "/ts/s058.jpeg",
+            "range": null,
+            "at": 277.5
+          },
+          {
+            "path": "/ts/s059.jpeg",
+            "range": null,
+            "at": 277.515
+          },
+          {
+            "path": "/ts/s011.jpeg",
+            "range": null,
+            "at": 277.531
+          },
+          {
+            "path": "/ts/s015.jpeg",
+            "range": null,
+            "at": 277.546
+          },
+          {
+            "path": "/ts/s016.jpeg",
+            "range": null,
+            "at": 277.562
+          },
+          {
+            "path": "/ts/s017.jpeg",
+            "range": null,
+            "at": 277.578
+          },
+          {
+            "path": "/ts/s018.jpeg",
+            "range": null,
+            "at": 277.578
+          },
+          {
+            "path": "/ts/s019.jpeg",
+            "range": null,
+            "at": 277.593
+          },
+          {
+            "path": "/ts/s020.jpeg",
+            "range": null,
+            "at": 277.609
+          },
+          {
+            "path": "/ts/s021.jpeg",
+            "range": null,
+            "at": 277.625
+          },
+          {
+            "path": "/ts/s022.jpeg",
+            "range": null,
+            "at": 277.625
+          },
+          {
+            "path": "/ts/s023.jpeg",
+            "range": null,
+            "at": 277.64
+          },
+          {
+            "path": "/ts/s024.jpeg",
+            "range": null,
+            "at": 277.64
+          },
+          {
+            "path": "/ts/s025.jpeg",
+            "range": null,
+            "at": 277.656
+          },
+          {
+            "path": "/ts/s026.jpeg",
+            "range": null,
+            "at": 277.671
+          },
+          {
+            "path": "/ts/s027.jpeg",
+            "range": null,
+            "at": 277.687
+          },
+          {
+            "path": "/ts/s028.jpeg",
+            "range": null,
+            "at": 277.687
+          },
+          {
+            "path": "/ts/s029.jpeg",
+            "range": null,
+            "at": 277.703
+          },
+          {
+            "path": "/ts/s030.jpeg",
+            "range": null,
+            "at": 277.718
+          },
+          {
+            "path": "/ts/s031.jpeg",
+            "range": null,
+            "at": 277.734
+          },
+          {
+            "path": "/ts/s032.jpeg",
+            "range": null,
+            "at": 277.75
+          },
+          {
+            "path": "/ts/s033.jpeg",
+            "range": null,
+            "at": 277.765
+          },
+          {
+            "path": "/ts/s034.jpeg",
+            "range": null,
+            "at": 277.765
+          },
+          {
+            "path": "/ts/s035.jpeg",
+            "range": null,
+            "at": 277.781
+          },
+          {
+            "path": "/ts/s036.jpeg",
+            "range": null,
+            "at": 277.796
+          },
+          {
+            "path": "/ts/s037.jpeg",
+            "range": null,
+            "at": 277.796
+          },
+          {
+            "path": "/ts/s038.jpeg",
+            "range": null,
+            "at": 277.812
+          },
+          {
+            "path": "/ts/s039.jpeg",
+            "range": null,
+            "at": 277.828
+          },
+          {
+            "path": "/ts/s040.jpeg",
+            "range": null,
+            "at": 277.843
+          },
+          {
+            "path": "/ts/s041.jpeg",
+            "range": null,
+            "at": 277.843
+          },
+          {
+            "path": "/ts/s042.jpeg",
+            "range": null,
+            "at": 277.859
+          },
+          {
+            "path": "/ts/s043.jpeg",
+            "range": null,
+            "at": 277.875
+          },
+          {
+            "path": "/ts/s044.jpeg",
+            "range": null,
+            "at": 277.89
+          },
+          {
+            "path": "/ts/s045.jpeg",
+            "range": null,
+            "at": 277.906
+          },
+          {
+            "path": "/ts/s046.jpeg",
+            "range": null,
+            "at": 277.906
+          },
+          {
+            "path": "/ts/s047.jpeg",
+            "range": null,
+            "at": 277.921
+          }
+        ]
+      }
+    },
+    {
+      "name": "fmp4: pause preserves cache and resume restores playable download",
+      "actual": true
+    },
+    {
+      "name": "fmp4: thumbnail leaves playback position, pause and speed unchanged",
+      "actual": true
+    },
+    {
+      "name": "fmp4: unfinished download decodes, exposes full duration and seeks to 80%",
+      "actual": {
+        "kind": "player_session",
+        "active": true,
+        "title": "fmp4.mp4",
+        "task_id": "task-2",
+        "status": "PAUSED",
+        "paused": true,
+        "speed": 1.5,
+        "position_seconds": 48.0,
+        "duration_seconds": 60.0,
+        "position_available": true,
+        "audio_tracks": 1,
+        "subtitle_tracks": 0,
+        "volume": 100.0,
+        "muted": false,
+        "buffered_end_seconds": 48.0,
+        "buffering": false,
+        "tracks": [
+          {
+            "id": "1",
+            "kind": "audio",
+            "title": "",
+            "language": "",
+            "selected": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "fmp4: same-window final switch; complete decode; cache removed; delete preserves output",
+      "actual": {
+        "window": [
+          {
+            "hwnd": 393838,
+            "pid": 1276,
+            "rect": [
+              254,
+              85,
+              959,
+              482
+            ]
+          }
+        ],
+        "final": {
+          "kind": "player_session",
+          "active": true,
+          "title": "fmp4.mp4",
+          "task_id": "task-2",
+          "status": "PAUSED",
+          "paused": true,
+          "speed": 1.5,
+          "position_seconds": 48.421,
+          "duration_seconds": 60.021333,
+          "position_available": true,
+          "audio_tracks": 1,
+          "subtitle_tracks": 0,
+          "volume": 100.0,
+          "muted": false,
+          "buffered_end_seconds": 49.221406,
+          "buffering": false,
+          "tracks": [
+            {
+              "id": "1",
+              "kind": "audio",
+              "title": "",
+              "language": "",
+              "selected": true
+            }
+          ]
+        },
+        "output_sha256": "28bf627f1638f9cc1200837552eb6b55350bfdf7b649f4d7f07d4be386f065f3",
+        "origin_requests": [
+          {
+            "path": "/fmp4/index.m3u8",
+            "range": null,
+            "at": 280.156
+          },
+          {
+            "path": "/fmp4/init.mp4",
+            "range": null,
+            "at": 280.156
+          },
+          {
+            "path": "/fmp4/s000.m4s",
+            "range": null,
+            "at": 280.484
+          },
+          {
+            "path": "/fmp4/s001.m4s",
+            "range": null,
+            "at": 281.156
+          },
+          {
+            "path": "/fmp4/index.m3u8",
+            "range": null,
+            "at": 281.39
+          },
+          {
+            "path": "/fmp4/s001.m4s",
+            "range": null,
+            "at": 281.687
+          },
+          {
+            "path": "/fmp4/s002.m4s",
+            "range": null,
+            "at": 282.375
+          },
+          {
+            "path": "/fmp4/s003.m4s",
+            "range": null,
+            "at": 283.046
+          },
+          {
+            "path": "/fmp4/s004.m4s",
+            "range": null,
+            "at": 283.734
+          },
+          {
+            "path": "/fmp4/s005.m4s",
+            "range": null,
+            "at": 284.421
+          },
+          {
+            "path": "/fmp4/s048.m4s",
+            "range": null,
+            "at": 285.109
+          },
+          {
+            "path": "/fmp4/s049.m4s",
+            "range": null,
+            "at": 285.765
+          },
+          {
+            "path": "/fmp4/s050.m4s",
+            "range": null,
+            "at": 286.421
+          },
+          {
+            "path": "/fmp4/s051.m4s",
+            "range": null,
+            "at": 287.093
+          },
+          {
+            "path": "/fmp4/s052.m4s",
+            "range": null,
+            "at": 287.765
+          },
+          {
+            "path": "/fmp4/s053.m4s",
+            "range": null,
+            "at": 287.765
+          },
+          {
+            "path": "/fmp4/s054.m4s",
+            "range": null,
+            "at": 287.781
+          },
+          {
+            "path": "/fmp4/s055.m4s",
+            "range": null,
+            "at": 287.796
+          },
+          {
+            "path": "/fmp4/s056.m4s",
+            "range": null,
+            "at": 287.812
+          },
+          {
+            "path": "/fmp4/s057.m4s",
+            "range": null,
+            "at": 287.828
+          },
+          {
+            "path": "/fmp4/s058.m4s",
+            "range": null,
+            "at": 287.828
+          },
+          {
+            "path": "/fmp4/s059.m4s",
+            "range": null,
+            "at": 287.843
+          },
+          {
+            "path": "/fmp4/s006.m4s",
+            "range": null,
+            "at": 287.859
+          },
+          {
+            "path": "/fmp4/s007.m4s",
+            "range": null,
+            "at": 287.89
+          },
+          {
+            "path": "/fmp4/s008.m4s",
+            "range": null,
+            "at": 287.89
+          },
+          {
+            "path": "/fmp4/s009.m4s",
+            "range": null,
+            "at": 287.906
+          },
+          {
+            "path": "/fmp4/s010.m4s",
+            "range": null,
+            "at": 287.921
+          },
+          {
+            "path": "/fmp4/s011.m4s",
+            "range": null,
+            "at": 287.937
+          },
+          {
+            "path": "/fmp4/s012.m4s",
+            "range": null,
+            "at": 287.937
+          },
+          {
+            "path": "/fmp4/s013.m4s",
+            "range": null,
+            "at": 287.953
+          },
+          {
+            "path": "/fmp4/s014.m4s",
+            "range": null,
+            "at": 287.968
+          },
+          {
+            "path": "/fmp4/s015.m4s",
+            "range": null,
+            "at": 287.984
+          },
+          {
+            "path": "/fmp4/s016.m4s",
+            "range": null,
+            "at": 288.0
+          },
+          {
+            "path": "/fmp4/s017.m4s",
+            "range": null,
+            "at": 288.015
+          },
+          {
+            "path": "/fmp4/s018.m4s",
+            "range": null,
+            "at": 288.031
+          },
+          {
+            "path": "/fmp4/s019.m4s",
+            "range": null,
+            "at": 288.046
+          },
+          {
+            "path": "/fmp4/s020.m4s",
+            "range": null,
+            "at": 288.062
+          },
+          {
+            "path": "/fmp4/s021.m4s",
+            "range": null,
+            "at": 288.078
+          },
+          {
+            "path": "/fmp4/s022.m4s",
+            "range": null,
+            "at": 288.093
+          },
+          {
+            "path": "/fmp4/s023.m4s",
+            "range": null,
+            "at": 288.109
+          },
+          {
+            "path": "/fmp4/s024.m4s",
+            "range": null,
+            "at": 288.125
+          },
+          {
+            "path": "/fmp4/s025.m4s",
+            "range": null,
+            "at": 288.14
+          },
+          {
+            "path": "/fmp4/s026.m4s",
+            "range": null,
+            "at": 288.156
+          },
+          {
+            "path": "/fmp4/s027.m4s",
+            "range": null,
+            "at": 288.171
+          },
+          {
+            "path": "/fmp4/s028.m4s",
+            "range": null,
+            "at": 288.171
+          },
+          {
+            "path": "/fmp4/s029.m4s",
+            "range": null,
+            "at": 288.187
+          },
+          {
+            "path": "/fmp4/s030.m4s",
+            "range": null,
+            "at": 288.203
+          },
+          {
+            "path": "/fmp4/s031.m4s",
+            "range": null,
+            "at": 288.203
+          },
+          {
+            "path": "/fmp4/s032.m4s",
+            "range": null,
+            "at": 288.218
+          },
+          {
+            "path": "/fmp4/s033.m4s",
+            "range": null,
+            "at": 288.234
+          },
+          {
+            "path": "/fmp4/s034.m4s",
+            "range": null,
+            "at": 288.25
+          },
+          {
+            "path": "/fmp4/s035.m4s",
+            "range": null,
+            "at": 288.25
+          },
+          {
+            "path": "/fmp4/s036.m4s",
+            "range": null,
+            "at": 288.265
+          },
+          {
+            "path": "/fmp4/s037.m4s",
+            "range": null,
+            "at": 288.281
+          },
+          {
+            "path": "/fmp4/s038.m4s",
+            "range": null,
+            "at": 288.296
+          },
+          {
+            "path": "/fmp4/s039.m4s",
+            "range": null,
+            "at": 288.296
+          },
+          {
+            "path": "/fmp4/s040.m4s",
+            "range": null,
+            "at": 288.312
+          },
+          {
+            "path": "/fmp4/s041.m4s",
+            "range": null,
+            "at": 288.328
+          },
+          {
+            "path": "/fmp4/s042.m4s",
+            "range": null,
+            "at": 288.343
+          },
+          {
+            "path": "/fmp4/s043.m4s",
+            "range": null,
+            "at": 288.343
+          },
+          {
+            "path": "/fmp4/s044.m4s",
+            "range": null,
+            "at": 288.359
+          },
+          {
+            "path": "/fmp4/s045.m4s",
+            "range": null,
+            "at": 288.39
+          },
+          {
+            "path": "/fmp4/s046.m4s",
+            "range": null,
+            "at": 288.406
+          },
+          {
+            "path": "/fmp4/s047.m4s",
+            "range": null,
+            "at": 288.421
+          }
+        ]
+      }
+    },
+    {
+      "name": "aes: pause preserves cache and resume restores playable download",
+      "actual": true
+    },
+    {
+      "name": "aes: thumbnail leaves playback position, pause and speed unchanged",
+      "actual": true
+    },
+    {
+      "name": "aes: unfinished download decodes, exposes full duration and seeks to 80%",
+      "actual": {
+        "kind": "player_session",
+        "active": true,
+        "title": "aes.mp4",
+        "task_id": "task-3",
+        "status": "PAUSED",
+        "paused": true,
+        "speed": 1.5,
+        "position_seconds": 48.0,
+        "duration_seconds": 60.0,
+        "position_available": true,
+        "audio_tracks": 1,
+        "subtitle_tracks": 0,
+        "volume": 100.0,
+        "muted": false,
+        "buffered_end_seconds": 48.0,
+        "buffering": false,
+        "tracks": [
+          {
+            "id": "1",
+            "kind": "audio",
+            "title": "",
+            "language": "",
+            "selected": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "aes: same-window final switch; complete decode; cache removed; delete preserves output",
+      "actual": {
+        "window": [
+          {
+            "hwnd": 459374,
+            "pid": 5964,
+            "rect": [
+              254,
+              85,
+              959,
+              482
+            ]
+          }
+        ],
+        "final": {
+          "kind": "player_session",
+          "active": true,
+          "title": "aes.mp4",
+          "task_id": "task-3",
+          "status": "PAUSED",
+          "paused": true,
+          "speed": 1.5,
+          "position_seconds": 48.381333,
+          "duration_seconds": 60.032,
+          "position_available": true,
+          "audio_tracks": 1,
+          "subtitle_tracks": 0,
+          "volume": 100.0,
+          "muted": false,
+          "buffered_end_seconds": 49.706667,
+          "buffering": false,
+          "tracks": [
+            {
+              "id": "1",
+              "kind": "audio",
+              "title": "",
+              "language": "",
+              "selected": true
+            }
+          ]
+        },
+        "output_sha256": "a9d51d6c417457498bef47b7495374e4efe53336eb5dfcc38c95248c99b5941f",
+        "origin_requests": [
+          {
+            "path": "/aes/index.m3u8",
+            "range": null,
+            "at": 290.468
+          },
+          {
+            "path": "/aes/key.bin",
+            "range": null,
+            "at": 290.468
+          },
+          {
+            "path": "/aes/s000.jpeg",
+            "range": null,
+            "at": 290.5
+          },
+          {
+            "path": "/aes/s001.jpeg",
+            "range": null,
+            "at": 291.187
+          },
+          {
+            "path": "/aes/index.m3u8",
+            "range": null,
+            "at": 291.421
+          },
+          {
+            "path": "/aes/key.bin",
+            "range": null,
+            "at": 291.437
+          },
+          {
+            "path": "/aes/s001.jpeg",
+            "range": null,
+            "at": 291.468
+          },
+          {
+            "path": "/aes/s002.jpeg",
+            "range": null,
+            "at": 292.187
+          },
+          {
+            "path": "/aes/s003.jpeg",
+            "range": null,
+            "at": 292.875
+          },
+          {
+            "path": "/aes/s004.jpeg",
+            "range": null,
+            "at": 293.562
+          },
+          {
+            "path": "/aes/s005.jpeg",
+            "range": null,
+            "at": 294.234
+          },
+          {
+            "path": "/aes/s048.jpeg",
+            "range": null,
+            "at": 294.921
+          },
+          {
+            "path": "/aes/s049.jpeg",
+            "range": null,
+            "at": 295.593
+          },
+          {
+            "path": "/aes/s050.jpeg",
+            "range": null,
+            "at": 296.25
+          },
+          {
+            "path": "/aes/s051.jpeg",
+            "range": null,
+            "at": 296.937
+          },
+          {
+            "path": "/aes/s052.jpeg",
+            "range": null,
+            "at": 296.953
+          },
+          {
+            "path": "/aes/s053.jpeg",
+            "range": null,
+            "at": 296.968
+          },
+          {
+            "path": "/aes/s054.jpeg",
+            "range": null,
+            "at": 296.984
+          },
+          {
+            "path": "/aes/s055.jpeg",
+            "range": null,
+            "at": 297.015
+          },
+          {
+            "path": "/aes/s056.jpeg",
+            "range": null,
+            "at": 297.031
+          },
+          {
+            "path": "/aes/s057.jpeg",
+            "range": null,
+            "at": 297.046
+          },
+          {
+            "path": "/aes/s058.jpeg",
+            "range": null,
+            "at": 297.078
+          },
+          {
+            "path": "/aes/s059.jpeg",
+            "range": null,
+            "at": 297.093
+          },
+          {
+            "path": "/aes/s006.jpeg",
+            "range": null,
+            "at": 297.125
+          },
+          {
+            "path": "/aes/s007.jpeg",
+            "range": null,
+            "at": 297.171
+          },
+          {
+            "path": "/aes/s008.jpeg",
+            "range": null,
+            "at": 297.187
+          },
+          {
+            "path": "/aes/s009.jpeg",
+            "range": null,
+            "at": 297.234
+          },
+          {
+            "path": "/aes/s010.jpeg",
+            "range": null,
+            "at": 297.265
+          },
+          {
+            "path": "/aes/s011.jpeg",
+            "range": null,
+            "at": 297.281
+          },
+          {
+            "path": "/aes/s012.jpeg",
+            "range": null,
+            "at": 297.296
+          },
+          {
+            "path": "/aes/s013.jpeg",
+            "range": null,
+            "at": 297.312
+          },
+          {
+            "path": "/aes/s014.jpeg",
+            "range": null,
+            "at": 297.343
+          },
+          {
+            "path": "/aes/s015.jpeg",
+            "range": null,
+            "at": 297.359
+          },
+          {
+            "path": "/aes/s016.jpeg",
+            "range": null,
+            "at": 297.375
+          },
+          {
+            "path": "/aes/s017.jpeg",
+            "range": null,
+            "at": 297.39
+          },
+          {
+            "path": "/aes/s018.jpeg",
+            "range": null,
+            "at": 297.421
+          },
+          {
+            "path": "/aes/s019.jpeg",
+            "range": null,
+            "at": 297.437
+          },
+          {
+            "path": "/aes/s020.jpeg",
+            "range": null,
+            "at": 297.453
+          },
+          {
+            "path": "/aes/s021.jpeg",
+            "range": null,
+            "at": 297.468
+          },
+          {
+            "path": "/aes/s022.jpeg",
+            "range": null,
+            "at": 297.484
+          },
+          {
+            "path": "/aes/s023.jpeg",
+            "range": null,
+            "at": 297.5
+          },
+          {
+            "path": "/aes/s024.jpeg",
+            "range": null,
+            "at": 297.515
+          },
+          {
+            "path": "/aes/s025.jpeg",
+            "range": null,
+            "at": 297.531
+          },
+          {
+            "path": "/aes/s026.jpeg",
+            "range": null,
+            "at": 297.562
+          },
+          {
+            "path": "/aes/s027.jpeg",
+            "range": null,
+            "at": 297.578
+          },
+          {
+            "path": "/aes/s028.jpeg",
+            "range": null,
+            "at": 297.609
+          },
+          {
+            "path": "/aes/s029.jpeg",
+            "range": null,
+            "at": 297.625
+          },
+          {
+            "path": "/aes/s030.jpeg",
+            "range": null,
+            "at": 297.656
+          },
+          {
+            "path": "/aes/s031.jpeg",
+            "range": null,
+            "at": 297.671
+          },
+          {
+            "path": "/aes/s032.jpeg",
+            "range": null,
+            "at": 297.687
+          },
+          {
+            "path": "/aes/s033.jpeg",
+            "range": null,
+            "at": 297.718
+          },
+          {
+            "path": "/aes/s034.jpeg",
+            "range": null,
+            "at": 297.734
+          },
+          {
+            "path": "/aes/s035.jpeg",
+            "range": null,
+            "at": 297.75
+          },
+          {
+            "path": "/aes/s036.jpeg",
+            "range": null,
+            "at": 297.781
+          },
+          {
+            "path": "/aes/s037.jpeg",
+            "range": null,
+            "at": 297.796
+          },
+          {
+            "path": "/aes/s038.jpeg",
+            "range": null,
+            "at": 297.812
+          },
+          {
+            "path": "/aes/s039.jpeg",
+            "range": null,
+            "at": 297.843
+          },
+          {
+            "path": "/aes/s040.jpeg",
+            "range": null,
+            "at": 297.859
+          },
+          {
+            "path": "/aes/s041.jpeg",
+            "range": null,
+            "at": 297.875
+          },
+          {
+            "path": "/aes/s042.jpeg",
+            "range": null,
+            "at": 297.89
+          },
+          {
+            "path": "/aes/s043.jpeg",
+            "range": null,
+            "at": 297.906
+          },
+          {
+            "path": "/aes/s044.jpeg",
+            "range": null,
+            "at": 297.921
+          },
+          {
+            "path": "/aes/s045.jpeg",
+            "range": null,
+            "at": 297.937
+          },
+          {
+            "path": "/aes/s046.jpeg",
+            "range": null,
+            "at": 297.953
+          },
+          {
+            "path": "/aes/s047.jpeg",
+            "range": null,
+            "at": 297.968
+          }
+        ]
+      }
+    },
+    {
+      "name": "external: preview opens while audio tail is blocked and absent",
+      "actual": true
+    },
+    {
+      "name": "external: pause preserves cache and resume restores playable download",
+      "actual": true
+    },
+    {
+      "name": "external: thumbnail leaves playback position, pause and speed unchanged",
+      "actual": true
+    },
+    {
+      "name": "external: unfinished download decodes, exposes full duration and seeks to 80%",
+      "actual": {
+        "kind": "player_session",
+        "active": true,
+        "title": "external.mp4",
+        "task_id": "task-4",
+        "status": "PAUSED",
+        "paused": true,
+        "speed": 1.5,
+        "position_seconds": 48.0,
+        "duration_seconds": 60.0,
+        "position_available": true,
+        "audio_tracks": 0,
+        "subtitle_tracks": 0,
+        "volume": 100.0,
+        "muted": false,
+        "buffered_end_seconds": 48.0,
+        "buffering": false,
+        "tracks": []
+      }
+    },
+    {
+      "name": "external: same-window final switch; complete decode; cache removed; delete preserves output",
+      "actual": {
+        "window": [
+          {
+            "hwnd": 459224,
+            "pid": 1712,
+            "rect": [
+              254,
+              85,
+              959,
+              482
+            ]
+          }
+        ],
+        "final": {
+          "kind": "player_session",
+          "active": true,
+          "title": "external.mp4",
+          "task_id": "task-4",
+          "status": "PAUSED",
+          "paused": true,
+          "speed": 1.5,
+          "position_seconds": 48.36,
+          "duration_seconds": 60.032,
+          "position_available": true,
+          "audio_tracks": 1,
+          "subtitle_tracks": 0,
+          "volume": 100.0,
+          "muted": false,
+          "buffered_end_seconds": 49.52,
+          "buffering": false,
+          "tracks": [
+            {
+              "id": "1",
+              "kind": "audio",
+              "title": "",
+              "language": "",
+              "selected": false
+            }
+          ]
+        },
+        "output_sha256": "9ac341f1a2cfa6c5fc41975cb935167898096a11a50d8a1e4212c8249327be72",
+        "origin_requests": [
+          {
+            "path": "/external/index.m3u8",
+            "range": null,
+            "at": 300.156
+          },
+          {
+            "path": "/external/video.m3u8",
+            "range": null,
+            "at": 300.156
+          },
+          {
+            "path": "/external/audio.m3u8",
+            "range": null,
+            "at": 300.171
+          },
+          {
+            "path": "/external/v000.ts",
+            "range": null,
+            "at": 300.203
+          },
+          {
+            "path": "/external/a000.ts",
+            "range": null,
+            "at": 300.89
+          },
+          {
+            "path": "/external/v001.ts",
+            "range": null,
+            "at": 300.921
+          },
+          {
+            "path": "/external/index.m3u8",
+            "range": null,
+            "at": 301.156
+          },
+          {
+            "path": "/external/video.m3u8",
+            "range": null,
+            "at": 301.171
+          },
+          {
+            "path": "/external/audio.m3u8",
+            "range": null,
+            "at": 301.171
+          },
+          {
+            "path": "/external/v001.ts",
+            "range": null,
+            "at": 301.234
+          },
+          {
+            "path": "/external/a001.ts",
+            "range": null,
+            "at": 301.921
+          },
+          {
+            "path": "/external/v002.ts",
+            "range": null,
+            "at": 301.937
+          },
+          {
+            "path": "/external/a002.ts",
+            "range": null,
+            "at": 302.625
+          },
+          {
+            "path": "/external/v003.ts",
+            "range": null,
+            "at": 302.64
+          },
+          {
+            "path": "/external/a003.ts",
+            "range": null,
+            "at": 303.312
+          },
+          {
+            "path": "/external/v004.ts",
+            "range": null,
+            "at": 303.328
+          },
+          {
+            "path": "/external/v012.ts",
+            "range": null,
+            "at": 304.0
+          },
+          {
+            "path": "/external/a012.ts",
+            "range": null,
+            "at": 304.671
+          },
+          {
+            "path": "/external/v013.ts",
+            "range": null,
+            "at": 304.687
+          },
+          {
+            "path": "/external/a013.ts",
+            "range": null,
+            "at": 305.343
+          },
+          {
+            "path": "/external/v014.ts",
+            "range": null,
+            "at": 305.359
+          },
+          {
+            "path": "/external/v048.ts",
+            "range": null,
+            "at": 306.015
+          },
+          {
+            "path": "/external/a048.ts",
+            "range": null,
+            "at": 306.687
+          },
+          {
+            "path": "/external/v049.ts",
+            "range": null,
+            "at": 306.703
+          },
+          {
+            "path": "/external/a049.ts",
+            "range": null,
+            "at": 307.375
+          },
+          {
+            "path": "/external/v050.ts",
+            "range": null,
+            "at": 307.39
+          },
+          {
+            "path": "/external/a050.ts",
+            "range": null,
+            "at": 308.062
+          },
+          {
+            "path": "/external/v051.ts",
+            "range": null,
+            "at": 308.078
+          },
+          {
+            "path": "/external/a051.ts",
+            "range": null,
+            "at": 308.093
+          },
+          {
+            "path": "/external/v052.ts",
+            "range": null,
+            "at": 308.109
+          },
+          {
+            "path": "/external/a052.ts",
+            "range": null,
+            "at": 308.14
+          },
+          {
+            "path": "/external/v053.ts",
+            "range": null,
+            "at": 308.14
+          },
+          {
+            "path": "/external/a053.ts",
+            "range": null,
+            "at": 308.156
+          },
+          {
+            "path": "/external/v054.ts",
+            "range": null,
+            "at": 308.171
+          },
+          {
+            "path": "/external/a054.ts",
+            "range": null,
+            "at": 308.187
+          },
+          {
+            "path": "/external/v055.ts",
+            "range": null,
+            "at": 308.203
+          },
+          {
+            "path": "/external/a055.ts",
+            "range": null,
+            "at": 308.218
+          },
+          {
+            "path": "/external/v056.ts",
+            "range": null,
+            "at": 308.234
+          },
+          {
+            "path": "/external/a056.ts",
+            "range": null,
+            "at": 308.25
+          },
+          {
+            "path": "/external/v057.ts",
+            "range": null,
+            "at": 308.265
+          },
+          {
+            "path": "/external/a057.ts",
+            "range": null,
+            "at": 308.281
+          },
+          {
+            "path": "/external/v058.ts",
+            "range": null,
+            "at": 308.296
+          },
+          {
+            "path": "/external/a058.ts",
+            "range": null,
+            "at": 308.312
+          },
+          {
+            "path": "/external/v059.ts",
+            "range": null,
+            "at": 308.328
+          },
+          {
+            "path": "/external/a059.ts",
+            "range": null,
+            "at": 308.343
+          },
+          {
+            "path": "/external/a060.ts",
+            "range": null,
+            "at": 308.359
+          },
+          {
+            "path": "/external/a004.ts",
+            "range": null,
+            "at": 308.359
+          },
+          {
+            "path": "/external/v005.ts",
+            "range": null,
+            "at": 308.39
+          },
+          {
+            "path": "/external/a005.ts",
+            "range": null,
+            "at": 308.39
+          },
+          {
+            "path": "/external/v006.ts",
+            "range": null,
+            "at": 308.406
+          },
+          {
+            "path": "/external/a006.ts",
+            "range": null,
+            "at": 308.421
+          },
+          {
+            "path": "/external/v007.ts",
+            "range": null,
+            "at": 308.421
+          },
+          {
+            "path": "/external/a007.ts",
+            "range": null,
+            "at": 308.437
+          },
+          {
+            "path": "/external/v008.ts",
+            "range": null,
+            "at": 308.453
+          },
+          {
+            "path": "/external/a008.ts",
+            "range": null,
+            "at": 308.468
+          },
+          {
+            "path": "/external/v009.ts",
+            "range": null,
+            "at": 308.468
+          },
+          {
+            "path": "/external/a009.ts",
+            "range": null,
+            "at": 308.484
+          },
+          {
+            "path": "/external/v010.ts",
+            "range": null,
+            "at": 308.5
+          },
+          {
+            "path": "/external/a010.ts",
+            "range": null,
+            "at": 308.515
+          },
+          {
+            "path": "/external/v011.ts",
+            "range": null,
+            "at": 308.515
+          },
+          {
+            "path": "/external/a011.ts",
+            "range": null,
+            "at": 308.531
+          },
+          {
+            "path": "/external/a014.ts",
+            "range": null,
+            "at": 308.531
+          },
+          {
+            "path": "/external/v015.ts",
+            "range": null,
+            "at": 308.546
+          },
+          {
+            "path": "/external/a015.ts",
+            "range": null,
+            "at": 308.546
+          },
+          {
+            "path": "/external/v016.ts",
+            "range": null,
+            "at": 308.562
+          },
+          {
+            "path": "/external/a016.ts",
+            "range": null,
+            "at": 308.578
+          },
+          {
+            "path": "/external/v017.ts",
+            "range": null,
+            "at": 308.578
+          },
+          {
+            "path": "/external/a017.ts",
+            "range": null,
+            "at": 308.593
+          },
+          {
+            "path": "/external/v018.ts",
+            "range": null,
+            "at": 308.609
+          },
+          {
+            "path": "/external/a018.ts",
+            "range": null,
+            "at": 308.609
+          },
+          {
+            "path": "/external/v019.ts",
+            "range": null,
+            "at": 308.625
+          },
+          {
+            "path": "/external/a019.ts",
+            "range": null,
+            "at": 308.64
+          },
+          {
+            "path": "/external/v020.ts",
+            "range": null,
+            "at": 308.64
+          },
+          {
+            "path": "/external/a020.ts",
+            "range": null,
+            "at": 308.656
+          },
+          {
+            "path": "/external/v021.ts",
+            "range": null,
+            "at": 308.671
+          },
+          {
+            "path": "/external/a021.ts",
+            "range": null,
+            "at": 308.687
+          },
+          {
+            "path": "/external/v022.ts",
+            "range": null,
+            "at": 308.703
+          },
+          {
+            "path": "/external/a022.ts",
+            "range": null,
+            "at": 308.718
+          },
+          {
+            "path": "/external/v023.ts",
+            "range": null,
+            "at": 308.718
+          },
+          {
+            "path": "/external/a023.ts",
+            "range": null,
+            "at": 308.734
+          },
+          {
+            "path": "/external/v024.ts",
+            "range": null,
+            "at": 308.75
+          },
+          {
+            "path": "/external/a024.ts",
+            "range": null,
+            "at": 308.75
+          },
+          {
+            "path": "/external/v025.ts",
+            "range": null,
+            "at": 308.765
+          },
+          {
+            "path": "/external/a025.ts",
+            "range": null,
+            "at": 308.781
+          },
+          {
+            "path": "/external/v026.ts",
+            "range": null,
+            "at": 308.796
+          },
+          {
+            "path": "/external/a026.ts",
+            "range": null,
+            "at": 308.796
+          },
+          {
+            "path": "/external/v027.ts",
+            "range": null,
+            "at": 308.812
+          },
+          {
+            "path": "/external/a027.ts",
+            "range": null,
+            "at": 308.828
+          },
+          {
+            "path": "/external/v028.ts",
+            "range": null,
+            "at": 308.843
+          },
+          {
+            "path": "/external/a028.ts",
+            "range": null,
+            "at": 308.843
+          },
+          {
+            "path": "/external/v029.ts",
+            "range": null,
+            "at": 308.859
+          },
+          {
+            "path": "/external/a029.ts",
+            "range": null,
+            "at": 308.875
+          },
+          {
+            "path": "/external/v030.ts",
+            "range": null,
+            "at": 308.89
+          },
+          {
+            "path": "/external/a030.ts",
+            "range": null,
+            "at": 308.906
+          },
+          {
+            "path": "/external/v031.ts",
+            "range": null,
+            "at": 308.906
+          },
+          {
+            "path": "/external/a031.ts",
+            "range": null,
+            "at": 308.921
+          },
+          {
+            "path": "/external/v032.ts",
+            "range": null,
+            "at": 308.937
+          },
+          {
+            "path": "/external/a032.ts",
+            "range": null,
+            "at": 308.953
+          },
+          {
+            "path": "/external/v033.ts",
+            "range": null,
+            "at": 308.968
+          },
+          {
+            "path": "/external/a033.ts",
+            "range": null,
+            "at": 308.968
+          },
+          {
+            "path": "/external/v034.ts",
+            "range": null,
+            "at": 308.984
+          },
+          {
+            "path": "/external/a034.ts",
+            "range": null,
+            "at": 309.0
+          },
+          {
+            "path": "/external/v035.ts",
+            "range": null,
+            "at": 309.0
+          },
+          {
+            "path": "/external/a035.ts",
+            "range": null,
+            "at": 309.015
+          },
+          {
+            "path": "/external/v036.ts",
+            "range": null,
+            "at": 309.031
+          },
+          {
+            "path": "/external/a036.ts",
+            "range": null,
+            "at": 309.046
+          },
+          {
+            "path": "/external/v037.ts",
+            "range": null,
+            "at": 309.062
+          },
+          {
+            "path": "/external/a037.ts",
+            "range": null,
+            "at": 309.078
+          },
+          {
+            "path": "/external/v038.ts",
+            "range": null,
+            "at": 309.093
+          },
+          {
+            "path": "/external/a038.ts",
+            "range": null,
+            "at": 309.109
+          },
+          {
+            "path": "/external/v039.ts",
+            "range": null,
+            "at": 309.125
+          },
+          {
+            "path": "/external/a039.ts",
+            "range": null,
+            "at": 309.14
+          },
+          {
+            "path": "/external/v040.ts",
+            "range": null,
+            "at": 309.156
+          },
+          {
+            "path": "/external/a040.ts",
+            "range": null,
+            "at": 309.171
+          },
+          {
+            "path": "/external/v041.ts",
+            "range": null,
+            "at": 309.187
+          },
+          {
+            "path": "/external/a041.ts",
+            "range": null,
+            "at": 309.203
+          },
+          {
+            "path": "/external/v042.ts",
+            "range": null,
+            "at": 309.218
+          },
+          {
+            "path": "/external/a042.ts",
+            "range": null,
+            "at": 309.234
+          },
+          {
+            "path": "/external/v043.ts",
+            "range": null,
+            "at": 309.234
+          },
+          {
+            "path": "/external/a043.ts",
+            "range": null,
+            "at": 309.25
+          },
+          {
+            "path": "/external/v044.ts",
+            "range": null,
+            "at": 309.265
+          },
+          {
+            "path": "/external/a044.ts",
+            "range": null,
+            "at": 309.265
+          },
+          {
+            "path": "/external/v045.ts",
+            "range": null,
+            "at": 309.281
+          },
+          {
+            "path": "/external/a045.ts",
+            "range": null,
+            "at": 309.296
+          },
+          {
+            "path": "/external/v046.ts",
+            "range": null,
+            "at": 309.312
+          },
+          {
+            "path": "/external/a046.ts",
+            "range": null,
+            "at": 309.328
+          },
+          {
+            "path": "/external/v047.ts",
+            "range": null,
+            "at": 309.328
+          },
+          {
+            "path": "/external/a047.ts",
+            "range": null,
+            "at": 309.343
+          }
+        ]
+      }
+    },
+    {
+      "name": "dash: preview opens while audio tail is blocked and absent",
+      "actual": true
+    },
+    {
+      "name": "dash: pause preserves cache and resume restores playable download",
+      "actual": true
+    },
+    {
+      "name": "dash: thumbnail leaves playback position, pause and speed unchanged",
+      "actual": true
+    },
+    {
+      "name": "dash: unfinished download decodes, exposes full duration and seeks to 80%",
+      "actual": {
+        "kind": "player_session",
+        "active": true,
+        "title": "dash.mp4",
+        "task_id": "task-5",
+        "status": "PAUSED",
+        "paused": true,
+        "speed": 1.5,
+        "position_seconds": 48.0,
+        "duration_seconds": 60.0,
+        "position_available": true,
+        "audio_tracks": 1,
+        "subtitle_tracks": 0,
+        "volume": 100.0,
+        "muted": false,
+        "buffered_end_seconds": 48.0,
+        "buffering": false,
+        "tracks": [
+          {
+            "id": "1",
+            "kind": "audio",
+            "title": "Audio",
+            "language": "",
+            "selected": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "dash: same-window final switch; complete decode; cache removed; delete preserves output",
+      "actual": {
+        "window": [
+          {
+            "hwnd": 590446,
+            "pid": 3012,
+            "rect": [
+              254,
+              85,
+              959,
+              482
+            ]
+          }
+        ],
+        "final": {
+          "kind": "player_session",
+          "active": true,
+          "title": "dash.mp4",
+          "task_id": "task-5",
+          "status": "PAUSED",
+          "paused": true,
+          "speed": 1.5,
+          "position_seconds": 48.32,
+          "duration_seconds": 60.021333,
+          "position_available": true,
+          "audio_tracks": 1,
+          "subtitle_tracks": 0,
+          "volume": 100.0,
+          "muted": false,
+          "buffered_end_seconds": 49.642667,
+          "buffering": false,
+          "tracks": [
+            {
+              "id": "1",
+              "kind": "audio",
+              "title": "",
+              "language": "",
+              "selected": true
+            }
+          ]
+        },
+        "output_sha256": "52d9f9f34307532a8458a3961b8d52a1925623f3d225bed9bc46d0783000a368",
+        "origin_requests": [
+          {
+            "path": "/dash/index.mpd",
+            "range": null,
+            "at": 312.171
+          },
+          {
+            "path": "/dash/init-stream0.m4s",
+            "range": null,
+            "at": 312.187
+          },
+          {
+            "path": "/dash/init-stream1.m4s",
+            "range": null,
+            "at": 312.218
+          },
+          {
+            "path": "/dash/chunk-stream0-00001.m4s",
+            "range": null,
+            "at": 312.25
+          },
+          {
+            "path": "/dash/chunk-stream1-00001.m4s",
+            "range": null,
+            "at": 312.921
+          },
+          {
+            "path": "/dash/chunk-stream1-00002.m4s",
+            "range": null,
+            "at": 312.953
+          },
+          {
+            "path": "/dash/index.mpd",
+            "range": null,
+            "at": 313.093
+          },
+          {
+            "path": "/dash/chunk-stream1-00002.m4s",
+            "range": null,
+            "at": 313.203
+          },
+          {
+            "path": "/dash/chunk-stream0-00002.m4s",
+            "range": null,
+            "at": 313.234
+          },
+          {
+            "path": "/dash/chunk-stream1-00003.m4s",
+            "range": null,
+            "at": 313.921
+          },
+          {
+            "path": "/dash/chunk-stream0-00003.m4s",
+            "range": null,
+            "at": 313.953
+          },
+          {
+            "path": "/dash/chunk-stream1-00004.m4s",
+            "range": null,
+            "at": 314.625
+          },
+          {
+            "path": "/dash/chunk-stream0-00004.m4s",
+            "range": null,
+            "at": 314.656
+          },
+          {
+            "path": "/dash/chunk-stream1-00005.m4s",
+            "range": null,
+            "at": 315.343
+          },
+          {
+            "path": "/dash/chunk-stream0-00005.m4s",
+            "range": null,
+            "at": 315.375
+          },
+          {
+            "path": "/dash/chunk-stream1-00006.m4s",
+            "range": null,
+            "at": 316.046
+          },
+          {
+            "path": "/dash/chunk-stream0-00006.m4s",
+            "range": null,
+            "at": 316.078
+          },
+          {
+            "path": "/dash/chunk-stream1-00047.m4s",
+            "range": null,
+            "at": 316.765
+          },
+          {
+            "path": "/dash/chunk-stream0-00048.m4s",
+            "range": null,
+            "at": 316.796
+          },
+          {
+            "path": "/dash/chunk-stream1-00048.m4s",
+            "range": null,
+            "at": 317.484
+          },
+          {
+            "path": "/dash/chunk-stream0-00049.m4s",
+            "range": null,
+            "at": 317.5
+          },
+          {
+            "path": "/dash/chunk-stream1-00049.m4s",
+            "range": null,
+            "at": 318.187
+          },
+          {
+            "path": "/dash/chunk-stream0-00050.m4s",
+            "range": null,
+            "at": 318.203
+          },
+          {
+            "path": "/dash/chunk-stream1-00050.m4s",
+            "range": null,
+            "at": 318.875
+          },
+          {
+            "path": "/dash/chunk-stream0-00051.m4s",
+            "range": null,
+            "at": 318.906
+          },
+          {
+            "path": "/dash/chunk-stream1-00051.m4s",
+            "range": null,
+            "at": 319.578
+          },
+          {
+            "path": "/dash/chunk-stream0-00052.m4s",
+            "range": null,
+            "at": 319.609
+          },
+          {
+            "path": "/dash/chunk-stream1-00052.m4s",
+            "range": null,
+            "at": 320.296
+          },
+          {
+            "path": "/dash/chunk-stream0-00053.m4s",
+            "range": null,
+            "at": 320.312
+          },
+          {
+            "path": "/dash/chunk-stream1-00053.m4s",
+            "range": null,
+            "at": 320.343
+          },
+          {
+            "path": "/dash/chunk-stream0-00054.m4s",
+            "range": null,
+            "at": 320.359
+          },
+          {
+            "path": "/dash/chunk-stream1-00054.m4s",
+            "range": null,
+            "at": 320.39
+          },
+          {
+            "path": "/dash/chunk-stream0-00055.m4s",
+            "range": null,
+            "at": 320.406
+          },
+          {
+            "path": "/dash/chunk-stream1-00055.m4s",
+            "range": null,
+            "at": 320.421
+          },
+          {
+            "path": "/dash/chunk-stream0-00056.m4s",
+            "range": null,
+            "at": 320.453
+          },
+          {
+            "path": "/dash/chunk-stream1-00056.m4s",
+            "range": null,
+            "at": 320.468
+          },
+          {
+            "path": "/dash/chunk-stream0-00057.m4s",
+            "range": null,
+            "at": 320.484
+          },
+          {
+            "path": "/dash/chunk-stream1-00057.m4s",
+            "range": null,
+            "at": 320.515
+          },
+          {
+            "path": "/dash/chunk-stream0-00058.m4s",
+            "range": null,
+            "at": 320.531
+          },
+          {
+            "path": "/dash/chunk-stream1-00058.m4s",
+            "range": null,
+            "at": 320.562
+          },
+          {
+            "path": "/dash/chunk-stream0-00059.m4s",
+            "range": null,
+            "at": 320.578
+          },
+          {
+            "path": "/dash/chunk-stream1-00059.m4s",
+            "range": null,
+            "at": 320.609
+          },
+          {
+            "path": "/dash/chunk-stream0-00060.m4s",
+            "range": null,
+            "at": 320.625
+          },
+          {
+            "path": "/dash/chunk-stream1-00060.m4s",
+            "range": null,
+            "at": 320.64
+          },
+          {
+            "path": "/dash/chunk-stream1-00007.m4s",
+            "range": null,
+            "at": 320.656
+          },
+          {
+            "path": "/dash/chunk-stream0-00007.m4s",
+            "range": null,
+            "at": 320.687
+          },
+          {
+            "path": "/dash/chunk-stream1-00008.m4s",
+            "range": null,
+            "at": 320.703
+          },
+          {
+            "path": "/dash/chunk-stream0-00008.m4s",
+            "range": null,
+            "at": 320.734
+          },
+          {
+            "path": "/dash/chunk-stream1-00009.m4s",
+            "range": null,
+            "at": 320.781
+          },
+          {
+            "path": "/dash/chunk-stream0-00009.m4s",
+            "range": null,
+            "at": 320.796
+          },
+          {
+            "path": "/dash/chunk-stream0-00010.m4s",
+            "range": null,
+            "at": 320.812
+          },
+          {
+            "path": "/dash/chunk-stream1-00010.m4s",
+            "range": null,
+            "at": 320.828
+          },
+          {
+            "path": "/dash/chunk-stream0-00011.m4s",
+            "range": null,
+            "at": 320.843
+          },
+          {
+            "path": "/dash/chunk-stream1-00011.m4s",
+            "range": null,
+            "at": 320.859
+          },
+          {
+            "path": "/dash/chunk-stream0-00012.m4s",
+            "range": null,
+            "at": 320.875
+          },
+          {
+            "path": "/dash/chunk-stream1-00012.m4s",
+            "range": null,
+            "at": 320.906
+          },
+          {
+            "path": "/dash/chunk-stream0-00013.m4s",
+            "range": null,
+            "at": 320.921
+          },
+          {
+            "path": "/dash/chunk-stream1-00013.m4s",
+            "range": null,
+            "at": 320.937
+          },
+          {
+            "path": "/dash/chunk-stream0-00014.m4s",
+            "range": null,
+            "at": 320.968
+          },
+          {
+            "path": "/dash/chunk-stream1-00014.m4s",
+            "range": null,
+            "at": 320.984
+          },
+          {
+            "path": "/dash/chunk-stream0-00015.m4s",
+            "range": null,
+            "at": 321.0
+          },
+          {
+            "path": "/dash/chunk-stream1-00015.m4s",
+            "range": null,
+            "at": 321.015
+          },
+          {
+            "path": "/dash/chunk-stream0-00016.m4s",
+            "range": null,
+            "at": 321.031
+          },
+          {
+            "path": "/dash/chunk-stream1-00016.m4s",
+            "range": null,
+            "at": 321.062
+          },
+          {
+            "path": "/dash/chunk-stream1-00017.m4s",
+            "range": null,
+            "at": 321.093
+          },
+          {
+            "path": "/dash/chunk-stream0-00017.m4s",
+            "range": null,
+            "at": 321.109
+          },
+          {
+            "path": "/dash/chunk-stream0-00018.m4s",
+            "range": null,
+            "at": 321.14
+          },
+          {
+            "path": "/dash/chunk-stream1-00018.m4s",
+            "range": null,
+            "at": 321.171
+          },
+          {
+            "path": "/dash/chunk-stream0-00019.m4s",
+            "range": null,
+            "at": 321.187
+          },
+          {
+            "path": "/dash/chunk-stream1-00019.m4s",
+            "range": null,
+            "at": 321.203
+          },
+          {
+            "path": "/dash/chunk-stream0-00020.m4s",
+            "range": null,
+            "at": 321.234
+          },
+          {
+            "path": "/dash/chunk-stream1-00020.m4s",
+            "range": null,
+            "at": 321.25
+          },
+          {
+            "path": "/dash/chunk-stream0-00021.m4s",
+            "range": null,
+            "at": 321.265
+          },
+          {
+            "path": "/dash/chunk-stream1-00021.m4s",
+            "range": null,
+            "at": 321.296
+          },
+          {
+            "path": "/dash/chunk-stream0-00022.m4s",
+            "range": null,
+            "at": 321.312
+          },
+          {
+            "path": "/dash/chunk-stream1-00022.m4s",
+            "range": null,
+            "at": 321.328
+          },
+          {
+            "path": "/dash/chunk-stream0-00023.m4s",
+            "range": null,
+            "at": 321.359
+          },
+          {
+            "path": "/dash/chunk-stream1-00023.m4s",
+            "range": null,
+            "at": 321.375
+          },
+          {
+            "path": "/dash/chunk-stream0-00024.m4s",
+            "range": null,
+            "at": 321.421
+          },
+          {
+            "path": "/dash/chunk-stream1-00024.m4s",
+            "range": null,
+            "at": 321.437
+          },
+          {
+            "path": "/dash/chunk-stream1-00025.m4s",
+            "range": null,
+            "at": 321.468
+          },
+          {
+            "path": "/dash/chunk-stream0-00025.m4s",
+            "range": null,
+            "at": 321.484
+          },
+          {
+            "path": "/dash/chunk-stream0-00026.m4s",
+            "range": null,
+            "at": 321.515
+          },
+          {
+            "path": "/dash/chunk-stream1-00026.m4s",
+            "range": null,
+            "at": 321.531
+          },
+          {
+            "path": "/dash/chunk-stream0-00027.m4s",
+            "range": null,
+            "at": 321.562
+          },
+          {
+            "path": "/dash/chunk-stream1-00027.m4s",
+            "range": null,
+            "at": 321.593
+          },
+          {
+            "path": "/dash/chunk-stream0-00028.m4s",
+            "range": null,
+            "at": 321.609
+          },
+          {
+            "path": "/dash/chunk-stream1-00028.m4s",
+            "range": null,
+            "at": 321.64
+          },
+          {
+            "path": "/dash/chunk-stream0-00029.m4s",
+            "range": null,
+            "at": 321.656
+          },
+          {
+            "path": "/dash/chunk-stream1-00029.m4s",
+            "range": null,
+            "at": 321.687
+          },
+          {
+            "path": "/dash/chunk-stream0-00030.m4s",
+            "range": null,
+            "at": 321.703
+          },
+          {
+            "path": "/dash/chunk-stream1-00030.m4s",
+            "range": null,
+            "at": 321.718
+          },
+          {
+            "path": "/dash/chunk-stream0-00031.m4s",
+            "range": null,
+            "at": 321.75
+          },
+          {
+            "path": "/dash/chunk-stream1-00031.m4s",
+            "range": null,
+            "at": 321.781
+          },
+          {
+            "path": "/dash/chunk-stream0-00032.m4s",
+            "range": null,
+            "at": 321.796
+          },
+          {
+            "path": "/dash/chunk-stream1-00032.m4s",
+            "range": null,
+            "at": 321.828
+          },
+          {
+            "path": "/dash/chunk-stream1-00033.m4s",
+            "range": null,
+            "at": 321.843
+          },
+          {
+            "path": "/dash/chunk-stream0-00033.m4s",
+            "range": null,
+            "at": 321.875
+          },
+          {
+            "path": "/dash/chunk-stream0-00034.m4s",
+            "range": null,
+            "at": 321.89
+          },
+          {
+            "path": "/dash/chunk-stream1-00034.m4s",
+            "range": null,
+            "at": 321.921
+          },
+          {
+            "path": "/dash/chunk-stream0-00035.m4s",
+            "range": null,
+            "at": 321.953
+          },
+          {
+            "path": "/dash/chunk-stream1-00035.m4s",
+            "range": null,
+            "at": 321.968
+          },
+          {
+            "path": "/dash/chunk-stream0-00036.m4s",
+            "range": null,
+            "at": 321.984
+          },
+          {
+            "path": "/dash/chunk-stream1-00036.m4s",
+            "range": null,
+            "at": 322.015
+          },
+          {
+            "path": "/dash/chunk-stream0-00037.m4s",
+            "range": null,
+            "at": 322.031
+          },
+          {
+            "path": "/dash/chunk-stream1-00037.m4s",
+            "range": null,
+            "at": 322.062
+          },
+          {
+            "path": "/dash/chunk-stream0-00038.m4s",
+            "range": null,
+            "at": 322.093
+          },
+          {
+            "path": "/dash/chunk-stream1-00038.m4s",
+            "range": null,
+            "at": 322.125
+          },
+          {
+            "path": "/dash/chunk-stream0-00039.m4s",
+            "range": null,
+            "at": 322.156
+          },
+          {
+            "path": "/dash/chunk-stream1-00039.m4s",
+            "range": null,
+            "at": 322.187
+          },
+          {
+            "path": "/dash/chunk-stream0-00040.m4s",
+            "range": null,
+            "at": 322.203
+          },
+          {
+            "path": "/dash/chunk-stream1-00040.m4s",
+            "range": null,
+            "at": 322.234
+          },
+          {
+            "path": "/dash/chunk-stream0-00041.m4s",
+            "range": null,
+            "at": 322.25
+          },
+          {
+            "path": "/dash/chunk-stream1-00041.m4s",
+            "range": null,
+            "at": 322.281
+          },
+          {
+            "path": "/dash/chunk-stream0-00042.m4s",
+            "range": null,
+            "at": 322.296
+          },
+          {
+            "path": "/dash/chunk-stream1-00042.m4s",
+            "range": null,
+            "at": 322.328
+          },
+          {
+            "path": "/dash/chunk-stream0-00043.m4s",
+            "range": null,
+            "at": 322.359
+          },
+          {
+            "path": "/dash/chunk-stream1-00043.m4s",
+            "range": null,
+            "at": 322.39
+          },
+          {
+            "path": "/dash/chunk-stream0-00044.m4s",
+            "range": null,
+            "at": 322.421
+          },
+          {
+            "path": "/dash/chunk-stream1-00044.m4s",
+            "range": null,
+            "at": 322.437
+          },
+          {
+            "path": "/dash/chunk-stream0-00045.m4s",
+            "range": null,
+            "at": 322.468
+          },
+          {
+            "path": "/dash/chunk-stream1-00045.m4s",
+            "range": null,
+            "at": 322.484
+          },
+          {
+            "path": "/dash/chunk-stream0-00046.m4s",
+            "range": null,
+            "at": 322.515
+          },
+          {
+            "path": "/dash/chunk-stream1-00046.m4s",
+            "range": null,
+            "at": 322.531
+          },
+          {
+            "path": "/dash/chunk-stream0-00047.m4s",
+            "range": null,
+            "at": 322.546
+          }
+        ]
+      }
+    },
+    {
+      "name": "http: pause preserves cache and resume restores playable download",
+      "actual": true
+    },
+    {
+      "name": "http: thumbnail leaves playback position, pause and speed unchanged",
+      "actual": true
+    },
+    {
+      "name": "http: unfinished download decodes, exposes full duration and seeks to 80%",
+      "actual": {
+        "kind": "player_session",
+        "active": true,
+        "title": "http.mp4",
+        "task_id": "task-6",
+        "status": "PAUSED",
+        "paused": true,
+        "speed": 1.5,
+        "position_seconds": 48.0,
+        "duration_seconds": 60.0,
+        "position_available": true,
+        "audio_tracks": 1,
+        "subtitle_tracks": 0,
+        "volume": 100.0,
+        "muted": false,
+        "buffered_end_seconds": 48.0,
+        "buffering": false,
+        "tracks": [
+          {
+            "id": "1",
+            "kind": "audio",
+            "title": "",
+            "language": "",
+            "selected": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "http: same-window final switch; complete decode; cache removed; delete preserves output",
+      "actual": {
+        "window": [
+          {
+            "hwnd": 655982,
+            "pid": 6472,
+            "rect": [
+              254,
+              85,
+              959,
+              482
+            ]
+          }
+        ],
+        "final": {
+          "kind": "player_session",
+          "active": true,
+          "title": "http.mp4",
+          "task_id": "task-6",
+          "status": "PAUSED",
+          "paused": true,
+          "speed": 1.5,
+          "position_seconds": 48.32,
+          "duration_seconds": 60.0,
+          "position_available": true,
+          "audio_tracks": 1,
+          "subtitle_tracks": 0,
+          "volume": 100.0,
+          "muted": false,
+          "buffered_end_seconds": 49.621333,
+          "buffering": false,
+          "tracks": [
+            {
+              "id": "1",
+              "kind": "audio",
+              "title": "",
+              "language": "",
+              "selected": true
+            }
+          ]
+        },
+        "output_sha256": "725786c15e8603bfd80b5078fb1b8c9cccf6bd73cc7d36d05754976f41d3edc0",
+        "origin_requests": [
+          {
+            "path": "/source.mp4",
+            "range": "bytes=0-0",
+            "at": 325.359
+          },
+          {
+            "path": "/source.mp4",
+            "range": "bytes=0-5838913",
+            "at": 325.375
+          },
+          {
+            "path": "/source.mp4",
+            "range": "bytes=5838914-11677827",
+            "at": 336.968
+          },
+          {
+            "path": "/source.mp4",
+            "range": "bytes=0-0",
+            "at": 337.328
+          },
+          {
+            "path": "/source.mp4",
+            "range": "bytes=11677828-17516741",
+            "at": 337.328
+          },
+          {
+            "path": "/source.mp4",
+            "range": "bytes=5969986-11677827",
+            "at": 348.546
+          },
+          {
+            "path": "/source.mp4",
+            "range": "bytes=17516742-23355655",
+            "at": 359.14
+          }
+        ]
+      }
+    },
+    {
+      "name": "pause retains resumable cache; deleting unfinished task cleans cache and preserves unrelated file",
+      "actual": true
+    },
+    {
+      "name": "closing playback during download stays closed after completion and allows cleanup",
+      "actual": true
+    },
+    {
+      "name": "keep_temp_files opt-in works; clear-completed still cleans cache and preserves output",
+      "actual": true
+    }
+  ],
+  "requests": [
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 261.468
+    },
+    {
+      "path": "/ts/s000.jpeg",
+      "range": null,
+      "at": 261.718
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 262.39
+    },
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 262.625
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 262.656
+    },
+    {
+      "path": "/ts/s002.jpeg",
+      "range": null,
+      "at": 263.312
+    },
+    {
+      "path": "/ts/s003.jpeg",
+      "range": null,
+      "at": 264.0
+    },
+    {
+      "path": "/ts/s004.jpeg",
+      "range": null,
+      "at": 264.671
+    },
+    {
+      "path": "/ts/s005.jpeg",
+      "range": null,
+      "at": 265.328
+    },
+    {
+      "path": "/ts/s006.jpeg",
+      "range": null,
+      "at": 266.015
+    },
+    {
+      "path": "/ts/s007.jpeg",
+      "range": null,
+      "at": 266.687
+    },
+    {
+      "path": "/ts/s008.jpeg",
+      "range": null,
+      "at": 267.375
+    },
+    {
+      "path": "/ts/s009.jpeg",
+      "range": null,
+      "at": 268.046
+    },
+    {
+      "path": "/ts/s010.jpeg",
+      "range": null,
+      "at": 268.718
+    },
+    {
+      "path": "/ts/s012.jpeg",
+      "range": null,
+      "at": 269.39
+    },
+    {
+      "path": "/ts/s013.jpeg",
+      "range": null,
+      "at": 270.062
+    },
+    {
+      "path": "/ts/s014.jpeg",
+      "range": null,
+      "at": 270.718
+    },
+    {
+      "path": "/ts/s048.jpeg",
+      "range": null,
+      "at": 271.468
+    },
+    {
+      "path": "/ts/s049.jpeg",
+      "range": null,
+      "at": 272.14
+    },
+    {
+      "path": "/ts/s050.jpeg",
+      "range": null,
+      "at": 272.812
+    },
+    {
+      "path": "/ts/s051.jpeg",
+      "range": null,
+      "at": 273.468
+    },
+    {
+      "path": "/ts/s052.jpeg",
+      "range": null,
+      "at": 274.14
+    },
+    {
+      "path": "/ts/s053.jpeg",
+      "range": null,
+      "at": 274.812
+    },
+    {
+      "path": "/ts/s054.jpeg",
+      "range": null,
+      "at": 275.468
+    },
+    {
+      "path": "/ts/s055.jpeg",
+      "range": null,
+      "at": 276.171
+    },
+    {
+      "path": "/ts/s056.jpeg",
+      "range": null,
+      "at": 276.828
+    },
+    {
+      "path": "/ts/s057.jpeg",
+      "range": null,
+      "at": 277.484
+    },
+    {
+      "path": "/ts/s058.jpeg",
+      "range": null,
+      "at": 277.5
+    },
+    {
+      "path": "/ts/s059.jpeg",
+      "range": null,
+      "at": 277.515
+    },
+    {
+      "path": "/ts/s011.jpeg",
+      "range": null,
+      "at": 277.531
+    },
+    {
+      "path": "/ts/s015.jpeg",
+      "range": null,
+      "at": 277.546
+    },
+    {
+      "path": "/ts/s016.jpeg",
+      "range": null,
+      "at": 277.562
+    },
+    {
+      "path": "/ts/s017.jpeg",
+      "range": null,
+      "at": 277.578
+    },
+    {
+      "path": "/ts/s018.jpeg",
+      "range": null,
+      "at": 277.578
+    },
+    {
+      "path": "/ts/s019.jpeg",
+      "range": null,
+      "at": 277.593
+    },
+    {
+      "path": "/ts/s020.jpeg",
+      "range": null,
+      "at": 277.609
+    },
+    {
+      "path": "/ts/s021.jpeg",
+      "range": null,
+      "at": 277.625
+    },
+    {
+      "path": "/ts/s022.jpeg",
+      "range": null,
+      "at": 277.625
+    },
+    {
+      "path": "/ts/s023.jpeg",
+      "range": null,
+      "at": 277.64
+    },
+    {
+      "path": "/ts/s024.jpeg",
+      "range": null,
+      "at": 277.64
+    },
+    {
+      "path": "/ts/s025.jpeg",
+      "range": null,
+      "at": 277.656
+    },
+    {
+      "path": "/ts/s026.jpeg",
+      "range": null,
+      "at": 277.671
+    },
+    {
+      "path": "/ts/s027.jpeg",
+      "range": null,
+      "at": 277.687
+    },
+    {
+      "path": "/ts/s028.jpeg",
+      "range": null,
+      "at": 277.687
+    },
+    {
+      "path": "/ts/s029.jpeg",
+      "range": null,
+      "at": 277.703
+    },
+    {
+      "path": "/ts/s030.jpeg",
+      "range": null,
+      "at": 277.718
+    },
+    {
+      "path": "/ts/s031.jpeg",
+      "range": null,
+      "at": 277.734
+    },
+    {
+      "path": "/ts/s032.jpeg",
+      "range": null,
+      "at": 277.75
+    },
+    {
+      "path": "/ts/s033.jpeg",
+      "range": null,
+      "at": 277.765
+    },
+    {
+      "path": "/ts/s034.jpeg",
+      "range": null,
+      "at": 277.765
+    },
+    {
+      "path": "/ts/s035.jpeg",
+      "range": null,
+      "at": 277.781
+    },
+    {
+      "path": "/ts/s036.jpeg",
+      "range": null,
+      "at": 277.796
+    },
+    {
+      "path": "/ts/s037.jpeg",
+      "range": null,
+      "at": 277.796
+    },
+    {
+      "path": "/ts/s038.jpeg",
+      "range": null,
+      "at": 277.812
+    },
+    {
+      "path": "/ts/s039.jpeg",
+      "range": null,
+      "at": 277.828
+    },
+    {
+      "path": "/ts/s040.jpeg",
+      "range": null,
+      "at": 277.843
+    },
+    {
+      "path": "/ts/s041.jpeg",
+      "range": null,
+      "at": 277.843
+    },
+    {
+      "path": "/ts/s042.jpeg",
+      "range": null,
+      "at": 277.859
+    },
+    {
+      "path": "/ts/s043.jpeg",
+      "range": null,
+      "at": 277.875
+    },
+    {
+      "path": "/ts/s044.jpeg",
+      "range": null,
+      "at": 277.89
+    },
+    {
+      "path": "/ts/s045.jpeg",
+      "range": null,
+      "at": 277.906
+    },
+    {
+      "path": "/ts/s046.jpeg",
+      "range": null,
+      "at": 277.906
+    },
+    {
+      "path": "/ts/s047.jpeg",
+      "range": null,
+      "at": 277.921
+    },
+    {
+      "path": "/fmp4/index.m3u8",
+      "range": null,
+      "at": 280.156
+    },
+    {
+      "path": "/fmp4/init.mp4",
+      "range": null,
+      "at": 280.156
+    },
+    {
+      "path": "/fmp4/s000.m4s",
+      "range": null,
+      "at": 280.484
+    },
+    {
+      "path": "/fmp4/s001.m4s",
+      "range": null,
+      "at": 281.156
+    },
+    {
+      "path": "/fmp4/index.m3u8",
+      "range": null,
+      "at": 281.39
+    },
+    {
+      "path": "/fmp4/s001.m4s",
+      "range": null,
+      "at": 281.687
+    },
+    {
+      "path": "/fmp4/s002.m4s",
+      "range": null,
+      "at": 282.375
+    },
+    {
+      "path": "/fmp4/s003.m4s",
+      "range": null,
+      "at": 283.046
+    },
+    {
+      "path": "/fmp4/s004.m4s",
+      "range": null,
+      "at": 283.734
+    },
+    {
+      "path": "/fmp4/s005.m4s",
+      "range": null,
+      "at": 284.421
+    },
+    {
+      "path": "/fmp4/s048.m4s",
+      "range": null,
+      "at": 285.109
+    },
+    {
+      "path": "/fmp4/s049.m4s",
+      "range": null,
+      "at": 285.765
+    },
+    {
+      "path": "/fmp4/s050.m4s",
+      "range": null,
+      "at": 286.421
+    },
+    {
+      "path": "/fmp4/s051.m4s",
+      "range": null,
+      "at": 287.093
+    },
+    {
+      "path": "/fmp4/s052.m4s",
+      "range": null,
+      "at": 287.765
+    },
+    {
+      "path": "/fmp4/s053.m4s",
+      "range": null,
+      "at": 287.765
+    },
+    {
+      "path": "/fmp4/s054.m4s",
+      "range": null,
+      "at": 287.781
+    },
+    {
+      "path": "/fmp4/s055.m4s",
+      "range": null,
+      "at": 287.796
+    },
+    {
+      "path": "/fmp4/s056.m4s",
+      "range": null,
+      "at": 287.812
+    },
+    {
+      "path": "/fmp4/s057.m4s",
+      "range": null,
+      "at": 287.828
+    },
+    {
+      "path": "/fmp4/s058.m4s",
+      "range": null,
+      "at": 287.828
+    },
+    {
+      "path": "/fmp4/s059.m4s",
+      "range": null,
+      "at": 287.843
+    },
+    {
+      "path": "/fmp4/s006.m4s",
+      "range": null,
+      "at": 287.859
+    },
+    {
+      "path": "/fmp4/s007.m4s",
+      "range": null,
+      "at": 287.89
+    },
+    {
+      "path": "/fmp4/s008.m4s",
+      "range": null,
+      "at": 287.89
+    },
+    {
+      "path": "/fmp4/s009.m4s",
+      "range": null,
+      "at": 287.906
+    },
+    {
+      "path": "/fmp4/s010.m4s",
+      "range": null,
+      "at": 287.921
+    },
+    {
+      "path": "/fmp4/s011.m4s",
+      "range": null,
+      "at": 287.937
+    },
+    {
+      "path": "/fmp4/s012.m4s",
+      "range": null,
+      "at": 287.937
+    },
+    {
+      "path": "/fmp4/s013.m4s",
+      "range": null,
+      "at": 287.953
+    },
+    {
+      "path": "/fmp4/s014.m4s",
+      "range": null,
+      "at": 287.968
+    },
+    {
+      "path": "/fmp4/s015.m4s",
+      "range": null,
+      "at": 287.984
+    },
+    {
+      "path": "/fmp4/s016.m4s",
+      "range": null,
+      "at": 288.0
+    },
+    {
+      "path": "/fmp4/s017.m4s",
+      "range": null,
+      "at": 288.015
+    },
+    {
+      "path": "/fmp4/s018.m4s",
+      "range": null,
+      "at": 288.031
+    },
+    {
+      "path": "/fmp4/s019.m4s",
+      "range": null,
+      "at": 288.046
+    },
+    {
+      "path": "/fmp4/s020.m4s",
+      "range": null,
+      "at": 288.062
+    },
+    {
+      "path": "/fmp4/s021.m4s",
+      "range": null,
+      "at": 288.078
+    },
+    {
+      "path": "/fmp4/s022.m4s",
+      "range": null,
+      "at": 288.093
+    },
+    {
+      "path": "/fmp4/s023.m4s",
+      "range": null,
+      "at": 288.109
+    },
+    {
+      "path": "/fmp4/s024.m4s",
+      "range": null,
+      "at": 288.125
+    },
+    {
+      "path": "/fmp4/s025.m4s",
+      "range": null,
+      "at": 288.14
+    },
+    {
+      "path": "/fmp4/s026.m4s",
+      "range": null,
+      "at": 288.156
+    },
+    {
+      "path": "/fmp4/s027.m4s",
+      "range": null,
+      "at": 288.171
+    },
+    {
+      "path": "/fmp4/s028.m4s",
+      "range": null,
+      "at": 288.171
+    },
+    {
+      "path": "/fmp4/s029.m4s",
+      "range": null,
+      "at": 288.187
+    },
+    {
+      "path": "/fmp4/s030.m4s",
+      "range": null,
+      "at": 288.203
+    },
+    {
+      "path": "/fmp4/s031.m4s",
+      "range": null,
+      "at": 288.203
+    },
+    {
+      "path": "/fmp4/s032.m4s",
+      "range": null,
+      "at": 288.218
+    },
+    {
+      "path": "/fmp4/s033.m4s",
+      "range": null,
+      "at": 288.234
+    },
+    {
+      "path": "/fmp4/s034.m4s",
+      "range": null,
+      "at": 288.25
+    },
+    {
+      "path": "/fmp4/s035.m4s",
+      "range": null,
+      "at": 288.25
+    },
+    {
+      "path": "/fmp4/s036.m4s",
+      "range": null,
+      "at": 288.265
+    },
+    {
+      "path": "/fmp4/s037.m4s",
+      "range": null,
+      "at": 288.281
+    },
+    {
+      "path": "/fmp4/s038.m4s",
+      "range": null,
+      "at": 288.296
+    },
+    {
+      "path": "/fmp4/s039.m4s",
+      "range": null,
+      "at": 288.296
+    },
+    {
+      "path": "/fmp4/s040.m4s",
+      "range": null,
+      "at": 288.312
+    },
+    {
+      "path": "/fmp4/s041.m4s",
+      "range": null,
+      "at": 288.328
+    },
+    {
+      "path": "/fmp4/s042.m4s",
+      "range": null,
+      "at": 288.343
+    },
+    {
+      "path": "/fmp4/s043.m4s",
+      "range": null,
+      "at": 288.343
+    },
+    {
+      "path": "/fmp4/s044.m4s",
+      "range": null,
+      "at": 288.359
+    },
+    {
+      "path": "/fmp4/s045.m4s",
+      "range": null,
+      "at": 288.39
+    },
+    {
+      "path": "/fmp4/s046.m4s",
+      "range": null,
+      "at": 288.406
+    },
+    {
+      "path": "/fmp4/s047.m4s",
+      "range": null,
+      "at": 288.421
+    },
+    {
+      "path": "/aes/index.m3u8",
+      "range": null,
+      "at": 290.468
+    },
+    {
+      "path": "/aes/key.bin",
+      "range": null,
+      "at": 290.468
+    },
+    {
+      "path": "/aes/s000.jpeg",
+      "range": null,
+      "at": 290.5
+    },
+    {
+      "path": "/aes/s001.jpeg",
+      "range": null,
+      "at": 291.187
+    },
+    {
+      "path": "/aes/index.m3u8",
+      "range": null,
+      "at": 291.421
+    },
+    {
+      "path": "/aes/key.bin",
+      "range": null,
+      "at": 291.437
+    },
+    {
+      "path": "/aes/s001.jpeg",
+      "range": null,
+      "at": 291.468
+    },
+    {
+      "path": "/aes/s002.jpeg",
+      "range": null,
+      "at": 292.187
+    },
+    {
+      "path": "/aes/s003.jpeg",
+      "range": null,
+      "at": 292.875
+    },
+    {
+      "path": "/aes/s004.jpeg",
+      "range": null,
+      "at": 293.562
+    },
+    {
+      "path": "/aes/s005.jpeg",
+      "range": null,
+      "at": 294.234
+    },
+    {
+      "path": "/aes/s048.jpeg",
+      "range": null,
+      "at": 294.921
+    },
+    {
+      "path": "/aes/s049.jpeg",
+      "range": null,
+      "at": 295.593
+    },
+    {
+      "path": "/aes/s050.jpeg",
+      "range": null,
+      "at": 296.25
+    },
+    {
+      "path": "/aes/s051.jpeg",
+      "range": null,
+      "at": 296.937
+    },
+    {
+      "path": "/aes/s052.jpeg",
+      "range": null,
+      "at": 296.953
+    },
+    {
+      "path": "/aes/s053.jpeg",
+      "range": null,
+      "at": 296.968
+    },
+    {
+      "path": "/aes/s054.jpeg",
+      "range": null,
+      "at": 296.984
+    },
+    {
+      "path": "/aes/s055.jpeg",
+      "range": null,
+      "at": 297.015
+    },
+    {
+      "path": "/aes/s056.jpeg",
+      "range": null,
+      "at": 297.031
+    },
+    {
+      "path": "/aes/s057.jpeg",
+      "range": null,
+      "at": 297.046
+    },
+    {
+      "path": "/aes/s058.jpeg",
+      "range": null,
+      "at": 297.078
+    },
+    {
+      "path": "/aes/s059.jpeg",
+      "range": null,
+      "at": 297.093
+    },
+    {
+      "path": "/aes/s006.jpeg",
+      "range": null,
+      "at": 297.125
+    },
+    {
+      "path": "/aes/s007.jpeg",
+      "range": null,
+      "at": 297.171
+    },
+    {
+      "path": "/aes/s008.jpeg",
+      "range": null,
+      "at": 297.187
+    },
+    {
+      "path": "/aes/s009.jpeg",
+      "range": null,
+      "at": 297.234
+    },
+    {
+      "path": "/aes/s010.jpeg",
+      "range": null,
+      "at": 297.265
+    },
+    {
+      "path": "/aes/s011.jpeg",
+      "range": null,
+      "at": 297.281
+    },
+    {
+      "path": "/aes/s012.jpeg",
+      "range": null,
+      "at": 297.296
+    },
+    {
+      "path": "/aes/s013.jpeg",
+      "range": null,
+      "at": 297.312
+    },
+    {
+      "path": "/aes/s014.jpeg",
+      "range": null,
+      "at": 297.343
+    },
+    {
+      "path": "/aes/s015.jpeg",
+      "range": null,
+      "at": 297.359
+    },
+    {
+      "path": "/aes/s016.jpeg",
+      "range": null,
+      "at": 297.375
+    },
+    {
+      "path": "/aes/s017.jpeg",
+      "range": null,
+      "at": 297.39
+    },
+    {
+      "path": "/aes/s018.jpeg",
+      "range": null,
+      "at": 297.421
+    },
+    {
+      "path": "/aes/s019.jpeg",
+      "range": null,
+      "at": 297.437
+    },
+    {
+      "path": "/aes/s020.jpeg",
+      "range": null,
+      "at": 297.453
+    },
+    {
+      "path": "/aes/s021.jpeg",
+      "range": null,
+      "at": 297.468
+    },
+    {
+      "path": "/aes/s022.jpeg",
+      "range": null,
+      "at": 297.484
+    },
+    {
+      "path": "/aes/s023.jpeg",
+      "range": null,
+      "at": 297.5
+    },
+    {
+      "path": "/aes/s024.jpeg",
+      "range": null,
+      "at": 297.515
+    },
+    {
+      "path": "/aes/s025.jpeg",
+      "range": null,
+      "at": 297.531
+    },
+    {
+      "path": "/aes/s026.jpeg",
+      "range": null,
+      "at": 297.562
+    },
+    {
+      "path": "/aes/s027.jpeg",
+      "range": null,
+      "at": 297.578
+    },
+    {
+      "path": "/aes/s028.jpeg",
+      "range": null,
+      "at": 297.609
+    },
+    {
+      "path": "/aes/s029.jpeg",
+      "range": null,
+      "at": 297.625
+    },
+    {
+      "path": "/aes/s030.jpeg",
+      "range": null,
+      "at": 297.656
+    },
+    {
+      "path": "/aes/s031.jpeg",
+      "range": null,
+      "at": 297.671
+    },
+    {
+      "path": "/aes/s032.jpeg",
+      "range": null,
+      "at": 297.687
+    },
+    {
+      "path": "/aes/s033.jpeg",
+      "range": null,
+      "at": 297.718
+    },
+    {
+      "path": "/aes/s034.jpeg",
+      "range": null,
+      "at": 297.734
+    },
+    {
+      "path": "/aes/s035.jpeg",
+      "range": null,
+      "at": 297.75
+    },
+    {
+      "path": "/aes/s036.jpeg",
+      "range": null,
+      "at": 297.781
+    },
+    {
+      "path": "/aes/s037.jpeg",
+      "range": null,
+      "at": 297.796
+    },
+    {
+      "path": "/aes/s038.jpeg",
+      "range": null,
+      "at": 297.812
+    },
+    {
+      "path": "/aes/s039.jpeg",
+      "range": null,
+      "at": 297.843
+    },
+    {
+      "path": "/aes/s040.jpeg",
+      "range": null,
+      "at": 297.859
+    },
+    {
+      "path": "/aes/s041.jpeg",
+      "range": null,
+      "at": 297.875
+    },
+    {
+      "path": "/aes/s042.jpeg",
+      "range": null,
+      "at": 297.89
+    },
+    {
+      "path": "/aes/s043.jpeg",
+      "range": null,
+      "at": 297.906
+    },
+    {
+      "path": "/aes/s044.jpeg",
+      "range": null,
+      "at": 297.921
+    },
+    {
+      "path": "/aes/s045.jpeg",
+      "range": null,
+      "at": 297.937
+    },
+    {
+      "path": "/aes/s046.jpeg",
+      "range": null,
+      "at": 297.953
+    },
+    {
+      "path": "/aes/s047.jpeg",
+      "range": null,
+      "at": 297.968
+    },
+    {
+      "path": "/external/index.m3u8",
+      "range": null,
+      "at": 300.156
+    },
+    {
+      "path": "/external/video.m3u8",
+      "range": null,
+      "at": 300.156
+    },
+    {
+      "path": "/external/audio.m3u8",
+      "range": null,
+      "at": 300.171
+    },
+    {
+      "path": "/external/v000.ts",
+      "range": null,
+      "at": 300.203
+    },
+    {
+      "path": "/external/a000.ts",
+      "range": null,
+      "at": 300.89
+    },
+    {
+      "path": "/external/v001.ts",
+      "range": null,
+      "at": 300.921
+    },
+    {
+      "path": "/external/index.m3u8",
+      "range": null,
+      "at": 301.156
+    },
+    {
+      "path": "/external/video.m3u8",
+      "range": null,
+      "at": 301.171
+    },
+    {
+      "path": "/external/audio.m3u8",
+      "range": null,
+      "at": 301.171
+    },
+    {
+      "path": "/external/v001.ts",
+      "range": null,
+      "at": 301.234
+    },
+    {
+      "path": "/external/a001.ts",
+      "range": null,
+      "at": 301.921
+    },
+    {
+      "path": "/external/v002.ts",
+      "range": null,
+      "at": 301.937
+    },
+    {
+      "path": "/external/a002.ts",
+      "range": null,
+      "at": 302.625
+    },
+    {
+      "path": "/external/v003.ts",
+      "range": null,
+      "at": 302.64
+    },
+    {
+      "path": "/external/a003.ts",
+      "range": null,
+      "at": 303.312
+    },
+    {
+      "path": "/external/v004.ts",
+      "range": null,
+      "at": 303.328
+    },
+    {
+      "path": "/external/v012.ts",
+      "range": null,
+      "at": 304.0
+    },
+    {
+      "path": "/external/a012.ts",
+      "range": null,
+      "at": 304.671
+    },
+    {
+      "path": "/external/v013.ts",
+      "range": null,
+      "at": 304.687
+    },
+    {
+      "path": "/external/a013.ts",
+      "range": null,
+      "at": 305.343
+    },
+    {
+      "path": "/external/v014.ts",
+      "range": null,
+      "at": 305.359
+    },
+    {
+      "path": "/external/v048.ts",
+      "range": null,
+      "at": 306.015
+    },
+    {
+      "path": "/external/a048.ts",
+      "range": null,
+      "at": 306.687
+    },
+    {
+      "path": "/external/v049.ts",
+      "range": null,
+      "at": 306.703
+    },
+    {
+      "path": "/external/a049.ts",
+      "range": null,
+      "at": 307.375
+    },
+    {
+      "path": "/external/v050.ts",
+      "range": null,
+      "at": 307.39
+    },
+    {
+      "path": "/external/a050.ts",
+      "range": null,
+      "at": 308.062
+    },
+    {
+      "path": "/external/v051.ts",
+      "range": null,
+      "at": 308.078
+    },
+    {
+      "path": "/external/a051.ts",
+      "range": null,
+      "at": 308.093
+    },
+    {
+      "path": "/external/v052.ts",
+      "range": null,
+      "at": 308.109
+    },
+    {
+      "path": "/external/a052.ts",
+      "range": null,
+      "at": 308.14
+    },
+    {
+      "path": "/external/v053.ts",
+      "range": null,
+      "at": 308.14
+    },
+    {
+      "path": "/external/a053.ts",
+      "range": null,
+      "at": 308.156
+    },
+    {
+      "path": "/external/v054.ts",
+      "range": null,
+      "at": 308.171
+    },
+    {
+      "path": "/external/a054.ts",
+      "range": null,
+      "at": 308.187
+    },
+    {
+      "path": "/external/v055.ts",
+      "range": null,
+      "at": 308.203
+    },
+    {
+      "path": "/external/a055.ts",
+      "range": null,
+      "at": 308.218
+    },
+    {
+      "path": "/external/v056.ts",
+      "range": null,
+      "at": 308.234
+    },
+    {
+      "path": "/external/a056.ts",
+      "range": null,
+      "at": 308.25
+    },
+    {
+      "path": "/external/v057.ts",
+      "range": null,
+      "at": 308.265
+    },
+    {
+      "path": "/external/a057.ts",
+      "range": null,
+      "at": 308.281
+    },
+    {
+      "path": "/external/v058.ts",
+      "range": null,
+      "at": 308.296
+    },
+    {
+      "path": "/external/a058.ts",
+      "range": null,
+      "at": 308.312
+    },
+    {
+      "path": "/external/v059.ts",
+      "range": null,
+      "at": 308.328
+    },
+    {
+      "path": "/external/a059.ts",
+      "range": null,
+      "at": 308.343
+    },
+    {
+      "path": "/external/a060.ts",
+      "range": null,
+      "at": 308.359
+    },
+    {
+      "path": "/external/a004.ts",
+      "range": null,
+      "at": 308.359
+    },
+    {
+      "path": "/external/v005.ts",
+      "range": null,
+      "at": 308.39
+    },
+    {
+      "path": "/external/a005.ts",
+      "range": null,
+      "at": 308.39
+    },
+    {
+      "path": "/external/v006.ts",
+      "range": null,
+      "at": 308.406
+    },
+    {
+      "path": "/external/a006.ts",
+      "range": null,
+      "at": 308.421
+    },
+    {
+      "path": "/external/v007.ts",
+      "range": null,
+      "at": 308.421
+    },
+    {
+      "path": "/external/a007.ts",
+      "range": null,
+      "at": 308.437
+    },
+    {
+      "path": "/external/v008.ts",
+      "range": null,
+      "at": 308.453
+    },
+    {
+      "path": "/external/a008.ts",
+      "range": null,
+      "at": 308.468
+    },
+    {
+      "path": "/external/v009.ts",
+      "range": null,
+      "at": 308.468
+    },
+    {
+      "path": "/external/a009.ts",
+      "range": null,
+      "at": 308.484
+    },
+    {
+      "path": "/external/v010.ts",
+      "range": null,
+      "at": 308.5
+    },
+    {
+      "path": "/external/a010.ts",
+      "range": null,
+      "at": 308.515
+    },
+    {
+      "path": "/external/v011.ts",
+      "range": null,
+      "at": 308.515
+    },
+    {
+      "path": "/external/a011.ts",
+      "range": null,
+      "at": 308.531
+    },
+    {
+      "path": "/external/a014.ts",
+      "range": null,
+      "at": 308.531
+    },
+    {
+      "path": "/external/v015.ts",
+      "range": null,
+      "at": 308.546
+    },
+    {
+      "path": "/external/a015.ts",
+      "range": null,
+      "at": 308.546
+    },
+    {
+      "path": "/external/v016.ts",
+      "range": null,
+      "at": 308.562
+    },
+    {
+      "path": "/external/a016.ts",
+      "range": null,
+      "at": 308.578
+    },
+    {
+      "path": "/external/v017.ts",
+      "range": null,
+      "at": 308.578
+    },
+    {
+      "path": "/external/a017.ts",
+      "range": null,
+      "at": 308.593
+    },
+    {
+      "path": "/external/v018.ts",
+      "range": null,
+      "at": 308.609
+    },
+    {
+      "path": "/external/a018.ts",
+      "range": null,
+      "at": 308.609
+    },
+    {
+      "path": "/external/v019.ts",
+      "range": null,
+      "at": 308.625
+    },
+    {
+      "path": "/external/a019.ts",
+      "range": null,
+      "at": 308.64
+    },
+    {
+      "path": "/external/v020.ts",
+      "range": null,
+      "at": 308.64
+    },
+    {
+      "path": "/external/a020.ts",
+      "range": null,
+      "at": 308.656
+    },
+    {
+      "path": "/external/v021.ts",
+      "range": null,
+      "at": 308.671
+    },
+    {
+      "path": "/external/a021.ts",
+      "range": null,
+      "at": 308.687
+    },
+    {
+      "path": "/external/v022.ts",
+      "range": null,
+      "at": 308.703
+    },
+    {
+      "path": "/external/a022.ts",
+      "range": null,
+      "at": 308.718
+    },
+    {
+      "path": "/external/v023.ts",
+      "range": null,
+      "at": 308.718
+    },
+    {
+      "path": "/external/a023.ts",
+      "range": null,
+      "at": 308.734
+    },
+    {
+      "path": "/external/v024.ts",
+      "range": null,
+      "at": 308.75
+    },
+    {
+      "path": "/external/a024.ts",
+      "range": null,
+      "at": 308.75
+    },
+    {
+      "path": "/external/v025.ts",
+      "range": null,
+      "at": 308.765
+    },
+    {
+      "path": "/external/a025.ts",
+      "range": null,
+      "at": 308.781
+    },
+    {
+      "path": "/external/v026.ts",
+      "range": null,
+      "at": 308.796
+    },
+    {
+      "path": "/external/a026.ts",
+      "range": null,
+      "at": 308.796
+    },
+    {
+      "path": "/external/v027.ts",
+      "range": null,
+      "at": 308.812
+    },
+    {
+      "path": "/external/a027.ts",
+      "range": null,
+      "at": 308.828
+    },
+    {
+      "path": "/external/v028.ts",
+      "range": null,
+      "at": 308.843
+    },
+    {
+      "path": "/external/a028.ts",
+      "range": null,
+      "at": 308.843
+    },
+    {
+      "path": "/external/v029.ts",
+      "range": null,
+      "at": 308.859
+    },
+    {
+      "path": "/external/a029.ts",
+      "range": null,
+      "at": 308.875
+    },
+    {
+      "path": "/external/v030.ts",
+      "range": null,
+      "at": 308.89
+    },
+    {
+      "path": "/external/a030.ts",
+      "range": null,
+      "at": 308.906
+    },
+    {
+      "path": "/external/v031.ts",
+      "range": null,
+      "at": 308.906
+    },
+    {
+      "path": "/external/a031.ts",
+      "range": null,
+      "at": 308.921
+    },
+    {
+      "path": "/external/v032.ts",
+      "range": null,
+      "at": 308.937
+    },
+    {
+      "path": "/external/a032.ts",
+      "range": null,
+      "at": 308.953
+    },
+    {
+      "path": "/external/v033.ts",
+      "range": null,
+      "at": 308.968
+    },
+    {
+      "path": "/external/a033.ts",
+      "range": null,
+      "at": 308.968
+    },
+    {
+      "path": "/external/v034.ts",
+      "range": null,
+      "at": 308.984
+    },
+    {
+      "path": "/external/a034.ts",
+      "range": null,
+      "at": 309.0
+    },
+    {
+      "path": "/external/v035.ts",
+      "range": null,
+      "at": 309.0
+    },
+    {
+      "path": "/external/a035.ts",
+      "range": null,
+      "at": 309.015
+    },
+    {
+      "path": "/external/v036.ts",
+      "range": null,
+      "at": 309.031
+    },
+    {
+      "path": "/external/a036.ts",
+      "range": null,
+      "at": 309.046
+    },
+    {
+      "path": "/external/v037.ts",
+      "range": null,
+      "at": 309.062
+    },
+    {
+      "path": "/external/a037.ts",
+      "range": null,
+      "at": 309.078
+    },
+    {
+      "path": "/external/v038.ts",
+      "range": null,
+      "at": 309.093
+    },
+    {
+      "path": "/external/a038.ts",
+      "range": null,
+      "at": 309.109
+    },
+    {
+      "path": "/external/v039.ts",
+      "range": null,
+      "at": 309.125
+    },
+    {
+      "path": "/external/a039.ts",
+      "range": null,
+      "at": 309.14
+    },
+    {
+      "path": "/external/v040.ts",
+      "range": null,
+      "at": 309.156
+    },
+    {
+      "path": "/external/a040.ts",
+      "range": null,
+      "at": 309.171
+    },
+    {
+      "path": "/external/v041.ts",
+      "range": null,
+      "at": 309.187
+    },
+    {
+      "path": "/external/a041.ts",
+      "range": null,
+      "at": 309.203
+    },
+    {
+      "path": "/external/v042.ts",
+      "range": null,
+      "at": 309.218
+    },
+    {
+      "path": "/external/a042.ts",
+      "range": null,
+      "at": 309.234
+    },
+    {
+      "path": "/external/v043.ts",
+      "range": null,
+      "at": 309.234
+    },
+    {
+      "path": "/external/a043.ts",
+      "range": null,
+      "at": 309.25
+    },
+    {
+      "path": "/external/v044.ts",
+      "range": null,
+      "at": 309.265
+    },
+    {
+      "path": "/external/a044.ts",
+      "range": null,
+      "at": 309.265
+    },
+    {
+      "path": "/external/v045.ts",
+      "range": null,
+      "at": 309.281
+    },
+    {
+      "path": "/external/a045.ts",
+      "range": null,
+      "at": 309.296
+    },
+    {
+      "path": "/external/v046.ts",
+      "range": null,
+      "at": 309.312
+    },
+    {
+      "path": "/external/a046.ts",
+      "range": null,
+      "at": 309.328
+    },
+    {
+      "path": "/external/v047.ts",
+      "range": null,
+      "at": 309.328
+    },
+    {
+      "path": "/external/a047.ts",
+      "range": null,
+      "at": 309.343
+    },
+    {
+      "path": "/dash/index.mpd",
+      "range": null,
+      "at": 312.171
+    },
+    {
+      "path": "/dash/init-stream0.m4s",
+      "range": null,
+      "at": 312.187
+    },
+    {
+      "path": "/dash/init-stream1.m4s",
+      "range": null,
+      "at": 312.218
+    },
+    {
+      "path": "/dash/chunk-stream0-00001.m4s",
+      "range": null,
+      "at": 312.25
+    },
+    {
+      "path": "/dash/chunk-stream1-00001.m4s",
+      "range": null,
+      "at": 312.921
+    },
+    {
+      "path": "/dash/chunk-stream1-00002.m4s",
+      "range": null,
+      "at": 312.953
+    },
+    {
+      "path": "/dash/index.mpd",
+      "range": null,
+      "at": 313.093
+    },
+    {
+      "path": "/dash/chunk-stream1-00002.m4s",
+      "range": null,
+      "at": 313.203
+    },
+    {
+      "path": "/dash/chunk-stream0-00002.m4s",
+      "range": null,
+      "at": 313.234
+    },
+    {
+      "path": "/dash/chunk-stream1-00003.m4s",
+      "range": null,
+      "at": 313.921
+    },
+    {
+      "path": "/dash/chunk-stream0-00003.m4s",
+      "range": null,
+      "at": 313.953
+    },
+    {
+      "path": "/dash/chunk-stream1-00004.m4s",
+      "range": null,
+      "at": 314.625
+    },
+    {
+      "path": "/dash/chunk-stream0-00004.m4s",
+      "range": null,
+      "at": 314.656
+    },
+    {
+      "path": "/dash/chunk-stream1-00005.m4s",
+      "range": null,
+      "at": 315.343
+    },
+    {
+      "path": "/dash/chunk-stream0-00005.m4s",
+      "range": null,
+      "at": 315.375
+    },
+    {
+      "path": "/dash/chunk-stream1-00006.m4s",
+      "range": null,
+      "at": 316.046
+    },
+    {
+      "path": "/dash/chunk-stream0-00006.m4s",
+      "range": null,
+      "at": 316.078
+    },
+    {
+      "path": "/dash/chunk-stream1-00047.m4s",
+      "range": null,
+      "at": 316.765
+    },
+    {
+      "path": "/dash/chunk-stream0-00048.m4s",
+      "range": null,
+      "at": 316.796
+    },
+    {
+      "path": "/dash/chunk-stream1-00048.m4s",
+      "range": null,
+      "at": 317.484
+    },
+    {
+      "path": "/dash/chunk-stream0-00049.m4s",
+      "range": null,
+      "at": 317.5
+    },
+    {
+      "path": "/dash/chunk-stream1-00049.m4s",
+      "range": null,
+      "at": 318.187
+    },
+    {
+      "path": "/dash/chunk-stream0-00050.m4s",
+      "range": null,
+      "at": 318.203
+    },
+    {
+      "path": "/dash/chunk-stream1-00050.m4s",
+      "range": null,
+      "at": 318.875
+    },
+    {
+      "path": "/dash/chunk-stream0-00051.m4s",
+      "range": null,
+      "at": 318.906
+    },
+    {
+      "path": "/dash/chunk-stream1-00051.m4s",
+      "range": null,
+      "at": 319.578
+    },
+    {
+      "path": "/dash/chunk-stream0-00052.m4s",
+      "range": null,
+      "at": 319.609
+    },
+    {
+      "path": "/dash/chunk-stream1-00052.m4s",
+      "range": null,
+      "at": 320.296
+    },
+    {
+      "path": "/dash/chunk-stream0-00053.m4s",
+      "range": null,
+      "at": 320.312
+    },
+    {
+      "path": "/dash/chunk-stream1-00053.m4s",
+      "range": null,
+      "at": 320.343
+    },
+    {
+      "path": "/dash/chunk-stream0-00054.m4s",
+      "range": null,
+      "at": 320.359
+    },
+    {
+      "path": "/dash/chunk-stream1-00054.m4s",
+      "range": null,
+      "at": 320.39
+    },
+    {
+      "path": "/dash/chunk-stream0-00055.m4s",
+      "range": null,
+      "at": 320.406
+    },
+    {
+      "path": "/dash/chunk-stream1-00055.m4s",
+      "range": null,
+      "at": 320.421
+    },
+    {
+      "path": "/dash/chunk-stream0-00056.m4s",
+      "range": null,
+      "at": 320.453
+    },
+    {
+      "path": "/dash/chunk-stream1-00056.m4s",
+      "range": null,
+      "at": 320.468
+    },
+    {
+      "path": "/dash/chunk-stream0-00057.m4s",
+      "range": null,
+      "at": 320.484
+    },
+    {
+      "path": "/dash/chunk-stream1-00057.m4s",
+      "range": null,
+      "at": 320.515
+    },
+    {
+      "path": "/dash/chunk-stream0-00058.m4s",
+      "range": null,
+      "at": 320.531
+    },
+    {
+      "path": "/dash/chunk-stream1-00058.m4s",
+      "range": null,
+      "at": 320.562
+    },
+    {
+      "path": "/dash/chunk-stream0-00059.m4s",
+      "range": null,
+      "at": 320.578
+    },
+    {
+      "path": "/dash/chunk-stream1-00059.m4s",
+      "range": null,
+      "at": 320.609
+    },
+    {
+      "path": "/dash/chunk-stream0-00060.m4s",
+      "range": null,
+      "at": 320.625
+    },
+    {
+      "path": "/dash/chunk-stream1-00060.m4s",
+      "range": null,
+      "at": 320.64
+    },
+    {
+      "path": "/dash/chunk-stream1-00007.m4s",
+      "range": null,
+      "at": 320.656
+    },
+    {
+      "path": "/dash/chunk-stream0-00007.m4s",
+      "range": null,
+      "at": 320.687
+    },
+    {
+      "path": "/dash/chunk-stream1-00008.m4s",
+      "range": null,
+      "at": 320.703
+    },
+    {
+      "path": "/dash/chunk-stream0-00008.m4s",
+      "range": null,
+      "at": 320.734
+    },
+    {
+      "path": "/dash/chunk-stream1-00009.m4s",
+      "range": null,
+      "at": 320.781
+    },
+    {
+      "path": "/dash/chunk-stream0-00009.m4s",
+      "range": null,
+      "at": 320.796
+    },
+    {
+      "path": "/dash/chunk-stream0-00010.m4s",
+      "range": null,
+      "at": 320.812
+    },
+    {
+      "path": "/dash/chunk-stream1-00010.m4s",
+      "range": null,
+      "at": 320.828
+    },
+    {
+      "path": "/dash/chunk-stream0-00011.m4s",
+      "range": null,
+      "at": 320.843
+    },
+    {
+      "path": "/dash/chunk-stream1-00011.m4s",
+      "range": null,
+      "at": 320.859
+    },
+    {
+      "path": "/dash/chunk-stream0-00012.m4s",
+      "range": null,
+      "at": 320.875
+    },
+    {
+      "path": "/dash/chunk-stream1-00012.m4s",
+      "range": null,
+      "at": 320.906
+    },
+    {
+      "path": "/dash/chunk-stream0-00013.m4s",
+      "range": null,
+      "at": 320.921
+    },
+    {
+      "path": "/dash/chunk-stream1-00013.m4s",
+      "range": null,
+      "at": 320.937
+    },
+    {
+      "path": "/dash/chunk-stream0-00014.m4s",
+      "range": null,
+      "at": 320.968
+    },
+    {
+      "path": "/dash/chunk-stream1-00014.m4s",
+      "range": null,
+      "at": 320.984
+    },
+    {
+      "path": "/dash/chunk-stream0-00015.m4s",
+      "range": null,
+      "at": 321.0
+    },
+    {
+      "path": "/dash/chunk-stream1-00015.m4s",
+      "range": null,
+      "at": 321.015
+    },
+    {
+      "path": "/dash/chunk-stream0-00016.m4s",
+      "range": null,
+      "at": 321.031
+    },
+    {
+      "path": "/dash/chunk-stream1-00016.m4s",
+      "range": null,
+      "at": 321.062
+    },
+    {
+      "path": "/dash/chunk-stream1-00017.m4s",
+      "range": null,
+      "at": 321.093
+    },
+    {
+      "path": "/dash/chunk-stream0-00017.m4s",
+      "range": null,
+      "at": 321.109
+    },
+    {
+      "path": "/dash/chunk-stream0-00018.m4s",
+      "range": null,
+      "at": 321.14
+    },
+    {
+      "path": "/dash/chunk-stream1-00018.m4s",
+      "range": null,
+      "at": 321.171
+    },
+    {
+      "path": "/dash/chunk-stream0-00019.m4s",
+      "range": null,
+      "at": 321.187
+    },
+    {
+      "path": "/dash/chunk-stream1-00019.m4s",
+      "range": null,
+      "at": 321.203
+    },
+    {
+      "path": "/dash/chunk-stream0-00020.m4s",
+      "range": null,
+      "at": 321.234
+    },
+    {
+      "path": "/dash/chunk-stream1-00020.m4s",
+      "range": null,
+      "at": 321.25
+    },
+    {
+      "path": "/dash/chunk-stream0-00021.m4s",
+      "range": null,
+      "at": 321.265
+    },
+    {
+      "path": "/dash/chunk-stream1-00021.m4s",
+      "range": null,
+      "at": 321.296
+    },
+    {
+      "path": "/dash/chunk-stream0-00022.m4s",
+      "range": null,
+      "at": 321.312
+    },
+    {
+      "path": "/dash/chunk-stream1-00022.m4s",
+      "range": null,
+      "at": 321.328
+    },
+    {
+      "path": "/dash/chunk-stream0-00023.m4s",
+      "range": null,
+      "at": 321.359
+    },
+    {
+      "path": "/dash/chunk-stream1-00023.m4s",
+      "range": null,
+      "at": 321.375
+    },
+    {
+      "path": "/dash/chunk-stream0-00024.m4s",
+      "range": null,
+      "at": 321.421
+    },
+    {
+      "path": "/dash/chunk-stream1-00024.m4s",
+      "range": null,
+      "at": 321.437
+    },
+    {
+      "path": "/dash/chunk-stream1-00025.m4s",
+      "range": null,
+      "at": 321.468
+    },
+    {
+      "path": "/dash/chunk-stream0-00025.m4s",
+      "range": null,
+      "at": 321.484
+    },
+    {
+      "path": "/dash/chunk-stream0-00026.m4s",
+      "range": null,
+      "at": 321.515
+    },
+    {
+      "path": "/dash/chunk-stream1-00026.m4s",
+      "range": null,
+      "at": 321.531
+    },
+    {
+      "path": "/dash/chunk-stream0-00027.m4s",
+      "range": null,
+      "at": 321.562
+    },
+    {
+      "path": "/dash/chunk-stream1-00027.m4s",
+      "range": null,
+      "at": 321.593
+    },
+    {
+      "path": "/dash/chunk-stream0-00028.m4s",
+      "range": null,
+      "at": 321.609
+    },
+    {
+      "path": "/dash/chunk-stream1-00028.m4s",
+      "range": null,
+      "at": 321.64
+    },
+    {
+      "path": "/dash/chunk-stream0-00029.m4s",
+      "range": null,
+      "at": 321.656
+    },
+    {
+      "path": "/dash/chunk-stream1-00029.m4s",
+      "range": null,
+      "at": 321.687
+    },
+    {
+      "path": "/dash/chunk-stream0-00030.m4s",
+      "range": null,
+      "at": 321.703
+    },
+    {
+      "path": "/dash/chunk-stream1-00030.m4s",
+      "range": null,
+      "at": 321.718
+    },
+    {
+      "path": "/dash/chunk-stream0-00031.m4s",
+      "range": null,
+      "at": 321.75
+    },
+    {
+      "path": "/dash/chunk-stream1-00031.m4s",
+      "range": null,
+      "at": 321.781
+    },
+    {
+      "path": "/dash/chunk-stream0-00032.m4s",
+      "range": null,
+      "at": 321.796
+    },
+    {
+      "path": "/dash/chunk-stream1-00032.m4s",
+      "range": null,
+      "at": 321.828
+    },
+    {
+      "path": "/dash/chunk-stream1-00033.m4s",
+      "range": null,
+      "at": 321.843
+    },
+    {
+      "path": "/dash/chunk-stream0-00033.m4s",
+      "range": null,
+      "at": 321.875
+    },
+    {
+      "path": "/dash/chunk-stream0-00034.m4s",
+      "range": null,
+      "at": 321.89
+    },
+    {
+      "path": "/dash/chunk-stream1-00034.m4s",
+      "range": null,
+      "at": 321.921
+    },
+    {
+      "path": "/dash/chunk-stream0-00035.m4s",
+      "range": null,
+      "at": 321.953
+    },
+    {
+      "path": "/dash/chunk-stream1-00035.m4s",
+      "range": null,
+      "at": 321.968
+    },
+    {
+      "path": "/dash/chunk-stream0-00036.m4s",
+      "range": null,
+      "at": 321.984
+    },
+    {
+      "path": "/dash/chunk-stream1-00036.m4s",
+      "range": null,
+      "at": 322.015
+    },
+    {
+      "path": "/dash/chunk-stream0-00037.m4s",
+      "range": null,
+      "at": 322.031
+    },
+    {
+      "path": "/dash/chunk-stream1-00037.m4s",
+      "range": null,
+      "at": 322.062
+    },
+    {
+      "path": "/dash/chunk-stream0-00038.m4s",
+      "range": null,
+      "at": 322.093
+    },
+    {
+      "path": "/dash/chunk-stream1-00038.m4s",
+      "range": null,
+      "at": 322.125
+    },
+    {
+      "path": "/dash/chunk-stream0-00039.m4s",
+      "range": null,
+      "at": 322.156
+    },
+    {
+      "path": "/dash/chunk-stream1-00039.m4s",
+      "range": null,
+      "at": 322.187
+    },
+    {
+      "path": "/dash/chunk-stream0-00040.m4s",
+      "range": null,
+      "at": 322.203
+    },
+    {
+      "path": "/dash/chunk-stream1-00040.m4s",
+      "range": null,
+      "at": 322.234
+    },
+    {
+      "path": "/dash/chunk-stream0-00041.m4s",
+      "range": null,
+      "at": 322.25
+    },
+    {
+      "path": "/dash/chunk-stream1-00041.m4s",
+      "range": null,
+      "at": 322.281
+    },
+    {
+      "path": "/dash/chunk-stream0-00042.m4s",
+      "range": null,
+      "at": 322.296
+    },
+    {
+      "path": "/dash/chunk-stream1-00042.m4s",
+      "range": null,
+      "at": 322.328
+    },
+    {
+      "path": "/dash/chunk-stream0-00043.m4s",
+      "range": null,
+      "at": 322.359
+    },
+    {
+      "path": "/dash/chunk-stream1-00043.m4s",
+      "range": null,
+      "at": 322.39
+    },
+    {
+      "path": "/dash/chunk-stream0-00044.m4s",
+      "range": null,
+      "at": 322.421
+    },
+    {
+      "path": "/dash/chunk-stream1-00044.m4s",
+      "range": null,
+      "at": 322.437
+    },
+    {
+      "path": "/dash/chunk-stream0-00045.m4s",
+      "range": null,
+      "at": 322.468
+    },
+    {
+      "path": "/dash/chunk-stream1-00045.m4s",
+      "range": null,
+      "at": 322.484
+    },
+    {
+      "path": "/dash/chunk-stream0-00046.m4s",
+      "range": null,
+      "at": 322.515
+    },
+    {
+      "path": "/dash/chunk-stream1-00046.m4s",
+      "range": null,
+      "at": 322.531
+    },
+    {
+      "path": "/dash/chunk-stream0-00047.m4s",
+      "range": null,
+      "at": 322.546
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=0-0",
+      "at": 325.359
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=0-5838913",
+      "at": 325.375
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=5838914-11677827",
+      "at": 336.968
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=0-0",
+      "at": 337.328
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=11677828-17516741",
+      "at": 337.328
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=5969986-11677827",
+      "at": 348.546
+    },
+    {
+      "path": "/source.mp4",
+      "range": "bytes=17516742-23355655",
+      "at": 359.14
+    },
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 372.64
+    },
+    {
+      "path": "/ts/s000.jpeg",
+      "range": null,
+      "at": 372.671
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 373.359
+    },
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 373.64
+    },
+    {
+      "path": "/ts/s000.jpeg",
+      "range": null,
+      "at": 373.656
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 374.343
+    },
+    {
+      "path": "/ts/s002.jpeg",
+      "range": null,
+      "at": 375.015
+    },
+    {
+      "path": "/ts/s003.jpeg",
+      "range": null,
+      "at": 375.703
+    },
+    {
+      "path": "/ts/s004.jpeg",
+      "range": null,
+      "at": 376.375
+    },
+    {
+      "path": "/ts/s005.jpeg",
+      "range": null,
+      "at": 376.39
+    },
+    {
+      "path": "/ts/s006.jpeg",
+      "range": null,
+      "at": 376.406
+    },
+    {
+      "path": "/ts/s007.jpeg",
+      "range": null,
+      "at": 376.406
+    },
+    {
+      "path": "/ts/s008.jpeg",
+      "range": null,
+      "at": 376.421
+    },
+    {
+      "path": "/ts/s009.jpeg",
+      "range": null,
+      "at": 376.437
+    },
+    {
+      "path": "/ts/s010.jpeg",
+      "range": null,
+      "at": 376.453
+    },
+    {
+      "path": "/ts/s011.jpeg",
+      "range": null,
+      "at": 376.468
+    },
+    {
+      "path": "/ts/s012.jpeg",
+      "range": null,
+      "at": 376.5
+    },
+    {
+      "path": "/ts/s013.jpeg",
+      "range": null,
+      "at": 376.515
+    },
+    {
+      "path": "/ts/s014.jpeg",
+      "range": null,
+      "at": 376.531
+    },
+    {
+      "path": "/ts/s015.jpeg",
+      "range": null,
+      "at": 376.546
+    },
+    {
+      "path": "/ts/s016.jpeg",
+      "range": null,
+      "at": 376.562
+    },
+    {
+      "path": "/ts/s017.jpeg",
+      "range": null,
+      "at": 376.578
+    },
+    {
+      "path": "/ts/s018.jpeg",
+      "range": null,
+      "at": 376.593
+    },
+    {
+      "path": "/ts/s019.jpeg",
+      "range": null,
+      "at": 376.609
+    },
+    {
+      "path": "/ts/s020.jpeg",
+      "range": null,
+      "at": 376.625
+    },
+    {
+      "path": "/ts/s021.jpeg",
+      "range": null,
+      "at": 376.64
+    },
+    {
+      "path": "/ts/s022.jpeg",
+      "range": null,
+      "at": 376.656
+    },
+    {
+      "path": "/ts/s023.jpeg",
+      "range": null,
+      "at": 376.671
+    },
+    {
+      "path": "/ts/s024.jpeg",
+      "range": null,
+      "at": 376.687
+    },
+    {
+      "path": "/ts/s025.jpeg",
+      "range": null,
+      "at": 376.703
+    },
+    {
+      "path": "/ts/s026.jpeg",
+      "range": null,
+      "at": 376.703
+    },
+    {
+      "path": "/ts/s027.jpeg",
+      "range": null,
+      "at": 376.718
+    },
+    {
+      "path": "/ts/s028.jpeg",
+      "range": null,
+      "at": 376.734
+    },
+    {
+      "path": "/ts/s029.jpeg",
+      "range": null,
+      "at": 376.75
+    },
+    {
+      "path": "/ts/s030.jpeg",
+      "range": null,
+      "at": 376.765
+    },
+    {
+      "path": "/ts/s031.jpeg",
+      "range": null,
+      "at": 376.765
+    },
+    {
+      "path": "/ts/s032.jpeg",
+      "range": null,
+      "at": 376.781
+    },
+    {
+      "path": "/ts/s033.jpeg",
+      "range": null,
+      "at": 376.796
+    },
+    {
+      "path": "/ts/s034.jpeg",
+      "range": null,
+      "at": 376.796
+    },
+    {
+      "path": "/ts/s035.jpeg",
+      "range": null,
+      "at": 376.812
+    },
+    {
+      "path": "/ts/s036.jpeg",
+      "range": null,
+      "at": 376.828
+    },
+    {
+      "path": "/ts/s037.jpeg",
+      "range": null,
+      "at": 376.843
+    },
+    {
+      "path": "/ts/s038.jpeg",
+      "range": null,
+      "at": 376.859
+    },
+    {
+      "path": "/ts/s039.jpeg",
+      "range": null,
+      "at": 376.89
+    },
+    {
+      "path": "/ts/s040.jpeg",
+      "range": null,
+      "at": 376.89
+    },
+    {
+      "path": "/ts/s041.jpeg",
+      "range": null,
+      "at": 376.906
+    },
+    {
+      "path": "/ts/s042.jpeg",
+      "range": null,
+      "at": 376.921
+    },
+    {
+      "path": "/ts/s043.jpeg",
+      "range": null,
+      "at": 376.937
+    },
+    {
+      "path": "/ts/s044.jpeg",
+      "range": null,
+      "at": 376.953
+    },
+    {
+      "path": "/ts/s045.jpeg",
+      "range": null,
+      "at": 376.953
+    },
+    {
+      "path": "/ts/s046.jpeg",
+      "range": null,
+      "at": 376.968
+    },
+    {
+      "path": "/ts/s047.jpeg",
+      "range": null,
+      "at": 376.984
+    },
+    {
+      "path": "/ts/s048.jpeg",
+      "range": null,
+      "at": 377.015
+    },
+    {
+      "path": "/ts/s049.jpeg",
+      "range": null,
+      "at": 377.015
+    },
+    {
+      "path": "/ts/s050.jpeg",
+      "range": null,
+      "at": 377.031
+    },
+    {
+      "path": "/ts/s051.jpeg",
+      "range": null,
+      "at": 377.046
+    },
+    {
+      "path": "/ts/s052.jpeg",
+      "range": null,
+      "at": 377.062
+    },
+    {
+      "path": "/ts/s053.jpeg",
+      "range": null,
+      "at": 377.078
+    },
+    {
+      "path": "/ts/s054.jpeg",
+      "range": null,
+      "at": 377.093
+    },
+    {
+      "path": "/ts/s055.jpeg",
+      "range": null,
+      "at": 377.093
+    },
+    {
+      "path": "/ts/s056.jpeg",
+      "range": null,
+      "at": 377.109
+    },
+    {
+      "path": "/ts/s057.jpeg",
+      "range": null,
+      "at": 377.125
+    },
+    {
+      "path": "/ts/s058.jpeg",
+      "range": null,
+      "at": 377.14
+    },
+    {
+      "path": "/ts/s059.jpeg",
+      "range": null,
+      "at": 377.156
+    },
+    {
+      "path": "/ts/index.m3u8",
+      "range": null,
+      "at": 377.984
+    },
+    {
+      "path": "/ts/s000.jpeg",
+      "range": null,
+      "at": 378.015
+    },
+    {
+      "path": "/ts/s001.jpeg",
+      "range": null,
+      "at": 378.031
+    },
+    {
+      "path": "/ts/s002.jpeg",
+      "range": null,
+      "at": 378.046
+    },
+    {
+      "path": "/ts/s003.jpeg",
+      "range": null,
+      "at": 378.062
+    },
+    {
+      "path": "/ts/s004.jpeg",
+      "range": null,
+      "at": 378.062
+    },
+    {
+      "path": "/ts/s005.jpeg",
+      "range": null,
+      "at": 378.078
+    },
+    {
+      "path": "/ts/s006.jpeg",
+      "range": null,
+      "at": 378.093
+    },
+    {
+      "path": "/ts/s007.jpeg",
+      "range": null,
+      "at": 378.109
+    },
+    {
+      "path": "/ts/s008.jpeg",
+      "range": null,
+      "at": 378.125
+    },
+    {
+      "path": "/ts/s009.jpeg",
+      "range": null,
+      "at": 378.125
+    },
+    {
+      "path": "/ts/s010.jpeg",
+      "range": null,
+      "at": 378.14
+    },
+    {
+      "path": "/ts/s011.jpeg",
+      "range": null,
+      "at": 378.156
+    },
+    {
+      "path": "/ts/s012.jpeg",
+      "range": null,
+      "at": 378.171
+    },
+    {
+      "path": "/ts/s013.jpeg",
+      "range": null,
+      "at": 378.187
+    },
+    {
+      "path": "/ts/s014.jpeg",
+      "range": null,
+      "at": 378.203
+    },
+    {
+      "path": "/ts/s015.jpeg",
+      "range": null,
+      "at": 378.218
+    },
+    {
+      "path": "/ts/s016.jpeg",
+      "range": null,
+      "at": 378.234
+    },
+    {
+      "path": "/ts/s017.jpeg",
+      "range": null,
+      "at": 378.25
+    },
+    {
+      "path": "/ts/s018.jpeg",
+      "range": null,
+      "at": 378.265
+    },
+    {
+      "path": "/ts/s019.jpeg",
+      "range": null,
+      "at": 378.281
+    },
+    {
+      "path": "/ts/s020.jpeg",
+      "range": null,
+      "at": 378.296
+    },
+    {
+      "path": "/ts/s021.jpeg",
+      "range": null,
+      "at": 378.312
+    },
+    {
+      "path": "/ts/s022.jpeg",
+      "range": null,
+      "at": 378.328
+    },
+    {
+      "path": "/ts/s023.jpeg",
+      "range": null,
+      "at": 378.328
+    },
+    {
+      "path": "/ts/s024.jpeg",
+      "range": null,
+      "at": 378.343
+    },
+    {
+      "path": "/ts/s025.jpeg",
+      "range": null,
+      "at": 378.359
+    },
+    {
+      "path": "/ts/s026.jpeg",
+      "range": null,
+      "at": 378.359
+    },
+    {
+      "path": "/ts/s027.jpeg",
+      "range": null,
+      "at": 378.375
+    },
+    {
+      "path": "/ts/s028.jpeg",
+      "range": null,
+      "at": 378.39
+    },
+    {
+      "path": "/ts/s029.jpeg",
+      "range": null,
+      "at": 378.406
+    },
+    {
+      "path": "/ts/s030.jpeg",
+      "range": null,
+      "at": 378.406
+    },
+    {
+      "path": "/ts/s031.jpeg",
+      "range": null,
+      "at": 378.421
+    },
+    {
+      "path": "/ts/s032.jpeg",
+      "range": null,
+      "at": 378.421
+    },
+    {
+      "path": "/ts/s033.jpeg",
+      "range": null,
+      "at": 378.437
+    },
+    {
+      "path": "/ts/s034.jpeg",
+      "range": null,
+      "at": 378.453
+    },
+    {
+      "path": "/ts/s035.jpeg",
+      "range": null,
+      "at": 378.468
+    },
+    {
+      "path": "/ts/s036.jpeg",
+      "range": null,
+      "at": 378.484
+    },
+    {
+      "path": "/ts/s037.jpeg",
+      "range": null,
+      "at": 378.5
+    },
+    {
+      "path": "/ts/s038.jpeg",
+      "range": null,
+      "at": 378.515
+    },
+    {
+      "path": "/ts/s039.jpeg",
+      "range": null,
+      "at": 378.531
+    },
+    {
+      "path": "/ts/s040.jpeg",
+      "range": null,
+      "at": 378.546
+    },
+    {
+      "path": "/ts/s041.jpeg",
+      "range": null,
+      "at": 378.562
+    },
+    {
+      "path": "/ts/s042.jpeg",
+      "range": null,
+      "at": 378.578
+    },
+    {
+      "path": "/ts/s043.jpeg",
+      "range": null,
+      "at": 378.578
+    },
+    {
+      "path": "/ts/s044.jpeg",
+      "range": null,
+      "at": 378.593
+    },
+    {
+      "path": "/ts/s045.jpeg",
+      "range": null,
+      "at": 378.609
+    },
+    {
+      "path": "/ts/s046.jpeg",
+      "range": null,
+      "at": 378.625
+    },
+    {
+      "path": "/ts/s047.jpeg",
+      "range": null,
+      "at": 378.64
+    },
+    {
+      "path": "/ts/s048.jpeg",
+      "range": null,
+      "at": 378.64
+    },
+    {
+      "path": "/ts/s049.jpeg",
+      "range": null,
+      "at": 378.656
+    },
+    {
+      "path": "/ts/s050.jpeg",
+      "range": null,
+      "at": 378.671
+    },
+    {
+      "path": "/ts/s051.jpeg",
+      "range": null,
+      "at": 378.687
+    },
+    {
+      "path": "/ts/s052.jpeg",
+      "range": null,
+      "at": 378.703
+    },
+    {
+      "path": "/ts/s053.jpeg",
+      "range": null,
+      "at": 378.718
+    },
+    {
+      "path": "/ts/s054.jpeg",
+      "range": null,
+      "at": 378.718
+    },
+    {
+      "path": "/ts/s055.jpeg",
+      "range": null,
+      "at": 378.75
+    },
+    {
+      "path": "/ts/s056.jpeg",
+      "range": null,
+      "at": 378.75
+    },
+    {
+      "path": "/ts/s057.jpeg",
+      "range": null,
+      "at": 378.781
+    },
+    {
+      "path": "/ts/s058.jpeg",
+      "range": null,
+      "at": 378.781
+    },
+    {
+      "path": "/ts/s059.jpeg",
+      "range": null,
+      "at": 378.796
+    }
+  ],
+  "performance": {
+    "core_idle": {
+      "elapsed_seconds": 3.0,
+      "cpu_one_core_percent": 0.0,
+      "cpu_machine_percent": 0.0,
+      "rss_sum_bytes": 12898304,
+      "processes": {
+        "1140": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.015625,
+          "rss": 12898304,
+          "private": 2981888
+        }
+      }
+    },
+    "downloading": {
+      "elapsed_seconds": 3.0160000000000196,
+      "cpu_one_core_percent": 0.518070291777185,
+      "cpu_machine_percent": 0.06475878647214812,
+      "rss_sum_bytes": 15802368,
+      "processes": {
+        "1140": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.03125,
+          "rss": 15802368,
+          "private": 5521408
+        }
+      }
+    },
+    "downloading_and_playing": {
+      "elapsed_seconds": 3.0,
+      "cpu_one_core_percent": 8.854166666666668,
+      "cpu_machine_percent": 1.1067708333333335,
+      "rss_sum_bytes": 156434432,
+      "processes": {
+        "1140": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 0.234375,
+          "rss": 17432576,
+          "private": 6234112
+        },
+        "7120": {
+          "name": "HLSDownloaderEngine.exe",
+          "cpu": 1.203125,
+          "rss": 139001856,
+          "private": 165826560
+        }
+      }
+    }
+  },
+  "engine_sha256": "31d56e737907e5aedc6b523837266c2bdcaa0ae10f0ea3e4811d1baf26ff2ae8",
+  "window_switch": {
+    "before": [
+      {
+        "hwnd": 655982,
+        "pid": 6472,
+        "rect": [
+          254,
+          85,
+          959,
+          482
+        ]
+      }
+    ],
+    "after": [
+      {
+        "hwnd": 655982,
+        "pid": 6472,
+        "rect": [
+          254,
+          85,
+          959,
+          482
+        ]
+      }
+    ]
+  }
+}

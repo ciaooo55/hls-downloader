@@ -33,7 +33,7 @@ The recommended way to get HLS Downloader is from **GitHub Releases**:
 
 Release bundles may include Windows x64 **EXE / MSI / Portable ZIP** packages together with matching **Chromium / Firefox browser extensions**.
 
-Latest revision: [7.0.3-r12 (unsigned prerelease)](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r12). Includes the unsigned MSI, Chromium/Firefox extensions, extension sources, Firefox review sources and complete project source. Fixes partial batch failures, queue numeric editing and naming, and the FTPS entry flow. Retains the inline player, playback during download and cache cleanup, with renewed protocol, recovery, playback and installation checks. See the [release notes](docs/releases/release-v7-r12.md) and attached evidence for the actual scope and limitations.
+Installers, Chromium/Firefox extensions and extension sources are available on the [releases page](https://github.com/ciaooo55/hls-downloader/releases). It retains the last release of each major version and a single unsigned v7 prerelease; historical source tags remain available. `main` and desktop candidates may include fixes that are not yet published. Consult each release's notes and validation records for the tested version, scenarios and limitations.
 
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
 

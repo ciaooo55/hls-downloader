@@ -1,0 +1,42 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "download-playback",
+    "checks":  [
+                   {
+                       "name":  "core-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "curl-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "winhttp-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "ffmpeg-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "sequential-comparison",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "sequential-repeat",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "http-boundaries",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "http-stall",
+                       "passed":  true
+                   }
+               ],
+    "error":  "download-playback failed: 1",
+    "position":  "At C:\\QAPerf\\runners\\guest-v2.ps1:15 char:27\r\n+     if($p.ExitCode -ne 0){throw \"$name failed: $($p.ExitCode)\"}\r\n+                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+    "stack":  "at Run, C:\\QAPerf\\runners\\guest-v2.ps1: line 15\r\nat \u003cScriptBlock\u003e, C:\\QAPerf\\runners\\guest-v2.ps1: line 37"
+}

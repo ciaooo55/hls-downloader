@@ -475,7 +475,7 @@ def run(args):
             return result
         before = sample()
         started = time.monotonic()
-        time.sleep(5)
+        time.sleep(args.idle_seconds)
         after = sample()
         elapsed = time.monotonic()-started
         cpu = sum(max(0, p['cpu']-before.get(pid, p)['cpu']) for pid, p in after.items())
@@ -519,6 +519,8 @@ if __name__ == '__main__':
     parser.add_argument('--expected-components', type=Path,
                         help='JSON mapping installation-relative paths to tested SHA256 values')
     parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
+    parser.add_argument('--idle-seconds', type=float, default=5,
+                        help='Duration of the installed product resource sample (default: 5 seconds)')
     parser.add_argument('--verify-browser-color', action='store_true', help='Verify footer pixels before/after a simulated browser handshake')
     parser.add_argument('--verify-http-retry', action='store_true', help='Verify permanent/transient HTTP failures and queue continuation with the installed Engine')
     parser.add_argument('--verify-hls-retry', action='store_true', help='Verify full/range HLS segment errors, recovery and cache cleanup with the installed Engine')

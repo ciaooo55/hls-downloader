@@ -1,6 +1,6 @@
 # 历史修复摘要
 
-当前说明以 [r12](release-v7-r12.md)、[模块图](../architecture/v7-module-map.md)和[验证状态](../validation/v7-verification.md)为准。旧版发布文字、单次本机记录和迭代日志已合并，详细原文保留在同一仓库的 Git 历史中。
+可下载版本以 [GitHub 发布页](https://github.com/ciaooo55/hls-downloader/releases)为准；每个主要版本只保留最后一版，v7 保留一个未签名预发布。移除重复发布不会移除对应的源码标签。下面是早期 v7 改动摘要，不能代替后续版本各自的验收记录；架构见[模块图](../architecture/v7-module-map.md)。旧版发布文字、单次本机记录和迭代日志已合并，详细原文保留在同一仓库的 Git 历史中。
 
 | 历史阶段 | 与当前维护有关的改动 |
 | --- | --- |

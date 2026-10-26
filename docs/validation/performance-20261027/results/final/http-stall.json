@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "single: stalled pause/resume",
+      "pause_seconds": 0.031999999999982265,
+      "resume_seconds": 0.42099999999999227
+    },
+    {
+      "name": "single: complete, SHA-256 verified, cache removed",
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "parallel: stalled pause/resume",
+      "pause_seconds": 0.03100000000000591,
+      "resume_seconds": 0.25
+    },
+    {
+      "name": "parallel: complete, SHA-256 verified, cache removed",
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    },
+    {
+      "name": "delete while all connections are stalled removes task/cache",
+      "seconds": 0.20299999999997453
+    },
+    {
+      "name": "gap: complete, SHA-256 verified, cache removed",
+      "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+    }
+  ],
+  "engine_sha256": "ce983add1a882178b9ae87a732a0e7c83594f632a49f49060cf6f58e61aab18f"
+}

@@ -1,0 +1,47 @@
+﻿{
+    "passed":  true,
+    "finished":  true,
+    "current":  "installed",
+    "checks":  [
+                   {
+                       "name":  "core-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "curl-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "winhttp-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "ffmpeg-regression",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "sequential-comparison",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "sequential-repeat",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "http-boundaries",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "http-stall",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "download-playback",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "installed",
+                       "passed":  true
+                   }
+               ]
+}

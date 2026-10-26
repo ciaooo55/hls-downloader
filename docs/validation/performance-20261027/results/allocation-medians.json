@@ -1,0 +1,164 @@
+[
+  {
+    "run": "sequential",
+    "method": "GET",
+    "block": 4096,
+    "variant": "baseline-a",
+    "elapsed_seconds": 0.431308,
+    "cpu_seconds": 0.265625,
+    "rss_bytes": 13676544
+  },
+  {
+    "run": "sequential",
+    "method": "GET",
+    "block": 4096,
+    "variant": "baseline-b",
+    "elapsed_seconds": 0.456318,
+    "cpu_seconds": 0.265625,
+    "rss_bytes": 13684736
+  },
+  {
+    "run": "sequential",
+    "method": "GET",
+    "block": 4096,
+    "variant": "candidate",
+    "elapsed_seconds": 0.43342,
+    "cpu_seconds": 0.28125,
+    "rss_bytes": 13709312
+  },
+  {
+    "run": "sequential",
+    "method": "GET",
+    "block": 65536,
+    "variant": "baseline-a",
+    "elapsed_seconds": 0.403917,
+    "cpu_seconds": 0.359375,
+    "rss_bytes": 13680640
+  },
+  {
+    "run": "sequential",
+    "method": "GET",
+    "block": 65536,
+    "variant": "baseline-b",
+    "elapsed_seconds": 0.409044,
+    "cpu_seconds": 0.34375,
+    "rss_bytes": 13688832
+  },
+  {
+    "run": "sequential",
+    "method": "GET",
+    "block": 65536,
+    "variant": "candidate",
+    "elapsed_seconds": 0.435667,
+    "cpu_seconds": 0.34375,
+    "rss_bytes": 13713408
+  },
+  {
+    "run": "sequential",
+    "method": "POST",
+    "block": 4096,
+    "variant": "baseline-a",
+    "elapsed_seconds": 0.40289,
+    "cpu_seconds": 0.296875,
+    "rss_bytes": 13643776
+  },
+  {
+    "run": "sequential",
+    "method": "POST",
+    "block": 4096,
+    "variant": "baseline-b",
+    "elapsed_seconds": 0.574809,
+    "cpu_seconds": 0.28125,
+    "rss_bytes": 13684736
+  },
+  {
+    "run": "sequential",
+    "method": "POST",
+    "block": 4096,
+    "variant": "candidate",
+    "elapsed_seconds": 0.405019,
+    "cpu_seconds": 0.25,
+    "rss_bytes": 13742080
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "GET",
+    "block": 4096,
+    "variant": "baseline-a",
+    "elapsed_seconds": 0.427593,
+    "cpu_seconds": 0.3125,
+    "rss_bytes": 13680640
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "GET",
+    "block": 4096,
+    "variant": "baseline-b",
+    "elapsed_seconds": 0.403521,
+    "cpu_seconds": 0.3125,
+    "rss_bytes": 13651968
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "GET",
+    "block": 4096,
+    "variant": "candidate",
+    "elapsed_seconds": 0.403041,
+    "cpu_seconds": 0.28125,
+    "rss_bytes": 13733888
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "GET",
+    "block": 65536,
+    "variant": "baseline-a",
+    "elapsed_seconds": 0.460361,
+    "cpu_seconds": 0.40625,
+    "rss_bytes": 13672448
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "GET",
+    "block": 65536,
+    "variant": "baseline-b",
+    "elapsed_seconds": 0.436742,
+    "cpu_seconds": 0.375,
+    "rss_bytes": 13680640
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "GET",
+    "block": 65536,
+    "variant": "candidate",
+    "elapsed_seconds": 0.548066,
+    "cpu_seconds": 0.484375,
+    "rss_bytes": 13766656
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "POST",
+    "block": 4096,
+    "variant": "baseline-a",
+    "elapsed_seconds": 0.483705,
+    "cpu_seconds": 0.375,
+    "rss_bytes": 13660160
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "POST",
+    "block": 4096,
+    "variant": "baseline-b",
+    "elapsed_seconds": 0.383849,
+    "cpu_seconds": 0.34375,
+    "rss_bytes": 13701120
+  },
+  {
+    "run": "sequential-repeat",
+    "method": "POST",
+    "block": 4096,
+    "variant": "candidate",
+    "elapsed_seconds": 0.455981,
+    "cpu_seconds": 0.34375,
+    "rss_bytes": 13758464
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "host_install_performed": false,
+  "native_host_keys": [],
+  "scope": "Exact project Native Messaging child keys in user/machine and 32-bit views, product-named uninstall registrations and exact product process names; not a whole-disk zero-trace claim",
+  "product_processes": [],
+  "uninstall_records": [],
+  "registry_writes_performed": false,
+  "checked_at": "2026-10-27T02:36:34.1720209+08:00"
+}

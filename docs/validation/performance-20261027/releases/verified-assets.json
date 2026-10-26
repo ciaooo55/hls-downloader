@@ -1,0 +1,80 @@
+{
+  "assets": [
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/HLSDownloader-7.0.3-extension-source.zip",
+      "digest": "sha256:ea62ae7579da421159f64534567a32b008af1744691393f773352ebcaf489718",
+      "id": 679089587,
+      "name": "HLSDownloader-7.0.3-extension-source.zip",
+      "size": 362418,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/delivery-manifest.json",
+      "digest": "sha256:18a020ca01502e59a86f45c4efb401be923df986f65f507603c40870f0b0dc74",
+      "id": 679089589,
+      "name": "delivery-manifest.json",
+      "size": 2368,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/HLSDownloader-7.0.3-20261026-unsigned.msi",
+      "digest": "sha256:140b9774ebcb457dd7875b384de055568321a171a493e7cbf2972f50d72fce96",
+      "id": 679089591,
+      "name": "HLSDownloader-7.0.3-20261026-unsigned.msi",
+      "size": 203448320,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/HLSDownloader-7.0.3-Chromium.zip",
+      "digest": "sha256:997aeeec32495f30bcf5d1b90736e62b477c502235473522f002a02ae8a1738b",
+      "id": 679089594,
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "size": 327501,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/BUILD-PROVENANCE.json",
+      "digest": "sha256:b4efbefe48d49bf87db36feae0b1bfceac9cf6756c9889cb915c7635852c0074",
+      "id": 679089595,
+      "name": "BUILD-PROVENANCE.json",
+      "size": 5651,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/HLSDownloader-7.0.3-Firefox-review-source.zip",
+      "digest": "sha256:832a10b6c032152b17f1518dba1c1ffa28614e52724762fdf72b06c13f36379f",
+      "id": 679089634,
+      "name": "HLSDownloader-7.0.3-Firefox-review-source.zip",
+      "size": 282447,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/HLSDownloader-7.0.3-Firefox-unsigned.zip",
+      "digest": "sha256:a18273131b7a9ef13a83f166f3b1bce265ec74e521d541491344d6f73d956248",
+      "id": 679089636,
+      "name": "HLSDownloader-7.0.3-Firefox-unsigned.zip",
+      "size": 326826,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/SHA256SUMS.txt",
+      "digest": "sha256:959d8970b0a574a4ff42a2818a75d76c2132046ef7d6391bb48283bb251220b5",
+      "id": 679089641,
+      "name": "SHA256SUMS.txt",
+      "size": 799,
+      "state": "uploaded"
+    },
+    {
+      "browser_download_url": "https://github.com/ciaooo55/hls-downloader/releases/download/untagged-7d83047ec4b99ad69598/VALIDATION.txt",
+      "digest": "sha256:61bffbe8412d54a676c5b32a5377cf9764e56e946e78cd0ff4b590b0fa95c676",
+      "id": 679089648,
+      "name": "VALIDATION.txt",
+      "size": 1169,
+      "state": "uploaded"
+    }
+  ],
+  "draft": true,
+  "id": 424619287,
+  "prerelease": true,
+  "tag_name": "v7.0.3-r15"
+}

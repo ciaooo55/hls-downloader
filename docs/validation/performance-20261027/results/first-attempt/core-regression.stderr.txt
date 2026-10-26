@@ -1,0 +1,42 @@
+Core setting queue_profiles is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 was published but the Core mutex was poisoned
+v7 task task-1 was published but its completion power action failed: v7 Core mutex poisoned
+v7 task task-1 subtitle copy failed: copy subtitle C:\QAWork\tmp\hls-publish-media-preserve-6436-1793036132274314500\subs\zh.srt: 拒绝访问。 (os error 5)
+v7 task task-1 subtitle copy failed: copy subtitle C:\QAWork\tmp\hls-publish-media-preserve-6436-1793036132372837100\subs\zh.srt: 拒绝访问。 (os error 5)
+v7 task task-1 failed: av_scan_error: 系统找不到指定的文件。 (os error 2)
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: HTTP 401
+v7 task task-2 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: HTTP 403
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: HTTP 404
+v7 task task-1 failed: HTTP 503 after 5 attempts
+v7 task task-1 failed: HTTP 503 after 5 attempts
+v7 task task-1 failed: HTTP 503 after 5 attempts
+v7 task task-1 failed: resource identity changed: ETag differs from the saved download
+v7 task task-1 failed: range response rejected: Range response missing valid Content-Range
+v7 task task-1 failed: checksum mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, got 9c729c04a3ec90078b265e7b9bbfcb834f5b3f5ee3a6732e76f6a65f8910ad43
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: url path invalid
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-2 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+Core setting queue_profiles is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting queue_profiles is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: read BT task control: 系统找不到指定的文件。 (os error 2)
+v7 task task-1 failed: WinHttpSendRequest 12029
+v7 task task-1 failed: 请求上下文损坏: expected value at line 1 column 1
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0

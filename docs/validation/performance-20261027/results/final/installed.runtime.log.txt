@@ -1,0 +1,26 @@
+core_startup stage=entry elapsed_us=28
+core_startup stage=registration elapsed_us=3484
+core_startup stage=instance_lock elapsed_us=5846
+core_sqlite_open stage=directory_ready elapsed_us=98
+core_sqlite_open stage=connection_ready elapsed_us=3271
+core_sqlite_open stage=version_read elapsed_us=5666
+core_sqlite_initialize stage=pragmas_ready elapsed_us=275
+core_sqlite_initialize stage=schema_ready elapsed_us=1863
+core_sqlite_initialize stage=committed elapsed_us=3175
+core_sqlite_open stage=initialized elapsed_us=11247
+core_store_startup stage=database_open elapsed_us=12584
+core_store_startup stage=bootstrap elapsed_us=15493
+core_store_startup stage=recovery_watchers elapsed_us=19196
+core_startup stage=store_ready elapsed_us=29654
+core_startup stage=tray elapsed_us=31612
+core_startup stage=ipc_ready elapsed_us=35929
+download engine listening on 127.0.0.1:51701
+v7 task task-2 failed: HTTP 403
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-4 failed: HTTP 503 after 5 attempts
+v7 task task-6 failed: resource identity changed: ETag differs from the saved download
+v7 task task-8 failed: range response rejected: Range response missing valid Content-Range
+v7 task task-10 failed: HLS media HTTP 403
+v7 task task-11 failed: HTTP 403: byte range requires status 206
+UI_TEST_API=http://127.0.0.1:51702

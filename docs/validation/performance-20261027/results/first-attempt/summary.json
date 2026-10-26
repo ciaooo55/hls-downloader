@@ -1,0 +1,11 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "current":  "core-regression",
+    "checks":  [
+
+               ],
+    "error":  "core-regression failed: 101",
+    "position":  "At C:\\QAPerf\\runners\\guest.ps1:15 char:27\r\n+     if($p.ExitCode -ne 0){throw \"$name failed: $($p.ExitCode)\"}\r\n+                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+    "stack":  "at Run, C:\\QAPerf\\runners\\guest.ps1: line 15\r\nat \u003cScriptBlock\u003e, C:\\QAPerf\\runners\\guest.ps1: line 28"
+}
