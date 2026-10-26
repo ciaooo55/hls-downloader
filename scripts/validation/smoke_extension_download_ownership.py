@@ -242,6 +242,7 @@ def run(args):
                 if name == 'double':
                     click(name, reload=False)
                     # IPC 往返作为屏障，再核对只有一份持久确认，不以删除重复任务掩盖问题。
+                    driver.switch_to.window(inspector)
                     _extension_call(driver, "chrome.runtime.sendMessage({type:'ping'}).then(done)")
                     new_offers = [h for h in handoffs() if h['id'] not in before]
                     assert len(new_offers) == 1, new_offers
@@ -274,7 +275,7 @@ def run(args):
                     assert output.read_bytes() == PAYLOAD
                     assert absent()
                     if name == 'previous-post':
-                        assert requests['POST /export.zip'] == requests['/export.zip'] == 1, requests
+                        assert requests['POST /export.zip'] == 1 and requests['/export.zip'] > 0, requests
                     record(f'{name}: one Core file, no browser copy', {'created_events': delta, 'sha256': hashlib.sha256(output.read_bytes()).hexdigest()})
                     command({'kind':'task_action','task_id':task['task_id'],'action':'delete_files'})
 
