@@ -76,12 +76,61 @@ describe('browser download ownership through registered event listeners', () => 
   function response(early = false, method = 'GET') {
     const request = { requestId: 'download-request', url: item.url, method, tabId: 7,
       frameId: 0, type: 'main_frame', documentUrl: item.referrer, timeStamp: Date.now() }
-    listener(mocks.browser.webRequest.onBeforeRequest)(request)
+    listener(mocks.browser.webRequest.onBeforeRequest)({ ...request,
+      ...(method === 'POST' ? { requestBody: { formData: { export: ['once'] } } } : {}) })
+    if (method === 'POST') listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+      requestHeaders: [{ name: 'Content-Type', value: 'application/x-www-form-urlencoded' }] })
     listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
       responseHeaders: [{ name: 'Content-Type', value: 'application/octet-stream' },
         ...(early ? [{ name: 'Content-Disposition', value: 'attachment; filename="export.bin"' }] : []),
         { name: 'Content-Length', value: '1024' }] })
   }
+
+  function directLink() {
+    return new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'intercept-download-link', href: 'https://site.test/export.zip', filename: '' },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 }, resolve,
+    ))
+  }
+
+  it('shares one pending desktop confirmation for repeated direct-link clicks', async () => {
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      return { ok: true, handoff: { id: 'one-confirmation', status: 'pending' } }
+    })
+    const clicks = Promise.all([directLink(), directLink()])
+    await vi.advanceTimersByTimeAsync(500)
+    const replies = await clicks
+    expect(replies.every(reply => reply.handoff?.id === 'one-confirmation')).toBe(true)
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    const third = directLink()
+    await vi.advanceTimersByTimeAsync(500)
+    expect((await third).handoff?.id).toBe('one-confirmation')
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+  })
+
+  it('allows browser fallback for both clicks when a shared offer is explicitly refused', async () => {
+    mocks.native.mockImplementation(async message => message.op === 'ping'
+      ? { ok: true } : { ok: false, error: 'desktop refused' })
+    const clicks = Promise.all([directLink(), directLink()])
+    await vi.advanceTimersByTimeAsync(500)
+    const replies = await clicks
+    expect(replies.every(reply => reply.browserFallback === true)).toBe(true)
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+  })
+
+  it('does not replay a previous POST when intercepting a new GET link to the same URL', async () => {
+    item.url = item.finalUrl = 'https://site.test/export.zip'
+    response(true, 'POST')
+    mocks.native.mockImplementation(async message => message.op === 'ping'
+      ? { ok: true } : { ok: true, handoff: { id: 'get-confirmation', status: 'pending' } })
+    const click = directLink()
+    await vi.advanceTimersByTimeAsync(500)
+    expect((await click).browserFallback).toBe(false)
+    const offered = mocks.native.mock.calls.find(([message]) => message.op === 'offer')?.[0]
+    expect(offered.resource.request_method).not.toBe('POST')
+    expect(offered.resource.request_body).toBeUndefined()
+  })
 
   it.each([false, true])('imports a completed GET without replay, early response=%s', async early => {
     response(early)

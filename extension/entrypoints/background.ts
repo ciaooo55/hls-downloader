@@ -928,12 +928,17 @@ async function resourceRequest(
   resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
   const requireSuccessfulRequest = resource.kind !== 'magnet'
-  let chain = usesShortLivedMediaSignature(resource)
-    ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
-    : explicitChain || (resource.tabId !== undefined && resource.tabId >= 0
+  const findChain = () => {
+    const found = resource.tabId !== undefined && resource.tabId >= 0
       ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), resource.tabId, requireSuccessfulRequest)
       : requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), undefined, requireSuccessfulRequest)
-    )
+    return !resource.method || found?.method.toUpperCase() === resource.method.toUpperCase() ? found : undefined
+  }
+  let chain = usesShortLivedMediaSignature(resource)
+    ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
+    : explicitChain || findChain()
+  // 点击前接管尚未发出 GET；同 URL 的旧 POST 不能成为这次链接点击的请求体。
+  if (resource.method && chain?.method.toUpperCase() !== resource.method.toUpperCase()) chain = undefined
   if (!chain && !options.allowUnverified && resource.kind !== 'magnet') {
     // A visible URL is not by itself a browser request. Replaying a page
     // controller or stale signed gateway without a successful response chain
@@ -941,9 +946,7 @@ async function resourceRequest(
     // race, then fail closed for ordinary media/files.
     for (let attempt = 0; !chain && attempt < 8; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 75))
-      chain = resource.tabId !== undefined && resource.tabId >= 0
-        ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), resource.tabId, true)
-        : requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), undefined, true)
+      chain = findChain()
     }
     const successfulResponse = resource.statusCode !== undefined
       && resource.statusCode >= 200 && resource.statusCode < 400
@@ -1093,6 +1096,7 @@ async function requestDownload(
   const active = activeDownloadOffers.get(key)
   if (active) {
     const previous = await active
+    if (!desktopAcceptedHandoff(previous)) return previous
     const status = await native({ op: 'handoff_status', handoff_id: previous.handoff.id })
     if (!status?.ok) throw new Error(status?.error || '无法读取下载确认状态')
     if (status.handoff?.status === 'pending') return previous
@@ -1928,9 +1932,10 @@ export default defineBackground(() => {
           return { ok: false, browserFallback: true }
         }
         try {
-          const response = await offer({
+          const response = await requestDownload({
             id: resourceId(href), url: href, kind: 'file', pageUrl, tabId,
             frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
+            method: 'GET',
             seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
             replayContext: { method: 'GET', page_url: pageUrl },
           }, undefined, { allowUnverified: true })

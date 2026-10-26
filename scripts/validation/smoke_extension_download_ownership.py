@@ -46,7 +46,7 @@ def run(args):
         def do_POST(self):
             requests['POST ' + self.path] += 1
             body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
-            if self.path != '/post-export' or body != b'export=once':
+            if self.path not in ('/post-export', '/export.zip') or body != b'export=once':
                 self.send_error(400)
                 return
             self.send_response(200)
@@ -70,6 +70,8 @@ def run(args):
                         "addEventListener('unhandledrejection',e=>fixtureErrors.push(String(e.reason)))</script>"
                         "<a id='direct' href='/direct.zip'>direct.zip</a> "
                         "<a id='cancel' href='/cancel.zip'>cancel.zip</a> "
+                        "<a id='double' href='/double.zip'>double.zip</a> "
+                        "<a id='previous-post' href='/export.zip'>export.zip</a> "
                         "<a id='opaque' href='/opaque'>opaque attachment</a> "
                         "<a id='scripted-link' href='/stale.zip' onclick=\"event.preventDefault();"
                         "location.assign('/scripted-export')\">scripted download</a> "
@@ -199,9 +201,15 @@ def run(args):
                 driver.switch_to.window(inspector)
                 return driver.execute_script('return window.createdDownloads')
 
-            def click(name):
+            def click(name, reload=True):
                 driver.switch_to.window(page)
-                driver.get(url)
+                if reload:
+                    driver.get(url)
+                if name == 'previous-post':
+                    result = driver.execute_async_script("""const done=arguments[arguments.length-1];
+                        fetch('/export.zip',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+                        body:'export=once'}).then(r=>r.arrayBuffer()).then(b=>done(b.byteLength),e=>done(String(e)))""")
+                    assert result == len(PAYLOAD), result
                 if args.browser == 'edge':
                     # EdgeDriver 的元素查找在沙盒中可能持有过期的 JS context；
                     # 从当前 DOM 定位，再发送真实鼠标输入，仍验证 isTrusted 点击路径。
@@ -224,11 +232,19 @@ def run(args):
                 return not _download_items(driver, inspector)
 
             # 对明确链接和服务器附件分别验证；零创建事件与事后删除是不同的验收结果。
-            for name in ('direct', 'cancel', 'opaque', 'github', 'scripted-link', 'delegated-link'):
+            cases = ('direct', 'cancel', 'double', 'previous-post') if args.direct_links_only else (
+                'direct', 'cancel', 'opaque', 'github', 'scripted-link', 'delegated-link')
+            for name in cases:
                 before = {h['id'] for h in handoffs()}
                 prior_events = len(events())
                 click(name)
                 offered = pending(before)
+                if name == 'double':
+                    click(name, reload=False)
+                    # IPC 往返作为屏障，再核对只有一份持久确认，不以删除重复任务掩盖问题。
+                    _extension_call(driver, "chrome.runtime.sendMessage({type:'ping'}).then(done)")
+                    new_offers = [h for h in handoffs() if h['id'] not in before]
+                    assert len(new_offers) == 1, new_offers
                 if name in ('scripted-link', 'delegated-link'):
                     export = 'scripted-export' if name == 'scripted-link' else 'delegated-export'
                     assert offered['offer']['url'] == url+export, offered
@@ -246,7 +262,8 @@ def run(args):
                 else:
                     command({'kind': 'accept_handoff', 'handoff_id': offered['id'], 'filename': name+'.zip', 'download_dir': ''})
                     def finished():
-                        path = {'scripted-link': '/scripted-export', 'delegated-link': '/delegated-export',
+                        path = {'double': '/double.zip', 'previous-post': '/export.zip',
+                                'scripted-link': '/scripted-export', 'delegated-link': '/delegated-export',
                                 'opaque': '/opaque'}.get(name, '/direct.zip')
                         matches = [t for t in core({'type':'snapshot','request_id':3})['tasks'] if t['url'] == url.rstrip('/')+path]
                         if matches and matches[-1]['status'] == 'failed':
@@ -256,13 +273,15 @@ def run(args):
                     output = Path(task['output_path'])
                     assert output.read_bytes() == PAYLOAD
                     assert absent()
+                    if name == 'previous-post':
+                        assert requests['POST /export.zip'] == requests['/export.zip'] == 1, requests
                     record(f'{name}: one Core file, no browser copy', {'created_events': delta, 'sha256': hashlib.sha256(output.read_bytes()).hexdigest()})
                     command({'kind':'task_action','task_id':task['task_id'],'action':'delete_files'})
 
             # 不依赖链接扩展名或可信点击：脚本导航、GET 表单、新标签和重定向。
-            for name in ('media-attachment', 'audio-attachment', 'image-attachment',
+            for name in (() if args.direct_links_only else ('media-attachment', 'audio-attachment', 'image-attachment',
                          'json-attachment', 'html-attachment', 'unknown-attachment',
-                         'redirect-attachment', 'form-attachment', 'newtab-attachment'):
+                         'redirect-attachment', 'form-attachment', 'newtab-attachment')):
                 before = {h['id'] for h in handoffs()}
                 prior_events = len(events())
                 driver.switch_to.window(page)
@@ -305,7 +324,7 @@ def run(args):
 
             # POST 不重复提交；Blob 不尝试在 Core 中访问网页内存 URL。
             # 两者均在浏览器保存后交接本地文件，完成复制后才移除浏览器源文件。
-            for name in ('post-export', 'blob-export'):
+            for name in (() if args.direct_links_only else ('post-export', 'blob-export')):
                 before = {h['id'] for h in handoffs()}
                 before_tasks = {t['task_id'] for t in core({'type':'snapshot','request_id':3})['tasks']}
                 prior_events = len(events())
@@ -426,6 +445,7 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser', choices=('edge','firefox'), required=True)
+    parser.add_argument('--direct-links-only', action='store_true')
     for name in ('runtime','binary','driver','extension','report'):
         parser.add_argument('--'+name, type=Path, required=True)
     result = run(parser.parse_args())
