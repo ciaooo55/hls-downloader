@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "tag": "v7.0.3-r16",
+  "assets": [
+    {
+      "name": "HLSDownloader-7.0.3-20261027-unsigned.msi",
+      "bytes": 203448320,
+      "sha256": "sha256:71dc67c1ba08e466f91f750a325f66519edd531b0e2314a53efa2a63ed828564"
+    },
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 5936,
+      "sha256": "sha256:07f88cda87e34bfaebec2004b08b668e47c456d28c9624862ef4557c1f903e21"
+    },
+    {
+      "name": "delivery-manifest.json",
+      "bytes": 2316,
+      "sha256": "sha256:1ac356ce75b55c1d552074a55cb5ea88f7f03e79ea945d28c361260f25589eed"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 327664,
+      "sha256": "sha256:d361a3153c0035f8ab43576e3ca0492c7cea8e75a4dccee9281756231d2c3353"
+    },
+    {
+      "name": "delivery-notes.txt",
+      "bytes": 1454,
+      "sha256": "sha256:10cbf90e19677722abc359006e78726c19881f4dfd16c15138f02c45d956aaf6"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-extension-full-sources.zip",
+      "bytes": 368228,
+      "sha256": "sha256:9ddf9962fa5d63b05abbab00caf6c938b2005f9eb85fd81c1ff227d1136c215f"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-review-sources.zip",
+      "bytes": 282833,
+      "sha256": "sha256:dea2c8e7d2ff8fd166b476782b7f57dfb6e780833239f69c044c024e4ee16cca"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-unsigned.zip",
+      "bytes": 326989,
+      "sha256": "sha256:1f3143561882a00053ded37576b8d82be2037ef8491c89913c0df52bc511a10f"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 810,
+      "sha256": "sha256:0292b62a907f3aa2be71ce1c9daddc295dd2410aa2722233372ebdb1a0994027"
+    }
+  ]
+}

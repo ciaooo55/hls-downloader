@@ -1,0 +1,38 @@
+[
+  {
+    "path": ".tool-cache/takeover-20261027",
+    "directories": 415,
+    "files": 11036,
+    "bytes": 732946646.0
+  },
+  {
+    "path": "extension/node_modules",
+    "directories": 3624,
+    "files": 10630,
+    "bytes": 171874684.0
+  },
+  {
+    "path": "extension/.output",
+    "directories": 8,
+    "files": 37,
+    "bytes": 2487435.0
+  },
+  {
+    "path": "extension/.wxt",
+    "directories": 1,
+    "files": 8,
+    "bytes": 11215.0
+  },
+  {
+    "path": "extension/docs",
+    "directories": 3,
+    "files": 0,
+    "bytes": null
+  },
+  {
+    "path": "extension/.tool-cache",
+    "directories": 1,
+    "files": 0,
+    "bytes": null
+  }
+]

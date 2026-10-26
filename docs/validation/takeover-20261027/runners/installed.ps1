@@ -30,7 +30,7 @@ try {
         $path=Join-Path C:\QAUpgrade $property.Name
         if ((Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant() -ne $property.Value) { throw "Installed component mismatch: $($property.Name)" }
     }
-    Record 'all installed components match candidate' $components.PSObject.Properties.Count
+    Record 'all installed components match candidate' @($components.PSObject.Properties).Count
     foreach ($family in @('Chromium','Firefox')) {
         [IO.Compression.ZipFile]::ExtractToDirectory("C:\QAUpgrade\app\resources\extensions\HLSDownloader-7.0.3-$family.zip","C:\QAWork\Installed$family")
     }

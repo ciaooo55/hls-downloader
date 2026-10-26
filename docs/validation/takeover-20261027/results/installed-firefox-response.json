@@ -1,0 +1,339 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "real-host-connected",
+      "actual": true
+    },
+    {
+      "name": "plain-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "plain-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "plain-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "attribute-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "attribute-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "attribute-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "redirect-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "redirect-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "redirect-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "inline-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "inline-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "inline-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "opaque-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "opaque-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "opaque-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "stream-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "stream-Core-output",
+      "actual": {
+        "bytes": 2097152,
+        "sha256": "91d3beb88a9b2f778a6c44a1c53b63d3c79931845a9aef84b3fb414610bd1938"
+      }
+    },
+    {
+      "name": "stream-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "image-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "image-Core-output",
+      "actual": {
+        "bytes": 68,
+        "sha256": "6af484b8a73288a07fec730818a6de8bebce88aa915b52f66a8769bfb865f434"
+      }
+    },
+    {
+      "name": "image-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "export-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "export-Core-output",
+      "actual": {
+        "bytes": 32,
+        "sha256": "8cc6d67e9c047e92fa51eadb250504c11471cec93c4864cb2e66a96ae0b2361f"
+      }
+    },
+    {
+      "name": "export-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "XHR-response-left-to-page",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "cancel-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "cancel-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "failed-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "failed-Core-visible-failure",
+      "actual": "HTTP 403"
+    },
+    {
+      "name": "failed-after-failure",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "public-before-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "public-Core-output",
+      "actual": {
+        "bytes": 102535433,
+        "sha256": "3f98533c3ff1c0fcea635358a1c8b79dd5df94668ae03df723230901ec05bbd6"
+      }
+    },
+    {
+      "name": "public-after-decision",
+      "actual": {
+        "items": [],
+        "created_events": [],
+        "panel": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "disabled-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "excluded-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "offline-fault-confirmed",
+      "actual": {
+        "stopped": [
+          1996
+        ],
+        "host_executable_absent": true
+      }
+    },
+    {
+      "name": "offline-browser-bypass-no-desktop-offer",
+      "actual": true
+    },
+    {
+      "name": "alt-click-does-not-create-desktop-offer",
+      "actual": {
+        "events": [],
+        "items": []
+      }
+    }
+  ],
+  "browser": "firefox",
+  "decision_transport": "Core protocol",
+  "background_sha256": "d17e6d14824e630b0221f9c522a2906e684af3a14153b793803727afa49fd535",
+  "browser_version": "158.0.1",
+  "original_tasks_preserved": true
+}

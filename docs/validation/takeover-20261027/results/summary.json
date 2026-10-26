@@ -1,0 +1,27 @@
+﻿{
+    "passed":  true,
+    "finished":  true,
+    "current":  "installed",
+    "checks":  [
+                   {
+                       "name":  "firefox-install",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "firefox-completed",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "edge-completed",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "firefox-response",
+                       "passed":  true
+                   },
+                   {
+                       "name":  "installed",
+                       "passed":  true
+                   }
+               ]
+}

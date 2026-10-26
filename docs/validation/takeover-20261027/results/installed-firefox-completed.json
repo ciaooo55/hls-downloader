@@ -1,0 +1,84 @@
+{
+  "passed": true,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "accepted: browser completed before handler continued",
+      "actual": {
+        "state": "complete",
+        "settings_reads_held": 1
+      }
+    },
+    {
+      "name": "accepted: local source retained before decision",
+      "actual": {
+        "requests": 1,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9"
+      }
+    },
+    {
+      "name": "accepted: no URL replay, correct source ownership",
+      "actual": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "rejected: browser completed before handler continued",
+      "actual": {
+        "state": "complete",
+        "settings_reads_held": 1
+      }
+    },
+    {
+      "name": "rejected: local source retained before decision",
+      "actual": {
+        "requests": 1,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9"
+      }
+    },
+    {
+      "name": "rejected: no URL replay, correct source ownership",
+      "actual": {
+        "requests": 1
+      }
+    },
+    {
+      "name": "source-unavailable: browser completed before handler continued",
+      "actual": {
+        "state": "complete",
+        "settings_reads_held": 1
+      }
+    },
+    {
+      "name": "source-unavailable: local source retained before decision",
+      "actual": {
+        "requests": 1,
+        "sha256": "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9"
+      }
+    },
+    {
+      "name": "missing source rejected before task creation",
+      "actual": {
+        "type": "error",
+        "request_id": 3,
+        "code": "core_command_failed",
+        "message": "无法读取本地源文件: 系统找不到指定的文件。 (os error 2)"
+      }
+    },
+    {
+      "name": "source-unavailable: no URL replay, correct source ownership",
+      "actual": {
+        "requests": 1
+      }
+    }
+  ],
+  "decision_transport": "Core IPC",
+  "download_start": "browser extension downloads API",
+  "background_sha256": "d17e6d14824e630b0221f9c522a2906e684af3a14153b793803727afa49fd535",
+  "browser_version": "158.0.1",
+  "requests": {
+    "/accepted": 1,
+    "/rejected": 1,
+    "/source-unavailable": 1
+  }
+}
