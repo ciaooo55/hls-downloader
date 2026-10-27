@@ -1262,6 +1262,17 @@ impl CoreCoordinator {
         self.lock()?.store().load_handoffs()
     }
 
+    pub fn query_handoffs(
+        &self,
+        handoff_id: Option<&str>,
+        client_request_id: Option<&str>,
+        pending_only: bool,
+    ) -> Result<Vec<String>, String> {
+        self.lock()?
+            .store()
+            .query_handoffs(handoff_id, client_request_id, pending_only)
+    }
+
     fn request_media_push(&self, request: MediaPushRequest) -> Result<Vec<EventEnvelope>, String> {
         if request.id.trim().is_empty() || request.id.len() > 160 {
             return Err("媒体推送请求编号无效".into());

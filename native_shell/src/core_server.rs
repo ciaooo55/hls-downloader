@@ -506,7 +506,8 @@ fn dispatch(
         ) {
             Ok(()) => CorePipeResponse::Handoffs {
                 request_id,
-                items: coordinator.load_handoffs().unwrap_or_default(),
+                // 保存调用只需要持久化回执，不应重传无关历史或让回执超过帧上限。
+                items: Vec::new(),
             },
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
@@ -514,7 +515,16 @@ fn dispatch(
                 message: error,
             },
         },
-        CorePipeRequest::LoadHandoffs { request_id } => match coordinator.load_handoffs() {
+        CorePipeRequest::LoadHandoffs {
+            request_id,
+            handoff_id,
+            client_request_id,
+            pending_only,
+        } => match coordinator.query_handoffs(
+            handoff_id.as_deref(),
+            client_request_id.as_deref(),
+            pending_only,
+        ) {
             Ok(items) => CorePipeResponse::Handoffs { request_id, items },
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),

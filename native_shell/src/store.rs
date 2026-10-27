@@ -541,12 +541,35 @@ impl CoreStore {
     }
 
     pub fn load_handoffs(&self) -> Result<Vec<String>, String> {
+        self.query_handoffs(None, None, false)
+    }
+
+    pub fn query_handoffs(
+        &self,
+        handoff_id: Option<&str>,
+        client_request_id: Option<&str>,
+        pending_only: bool,
+    ) -> Result<Vec<String>, String> {
+        if let Some(id) = handoff_id {
+            return self.connection.query_row(
+                "SELECT public_json FROM handoffs WHERE handoff_id = ?1 \
+                 AND (?2 IS NULL OR CASE WHEN json_valid(public_json) THEN json_extract(public_json, '$.request_id') END = ?2) \
+                 AND (?3 = 0 OR status = 'pending')",
+                params![id, client_request_id, pending_only], |row| row.get::<_, String>(0),
+            ).optional()
+                .map(|item| item.into_iter().collect())
+                .map_err(|error| format!("read Core handoff {id}: {error}"));
+        }
         let mut statement = self
             .connection
-            .prepare("SELECT public_json FROM handoffs ORDER BY created_at_ms, rowid")
+            .prepare("SELECT public_json FROM handoffs WHERE \
+                (?1 IS NULL OR CASE WHEN json_valid(public_json) THEN json_extract(public_json, '$.request_id') END = ?1) \
+                AND (?2 = 0 OR status = 'pending') ORDER BY created_at_ms, rowid")
             .map_err(|error| format!("prepare Core handoff restore: {error}"))?;
         let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map(params![client_request_id, pending_only], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|error| format!("query Core handoffs: {error}"))?;
         rows.map(|row| row.map_err(|error| format!("read Core handoff: {error}")))
             .collect()
@@ -864,6 +887,51 @@ mod tests {
             store.load_task_log(&other.task_id, 500).unwrap(),
             vec!["keep this error"]
         );
+    }
+
+    #[test]
+    fn handoff_queries_filter_in_sql_and_tolerate_legacy_invalid_json() {
+        let mut store = CoreStore::in_memory().unwrap();
+        store
+            .save_handoff("bad", "legacy invalid JSON", "failed", None, 1)
+            .unwrap();
+        store
+            .save_handoff(
+                "done",
+                r#"{"request_id":"client-old"}"#,
+                "accepted",
+                None,
+                2,
+            )
+            .unwrap();
+        store
+            .save_handoff(
+                "active",
+                r#"{"request_id":"client-new"}"#,
+                "pending",
+                None,
+                3,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .query_handoffs(None, Some("client-new"), false)
+                .unwrap(),
+            vec![r#"{"request_id":"client-new"}"#]
+        );
+        assert!(store
+            .query_handoffs(Some("done"), None, true)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .query_handoffs(Some("active"), Some("client-old"), false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store.query_handoffs(None, None, true).unwrap(),
+            vec![r#"{"request_id":"client-new"}"#]
+        );
+        assert_eq!(store.load_handoffs().unwrap().len(), 3);
     }
 
     #[test]

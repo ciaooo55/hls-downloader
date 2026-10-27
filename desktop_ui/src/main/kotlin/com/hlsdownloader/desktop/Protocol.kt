@@ -727,8 +727,10 @@ object EnginePipeClient {
         response.arrayOrNull("events").orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) }
     }
 
-    fun loadHandoffStatuses(): List<HandoffStatusDto> = session { connection ->
-        val response = connection.request(request("load_handoffs"))
+    fun loadHandoffStatuses(handoffId: String): List<HandoffStatusDto> = session { connection ->
+        val response = connection.request(buildJsonObject {
+            put("type", "load_handoffs"); put("request_id", nextRequestId()); put("handoff_id", handoffId)
+        })
         response.requireType("handoffs", "读取浏览器接管状态失败")
         response.arrayOrNull("items").orEmpty().mapNotNull { item ->
             runCatching { protocolJson.decodeFromString(HandoffStatusDto.serializer(), item.stringOrNull() ?: return@mapNotNull null) }.getOrNull()
@@ -736,7 +738,9 @@ object EnginePipeClient {
     }
 
     fun loadHandoffs(): List<HandoffOfferDto> = session { connection ->
-        val response = connection.request(request("load_handoffs"))
+        val response = connection.request(buildJsonObject {
+            put("type", "load_handoffs"); put("request_id", nextRequestId()); put("pending_only", true)
+        })
         response.requireType("handoffs", "读取浏览器接管请求失败")
         response.arrayOrNull("items").orEmpty().mapNotNull { item ->
             runCatching {
@@ -760,7 +764,9 @@ object EnginePipeClient {
     }
 
     fun loadMediaPushRequests(): List<MediaPushRequestDto> = session { connection ->
-        val response = connection.request(request("load_handoffs"))
+        val response = connection.request(buildJsonObject {
+            put("type", "load_handoffs"); put("request_id", nextRequestId()); put("pending_only", true)
+        })
         response.requireType("handoffs", "读取媒体推送状态失败")
         response.arrayOrNull("items").orEmpty().mapNotNull { item ->
             runCatching { protocolJson.decodeFromString(MediaPushRequestDto.serializer(), item.stringOrNull() ?: return@mapNotNull null) }.getOrNull()

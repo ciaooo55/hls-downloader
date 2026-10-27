@@ -132,6 +132,12 @@ pub enum CorePipeRequest {
     },
     LoadHandoffs {
         request_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_request_id: Option<String>,
+        #[serde(default)]
+        pending_only: bool,
     },
     Subtitle {
         request_id: u64,
@@ -1282,7 +1288,21 @@ impl CoreIpcClient {
     }
 
     pub fn load_handoffs(&mut self) -> Result<Vec<String>, String> {
-        match self.request(&CorePipeRequest::LoadHandoffs { request_id: 1 })? {
+        self.query_handoffs(None, None, false)
+    }
+
+    pub fn query_handoffs(
+        &mut self,
+        handoff_id: Option<&str>,
+        client_request_id: Option<&str>,
+        pending_only: bool,
+    ) -> Result<Vec<String>, String> {
+        match self.request(&CorePipeRequest::LoadHandoffs {
+            request_id: 1,
+            handoff_id: handoff_id.map(str::to_owned),
+            client_request_id: client_request_id.map(str::to_owned),
+            pending_only,
+        })? {
             CorePipeResponse::Handoffs { items, .. } => Ok(items),
             CorePipeResponse::Error { message, .. } => Err(message),
             other => Err(format!("unexpected handoff response: {other:?}")),

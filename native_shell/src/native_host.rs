@@ -10,7 +10,6 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
@@ -24,13 +23,11 @@ const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const RECOMMENDED_EXTENSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MINIMUM_EXTENSION_VERSION: &str = "2.0.11";
-const EXTENSION_RELEASE_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases/latest";
+const EXTENSION_RELEASE_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases";
 static NEXT_HANDOFF: AtomicU64 = AtomicU64::new(1);
 
 struct NativeHostSession {
     core: HostCore,
-    handoffs: BTreeMap<String, Handoff>,
-    request_ids: BTreeMap<String, String>,
     media_push_ui_request_id: Option<String>,
 }
 
@@ -58,42 +55,22 @@ impl HostCore {
         }
     }
 
-    fn setting_bool(&mut self, key: &str, fallback: bool) -> Result<bool, String> {
+    fn takeover_settings(&mut self) -> Result<(bool, u64), String> {
         match self {
             #[cfg(test)]
-            Self::Local(core) => core.store().setting_bool(key, fallback),
+            Self::Local(core) => Ok((
+                core.store()
+                    .setting_bool("browser_takeover_enabled", true)?,
+                core.store()
+                    .setting_u64("browser_takeover_minimum_bytes", 0)?,
+            )),
             Self::Remote(client) => match client.load_settings()? {
                 crate::CorePipeResponse::Settings {
                     takeover_enabled,
-                    legal_accepted,
-                    ..
-                } => Ok(match key {
-                    "browser_takeover_enabled" => takeover_enabled,
-                    "legal_terms_accepted" => legal_accepted,
-                    _ => fallback,
-                }),
-                _ => Ok(fallback),
-            },
-        }
-    }
-
-    fn setting_u64(&mut self, key: &str, fallback: u64) -> Result<u64, String> {
-        match self {
-            #[cfg(test)]
-            Self::Local(core) => core.store().setting_u64(key, fallback),
-            Self::Remote(client) => match client.load_settings()? {
-                crate::CorePipeResponse::Settings {
                     takeover_minimum_bytes,
-                    speed_limit_kib,
-                    harvest_minimum_bytes,
                     ..
-                } => Ok(match key {
-                    "browser_takeover_minimum_bytes" => takeover_minimum_bytes,
-                    "download_speed_limit_kib" => speed_limit_kib,
-                    "harvest_minimum_bytes" => harvest_minimum_bytes,
-                    _ => fallback,
-                }),
-                _ => Ok(fallback),
+                } => Ok((takeover_enabled, takeover_minimum_bytes)),
+                other => Err(format!("unexpected takeover settings response: {other:?}")),
             },
         }
     }
@@ -158,11 +135,21 @@ impl HostCore {
         }
     }
 
-    fn load_handoffs(&mut self) -> Result<Vec<String>, String> {
+    fn query_handoffs(
+        &mut self,
+        handoff_id: Option<&str>,
+        client_request_id: Option<&str>,
+        pending_only: bool,
+    ) -> Result<Vec<String>, String> {
         match self {
             #[cfg(test)]
-            Self::Local(core) => core.store().load_handoffs(),
-            Self::Remote(client) => client.load_handoffs(),
+            Self::Local(core) => {
+                core.store()
+                    .query_handoffs(handoff_id, client_request_id, pending_only)
+            }
+            Self::Remote(client) => {
+                client.query_handoffs(handoff_id, client_request_id, pending_only)
+            }
         }
     }
 
@@ -195,31 +182,23 @@ struct Handoff {
 
 impl NativeHostSession {
     fn open_default() -> Result<Self, String> {
-        Self::from_backend(HostCore::Remote(connect_or_start_core()?))
+        Ok(Self::from_backend(HostCore::Remote(
+            connect_or_start_core()?
+        )))
     }
 
     #[cfg(test)]
     fn in_memory() -> Result<Self, String> {
-        Self::from_backend(HostCore::Local(crate::PersistentCore::in_memory()?))
+        Ok(Self::from_backend(HostCore::Local(
+            crate::PersistentCore::in_memory()?,
+        )))
     }
 
-    fn from_backend(mut core: HostCore) -> Result<Self, String> {
-        let mut handoffs = BTreeMap::new();
-        let mut request_ids = BTreeMap::new();
-        for encoded in core.load_handoffs()? {
-            if let Ok(handoff) = serde_json::from_str::<Handoff>(&encoded) {
-                if !handoff.request_id.is_empty() {
-                    request_ids.insert(handoff.request_id.clone(), handoff.id.clone());
-                }
-                handoffs.insert(handoff.id.clone(), handoff);
-            }
-        }
-        Ok(Self {
+    fn from_backend(core: HostCore) -> Self {
+        Self {
             core,
-            handoffs,
-            request_ids,
             media_push_ui_request_id: None,
-        })
+        }
     }
 
     fn dispatch(&mut self, message: &Value) -> Result<Value, String> {
@@ -304,8 +283,7 @@ impl NativeHostSession {
             version: env!("CARGO_PKG_VERSION").into(),
             browser: "extension".into(),
         });
-        let takeover_enabled = self.core.setting_bool("browser_takeover_enabled", true)?;
-        let minimum_bytes = self.core.setting_u64("browser_takeover_minimum_bytes", 0)?;
+        let (takeover_enabled, minimum_bytes) = self.core.takeover_settings()?;
         Ok(json!({
             "ok": true,
             "protocol": V7_PROTOCOL_NAME,
@@ -332,10 +310,14 @@ impl NativeHostSession {
             .unwrap_or("")
             .trim();
         if !request_id.is_empty() {
-            if let Some(existing_id) = self.request_ids.get(request_id) {
-                if let Some(existing) = self.handoffs.get(existing_id) {
-                    return Ok(json!({"ok": true, "handoff": existing.public(None)}));
-                }
+            if let Some(existing) = self
+                .core
+                .query_handoffs(None, Some(request_id), false)?
+                .into_iter()
+                .filter_map(|encoded| serde_json::from_str::<Handoff>(&encoded).ok())
+                .last()
+            {
+                return Ok(json!({"ok": true, "handoff": existing.public(None)}));
             }
         }
 
@@ -361,15 +343,7 @@ impl NativeHostSession {
         };
         let persistence = self.persist_handoff(&handoff);
         self.rollback_browser_credential_on_error(persistence, owned_credential_ref.as_deref())?;
-        if !request_id.is_empty() && request_id.len() <= 160 {
-            self.request_ids.insert(request_id.to_string(), id.clone());
-        }
-        self.handoffs.insert(id.clone(), handoff.clone());
         if let Err(error) = self.core.handle(CoreCommand::OfferResource { offer }) {
-            self.handoffs.remove(&id);
-            if !request_id.is_empty() {
-                self.request_ids.remove(request_id);
-            }
             let mut failed = handoff;
             failed.status = "failed".into();
             failed.presentation = "failed".into();
@@ -393,11 +367,7 @@ impl NativeHostSession {
                 )),
             };
         }
-        let response = self
-            .handoffs
-            .get(&id)
-            .map(|item| item.public(None))
-            .unwrap_or_else(|| json!({"id": id, "status": "pending"}));
+        let response = handoff.public(None);
         Ok(json!({"ok": true, "handoff": response}))
     }
 
@@ -495,16 +465,11 @@ impl NativeHostSession {
     }
 
     fn handoff_status(&mut self, message: &Value) -> Result<Value, String> {
-        let _ = self.reload_handoffs();
         let id = message
             .get("handoff_id")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let handoff = self
-            .handoffs
-            .get(id)
-            .ok_or_else(|| "接管请求不存在或已过期".to_string())?
-            .clone();
+        let handoff = self.handoff(id)?;
         let task = match handoff.task_id.as_deref() {
             Some(task_id) => self
                 .core
@@ -522,7 +487,6 @@ impl NativeHostSession {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let _ = self.reload_handoffs();
         let filename = message
             .get("filename")
             .and_then(Value::as_str)
@@ -539,7 +503,6 @@ impl NativeHostSession {
             download_dir,
             trusted_ui: false,
         })?;
-        self.reload_handoffs()?;
         self.handoff_status(&json!({"handoff_id": id}))
     }
 
@@ -549,7 +512,6 @@ impl NativeHostSession {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let _ = self.reload_handoffs();
         self.core.handle(CoreCommand::RejectHandoff {
             handoff_id: id.clone(),
             suppress_site_kind: message
@@ -557,7 +519,6 @@ impl NativeHostSession {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         })?;
-        self.reload_handoffs()?;
         self.handoff_status(&json!({"handoff_id": id}))
     }
 
@@ -582,8 +543,7 @@ impl NativeHostSession {
             self.core
                 .set_setting_u64("browser_takeover_minimum_bytes", bytes)?;
         }
-        let enabled = self.core.setting_bool("browser_takeover_enabled", true)?;
-        let minimum_bytes = self.core.setting_u64("browser_takeover_minimum_bytes", 0)?;
+        let (enabled, minimum_bytes) = self.core.takeover_settings()?;
         Ok(json!({
             "ok": true,
             "takeover_enabled": enabled,
@@ -671,7 +631,7 @@ impl NativeHostSession {
             .unwrap_or("");
         let Some(push) = self
             .core
-            .load_handoffs()?
+            .query_handoffs(Some(id), None, false)?
             .into_iter()
             .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
             .find(|item| item.id == id)
@@ -694,7 +654,7 @@ impl NativeHostSession {
     fn pending_media_push_id(&mut self) -> Result<Option<String>, String> {
         Ok(self
             .core
-            .load_handoffs()?
+            .query_handoffs(None, None, true)?
             .into_iter()
             .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
             .find(|request| request.status == "pending")
@@ -743,20 +703,13 @@ impl NativeHostSession {
         Ok(Some(credential_ref))
     }
 
-    fn reload_handoffs(&mut self) -> Result<(), String> {
-        let mut handoffs = BTreeMap::new();
-        let mut request_ids = BTreeMap::new();
-        for encoded in self.core.load_handoffs()? {
-            if let Ok(handoff) = serde_json::from_str::<Handoff>(&encoded) {
-                if !handoff.request_id.is_empty() {
-                    request_ids.insert(handoff.request_id.clone(), handoff.id.clone());
-                }
-                handoffs.insert(handoff.id.clone(), handoff);
-            }
-        }
-        self.handoffs = handoffs;
-        self.request_ids = request_ids;
-        Ok(())
+    fn handoff(&mut self, id: &str) -> Result<Handoff, String> {
+        self.core
+            .query_handoffs(Some(id), None, false)?
+            .into_iter()
+            .filter_map(|encoded| serde_json::from_str::<Handoff>(&encoded).ok())
+            .next()
+            .ok_or_else(|| "接管请求不存在或已过期".into())
     }
 }
 
@@ -1226,6 +1179,86 @@ mod tests {
     }
 
     #[test]
+    fn native_host_connection_and_handoff_io_ignore_unrelated_history() {
+        let server = crate::CoreServer::in_memory().unwrap();
+        let mut row = Handoff {
+            id: String::new(),
+            offer: crate::ResourceOffer {
+                url: "https://cdn.test/history.bin".into(),
+                ..Default::default()
+            },
+            filename: "history.bin".into(),
+            title: "x".repeat(384 * 1024),
+            mime_type: String::new(),
+            size: 1,
+            status: "accepted".into(),
+            presentation: "presented".into(),
+            task_id: None,
+            created_at_ms: 1,
+            request_id: String::new(),
+            suppression: None,
+        };
+        for index in 0..12 {
+            row.id = format!("history-{index}");
+            row.request_id = format!("browser-{index}");
+            server
+                .coordinator()
+                .save_handoff(
+                    &row.id,
+                    &serde_json::to_string(&row).unwrap(),
+                    &row.status,
+                    None,
+                    row.created_at_ms,
+                )
+                .unwrap();
+        }
+        let history = server.coordinator().load_handoffs().unwrap();
+        assert!(
+            crate::core_ipc::encode_message(&crate::CorePipeResponse::Handoffs {
+                request_id: 1,
+                items: history,
+            })
+            .is_err(),
+            "The fixture must exceed the real IPC frame limit"
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = NativeHostSession::from_backend(HostCore::Remote(client));
+        assert_eq!(session.dispatch(&json!({"op":"ping"})).unwrap()["ok"], true);
+        assert_eq!(
+            session.handoff("history-7").unwrap().request_id,
+            "browser-7"
+        );
+        assert!(session
+            .core
+            .query_handoffs(None, None, true)
+            .unwrap()
+            .is_empty());
+        let matched = session
+            .core
+            .query_handoffs(None, Some("browser-7"), false)
+            .unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<Handoff>(&matched[0]).unwrap().id,
+            "history-7"
+        );
+        row.id = "new-pending".into();
+        row.title.clear();
+        row.request_id = "browser-new".into();
+        row.status = "pending".into();
+        session.persist_handoff(&row).unwrap();
+        assert_eq!(session.handoff("new-pending").unwrap().status, "pending");
+        assert_eq!(
+            session.core.query_handoffs(None, None, true).unwrap().len(),
+            1
+        );
+        server.shutdown();
+    }
+
+    #[test]
     fn download_credential_rollback_is_transactional() {
         let server = crate::CoreServer::in_memory().unwrap();
         server
@@ -1236,7 +1269,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let _worker = server.serve(listener);
         let client = CoreIpcClient::connect_addr(addr).unwrap();
-        let mut session = NativeHostSession::from_backend(HostCore::Remote(client)).unwrap();
+        let mut session = NativeHostSession::from_backend(HostCore::Remote(client));
 
         session
             .core
@@ -1421,7 +1454,7 @@ mod tests {
             }
         });
         let first = session.dispatch(&request).unwrap();
-        let persisted_after_first = session.core.load_handoffs().unwrap();
+        let persisted_after_first = session.core.query_handoffs(None, None, false).unwrap();
         let retry = json!({
             "op": "offer",
             "resource": {
@@ -1434,8 +1467,11 @@ mod tests {
         });
         let second = session.dispatch(&retry).unwrap();
         assert_eq!(first["handoff"]["id"], second["handoff"]["id"]);
-        assert_eq!(session.handoffs.len(), 1);
-        assert_eq!(session.core.load_handoffs().unwrap(), persisted_after_first);
+        assert_eq!(persisted_after_first.len(), 1);
+        assert_eq!(
+            session.core.query_handoffs(None, None, false).unwrap(),
+            persisted_after_first
+        );
     }
 
     #[test]
@@ -1614,7 +1650,7 @@ mod tests {
         })
         .unwrap();
         let sequence_before_retry = core.latest_sequence();
-        let mut session = NativeHostSession::from_backend(HostCore::Local(core)).unwrap();
+        let mut session = NativeHostSession::from_backend(HostCore::Local(core));
 
         let retry = session
             .dispatch(&json!({
@@ -1802,8 +1838,11 @@ mod tests {
             .unwrap_err();
         assert!(msdt.contains("不受支持"));
         // 只检查当前会话的副作用；其他测试可以并行生成自己的交接序号。
-        assert!(session.handoffs.is_empty());
-        assert!(session.core.load_handoffs().unwrap().is_empty());
+        assert!(session
+            .core
+            .query_handoffs(None, None, false)
+            .unwrap()
+            .is_empty());
         assert!(session.core.snapshot_tasks().unwrap().is_empty());
         assert_eq!(
             session.core.local().latest_sequence(),
@@ -1833,7 +1872,9 @@ mod tests {
         let canonical = std::fs::canonicalize(&source).unwrap();
         let canonical = canonical.to_string_lossy();
         assert_eq!(
-            session.handoffs[handoff_id]
+            session
+                .handoff(handoff_id)
+                .unwrap()
                 .offer
                 .local_source_path
                 .as_deref(),

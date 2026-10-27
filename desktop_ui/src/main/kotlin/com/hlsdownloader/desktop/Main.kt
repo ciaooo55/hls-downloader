@@ -1851,7 +1851,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 failureReported = true
             }
             val status = runCatching {
-                withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffStatuses() }
+                withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffStatuses(offer.handoffId) }
             }.getOrNull()?.firstOrNull { it.id == offer.handoffId }?.status
             if (status != null && status != "pending") {
                 handoffQueue.removeAll { it.handoffId == offer.handoffId }
@@ -1866,7 +1866,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             var statusReadFailed = false
             while (handoffQueue.any { it.handoffId == offer.handoffId }) {
                 delay(1_500)
-                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffStatuses() } }
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.loadHandoffStatuses(offer.handoffId) } }
                     .onSuccess { statuses ->
                         statusReadFailed = false
                         val status = statuses.firstOrNull { it.id == offer.handoffId }?.status

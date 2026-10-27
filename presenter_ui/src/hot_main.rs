@@ -1053,7 +1053,7 @@ fn event_loop(
 }
 
 fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
-    let encoded = match client.load_handoffs() {
+    let encoded = match client.query_handoffs(None, None, true) {
         Ok(encoded) => encoded,
         Err(error) => {
             trace(&format!("恢复浏览器接管请求失败: {error}"));
