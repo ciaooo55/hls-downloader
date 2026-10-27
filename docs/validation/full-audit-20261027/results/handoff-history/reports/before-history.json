@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "expected_legacy_failure": true,
+  "engine_sha256": "a27d5a639d106c39dc12a47460db3dda59f0bf32c1ce8b2a8e3045d04bfad624",
+  "native_host_sha256": "425397564dc4527d6fce44de4959c2e453a9d6165ac551d54956fee0d2ad5578",
+  "history_json_bytes": 4721908,
+  "native_host": {
+    "exit_code": 1,
+    "stdout_bytes": 0,
+    "elapsed_ms": 62.00000000000472,
+    "stderr": "v7 Core startup failed: Core pipe closed\n",
+    "responses": []
+  },
+  "save": {
+    "ok": false,
+    "error": "Core IPC closed"
+  },
+  "row_committed": true,
+  "legacy_failure_reproduced": true,
+  "core_exit_code": 0
+}

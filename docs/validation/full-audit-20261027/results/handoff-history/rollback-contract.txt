@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\handoff-history-20261027\\input\\candidate.msi",
+  "original_product_code": "{669897B0-3B60-4D8C-939C-60E99C9D55CA}",
+  "verified_product_code": "{C5BB8C12-113D-45A8-BBF0-2E6ED12E5F37}",
+  "original_package_code": "{EE23D353-A339-4186-A424-016C9E539C80}",
+  "verified_package_code": "{781320E8-3928-49EB-8C7D-0434D48380AB}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "F259BB2FB4BC0121F3734DA0EDC4C0E2C109F09F72395F2A8770F9FEAE141C97",
+  "sha256_after": "DCB603869BA2B79937589785AB9AD5E004BEAE1E731BEB7E8D6E9AF2C5BC8D1D"
+}

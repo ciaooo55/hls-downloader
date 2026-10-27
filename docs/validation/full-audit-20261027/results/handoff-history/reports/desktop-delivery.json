@@ -1,0 +1,15 @@
+{
+  "tag": "v7.0.3-r20",
+  "verified_files": [
+    "BUILD-PROVENANCE.json",
+    "HLSDownloader-7.0.3-20261027-未签名.msi",
+    "HLSDownloader-7.0.3-Chromium.zip",
+    "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+    "HLSDownloader-7.0.3-Firefox-未签名.zip",
+    "HLSDownloader-7.0.3-插件完整源码.zip",
+    "交付清单.json",
+    "验收说明.txt"
+  ],
+  "all_hashes_match": true,
+  "old_refused_msi_not_touched": true
+}

@@ -1,0 +1,43 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html in the Gradle documentation.
+Daemon will be stopped at the end of the build
+Calculating task graph as no cached configuration is available for tasks: jar
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :generateComposeResClass SKIPPED
+> Task :convertXmlValueResourcesForMain NO-SOURCE
+> Task :copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :generateResourceAccessorsForMain SKIPPED
+> Task :generateActualResourceCollectorsForMain SKIPPED
+> Task :assembleMainResources UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :compileKotlin
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt:731:68 Too many arguments for 'fun request(type: String): JsonObject'.
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt:731:70 Candidate 'fun JsonObjectBuilder.put(key: String, value: Nothing?): JsonElement?' is inapplicable because of a receiver type mismatch.
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt:739:68 Too many arguments for 'fun request(type: String): JsonObject'.
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt:739:70 Candidate 'fun JsonObjectBuilder.put(key: String, value: Nothing?): JsonElement?' is inapplicable because of a receiver type mismatch.
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt:763:68 Too many arguments for 'fun request(type: String): JsonObject'.
+e: file:///A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt:763:70 Candidate 'fun JsonObjectBuilder.put(key: String, value: Nothing?): JsonElement?' is inapplicable because of a receiver type mismatch.
+
+> Task :compileKotlin FAILED
+
+[Incubating] Problems report is available at: file:///A:/Ubuntu/%E6%B5%8B%E8%AF%95/hls-downloader/.tool-cache/full-audit-20261027/compose-build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':compileKotlin' (registered by plugin 'org.jetbrains.kotlin.jvm').
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Kotlin compiler: TOO_MANY_ARGUMENTS
+       Kotlin compiler error
+         Too many arguments for 'fun request(type: String): JsonObject'.
+         Location: A:/Ubuntu/测试/hls-downloader/desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt line 731
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 2m 33s
+3 actionable tasks: 1 executed, 2 up-to-date
+Configuration cache entry stored.

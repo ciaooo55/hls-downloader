@@ -1,0 +1,20 @@
+
+running 16 tests
+test core_server::tests::capabilities_lists_task_inspection_and_thumbnail_commands ... ok
+test core_server::tests::capabilities_publish_the_v7_command_and_setting_contract ... ok
+test core_server::tests::credential_delete_roundtrips_over_ipc ... ok
+test core_server::tests::default_cookie_is_write_only_over_the_ui_protocol ... ok
+test core_server::tests::in_memory_core_does_not_bootstrap_from_disk ... ok
+test core_server::tests::invalid_batch_setting_does_not_partially_commit ... ok
+test core_server::tests::named_pipe_is_the_product_ipc ... ok
+test core_server::tests::present_handoff_roundtrip_p95_under_100ms ... ok
+test core_server::tests::product_bootstrap_removes_the_obsolete_first_run_legal_blocker ... ok
+test core_server::tests::shutdown_command_stops_the_core_after_acknowledging ... ok
+test core_server::tests::snapshot_exposes_the_latest_event_sequence ... ok
+test core_server::tests::torrent_probe_slot_allows_only_one_active_probe ... ok
+test core_server::tests::ui_accept_handoff_is_visible_to_native_host_over_ipc ... ok
+test core_server::tests::ui_and_native_host_share_one_core_over_ipc ... ok
+test core_server::tests::ui_present_handoff_failure_is_visible_to_native_host_over_ipc ... ok
+test core_server::tests::warm_core_ipc_command_p95_stays_under_75ms ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 644 filtered out; finished in 2.76s

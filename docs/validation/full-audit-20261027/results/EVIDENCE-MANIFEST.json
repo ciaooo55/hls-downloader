@@ -263,5 +263,220 @@
     "path": "render-followup/render-installed-audit.paint.png",
     "original_sha256": "92a00dd152e324885d106f611be2fef99cc084f89f913c1599cf236b30fa0220",
     "archived_sha256": "92a00dd152e324885d106f611be2fef99cc084f89f913c1599cf236b30fa0220"
+  },
+  {
+    "path": "handoff-history/reports/after-history.json",
+    "original_sha256": "58807a393331efadd18a0ef4ed31e9613b6675152e77a6e5c58f7e1c85fa8931",
+    "archived_sha256": "e2e5229cb2f1c3b52db5859a71323eca39f1299a734ad602c188ef07c28d9442"
+  },
+  {
+    "path": "handoff-history/reports/after-history.runtime.txt",
+    "original_sha256": "97ad8a96a11c0e9810553d53b3ae6998f27a387a105081927821b2f0f52a6ebb",
+    "archived_sha256": "97ad8a96a11c0e9810553d53b3ae6998f27a387a105081927821b2f0f52a6ebb"
+  },
+  {
+    "path": "handoff-history/reports/after-history.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/after-history.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/before-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "handoff-history/reports/before-history.json",
+    "original_sha256": "1a07d50fb7e88aae974f177883d4449a41a09bbc45741899d894be4f86c6715d",
+    "archived_sha256": "1b40223fda4817a6a4f5600806155e99c1cb4fcd1e154e2906afa16bad1b0187"
+  },
+  {
+    "path": "handoff-history/reports/before-history.runtime.txt",
+    "original_sha256": "3167c0b46cc7e5d19a71500678074b52260bdc894681a79a69c3e5497e735b1b",
+    "archived_sha256": "3167c0b46cc7e5d19a71500678074b52260bdc894681a79a69c3e5497e735b1b"
+  },
+  {
+    "path": "handoff-history/reports/before-history.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/before-history.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/desktop-delivery.json",
+    "original_sha256": "0b21d6fec796ccf9e702268616c0088638856f04580a38be3e71307bb6faa184",
+    "archived_sha256": "698cb04ca78404c3ea8294d8dff767f37e05704e69f231d22f2381f8065ee6c8"
+  },
+  {
+    "path": "handoff-history/reports/draft-release-check.json",
+    "original_sha256": "84581cd21a4cf6bb22a4351a225b84be5c6ce08c3316f522a784998db949602c",
+    "archived_sha256": "0ed14846b39fa70631f5a6a76a4b282aa13bcfe88155b01c75625d2a2752b38e"
+  },
+  {
+    "path": "handoff-history/reports/handoff-history-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "handoff-history/reports/history-create-pause.json",
+    "original_sha256": "65926053d25e5f88c5abe42f64f20adf54edb80bd188f926c52e0bec834e2feb",
+    "archived_sha256": "16e60d13602932bbd59ee0ffb7c58ac338d27087d0386ede4ada6d3c0c5c986c"
+  },
+  {
+    "path": "handoff-history/reports/history-create-pause.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/history-create-pause.stdout.txt",
+    "original_sha256": "cf8bbd45f22c844d074c24e9d64b3e177be682d59602aa4692321b65a3c90b8e",
+    "archived_sha256": "0ed55f66c1f7a145ad9ec28109cd9183e8b0a5d207d1fa6fa5d848920f0a2534"
+  },
+  {
+    "path": "handoff-history/reports/history-verify-resume.json",
+    "original_sha256": "348897656a9a966c9163800e8b13584fd8521dbe17feef7429f0c988a97009da",
+    "archived_sha256": "fd7be2ddd8102ba4fecdb7f3992c803a9e03abd6f304c128694f704f512a26d2"
+  },
+  {
+    "path": "handoff-history/reports/history-verify-resume.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/history-verify-resume.stdout.txt",
+    "original_sha256": "4e7e991e3b12d5b7331b0ab78921f85d2c571bb46534267e9e297879a2fc0d27",
+    "archived_sha256": "f343b1bae637f4a9ac84b00a8072b6650bc77863acc272725ef64d892333f5b2"
+  },
+  {
+    "path": "handoff-history/reports/installed-history-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "handoff-history/reports/installed-history.json",
+    "original_sha256": "cfac09f8faf1e48757645c06cc3fcd221b53ea9f6a1c7b6a5e2812fce5b3106f",
+    "archived_sha256": "0fe7f3f785cd3ef3d53cf289e828d691d81c5dd84cbcd4ce92b84ed377a7e87a"
+  },
+  {
+    "path": "handoff-history/reports/installed-large-history.json",
+    "original_sha256": "e9e83c15ac39a83457ff3148e01b8dece293635f7b07448540e445ccfd6286b0",
+    "archived_sha256": "5f6001a5ec58ab8ba152f46d3bb3c9931ed24a454986931891bcad52e7c1382a"
+  },
+  {
+    "path": "handoff-history/reports/installed-large-history.runtime.txt",
+    "original_sha256": "41bd3488ecdb06ccaf91587e68035e390f3802c24a11ddd2b25c11569662de95",
+    "archived_sha256": "41bd3488ecdb06ccaf91587e68035e390f3802c24a11ddd2b25c11569662de95"
+  },
+  {
+    "path": "handoff-history/reports/installed-large-history.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/installed-large-history.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/installed-presenter-self-test.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/installed-presenter-self-test.stdout.txt",
+    "original_sha256": "4711ace37df7ccafa0e13701a43c8f20f6123e913506446969124e7571aae757",
+    "archived_sha256": "4711ace37df7ccafa0e13701a43c8f20f6123e913506446969124e7571aae757"
+  },
+  {
+    "path": "handoff-history/reports/repack-path-failure.txt",
+    "original_sha256": "e0e6f8c8907d624d1bc98282c931f7b1403a1ccc0d6e59a74739e392a989a5bd",
+    "archived_sha256": "eafddb9f2dae74042368b70e52565555ab05f84c1cf6efc209d624975f6e4c5a"
+  },
+  {
+    "path": "handoff-history/reports/tests-core_ipc.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "handoff-history/reports/tests-core_ipc.stdout.txt",
+    "original_sha256": "3a22d5b3c90ae2a2a586d480cf0bf16603ed0349b5b3a401b2998103baf21b28",
+    "archived_sha256": "313ab8a22f5a7a1af8e4a257479303d56320e50db76675d3663f6fcd184b54c5"
+  },
+  {
+    "path": "handoff-history/reports/tests-core_server.stderr.txt",
+    "original_sha256": "9fa3b5248a3e75917e20be085ce984455929b6bdd0c304d4d5690399f2e18cad",
+    "archived_sha256": "18869cca22c979a669fc377b60e55bef02216c07ec0f30c2c8b83d1583fbf051"
+  },
+  {
+    "path": "handoff-history/reports/tests-core_server.stdout.txt",
+    "original_sha256": "391c6d59293af705c01666c6975d63207e5cc8e20a845b67d74819a81471e91d",
+    "archived_sha256": "a80f6317d1aa87667e322fdcd75cad455c0f430cb4b476acb6b999d76c635412"
+  },
+  {
+    "path": "handoff-history/reports/tests-native_host.stderr.txt",
+    "original_sha256": "355207b0103d72dd92ec2cd54813eaacd8628805cf028683299df9130ba269af",
+    "archived_sha256": "355207b0103d72dd92ec2cd54813eaacd8628805cf028683299df9130ba269af"
+  },
+  {
+    "path": "handoff-history/reports/tests-native_host.stdout.txt",
+    "original_sha256": "584be9c166bacba4ecad4ccc78b125866b038c43a6c6780e88f038bd1535191c",
+    "archived_sha256": "05b865e85db140b73ddc5d26b769214d05f9847985e3d4546eade21823bce05e"
+  },
+  {
+    "path": "handoff-history/reports/tests-store.stderr.txt",
+    "original_sha256": "b2adde0ef0da2529019e90e9427fe5f27dd343dad7b41ba03cd79cd36d6d578e",
+    "archived_sha256": "b2adde0ef0da2529019e90e9427fe5f27dd343dad7b41ba03cd79cd36d6d578e"
+  },
+  {
+    "path": "handoff-history/reports/tests-store.stdout.txt",
+    "original_sha256": "30c67a34d6fb75481fc7ab15779c0b8c14362b6085d84f5c546cb4c2521dfaa2",
+    "archived_sha256": "98291dce77e06754214591122be5d3d28f9406e79f9ee018671989a2ead3f4e6"
+  },
+  {
+    "path": "handoff-history/build-tests.stderr.txt",
+    "original_sha256": "c5b2d98a6a1c23ef6598bc4d7dccce33566e4c2f64c3c5763000bd40fbeeaa94",
+    "archived_sha256": "c02527626b212c30fb98b98ad549be2faf82f2fa14e4697b68b8782cdbb6aabc"
+  },
+  {
+    "path": "handoff-history/build-tests-fixed.stderr.txt",
+    "original_sha256": "e43043c0a7dd23dd00918e8dc6ee95072db628f62bcd9d8488545eb156ac6388",
+    "archived_sha256": "581396eae729f226747f57160fa8b9a251b11fb20ba3141c35614e6e21831707"
+  },
+  {
+    "path": "handoff-history/core-build.txt",
+    "original_sha256": "8b76eb902dcd4dd7c390b473cffa0763854f4ae2b4dcd82316b14eba91a43d26",
+    "archived_sha256": "962b82b37179cfe4e5af40236a4ae16e7e040c8991e690bdd970ccb01cb89da7"
+  },
+  {
+    "path": "handoff-history/ui-build.txt",
+    "original_sha256": "9080495a5540d3a2664a6a6459d520b27d7ce3c1830ba3d251eeebb9925409a5",
+    "archived_sha256": "f4c54cf33265127ed74fd26244dd7dc3f72012f290c9a62cc208cbff240cfdd2"
+  },
+  {
+    "path": "handoff-history/ui-build-fixed.txt",
+    "original_sha256": "8d3b8ae2f9bafdfc9c40bff08f06ad1be6093d946378cc04988e54d706e4903b",
+    "archived_sha256": "ec5d91c401ba54f46c1a09fd7b73a29af975b26350c224ab5be65fbcdb206d90"
+  },
+  {
+    "path": "handoff-history/presenter-build.txt",
+    "original_sha256": "2b4b31129d90dd73d0da8064ee98b94a42a2c37077dddadd8cbb518d160b3377",
+    "archived_sha256": "3157cbe78e69d2580d3037d82b568dcfa6e52b41086b9b44d81460b137b26a1b"
+  },
+  {
+    "path": "handoff-history/repack.txt",
+    "original_sha256": "21c3a0c9834762c4bdde3b0f513aa25af5c730b5a32fc539dfbdd50ccab9dc21",
+    "archived_sha256": "4662f72846e3ae01b1bb34282bafa831718dba21d42547b6c8f4594a0c82b8da"
+  },
+  {
+    "path": "handoff-history/rollback-contract.txt",
+    "original_sha256": "3fcb622a7065c3dc462fd0bf4dd864909b5e77ce41f8da2160d96e2ab972cc96",
+    "archived_sha256": "6327af96273d197761b93c796424bbd7b192cc260b2c6aafec4da979a1ba8240"
   }
 ]

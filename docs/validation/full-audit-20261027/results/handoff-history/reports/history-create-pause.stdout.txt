@@ -1,0 +1,1 @@
+{"schema":1,"mode":"create-pause","task_id":"task-1","status":"paused","downloaded_bytes":1048576,"active_workers":0,"data_db":"C:\\QAWork\\installed-checkpoint\\data\\data.db","data_db_sha256":"da63a52bdf62b3fc863995d79f497584be3ba97c1de4c55d1d301afbafab6cfc","engine_pid":5384,"file_sha256":null,"expected_sha256":null}

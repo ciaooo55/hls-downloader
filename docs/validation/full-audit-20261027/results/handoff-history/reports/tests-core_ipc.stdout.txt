@@ -1,0 +1,20 @@
+
+running 16 tests
+test core_ipc::tests::a_framing_violation_answers_with_a_protocol_violation_frame ... ok
+test core_ipc::tests::a_pipe_framing_violation_answers_with_a_protocol_violation_frame ... ok
+test core_ipc::tests::adversarial_pipe_frame_rejects_oversize_and_truncated ... ok
+test core_ipc::tests::adversarial_pipe_frame_rejects_valid_frame_with_unparseable_payload ... ok
+test core_ipc::tests::competing_pipe_clients_connect_within_their_deadline ... ok
+test core_ipc::tests::core_bind_accepts_only_loopback_ipv4_and_ipv6 ... ok
+test core_ipc::tests::core_bind_rejects_wildcard_lan_and_public_addresses ... ok
+test core_ipc::tests::delete_credential_request_roundtrip_preserves_identity ... ok
+test core_ipc::tests::hello_uses_the_v7_protocol_identity ... ok
+test core_ipc::tests::pipe_frame_roundtrip_preserves_versioned_command ... ok
+test core_ipc::tests::prebound_non_loopback_listener_is_rejected_at_server_boundary ... ok
+test core_ipc::tests::save_handoff_accepts_only_handoffs ... ok
+test core_ipc::tests::serve_loop_with_ready_answers_framing_violations_with_protocol_violation_frame ... ok
+test core_ipc::tests::store_credential_requires_a_protected_blob ... ok
+test core_ipc::tests::store_setting_accepts_only_settings_and_events ... ok
+test core_ipc::tests::windows_tcp_loopback_is_opt_in ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 644 filtered out; finished in 3.34s

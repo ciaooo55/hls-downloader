@@ -3,9 +3,9 @@
   "reason": "blocked by policy; no further reason supplied",
   "deletion_attempts": 1,
   "path": ".tool-cache/full-audit-20261027",
-  "files": 5529,
-  "directories": 2364,
-  "bytes": 2698100140.0,
+  "files": 5538,
+  "directories": 2366,
+  "bytes": 2698287403.0,
   "duplicate_logs": [
     {
       "path": "docs/validation/full-audit-20261027/results/render-v2-SOFTWARE.log",
@@ -26,5 +26,7 @@
     "Desktop/HLSDownloader/最新-20261025/HLSDownloader-7.0.3-20261026-未签名.msi"
   ],
   "task_sandbox_stopped": true,
-  "desktop_current_msi_sha256": "9fe6ea42285fa2ac1f911f398f5e169e3851f6867aff3265babf83b968491c8b"
+  "desktop_current_msi_sha256": "dcb603869ba2b79937589785ab9ad5e004beae1e731beb7e8d6e9af2c5bc8d1d",
+  "inventory_refreshed_at": "2026-10-27T11:58:44.3793118Z",
+  "deletion_not_retried": true
 }

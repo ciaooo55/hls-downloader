@@ -1,0 +1,13 @@
+
+running 9 tests
+test store::tests::a_failed_settings_write_rolls_back_the_credential_delete ... ok
+test store::tests::current_schema_and_task_snapshots_roundtrip ... ok
+test store::tests::handoff_queries_filter_in_sql_and_tolerate_legacy_invalid_json ... ok
+test store::tests::open_rejects_unexpected_existing_schema_version ... ok
+test store::tests::repeated_progress_logs_keep_the_latest_500_and_other_tasks ... ok
+test store::tests::schema_failure_rolls_back_tables_and_version ... ok
+test store::tests::settings_are_typed_and_persistent ... ok
+test store::tests::storing_a_credential_lands_with_its_setting ... ok
+test store::tests::task_export_advances_sequence_without_persisting_payload_as_a_task ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 651 filtered out; finished in 2.41s

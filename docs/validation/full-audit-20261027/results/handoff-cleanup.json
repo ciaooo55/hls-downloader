@@ -1,0 +1,13 @@
+{
+  "path": ".tool-cache/handoff-history-20261027",
+  "status": "blocked_by_automatic_approval",
+  "files": 72,
+  "directories": 3,
+  "bytes": 657606535.0,
+  "archive_hashes_verified": true,
+  "desktop_and_github_hashes_verified": true,
+  "old_denied_targets_not_retried": true,
+  "task_sandbox_stopped": true,
+  "reason": "blocked by policy; no further reason supplied",
+  "deletion_attempts": 1
+}

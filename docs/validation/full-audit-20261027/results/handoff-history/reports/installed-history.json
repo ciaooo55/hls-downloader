@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "candidate_sha256": "dcb603869ba2b79937589785ab9ad5e004beae1e731beb7e8d6e9af2c5bc8d1d",
+  "checks": [
+    {
+      "actual": 220,
+      "name": "running r19 upgrade, custom path and exact installed component hashes"
+    },
+    {
+      "actual": true,
+      "name": "paused task survives and resumes to original SHA256"
+    },
+    {
+      "actual": true,
+      "name": "actual installed Core and Native Host work with history beyond 4MiB"
+    },
+    {
+      "actual": true,
+      "name": "installed Presenter constructs its confirmation component"
+    },
+    {
+      "actual": true,
+      "name": "candidate MSI registration and launcher removed"
+    }
+  ],
+  "scope": "Installed payload, running upgrade, paused checkpoint, large handoff history and uninstall; no desktop input or full button acceptance"
+}

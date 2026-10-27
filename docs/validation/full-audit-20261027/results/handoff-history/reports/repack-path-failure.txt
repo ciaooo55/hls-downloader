@@ -1,0 +1,1 @@
+First repack attempt stopped before producing an MSI: incorrect Native Host binary filename hls-downloader-native-host.exe. Actual Cargo target is HLSDownloaderNativeHost.exe. No installation or product validation ran in that attempt.

@@ -1,0 +1,3 @@
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
+Core setting site_rules is unreadable, using raw value: invalid type: sequence, expected a string at line 1 column 0
