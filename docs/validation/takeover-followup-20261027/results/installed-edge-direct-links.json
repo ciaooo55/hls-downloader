@@ -1,0 +1,70 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "double: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "previous-post: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "offline: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "da8248ca4558c1333bb94dbb2a08aa3495de479271e3d1411eec695c3d81954c",
+    "HLSDownloaderNativeHost.exe": "0f92c4fb3fd7cd1d99b316c9be0d5594a7c039ce30a5c217eac9021e236770a1"
+  },
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "345d6678b399d577287165a9ffbb06576dc105354e280c10553626794c60f893",
+  "extension_takeover_sha256": "d4d36f94ee75d270cea0dd8de394a24ffde5db9cb08e2f107a6b1850f2038f04",
+  "offline_probe": {
+    "error": "Error: 下载器连接已断开",
+    "ok": false,
+    "reconnecting": true
+  },
+  "requests": {
+    "/": 8,
+    "/favicon.ico": 8,
+    "/direct.zip": 2,
+    "/double.zip": 2,
+    "POST /export.zip": 1,
+    "/export.zip": 2,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1,
+    "/offline.zip": 1
+  }
+}

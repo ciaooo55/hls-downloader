@@ -9,13 +9,13 @@
     "path": "extension/node_modules",
     "directories": 3624,
     "files": 10630,
-    "bytes": 171874684.0
+    "bytes": 171874634.0
   },
   {
     "path": "extension/.output",
     "directories": 8,
     "files": 37,
-    "bytes": 2487435.0
+    "bytes": 2487744.0
   },
   {
     "path": "extension/.wxt",
@@ -27,12 +27,12 @@
     "path": "extension/docs",
     "directories": 3,
     "files": 0,
-    "bytes": null
+    "bytes": 0.0
   },
   {
     "path": "extension/.tool-cache",
     "directories": 1,
     "files": 0,
-    "bytes": null
+    "bytes": 0.0
   }
 ]

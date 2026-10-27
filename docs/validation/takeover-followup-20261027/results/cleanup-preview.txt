@@ -1,0 +1,11 @@
+.tool-cache/takeover-followup-20261027: 106 files, 662940400 bytes
+.tool-cache/takeover-20261027: 11036 files, 732946646 bytes
+extension/node_modules: 10630 files, 171874634 bytes
+extension/.output: 37 files, 2487744 bytes
+extension/.wxt: 8 files, 11215 bytes
+extension/docs: 0 files, 0 bytes
+extension/.tool-cache: 0 files, 0 bytes
+目标：A:\Ubuntu\测试\hls-downloader\.tool-cache\performance-20261027；2736 个文件，2818288764 字节。
+只读检查完成；加 -Apply 执行清理。
+只读检查完成。加 -Apply 清理上述生成目录、上一轮缓存和旧安装包；保留源码、Git、最新成品、私有备份及用户下载。
+只读检查完成。加 -Apply 清理列明缓存和旧包；源码、Git、最新桌面成品、私有备份和下载保留。

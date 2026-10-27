@@ -1,0 +1,67 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+ ❯ lib/downloadOwnership.test.ts (15 tests | 3 failed) 517ms
+   ❯ browser download ownership through registered event listeners (15)
+     × shares one pending desktop confirmation for repeated direct-link clicks 395ms
+     × allows browser fallback for both clicks when a shared offer is explicitly refused 7ms
+     × does not replay a previous POST when intercepting a new GET link to the same URL 11ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > shares one pending desktop confirmation for repeated direct-link clicks
+AssertionError: expected [ …(2) ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ lib/downloadOwnership.test.ts:105:83
+    103|     const replies = await clicks
+    104|     expect(replies.every(reply => reply.handoff?.id === 'one-confirmat…
+    105|     expect(mocks.native.mock.calls.filter(([message]) => message.op ==…
+       |                                                                                   ^
+    106|     const third = directLink()
+    107|     await vi.advanceTimersByTimeAsync(500)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > allows browser fallback for both clicks when a shared offer is explicitly refused
+AssertionError: expected [ …(2) ] to have a length of 1 but got 2
+
+- Expected
++ Received
+
+- 1
++ 2
+
+ ❯ lib/downloadOwnership.test.ts:119:83
+    117|     const replies = await clicks
+    118|     expect(replies.every(reply => reply.browserFallback === true)).toB…
+    119|     expect(mocks.native.mock.calls.filter(([message]) => message.op ==…
+       |                                                                                   ^
+    120|   })
+    121|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > does not replay a previous POST when intercepting a new GET link to the same URL
+AssertionError: expected 'POST' not to be 'POST' // Object.is equality
+ ❯ lib/downloadOwnership.test.ts:131:49
+    129|     expect((await click).browserFallback).toBe(false)
+    130|     const offered = mocks.native.mock.calls.find(([message]) => messag…
+    131|     expect(offered.resource.request_method).not.toBe('POST')
+       |                                                 ^
+    132|     expect(offered.resource.request_body).toBeUndefined()
+    133|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 12 passed (15)
+   Start at  03:44:46
+   Duration  810ms (tests 82%, transform 11%, import 5%, worker 1%)
+

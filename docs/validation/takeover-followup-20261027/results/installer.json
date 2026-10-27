@@ -1,0 +1,35 @@
+﻿{
+    "passed":  false,
+    "checks":  [
+                   {
+                       "actual":  true,
+                       "name":  "upgrade while previous Core runs, old MSI removed"
+                   },
+                   {
+                       "actual":  220,
+                       "name":  "all installed components match candidate"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "installed firefox completed-download ownership"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "installed edge completed-download ownership"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "installed Firefox response blocking and public EXE"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "installed Edge direct links, repeated clicks, previous POST and fallback"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "upgrade candidate uninstalled"
+                   }
+               ],
+    "error":  "fresh-installed failed: 1",
+    "position":  "At C:\\QARunners\\installed.ps1:14 char:30\r\n+     if ($p.ExitCode -ne 0) { throw \"$name failed: $($p.ExitCode)\" }\r\n+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}

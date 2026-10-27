@@ -1,0 +1,7 @@
+{
+  "uninstall_matches": [],
+  "scope": "Exact product uninstall keys, Native Host subkeys and processes; read-only, no whole-PC zero-trace claim",
+  "native_host_matches": [],
+  "process_matches": [],
+  "host_install_performed": false
+}

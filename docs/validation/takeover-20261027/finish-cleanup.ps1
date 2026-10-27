@@ -40,7 +40,7 @@ foreach ($record in $records) {
 }
 $desktop=Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader/最新-20261025'
 $manifest=Get-Content (Join-Path $desktop '交付清单.json') -Raw | ConvertFrom-Json
-if ($manifest.verified_production_source_commit -ne 'da06ce46e7f306feaba0d53383f832f3a0179c3c') { throw 'Current delivery source changed' }
+if ($manifest.verified_production_source_commit -ne 'd27804fb3d5ab17b710455fdbc684b31ed42fd80') { throw 'Current delivery source changed' }
 foreach ($asset in $manifest.assets) {
     $path=[IO.Path]::GetFullPath((Join-Path $desktop $asset.name))
     if (-not $path.StartsWith([IO.Path]::GetFullPath($desktop)+'\',[StringComparison]::OrdinalIgnoreCase) -or

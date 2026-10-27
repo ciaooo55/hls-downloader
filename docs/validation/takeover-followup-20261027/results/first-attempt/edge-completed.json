@@ -1,0 +1,162 @@
+{
+  "passed": false,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "da8248ca4558c1333bb94dbb2a08aa3495de479271e3d1411eec695c3d81954c",
+    "HLSDownloaderNativeHost.exe": "0f92c4fb3fd7cd1d99b316c9be0d5594a7c039ce30a5c217eac9021e236770a1"
+  },
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "345d6678b399d577287165a9ffbb06576dc105354e280c10553626794c60f893",
+  "extension_takeover_sha256": "d4d36f94ee75d270cea0dd8de394a24ffde5db9cb08e2f107a6b1850f2038f04",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_extension_download_ownership.py\", line 245, in run\n    _extension_call(driver, \"chrome.runtime.sendMessage({type:'ping'}).then(done)\")\n  File \"C:\\QAScripts\\smoke_extension_takeover.py\", line 395, in _extension_call\n    return driver.execute_async_script(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAInput\\pydeps\\selenium\\webdriver\\remote\\webdriver.py\", line 636, in execute_async_script\n    return self.execute(command, {\"script\": script, \"args\": converted_args})[\"value\"]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAInput\\pydeps\\selenium\\webdriver\\remote\\webdriver.py\", line 506, in execute\n    self.error_handler.check_response(response)\n  File \"C:\\QAInput\\pydeps\\selenium\\webdriver\\remote\\errorhandler.py\", line 232, in check_response\n    raise exception_class(message, screen, stacktrace)\nselenium.common.exceptions.JavascriptException: Message: javascript error: Cannot read properties of undefined (reading 'sendMessage')\nJavaScript stack:\nTypeError: Cannot read properties of undefined (reading 'sendMessage')\n    at eval (eval at executeAsyncScript (:464:26), <anonymous>:3:83)\n    at eval (eval at executeAsyncScript (:464:26), <anonymous>:3:123)\n    at executeAsyncScript (<anonymous>:464:47)\n    at <anonymous>:479:29\n    at callFunction (<anonymous>:386:22)\n    at <anonymous>:400:23\n    at <anonymous>:401:3\n  (Session info: MicrosoftEdge=156.0.4314.42)\nStacktrace:\nSymbols not available. Dumping unresolved backtrace:\n\t(No symbol) [0x7ff768c609f5]\n\t(No symbol) [0x7ff768ba75d4]\n\t(No symbol) [0x7ff768fef8cf]\n\t(No symbol) [0x7ff76893d38f]\n\t(No symbol) [0x7ff7689bf3e5]\n\t(No symbol) [0x7ff7689a119a]\n\t(No symbol) [0x7ff76897651d]\n\t(No symbol) [0x7ff7689be458]\n\t(No symbol) [0x7ff768975d5c]\n\t(No symbol) [0x7ff768974f4a]\n\t(No symbol) [0x7ff768975b83]\n\t(No symbol) [0x7ff768ab5981]\n\t(No symbol) [0x7ff768ac5638]\n\t(No symbol) [0x7ff768d096d5]\n\t(No symbol) [0x7ff768d0fd51]\n\t(No symbol) [0x7ff768bb36ac]\n\t(No symbol) [0x7ff768badec4]\n\t(No symbol) [0x7ff768badfea]\n\t(No symbol) [0x7ff768b9f3f8]\n\t(No symbol) [0x7ff944a4257d]\n\t(No symbol) [0x7ff94608af08]\n\n",
+  "failure_background_console": [
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    },
+    {
+      "type": "debug",
+      "args": [
+        "HLS Downloader received an explicit click intent"
+      ]
+    }
+  ],
+  "failure_created_events": [],
+  "failure_page_state": {
+    "activation": true,
+    "blobStage": null,
+    "errors": []
+  },
+  "failure_targets": [
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49723/devtools/page/8081E20FAB89FAEFADFD47FCF9CFF6EB",
+      "id": "8081E20FAB89FAEFADFD47FCF9CFF6EB",
+      "title": "Takeover ownership",
+      "type": "page",
+      "url": "http://127.0.0.1:49719/",
+      "webSocketDebuggerUrl": "ws://localhost:49723/devtools/page/8081E20FAB89FAEFADFD47FCF9CFF6EB"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/inspector.html?ws=localhost:49723/devtools/page/5495485B4E6F8B6E145D3F370852C872",
+      "id": "5495485B4E6F8B6E145D3F370852C872",
+      "title": "HLS Downloader",
+      "type": "page",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "webSocketDebuggerUrl": "ws://localhost:49723/devtools/page/5495485B4E6F8B6E145D3F370852C872"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:49723/devtools/page/EDBB85931D23115DD59F63104CEF664C",
+      "id": "EDBB85931D23115DD59F63104CEF664C",
+      "title": "Service Worker https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&amp;bundles=latest&amp;riverAgeMinutes=2880&amp;navAgeMinutes=2880&amp;networkTimeoutSeconds=5&amp;bgTaskNetworkTimeoutSeconds=8&amp;enableNetworkFirst=true&amp;enableEmptySectionRoute=true&amp;enableNavPreload=true&amp;enableStaticAdsRouting=true",
+      "type": "service_worker",
+      "url": "https://ntp.msn.com/edge/ntp/service-worker.js?bundlevariant=ruby&bundles=latest&riverAgeMinutes=2880&navAgeMinutes=2880&networkTimeoutSeconds=5&bgTaskNetworkTimeoutSeconds=8&enableNetworkFirst=true&enableEmptySectionRoute=true&enableNavPreload=true&enableStaticAdsRouting=true",
+      "webSocketDebuggerUrl": "ws://localhost:49723/devtools/page/EDBB85931D23115DD59F63104CEF664C"
+    },
+    {
+      "description": "",
+      "devtoolsFrontendUrl": "https://aka.ms/docs-landing-page/serve_rev/@57559ad176e613cfedd7dff5fe6856590a39eb3b/worker_app.html?ws=localhost:49723/devtools/page/FD3FB8CCAC3F1D71F31C12B294A5BAD6",
+      "id": "FD3FB8CCAC3F1D71F31C12B294A5BAD6",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "type": "service_worker",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "webSocketDebuggerUrl": "ws://localhost:49723/devtools/page/FD3FB8CCAC3F1D71F31C12B294A5BAD6"
+    }
+  ],
+  "failure_screenshot": true,
+  "failure_url": "http://127.0.0.1:49719/",
+  "failure_html": "<html data-hls-downloader-extension=\"1\"><head><title>Takeover ownership</title><script>window.fixtureErrors=[];addEventListener('error',e=>fixtureErrors.push(e.message));addEventListener('unhandledrejection',e=>fixtureErrors.push(String(e.reason)))</script></head><body><a id=\"direct\" href=\"/direct.zip\">direct.zip</a> <a id=\"cancel\" href=\"/cancel.zip\">cancel.zip</a> <a id=\"double\" href=\"/double.zip\">double.zip</a> <a id=\"previous-post\" href=\"/export.zip\">export.zip</a> <a id=\"opaque\" href=\"/opaque\">opaque attachment</a> <a id=\"scripted-link\" href=\"/stale.zip\" onclick=\"event.preventDefault();location.assign('/scripted-export')\">scripted download</a> <a id=\"delegated-link\" href=\"/stale-delegated.zip\">delegated download</a> <script>document.addEventListener('click',e=>{if(e.target.id==='delegated-link'){e.preventDefault();location.assign('/delegated-export')}})</script><a id=\"disabled\" href=\"/disabled.zip\">disabled.zip</a> <a id=\"excluded\" href=\"/excluded.zip\">excluded.zip</a> <a id=\"offline\" href=\"/offline.zip\">offline.zip</a> <a id=\"preview\" href=\"/preview.pdf\">preview</a> <a id=\"github\" href=\"https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe\">GitHub portable EXE</a><form method=\"POST\" action=\"/post-export\"><input type=\"hidden\" name=\"export\" value=\"once\"><button id=\"post-export\">Export POST</button></form><button id=\"blob-export\" onclick=\"window.fixtureBlobStage='fetch';fetch('/blob-payload').then(r=&gt;r.blob()).then(blob=&gt;{const a=document.createElement('a');window.fixtureUrlTypes=[typeof URL,typeof window.URL];a.href=window.URL.createObjectURL(blob);a.download='blob-export.bin';document.body.append(a);window.fixtureBlobStage='click';a.click();a.remove();window.fixtureBlobStage='clicked'})\">Export Blob</button></body></html>",
+  "failure_handoffs": [
+    {
+      "id": "handoff-1a179c1e755-2",
+      "status": "accepted",
+      "url": "http://127.0.0.1:49719/direct.zip"
+    },
+    {
+      "id": "handoff-1a179c1ea23-4",
+      "status": "rejected",
+      "url": "http://127.0.0.1:49719/cancel.zip"
+    },
+    {
+      "id": "handoff-1a179c1ec4f-6",
+      "status": "pending",
+      "url": "http://127.0.0.1:49719/double.zip"
+    }
+  ],
+  "failure_downloads": [],
+  "failure_storage": [
+    {
+      "enabled": true,
+      "excludedHosts": [],
+      "minimumBytes": 0
+    },
+    {
+      "click-intents": [],
+      "handoff-tracker-v1": [
+        {
+          "checkedAt": 1793044115228,
+          "failures": 0,
+          "id": "handoff-1a179c1e755-2",
+          "presentation": "presented",
+          "resourceId": "2f759bcd5a3031dd28770847018d1f78",
+          "selectionKey": "5b284d56233842fbcc9360aefc53f6dc",
+          "status": "accepted",
+          "tabId": 967029446
+        },
+        {
+          "checkedAt": 1793044114304,
+          "failures": 0,
+          "id": "handoff-1a179c1ea23-4",
+          "presentation": "presented",
+          "resourceId": "d2eddbd4e479a74eff46105aa61bc1af",
+          "selectionKey": "70f5517569865f3802cd823fb2678e51",
+          "status": "rejected",
+          "tabId": 967029446
+        },
+        {
+          "checkedAt": 1793044120760,
+          "failures": 0,
+          "id": "handoff-1a179c1ec4f-6",
+          "presentation": "presented",
+          "resourceId": "2bb198c1acd35b3122a2da91768ea91c",
+          "selectionKey": "925cd2622aabbb9f5683a17c60048310",
+          "status": "pending",
+          "tabId": 967029446
+        }
+      ],
+      "resources:tab:967029446:page:4725ea20cb72d93d19bc3defd9977f3c": []
+    }
+  ],
+  "requests": {
+    "/": 4,
+    "/favicon.ico": 4,
+    "/direct.zip": 2
+  }
+}
