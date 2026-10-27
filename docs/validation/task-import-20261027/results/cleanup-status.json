@@ -1,0 +1,10 @@
+{
+  "reason": "blocked by policy",
+  "bytes": 1830520809,
+  "target": ".tool-cache/feature-parity-20261027",
+  "action": "Remove-Item exact task cache recursively",
+  "removed": false,
+  "rejected": true,
+  "executed": false,
+  "specific_reason_provided": false
+}

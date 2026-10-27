@@ -1,7 +1,5 @@
 {
-  "release_id": 425186503,
-  "draft": true,
-  "passed": true,
+  "draft": false,
   "assets": [
     {
       "name": "HLSDownloader-7.0.3-20261027-unsigned.msi",
@@ -48,5 +46,8 @@
       "size": 799,
       "digest": "sha256:23114aa8ac8b593b9c19465ca4e412d73fecb9515645e4dbdc011cd5b10b284f"
     }
-  ]
+  ],
+  "release_id": 425186503,
+  "passed": true,
+  "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r18"
 }
