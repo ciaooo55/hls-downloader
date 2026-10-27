@@ -1,0 +1,24 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "actual-ipc-thousand-task-import-and-export",
+      "exported_bytes": 621656
+    },
+    {
+      "name": "reimport-diagnostics",
+      "created_count": 0,
+      "errors": [
+        {
+          "kind": "error",
+          "code": "import_partial_failure",
+          "message": "已导入 0 项任务，1 项导入失败：\n第 1 项：下载目录必须位于默认下载根目录内"
+        }
+      ],
+      "stored_count": 0
+    }
+  ],
+  "engine_sha256": "599a8b2a3194ddfdd625e71b785cf319def833cccf54139bdf0e048aca556cbc",
+  "error": "0",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_v7_task_import.py\", line 103, in run\n    assert len(imported) == 1000, len(imported)\n           ^^^^^^^^^^^^^^^^^^^^^\nAssertionError: 0\n"
+}

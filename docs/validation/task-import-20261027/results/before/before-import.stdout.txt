@@ -1,0 +1,18 @@
+
+running 1 test
+test download_worker::tests::import_paths_continues_after_a_bad_file_and_reports_partial_success ... FAILED
+
+failures:
+
+---- download_worker::tests::import_paths_continues_after_a_bad_file_and_reports_partial_success stdout ----
+
+thread 'download_worker::tests::import_paths_continues_after_a_bad_file_and_reports_partial_success' (5564) panicked at src\download_worker.rs:9568:12:
+called `Result::unwrap()` on an `Err` value: "任务 JSON 格式无效: expected value at line 1 column 1"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    download_worker::tests::import_paths_continues_after_a_bad_file_and_reports_partial_success
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 650 filtered out; finished in 0.08s
+

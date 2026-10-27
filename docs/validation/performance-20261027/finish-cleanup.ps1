@@ -28,7 +28,7 @@ if ($record.path -ne '.tool-cache/performance-20261027' -or $files.Count -ne $re
 }
 $delivery = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader/最新-20261025'
 $manifest = Get-Content -LiteralPath (Join-Path $delivery '交付清单.json') -Raw | ConvertFrom-Json
-if ($manifest.verified_production_source_commit -ne 'd27804fb3d5ab17b710455fdbc684b31ed42fd80') { throw 'Delivery source changed' }
+if ($manifest.verified_production_source_commit -ne '0d139b557cf7665cb74db9bbeb8aefd09d8f6efd') { throw 'Delivery source changed' }
 foreach ($asset in $manifest.assets) {
     $path = [IO.Path]::GetFullPath((Join-Path $delivery $asset.name))
     if (-not $path.StartsWith([IO.Path]::GetFullPath($delivery) + '\', [StringComparison]::OrdinalIgnoreCase) -or

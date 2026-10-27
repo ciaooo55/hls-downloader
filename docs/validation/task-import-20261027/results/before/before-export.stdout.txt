@@ -1,0 +1,31 @@
+
+running 8 tests
+test task_export::tests::csv_neutralizes_spreadsheet_formula_cells ... ok
+test task_export::tests::csv_quotes_hostile_cells_and_url_export_uses_queue_order ... ok
+test task_export::tests::export_rejects_unknown_formats_and_empty_selection ... ok
+test task_export::tests::exported_json_imports_task_configuration_without_runtime_state ... ok
+test task_export::tests::exported_large_task_list_can_be_reimported ... FAILED
+test task_export::tests::json_export_is_stable_filtered_and_excludes_runtime_logs ... ok
+test task_export::tests::oversized_json_export_is_rejected_before_creating_an_unusable_backup ... FAILED
+test task_export::tests::task_import_rejects_foreign_schema_and_unsafe_urls ... ok
+
+failures:
+
+---- task_export::tests::exported_large_task_list_can_be_reimported stdout ----
+
+thread 'task_export::tests::exported_large_task_list_can_be_reimported' (5996) panicked at src\task_export.rs:355:44:
+called `Result::unwrap()` on an `Err` value: "任务 JSON 必须包含 1 到 100 个任务"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- task_export::tests::oversized_json_export_is_rejected_before_creating_an_unusable_backup stdout ----
+
+thread 'task_export::tests::oversized_json_export_is_rejected_before_creating_an_unusable_backup' (6032) panicked at src\task_export.rs:364:9:
+assertion failed: export_tasks(&[source], &[], "json").is_err()
+
+
+failures:
+    task_export::tests::exported_large_task_list_can_be_reimported
+    task_export::tests::oversized_json_export_is_rejected_before_creating_an_unusable_backup
+
+test result: FAILED. 6 passed; 2 failed; 0 ignored; 0 measured; 643 filtered out; finished in 1.47s
+

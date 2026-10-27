@@ -1,0 +1,29 @@
+﻿{
+    "passed":  true,
+    "checks":  [
+                   {
+                       "actual":  true,
+                       "name":  "old code rejects its own export from another download root"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "r17 running Core upgrades, old MSI registration removed"
+                   },
+                   {
+                       "actual":  220,
+                       "name":  "all installed components match candidate"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "actual installed Engine imports, exports and downloads after partial failure"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "upgrade candidate uninstalls"
+                   },
+                   {
+                       "actual":  true,
+                       "name":  "fresh custom path, Known Folder, public file, Native Host startup and uninstall"
+                   }
+               ]
+}

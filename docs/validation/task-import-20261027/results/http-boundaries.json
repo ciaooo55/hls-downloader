@@ -1,0 +1,58 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "signed-redirect-cookie-referer-complete-sha256",
+      "actual": true
+    },
+    {
+      "name": "actual-post-body-download-sha256",
+      "actual": true
+    },
+    {
+      "name": "http-403-fails-with-visible-task-error",
+      "actual": "HTTP 403"
+    },
+    {
+      "name": "failed-http-download-retry-recovers-sha256",
+      "actual": true
+    },
+    {
+      "name": "http-404-fails-with-visible-task-error",
+      "actual": "HTTP 404"
+    },
+    {
+      "name": "actual-http-connection-loss-visible-error-and-retry-sha256",
+      "actual": true
+    },
+    {
+      "name": "login-html-never-published-as-video",
+      "actual": true
+    },
+    {
+      "name": "browser-media-mime-survives-opaque-filename",
+      "actual": true
+    },
+    {
+      "name": "offer-confirmation-preserves-media-mime-and-rejects-html-without-extension",
+      "actual": true
+    },
+    {
+      "name": "intentional-html-file-download-still-works",
+      "actual": true
+    },
+    {
+      "name": "invalid-save-directory-visible-error-preserves-existing-file",
+      "actual": "create task directory: 当文件已存在时，无法创建该文件。 (os error 183)"
+    },
+    {
+      "name": "invalid-directory-task-does-not-block-following-download",
+      "actual": true
+    },
+    {
+      "name": "actual-core-restart-preserves-paused-task-and-resumes-sha256",
+      "actual": true
+    }
+  ],
+  "engine_sha256": "f0a9a2140c919d161a964b98037489cc99b3c6d59fc324fc81a26f25fcaa4715"
+}

@@ -1,0 +1,12 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "actual-ipc-thousand-task-import-and-export",
+      "exported_bytes": 621656
+    }
+  ],
+  "engine_sha256": "599a8b2a3194ddfdd625e71b785cf319def833cccf54139bdf0e048aca556cbc",
+  "error": "",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_v7_task_import.py\", line 99, in run\n    assert len(imported) == 1000\n           ^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+}

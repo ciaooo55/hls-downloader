@@ -1,0 +1,7 @@
+{
+  "passed": false,
+  "checks": [],
+  "engine_sha256": "599a8b2a3194ddfdd625e71b785cf319def833cccf54139bdf0e048aca556cbc",
+  "error": "Engine TCP IPC did not become ready",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_v7_task_import.py\", line 86, in run\n    with engine(\"source\") as ipc:\n         ^^^^^^^^^^^^^^^^\n  File \"contextlib.py\", line 137, in __enter__\n  File \"C:\\QAScripts\\smoke_v7_task_import.py\", line 62, in engine\n    with connect(port) as ipc:\n         ^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\msi_checkpoint_fixture.py\", line 98, in connect\n    raise TimeoutError(\"Engine TCP IPC did not become ready\")\nTimeoutError: Engine TCP IPC did not become ready\n"
+}

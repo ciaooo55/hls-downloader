@@ -1,0 +1,32 @@
+﻿{
+    "finished":  true,
+    "passed":  true,
+    "checks":  [
+                   {
+                       "name":  "before-portable",
+                       "expected_failure":  true,
+                       "exit_code":  1
+                   },
+                   {
+                       "name":  "core-regression",
+                       "expected_failure":  false,
+                       "exit_code":  0
+                   },
+                   {
+                       "name":  "task-import",
+                       "expected_failure":  false,
+                       "exit_code":  0
+                   },
+                   {
+                       "name":  "http-boundaries",
+                       "expected_failure":  false,
+                       "exit_code":  0
+                   },
+                   {
+                       "name":  "installed",
+                       "expected_failure":  false,
+                       "exit_code":  0
+                   }
+               ],
+    "current":  "installed"
+}

@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\feature-parity-20261027\\delivery\\candidate.msi",
+  "original_product_code": "{B7DD3266-48F5-4742-9297-D84F7BA9FD3D}",
+  "verified_product_code": "{02AE7948-888A-4547-BC16-6A6C5727649E}",
+  "original_package_code": "{C2282AD5-1B4D-4338-A338-1332D9F349C2}",
+  "verified_package_code": "{9FB31425-1EA2-4943-B30E-D7007B5CF3F0}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "4A7B03E947B37CC2D780A006CB2568BA5AD01746AC219033DD7E59CF8A50FD80",
+  "sha256_after": "47B64CF845DECC6A050B396A3295E91372FC1B3A6DC5609415E28BE7543BFCBE"
+}

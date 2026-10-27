@@ -1,0 +1,29 @@
+﻿{
+    "finished":  true,
+    "passed":  false,
+    "checks":  [
+                   {
+                       "name":  "before-export",
+                       "expected_failure":  true,
+                       "exit_code":  101
+                   },
+                   {
+                       "name":  "before-import",
+                       "expected_failure":  true,
+                       "exit_code":  101
+                   },
+                   {
+                       "name":  "core-regression",
+                       "expected_failure":  false,
+                       "exit_code":  0
+                   },
+                   {
+                       "name":  "task-import",
+                       "expected_failure":  false,
+                       "exit_code":  1
+                   }
+               ],
+    "current":  "task-import",
+    "error":  "task-import unexpected exit 1",
+    "position":  "At C:\\QARunners\\guest.ps1:17 char:101\r\n+ ...  $p.ExitCode -ne 0)) { throw \"$name unexpected exit $($p.ExitCode)\" }\r\n+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
