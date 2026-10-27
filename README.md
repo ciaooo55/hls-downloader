@@ -37,6 +37,8 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 
+当前 v7 交付为 [r19 未签名候选](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r19)。本轮修复了静止任务列表反复重组导致的高 CPU，以及任务列表导入/导出和诊断日志问题。[当前验收记录](docs/validation/full-audit-20261027/README.md)列出真实结果和未完成项；Chromium 全入口零下载项、完整原生按钮矩阵等门槛尚未通过，`release_ready=false`。
+
 ### 系统要求
 
 | 项目 | 要求 |

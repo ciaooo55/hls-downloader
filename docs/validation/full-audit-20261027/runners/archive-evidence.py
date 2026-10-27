@@ -19,6 +19,7 @@ selected = [
     'installed-audit.json','fresh-installed-audit.json','installed-create-pause.json',
     'installed-verify-paused.json','installed-verify-resume.json','comparison-clean.json',
     'hover-edge.json','hover-firefox.json',
+    'render-trace-jdk-SOFTWARE.log','render-trace-SOFTWARE.log',
 ]
 
 
@@ -46,6 +47,13 @@ def scrub(value):
 
 manifest = []
 files = [(source/name, Path(name)) for name in selected]
+build_source = repo/'.tool-cache/full-audit-20261027'
+files += [(build_source/name, Path('build-validation')/name) for name in (
+    'desktop-tests.txt', 'desktop-tests-limited.txt', 'desktop-jar.txt',
+    'extension-tests.txt', 'extension-tests-limited.txt', 'extension-typecheck.txt',
+    'extension-chrome-build.txt', 'extension-firefox-build.txt',
+    'final-release-build.txt', 'repack.txt', 'rollback-contract.txt',
+)]
 final_source = repo/'.tool-cache/full-audit-20261027/final-reports'
 files += [(final_source/name, Path('final-no-gpu')/name) for name in (
     'installed-audit.json', 'fresh-installed-audit.json',
@@ -78,6 +86,7 @@ for path, relative in files:
         text = '\n'.join(line.rstrip() for line in text.split('\n'))
         content = (json.dumps(scrub(json.loads(text)),ensure_ascii=False,indent=2)+'\n'
                    if relative.suffix == '.json' else scrub_text(text))
+        content = content.rstrip('\n')+'\n' if content.strip() else ''
         # Match the repository's LF checkout contract so archived hashes also
         # verify after cloning on another machine. Original hashes stay intact.
         destination.write_text(content,encoding='utf8',newline='\n')

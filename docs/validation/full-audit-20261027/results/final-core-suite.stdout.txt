@@ -661,4 +661,3 @@ test window_util::tests::missing_title_does_not_drag ... ok
 test window_util::tests::zero_window_long_result_only_fails_with_a_win32_error ... ok
 
 test result: ok. 646 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 69.67s
-

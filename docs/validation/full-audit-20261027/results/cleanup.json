@@ -1,0 +1,30 @@
+{
+  "status": "blocked_by_automatic_approval",
+  "reason": "blocked by policy; no further reason supplied",
+  "deletion_attempts": 1,
+  "path": ".tool-cache/full-audit-20261027",
+  "files": 5529,
+  "directories": 2364,
+  "bytes": 2698100140.0,
+  "duplicate_logs": [
+    {
+      "path": "docs/validation/full-audit-20261027/results/render-v2-SOFTWARE.log",
+      "sha256": "76e44d3f9be57a72c1a6da10b488aaace9a1286f790baa0e220bb360953275bf",
+      "replacement": "docs/validation/full-audit-20261027/results/render-v2-SOFTWARE.txt"
+    },
+    {
+      "path": "docs/validation/full-audit-20261027/results/render-fixed-SOFTWARE.log",
+      "sha256": "2567fd63954ab35449e5924cbf8a583474a297d986a0c37ab07fb26920c72069",
+      "replacement": "docs/validation/full-audit-20261027/results/render-fixed-SOFTWARE.txt"
+    }
+  ],
+  "earlier_refused_targets_not_retried": [
+    ".tool-cache/performance-20261027",
+    ".tool-cache/feature-parity-20261027",
+    "takeover and takeover-followup caches",
+    "extension generated directories and node_modules",
+    "Desktop/HLSDownloader/最新-20261025/HLSDownloader-7.0.3-20261026-未签名.msi"
+  ],
+  "task_sandbox_stopped": true,
+  "desktop_current_msi_sha256": "9fe6ea42285fa2ac1f911f398f5e169e3851f6867aff3265babf83b968491c8b"
+}

@@ -2,32 +2,32 @@
   {
     "path": "final-core-suite.stdout.txt",
     "original_sha256": "2110148e0199a1cf059a4cdd17d7399559417f50b32a4cfefc18271e133a53c7",
-    "archived_sha256": "2f3743deebff225c51b9f1f372de2687c8269e0ed40717cb07566ad17242be87"
+    "archived_sha256": "c2f66a61f8d0ff45a907b117cdf5b3d4dedde9b03ba9da3f4a1d22dc343fd371"
   },
   {
     "path": "curl-regression.stdout.txt",
     "original_sha256": "94cb2aaa5411d33eec5814901dd1b5449c2bd7f8ae0625ce2a307071b9a57485",
-    "archived_sha256": "94cb2aaa5411d33eec5814901dd1b5449c2bd7f8ae0625ce2a307071b9a57485"
+    "archived_sha256": "00ab31c25388be28d06748a812c3c2f7e139dbebf6cc81a446ae6b946cf665d1"
   },
   {
     "path": "winhttp-regression.stdout.txt",
     "original_sha256": "589ada0fbded5dc4f118a70fdc60c37f9dceeb4751171c4d2fa9ae3c1281f39b",
-    "archived_sha256": "589ada0fbded5dc4f118a70fdc60c37f9dceeb4751171c4d2fa9ae3c1281f39b"
+    "archived_sha256": "77b5a0b3c119a2856751d947298294c0c1637d7a89d0f4004260c3bf97e74f27"
   },
   {
     "path": "final-real-merge.stdout.txt",
     "original_sha256": "83e4cadc98298d3d885e448ea928602a97ce6beca20512aab04256b47854c838",
-    "archived_sha256": "83e4cadc98298d3d885e448ea928602a97ce6beca20512aab04256b47854c838"
+    "archived_sha256": "0d8515ac3b3dcc3d2b63cde5b5513b72e0e2504b5f01ff97990e3a00e344d808"
   },
   {
     "path": "before-post.stdout.txt",
     "original_sha256": "7b9048f24b7d52d153bcbed40916152f39215172db7f0c0617f25974305fc8df",
-    "archived_sha256": "7b9048f24b7d52d153bcbed40916152f39215172db7f0c0617f25974305fc8df"
+    "archived_sha256": "2730de695212618f3d0bf46e6345b6586802e2c3025156666d66da070efd60d5"
   },
   {
     "path": "before-queue.stdout.txt",
     "original_sha256": "5b4b8ae5eb8e50feac5c9c02e63a937b27366bb9befb29038516e3461dec1358",
-    "archived_sha256": "5b4b8ae5eb8e50feac5c9c02e63a937b27366bb9befb29038516e3461dec1358"
+    "archived_sha256": "b743d2bb5ad92c313173f92e6f81e30976d51e941e80a640ab1e187316d2489d"
   },
   {
     "path": "final-task-import.json",
@@ -72,7 +72,7 @@
   {
     "path": "ui-thread-dump.txt",
     "original_sha256": "400d87eb9f5582c0a24b8fd822493f4324d1fa0eeb99927895750f63a5129919",
-    "archived_sha256": "f650791f4d8f5b439a34072f7604cd42abcd82fdb63c02dc2f9dc396e688f0e6"
+    "archived_sha256": "cf846b67164164a2c584ea1c7133d958f7c057a4620d740ab99abdded6e4a079"
   },
   {
     "path": "render-comparison-v2.json",
@@ -138,6 +138,71 @@
     "path": "hover-firefox.json",
     "original_sha256": "d987876f0a401bf85aac7078ac0e7bbad228e1a154d101a1553d609c91232de2",
     "archived_sha256": "f726ab417505dc33bd48977f3203d9040cb26c14f860e1f788f8bf7d983a60b2"
+  },
+  {
+    "path": "render-trace-jdk-SOFTWARE.txt",
+    "original_sha256": "42c14722c245c1bb7e4f32f56c977360b1a4f4b0b3f06c51db359a6a4c4e28c5",
+    "archived_sha256": "bbf53fa862bca850a54ff81821fb064253aba7e0ffefc0e32109c6ce2276f4d0"
+  },
+  {
+    "path": "render-trace-SOFTWARE.txt",
+    "original_sha256": "d263632aa23d1eb6beeb04ebf464e7fabebb12c2e92a918428530533e569484a",
+    "archived_sha256": "d263632aa23d1eb6beeb04ebf464e7fabebb12c2e92a918428530533e569484a"
+  },
+  {
+    "path": "build-validation/desktop-tests.txt",
+    "original_sha256": "942d1817d8ad406b379f526ae0a0739aa68b1f462ea1fb7f428fbbdbbb8c8888",
+    "archived_sha256": "27634c70c9c65c022f895d8492b792e9348410c483c899d414180b17c95ede05"
+  },
+  {
+    "path": "build-validation/desktop-tests-limited.txt",
+    "original_sha256": "b4deeb79fe438c64ac24060d4e24bc3a3b513715e258f822780955a41aedd012",
+    "archived_sha256": "8ee090e47a368eff15b0fc63985448296b109faf965891d221c93bdfccbc6b0c"
+  },
+  {
+    "path": "build-validation/desktop-jar.txt",
+    "original_sha256": "db98621584878588da03f81becad14d87bf324cfcb7602a5be4c89014e6e35d9",
+    "archived_sha256": "a25108f8985d119e804fa925a197bae8f91488e7741bd4606c3bb363913ff6c3"
+  },
+  {
+    "path": "build-validation/extension-tests.txt",
+    "original_sha256": "a2a79d43d8713da707f804bd722ce0e9e90e2ea0cbafc8905689c66bc6978c9a",
+    "archived_sha256": "70ef5dc1b0e9418f91c51cb1d6b0af3ce53d879425abfd38faad752b6c10bbb7"
+  },
+  {
+    "path": "build-validation/extension-tests-limited.txt",
+    "original_sha256": "90a193094d772890d87f8c1bcba1407970e87b17d2aa625a9bc8704a1a2c5ea1",
+    "archived_sha256": "cd8eacc12c585fc6f249cb82c5df22d3e379be77a84153ced4624c9f0f7dc319"
+  },
+  {
+    "path": "build-validation/extension-typecheck.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "build-validation/extension-chrome-build.txt",
+    "original_sha256": "03d0560036ff265d6afd861d2e5cb1c1e63e34126c3e40dde4d9be3352889f5a",
+    "archived_sha256": "12288dd5089b8eef555514527c11bcc2f0b7a7eef0718d33bfc59bc9fd89a7b9"
+  },
+  {
+    "path": "build-validation/extension-firefox-build.txt",
+    "original_sha256": "60096a4360f0bc805fbbd741516c7dd8463240ed6fba23ceb49e46b6dd8406c2",
+    "archived_sha256": "e5af5046006679dcac1d36cf412480ae4d6a58e5f9c8b01b7fd39706db4e93e3"
+  },
+  {
+    "path": "build-validation/final-release-build.txt",
+    "original_sha256": "93ae30cf528c944b1dfa86782310e64c88e9115760fe3a1c64491a018b5bea3d",
+    "archived_sha256": "80e7039a5e5c67a8959c114ed4e5f51f31e3ec5d27e82c569c4c6294a0cb897b"
+  },
+  {
+    "path": "build-validation/repack.txt",
+    "original_sha256": "e4e76013801b7209dce1e94940b8ddc9f316a66f8ee16468e5f07d830ee72873",
+    "archived_sha256": "09e36f7b18e8312d49521aad92daaba34395a1bc3a48eb906762990775ae76d9"
+  },
+  {
+    "path": "build-validation/rollback-contract.txt",
+    "original_sha256": "0b4b4b015fe8e8fcf82961ccbae9746febb4a4f3b3e4b9ecb9a7b2b86b40d3b5",
+    "archived_sha256": "205de90cdbbe566c475c5e3829e8e32ec91d48f777daaed22ff65bee1c3d0de9"
   },
   {
     "path": "final-no-gpu/installed-audit.json",

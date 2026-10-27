@@ -1,0 +1,11 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+
+ Test Files  52 passed (52)
+      Tests  418 passed (418)
+   Start at  17:24:37
+   Duration  24.06s (tests 33%, import 31%, transform 24%, worker 11%)
+
+    Isolate  52 workers spawned · ~658ms startup each (spawn + environment, per file)
+             at least ~16.46s faster with isolate: false — reuses workers across files instead of one per file

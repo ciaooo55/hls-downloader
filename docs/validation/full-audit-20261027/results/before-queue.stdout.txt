@@ -15,4 +15,3 @@ failures:
     download_worker::tests::task_list_import_uses_default_for_a_queue_missing_on_this_computer
 
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 654 filtered out; finished in 0.46s
-

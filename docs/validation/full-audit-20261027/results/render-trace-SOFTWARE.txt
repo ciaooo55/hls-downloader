@@ -1,0 +1,3 @@
+Error occurred during initialization of VM
+Could not find agent library instrument on the library path, with error: Can't find dependent libraries
+Module java.instrument may be missing from runtime image.

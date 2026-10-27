@@ -103,3 +103,13 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 宿主精确只读核查见[host-state.json](results/host-state.json)：产品卸载登记、UpgradeCode相关MSI、28个Native Host精确子键、产品进程及列明的默认目录均未发现。本轮未在宿主安装产品或写注册表。该范围不能证明全盘不存在任何历史痕迹。
 
 最终版本仍是未签名候选，`release_ready=false`。Native Host首次响应曾超1500ms、Chromium全入口零下载项、原始网站/卡死现场和完整原生按钮矩阵等未完成项继续有效；不能用补验通过概括成“全部功能没有问题”。
+
+## 发布、桌面与清理的实际状态
+
+[r19](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r19)已公开为未签名预发布，9个资产发布前后均核对大小及服务端SHA256，结果见[release-assets.json](results/release-assets.json)。r18发布已移除，源码标签保留；v6/v5/v3/v1发布未修改，历史稳定Latest仍为v6.0.1。删除前资产记录见[retired-v7-release.json](results/retired-v7-release.json)。
+
+用户指定的桌面`HLSDownloader/最新-20261025`已更新9个当前交付文件：20261027 MSI、双插件、完整插件源码、Firefox审核源码、来源记录、清单、说明和校验表。8个非校验表文件的本地SHA256全部核对；同目录旧20261026 MSI此前被拒绝删除，本轮没有操作，清单明确它不是当前交付。
+
+本轮沙盒和构建进程已停止。**清理未完成**：新建`.tool-cache/full-audit-20261027`共5529文件、2364子目录、2698100140字节；唯一一次删除被自动审批拒绝，只返回`blocked by policy`，没有具体原因。未换工具或方式绕过。此前被拒绝的旧缓存、插件生成物及旧桌面安装包也未重试。两份被忽略的重复`.log`仍在，已提交的`.txt`是其归档替代。精确库存见[cleanup.json](results/cleanup.json)。
+
+用户可自行运行[本轮精确清理脚本](finish-cleanup.ps1)加`-Apply`；代理未执行。脚本核对库存、链接、进程、Git、归档哈希及最新桌面包，只处理本轮缓存和两份重复日志，不串联此前脚本或扩大范围。不加`-Apply`仅只读检查。旧缓存另按此前各轮记录处理，本脚本不会把整机“绝对干净”作为可证明结论。
