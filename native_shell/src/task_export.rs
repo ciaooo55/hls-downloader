@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
-const MAX_IMPORT_TASKS: usize = 100;
+const MAX_IMPORT_TASKS: usize = 1_000;
 
 #[derive(Serialize, Deserialize)]
 struct ExportDocument {
@@ -111,13 +111,16 @@ fn import_tasks_from_path(path: &Path) -> Result<Vec<TaskSpec>, String> {
 }
 
 pub fn import_tasks(text: &str) -> Result<Vec<TaskSpec>, String> {
+    if text.is_empty() || text.len() as u64 > MAX_IMPORT_BYTES {
+        return Err("任务 JSON 为空或超过 1 MiB".into());
+    }
     let document: ExportDocument =
         serde_json::from_str(text).map_err(|error| format!("任务 JSON 格式无效: {error}"))?;
     if document.schema != "hls-downloader.tasks.v1" {
         return Err("任务 JSON 架构不受支持".into());
     }
     if document.tasks.is_empty() || document.tasks.len() > MAX_IMPORT_TASKS {
-        return Err("任务 JSON 必须包含 1 到 100 个任务".into());
+        return Err(format!("任务 JSON 必须包含 1 到 {MAX_IMPORT_TASKS} 个任务"));
     }
     document
         .tasks
@@ -185,6 +188,11 @@ pub fn export_tasks(
         _ => return Err("导出格式仅支持 JSON、CSV 或 URL 列表".into()),
     };
     let count = tasks.len();
+    if format == "json" && count > MAX_IMPORT_TASKS {
+        return Err(format!(
+            "JSON 一次最多导出 {MAX_IMPORT_TASKS} 项任务，请分批选择后导出"
+        ));
+    }
     let data = match format {
         "json" => serde_json::to_string_pretty(&ExportDocument {
             schema: "hls-downloader.tasks.v1".into(),
@@ -200,6 +208,9 @@ pub fn export_tasks(
             .collect::<Vec<_>>()
             .join("\r\n"),
     };
+    if format == "json" && data.len() as u64 > MAX_IMPORT_BYTES {
+        return Err("任务 JSON 超过 1 MiB，请分批选择后导出".into());
+    }
     Ok((format.into(), data, count))
 }
 
@@ -344,6 +355,51 @@ mod tests {
         assert_eq!(imported[0].scheduled_start_at, "22:30");
         assert!(imported[0].credential_ref.is_none());
         assert!(imported[0].replay_context_ref.is_none());
+    }
+
+    #[test]
+    fn exported_large_task_list_can_be_reimported() {
+        let tasks: Vec<_> = (0..1_000)
+            .map(|index| {
+                task(
+                    &index.to_string(),
+                    index,
+                    "file.bin",
+                    &format!("https://cdn.test/{index}"),
+                )
+            })
+            .collect();
+        let (_, data, count) = export_tasks(&tasks, &[], "json").unwrap();
+        let imported = import_tasks(&data).unwrap();
+        assert_eq!(imported.len(), count);
+        assert_eq!(imported.last().unwrap().url, "https://cdn.test/999");
+    }
+
+    #[test]
+    fn oversized_json_export_is_rejected_before_creating_an_unusable_backup() {
+        let mut source = task("one", 0, "one.bin", "https://cdn.test/one");
+        source.title = "x".repeat(MAX_IMPORT_BYTES as usize);
+        assert!(export_tasks(&[source], &[], "json").is_err());
+    }
+
+    #[test]
+    fn oversized_task_count_is_rejected_by_export_and_import() {
+        let tasks: Vec<_> = (0..=MAX_IMPORT_TASKS)
+            .map(|index| {
+                task(
+                    &index.to_string(),
+                    index as i64,
+                    "file.bin",
+                    &format!("https://cdn.test/{index}"),
+                )
+            })
+            .collect();
+        assert!(export_tasks(&tasks, &[], "json").is_err());
+        let data = serde_json::json!({"schema":"hls-downloader.tasks.v1", "tasks":
+            tasks.iter().map(ExportTask::from).collect::<Vec<_>>()
+        })
+        .to_string();
+        assert!(import_tasks(&data).is_err());
     }
 
     #[test]

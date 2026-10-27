@@ -1429,12 +1429,34 @@ impl CoreCoordinator {
         }
         if let CoreCommand::ImportPaths { paths } = command {
             let mut events = Vec::new();
-            for path in paths {
-                events.extend(self.dispatch(CoreCommand::CreateTask {
+            let mut failures = Vec::new();
+            for (index, path) in paths.into_iter().enumerate() {
+                match self.dispatch(CoreCommand::CreateTask {
                     spec: TaskSpec {
                         url: path,
                         ..Default::default()
                     },
+                }) {
+                    Ok(imported) => {
+                        for event in imported {
+                            if let CoreEvent::Error { message, .. } = &event.event {
+                                failures.push(format!("第 {} 项：{message}", index + 1));
+                            } else {
+                                events.push(event);
+                            }
+                        }
+                    }
+                    Err(error) => failures.push(format!("第 {} 项：{error}", index + 1)),
+                }
+            }
+            if !failures.is_empty() {
+                let count = events
+                    .iter()
+                    .filter(|event| matches!(event.event, CoreEvent::TaskCreated { .. }))
+                    .count();
+                events.extend(self.lock()?.emit(CoreEvent::Error {
+                    code: "import_partial_failure".into(),
+                    message: format!("已导入 {count} 项任务，{} 项导入失败：\n{}", failures.len(), failures.join("\n")),
                 })?);
             }
             return Ok(events);
@@ -1608,9 +1630,17 @@ impl CoreCoordinator {
             )
         };
         if let Some(imported) = crate::task_export::import_tasks_from_source(&spec.url)? {
+            let download_dir = self.settings()?.download_dir;
             return imported
                 .into_iter()
                 .map(|mut imported| {
+                    reject_path_escape(&imported.download_dir)?;
+                    // 导出的绝对目录可能属于另一台电脑；导入不能越过当前下载根目录。
+                    if constrain_untrusted_download_dir(&imported.download_dir, &download_dir)
+                        .is_err()
+                    {
+                        imported.download_dir.clear();
+                    }
                     imported.allow_duplicate = spec.allow_duplicate;
                     self.apply_defaults_to_spec(imported)
                 })
@@ -9503,6 +9533,10 @@ mod tests {
                 title: "Archive".into(),
                 filename: "archive.zip".into(),
                 speed_limit_kib: 256,
+                download_dir: std::env::temp_dir()
+                    .join("hls-import-old-computer")
+                    .to_string_lossy()
+                    .into_owned(),
                 scheduled_start_at: "2999-01-01T00:00:00Z".into(),
                 ..Default::default()
             })
@@ -9528,6 +9562,10 @@ mod tests {
         target
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
+        let download_dir = std::env::temp_dir().join("hls-import-current-computer");
+        target
+            .set_setting("download_dir", serde_json::json!(download_dir.to_string_lossy()))
+            .unwrap();
         let imported = target
             .dispatch(CoreCommand::ImportPaths {
                 paths: vec![path.to_string_lossy().into_owned()],
@@ -9542,8 +9580,38 @@ mod tests {
             .unwrap();
         assert_eq!(snapshot.filename, "archive.zip");
         assert_eq!(snapshot.speed_limit_kib, 256);
+        assert_eq!(snapshot.download_dir, download_dir.to_string_lossy());
         assert_eq!(snapshot.scheduled_start_at, "2999-01-01T00:00:00Z");
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn import_paths_continues_after_a_bad_file_and_reports_partial_success() {
+        let root = std::env::temp_dir().join(format!("hls-v7-batch-import-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let paths: Vec<_> = ["first.json", "invalid.json", "last.json"]
+            .iter().map(|name| root.join(name)).collect();
+        for (index, path) in paths.iter().enumerate() {
+            let data = if index == 1 { "invalid JSON".into() } else {
+                serde_json::json!({"schema":"hls-downloader.tasks.v1", "tasks":[{
+                    "url":format!("https://cdn.test/batch-{index}.bin"),
+                    "scheduled_start_at":"2999-01-01T00:00:00Z"
+                }]}).to_string()
+            };
+            fs::write(path, data).unwrap();
+        }
+        let target = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        target.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
+        let events = target.dispatch(CoreCommand::ImportPaths {
+            paths: paths.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
+        }).unwrap();
+        assert_eq!(target.tasks().unwrap().len(), 2);
+        assert_eq!(events.iter().filter(|event| matches!(event.event, CoreEvent::TaskCreated { .. })).count(), 2);
+        assert!(events.iter().any(|event| matches!(&event.event,
+            CoreEvent::Error { code, message } if code == "import_partial_failure"
+                && message.contains("2 项任务") && message.contains("第 2 项")
+        )));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

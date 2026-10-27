@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 const MAX_LINK_FILE_BYTES: u64 = 256 * 1024;
 const MAX_LINK_URLS: usize = 100;
+const MAX_TEXT_URLS: usize = 1_000;
 
 /// If `source` is a local file (or `file://` URL), expand it into download URLs.
 /// Remote http(s)/ftp/sftp/magnet strings return `Ok(None)` so the caller keeps them as-is.
@@ -157,7 +158,7 @@ pub fn extract_download_urls(text: &str, suffix: &str) -> Result<Vec<String>, St
     if ext == "html" || ext == "htm" {
         return extract_html_urls(body);
     }
-    if ext == "txt" {
+    if ext == "txt" || ext == "urls" {
         return extract_text_urls(body);
     }
     Ok(vec![extract_download_url(body)?])
@@ -205,8 +206,10 @@ fn extract_text_urls(text: &str) -> Result<Vec<String>, String> {
         if let Ok(url) = normalize_download_url(candidate) {
             if seen.insert(url.clone()) {
                 found.push(url);
-                if found.len() >= MAX_LINK_URLS {
-                    break;
+                if found.len() > MAX_TEXT_URLS {
+                    return Err(format!(
+                        "URL 列表一次最多导入 {MAX_TEXT_URLS} 项，请拆分文件后导入"
+                    ));
                 }
             }
         }
@@ -415,6 +418,21 @@ mod tests {
             extract_download_urls(text, "magnet").unwrap()[0],
             "magnet:?xt=urn:btih:abc&dn=demo"
         );
+    }
+
+    #[test]
+    fn exported_url_lists_import_all_links_or_fail_without_truncation() {
+        let text = (0..MAX_TEXT_URLS)
+            .map(|index| format!("https://cdn.test/{index}\r\n"))
+            .collect::<String>();
+        for extension in ["txt", "urls"] {
+            let urls = extract_download_urls(&text, extension).unwrap();
+            assert_eq!(urls.len(), MAX_TEXT_URLS);
+            assert_eq!(urls.last().unwrap(), "https://cdn.test/999");
+            assert!(
+                extract_download_urls(&format!("{text}https://cdn.test/extra"), extension).is_err()
+            );
+        }
     }
 
     #[test]
