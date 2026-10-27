@@ -4,7 +4,7 @@ $meta=Get-Content C:\QAInput\installer.json -Raw | ConvertFrom-Json
 $old=Get-Content C:\QAInput\baseline-installer.json -Raw | ConvertFrom-Json
 $install='C:\QAUpgradeAudit'
 if(Test-Path -LiteralPath $install){throw 'Fresh audit install directory required'}
-$result=[ordered]@{passed=$false;candidate_sha256=$meta.sha256;checks=@()}
+$result=[ordered]@{passed=$false;candidate_sha256=$meta.sha256;checks=@();native_host_latency_gate='Separate earlier failure retained; not passed by this lifecycle run'}
 function Save { $result | ConvertTo-Json -Depth 8 | Set-Content C:\QAReports\installed-audit.json -Encoding UTF8 }
 function Record($name,$actual) { $result.checks+=@{name=$name;actual=$actual};Save }
 function Msi([string[]]$arguments,[string]$name,[int]$expected=0) {
@@ -60,8 +60,8 @@ try {
     $installed=$null
     if([Audit.MSI]::MsiQueryProductState($meta.product_code) -ne -1 -or (Test-Path "$install\HLSDownloader.exe")){throw 'Upgrade uninstall incomplete'}
     Remove-Item Env:HLS_V7_DATA_DIR,Env:HLS_V7_DOWNLOAD_DIR -ErrorAction SilentlyContinue
-    Run C:\QAWork\browser-python\python.exe @('C:\QAScripts\smoke_v7_installed_footprint.py','--msi','C:\QAInput\candidate.msi','--manifest','C:\QAInput\installer.json','--expected-components','C:\QAInput\components.json','--verify-native-host-startup','--verify-http-retry','--verify-hls-retry','--report','C:\QAReports\fresh-installed-audit.json') 'fresh-installed-audit'
-    Record 'fresh custom path, KnownFolder Downloads, installed retry/cleanup, NativeHost startup and uninstall' $true
+    Run C:\QAWork\browser-python\python.exe @('C:\QAScripts\smoke_v7_installed_footprint.py','--msi','C:\QAInput\candidate.msi','--manifest','C:\QAInput\installer.json','--expected-components','C:\QAInput\components.json','--idle-seconds','60','--verify-http-retry','--verify-hls-retry','--report','C:\QAReports\fresh-installed-audit.json') 'fresh-installed-audit'
+    Record 'fresh custom path, KnownFolder Downloads, installed retry/cleanup, UI connection, 60s resources and uninstall' $true
     $result.passed=$true
 } catch {$result.error=$_.Exception.Message;$result.position=$_.InvocationInfo.PositionMessage;throw}
 finally {if($installed){Stop-Runtime $install;Msi @('/x',$installed,'/qn') 'audit-final-uninstall'};Save}

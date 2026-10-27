@@ -274,7 +274,7 @@ test download_worker::tests::task_paths_prepare_preserves_an_active_pause_or_can
 test download_worker::tests::task_schedule_and_queue_membership_fail_closed_before_worker_spawn ... ok
 test download_worker::tests::task_torrent_file_contract_reads_and_persists_selection_before_start ... ok
 test download_worker::tests::untrusted_download_dir_must_stay_under_configured_root ... ok
-test download_worker::tests::untrusted_download_dir_rejects_junction_escape ... 为 C:\QAWork\tmp\hls-v6-junc-root-6632\escape <<===>> C:\QAWork\tmp\hls-v6-junc-out-6632 创建的联接
+test download_worker::tests::untrusted_download_dir_rejects_junction_escape ... 为 C:\QAWork\tmp\hls-v6-junc-root-6632\escape <<===>> C:\QAWork\tmp\hls-v6-junc-out-6632 创建的联接
 ok
 test download_worker::ui_layout_settings_validate_required_entries_widths_and_persistence ... ok
 test duplicate::tests::paused_same_url_resumes ... ok

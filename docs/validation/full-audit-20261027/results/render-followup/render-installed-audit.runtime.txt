@@ -1,0 +1,18 @@
+core_startup stage=entry elapsed_us=14
+core_startup stage=registration elapsed_us=2420
+core_startup stage=instance_lock elapsed_us=6382
+core_sqlite_open stage=directory_ready elapsed_us=100
+core_sqlite_open stage=connection_ready elapsed_us=2466
+core_sqlite_open stage=version_read elapsed_us=4300
+core_sqlite_initialize stage=pragmas_ready elapsed_us=2760
+core_sqlite_initialize stage=schema_ready elapsed_us=6620
+core_sqlite_initialize stage=committed elapsed_us=10653
+core_sqlite_open stage=initialized elapsed_us=17447
+core_store_startup stage=database_open elapsed_us=18636
+core_store_startup stage=bootstrap elapsed_us=20474
+core_store_startup stage=recovery_watchers elapsed_us=21506
+core_startup stage=store_ready elapsed_us=31829
+core_startup stage=tray elapsed_us=32972
+core_startup stage=ipc_ready elapsed_us=37060
+download engine listening on 127.0.0.1:49702
+UI_TEST_API=http://127.0.0.1

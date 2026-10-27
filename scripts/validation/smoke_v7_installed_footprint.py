@@ -417,10 +417,6 @@ def run(args):
                     return None
             window = wait(ready, 'Installed UI not visibly connected', 120)
             report['ui_visible_connected_seconds'] = time.monotonic()-started
-            screen = ui('screenshot', True)
-            paint = ui('screenshot?mode=paint', True)
-            args.report.with_suffix('.png').write_bytes(screen)
-            args.report.with_suffix('.paint.png').write_bytes(paint)
             def nonblank(data):
                 with Image.open(io.BytesIO(data)) as image:
                     # Resampling a flat canvas's rounded corners creates many
@@ -430,8 +426,23 @@ def run(args):
                     colors = rgb.getcolors(pixels)
                     counts = sorted((count for count, _ in colors), reverse=True)
                     return pixels - sum(counts[:2]) > max(500, pixels * .005)
-            report['ui_capture'] = {'screen_nonblank': nonblank(screen), 'paint_nonblank': nonblank(paint)}
-            assert any(report['ui_capture'].values()), 'UI reports showing but both screen and paint captures are blank'
+            def rendered():
+                screen = ui('screenshot', True)
+                paint = ui('screenshot?mode=paint', True)
+                args.report.with_suffix('.png').write_bytes(screen)
+                args.report.with_suffix('.paint.png').write_bytes(paint)
+                report['ui_capture'] = {'screen_nonblank': nonblank(screen),
+                                        'paint_nonblank': nonblank(paint)}
+                report.setdefault('ui_first_capture', dict(report['ui_capture']))
+                return any(report['ui_capture'].values())
+
+            # Showing/connected is not a first-frame acknowledgement. Keep the
+            # content requirement and fail if rendering never catches up.
+            render_started = time.monotonic()
+            try:
+                wait(rendered, 'UI reports showing but both screen and paint captures remain blank', 15)
+            finally:
+                report['ui_render_wait_seconds'] = time.monotonic()-render_started
             record('installed UI reports showing, connects to Core and produces a nonblank render',
                    {'window': window, 'capture': report['ui_capture']})
             if args.verify_browser_color:

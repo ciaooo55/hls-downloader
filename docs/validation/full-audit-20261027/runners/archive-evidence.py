@@ -45,20 +45,43 @@ def scrub(value):
 
 
 manifest = []
-for name in selected:
-    path = source/name
+files = [(source/name, Path(name)) for name in selected]
+final_source = repo/'.tool-cache/full-audit-20261027/final-reports'
+files += [(final_source/name, Path('final-no-gpu')/name) for name in (
+    'installed-audit.json', 'fresh-installed-audit.json',
+    'installed-create-pause.json', 'installed-verify-paused.json',
+    'installed-verify-resume.json', 'fresh-installed-audit.runtime.log',
+    'fresh-installed-audit.png', 'fresh-installed-audit.paint.png',
+)]
+render_source = repo/'.tool-cache/full-audit-20261027/render-reports'
+files += [(render_source/name, Path('render-followup')/name) for name in (
+    'render-installed-audit.json', 'render-installed-audit.runtime.log',
+    'render-installed-audit.png', 'render-installed-audit.paint.png',
+)]
+for path, relative in files:
     if not path.is_file():
         continue
     raw = path.read_bytes()
-    try:
-        text = raw.decode('utf-8-sig')
-    except UnicodeDecodeError:
-        # Windows PowerShell 5.1的原生命令重定向可能沿用系统代码页。
-        text = raw.decode('gb18030')
-    content = (json.dumps(scrub(json.loads(text)),ensure_ascii=False,indent=2)+'\n'
-               if name.endswith('.json') else scrub_text(text))
-    (target/name).write_text(content,'utf8')
-    manifest.append({'path':name,'original_sha256':hashlib.sha256(raw).hexdigest(),
-                     'archived_sha256':hashlib.sha256((target/name).read_bytes()).hexdigest()})
-(target/'EVIDENCE-MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n','utf8')
+    if relative.suffix == '.log':
+        relative = relative.with_suffix('.txt')
+    destination = target/relative
+    destination.parent.mkdir(exist_ok=True)
+    if relative.suffix == '.png':
+        destination.write_bytes(raw)
+    else:
+        try:
+            text = raw.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            # Windows PowerShell 5.1的原生命令重定向可能沿用系统代码页。
+            text = raw.decode('gb18030')
+        text = text.replace('\r\n', '\n').replace('\r', '')
+        text = '\n'.join(line.rstrip() for line in text.split('\n'))
+        content = (json.dumps(scrub(json.loads(text)),ensure_ascii=False,indent=2)+'\n'
+                   if relative.suffix == '.json' else scrub_text(text))
+        # Match the repository's LF checkout contract so archived hashes also
+        # verify after cloning on another machine. Original hashes stay intact.
+        destination.write_text(content,encoding='utf8',newline='\n')
+    manifest.append({'path':relative.as_posix(),'original_sha256':hashlib.sha256(raw).hexdigest(),
+                     'archived_sha256':hashlib.sha256(destination.read_bytes()).hexdigest()})
+(target/'EVIDENCE-MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf8',newline='\n')
 print(f'Archived {len(manifest)} reports; queries and credential fields sanitized')

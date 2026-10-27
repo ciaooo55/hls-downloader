@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "candidate_sha256": "9fe6ea42285fa2ac1f911f398f5e169e3851f6867aff3265babf83b968491c8b",
+  "checks": [
+    {
+      "actual": true,
+      "name": "forced post-file-install failure restores old registration, Engine and paused task"
+    },
+    {
+      "actual": 220,
+      "name": "running old Core/UI upgrade to same candidate payload; old registration removed"
+    },
+    {
+      "actual": true,
+      "name": "paused task survives upgrade and resumes to original SHA256"
+    }
+  ],
+  "native_host_latency_gate": "Separate earlier failure retained; not passed by this lifecycle run",
+  "error": "fresh-installed-audit failed: 1",
+  "position": "At C:\\QARunners\\common.ps1:14 char:30\r\n+     if ($p.ExitCode -ne 0) { throw \"$name failed: $($p.ExitCode)\" }\r\n+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
