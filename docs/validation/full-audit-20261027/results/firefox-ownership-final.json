@@ -1,0 +1,178 @@
+{
+  "passed": true,
+  "browser": "firefox",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "scripted-link: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "delegated-link: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "media-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "audio-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "image-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "json-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "html-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "unknown-attachment: Core saved unknown file type with exact bytes",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "redirect-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "form-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "newtab-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "post-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "C:\\Users\\WDAGUtilityAccount\\Downloads\\post-export.bin",
+            "id": 1,
+            "observed_at_ms": 1793094114111,
+            "url": "http://127.0.0.1/post-export"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    },
+    {
+      "name": "blob-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "C:\\Users\\WDAGUtilityAccount\\Downloads\\blob-export.bin",
+            "id": 2,
+            "observed_at_ms": 1793094119695,
+            "url": "blob:http://127.0.0.1/c72b6bac-b8ee-48c1-8c1d-62d5968e8b97"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "offline: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "WebDriver element click",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "a27d5a639d106c39dc12a47460db3dda59f0bf32c1ce8b2a8e3045d04bfad624",
+    "HLSDownloaderNativeHost.exe": "425397564dc4527d6fce44de4959c2e453a9d6165ac551d54956fee0d2ad5578"
+  },
+  "browser_version": "158.0.1",
+  "extension_background_sha256": "0f5ed0b8599c6976f499dc4bb10789e5b05584d3816c498a3bde49e8efa40216",
+  "extension_takeover_sha256": "f3e38b6ed6f05a54373cedb4bd91d5dd7a9d84f1ada453c16e4ddda4b3254434",
+  "offline_probe": {
+    "error": "Error: 下载器连接已断开",
+    "ok": false,
+    "reconnecting": true
+  },
+  "requests": {
+    "/": 21,
+    "/favicon.ico": 1,
+    "/direct.zip": 3,
+    "/cancel.zip": 1,
+    "/opaque": 3,
+    "/scripted-export": 3,
+    "/delegated-export": 3,
+    "/media-attachment": 2,
+    "/audio-attachment": 1,
+    "/image-attachment": 1,
+    "/json-attachment": 1,
+    "/html-attachment": 1,
+    "/unknown-attachment": 4,
+    "/redirect-attachment": 1,
+    "/media-attachment?": 1,
+    "POST /post-export": 1,
+    "/blob-payload": 1,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1,
+    "/offline.zip": 1
+  }
+}

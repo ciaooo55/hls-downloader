@@ -1,0 +1,266 @@
+{
+  "pid": 6852,
+  "sample_seconds": 5,
+  "threads": [
+    {
+      "thread_id": 5400,
+      "nid": "0x1518",
+      "cpu_seconds": 3.703125
+    },
+    {
+      "thread_id": 6592,
+      "nid": "0x19c0",
+      "cpu_seconds": 0.015625
+    },
+    {
+      "thread_id": 1780,
+      "nid": "0x6f4",
+      "cpu_seconds": 0.015625
+    },
+    {
+      "thread_id": 5220,
+      "nid": "0x1464",
+      "cpu_seconds": 0.015625
+    },
+    {
+      "thread_id": 548,
+      "nid": "0x224",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2132,
+      "nid": "0x854",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6488,
+      "nid": "0x1958",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6784,
+      "nid": "0x1a80",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6380,
+      "nid": "0x18ec",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1288,
+      "nid": "0x508",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 5340,
+      "nid": "0x14dc",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1540,
+      "nid": "0x604",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 5020,
+      "nid": "0x139c",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4044,
+      "nid": "0xfcc",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2816,
+      "nid": "0xb00",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2696,
+      "nid": "0xa88",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4292,
+      "nid": "0x10c4",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2480,
+      "nid": "0x9b0",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1576,
+      "nid": "0x628",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 7060,
+      "nid": "0x1b94",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1956,
+      "nid": "0x7a4",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4780,
+      "nid": "0x12ac",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 3200,
+      "nid": "0xc80",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1532,
+      "nid": "0x5fc",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2752,
+      "nid": "0xac0",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1208,
+      "nid": "0x4b8",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6452,
+      "nid": "0x1934",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4424,
+      "nid": "0x1148",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 920,
+      "nid": "0x398",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 3736,
+      "nid": "0xe98",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2308,
+      "nid": "0x904",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2068,
+      "nid": "0x814",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4308,
+      "nid": "0x10d4",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6848,
+      "nid": "0x1ac0",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 768,
+      "nid": "0x300",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4976,
+      "nid": "0x1370",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 5364,
+      "nid": "0x14f4",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 3740,
+      "nid": "0xe9c",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6732,
+      "nid": "0x1a4c",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 5188,
+      "nid": "0x1444",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4452,
+      "nid": "0x1164",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1988,
+      "nid": "0x7c4",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6644,
+      "nid": "0x19f4",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 3020,
+      "nid": "0xbcc",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 5756,
+      "nid": "0x167c",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 1076,
+      "nid": "0x434",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6300,
+      "nid": "0x189c",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 4188,
+      "nid": "0x105c",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2656,
+      "nid": "0xa60",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6608,
+      "nid": "0x19d0",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 2360,
+      "nid": "0x938",
+      "cpu_seconds": 0.0
+    },
+    {
+      "thread_id": 6408,
+      "nid": "0x1908",
+      "cpu_seconds": 0.0
+    }
+  ]
+}

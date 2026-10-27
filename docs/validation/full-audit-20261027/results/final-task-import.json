@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "actual-ipc-thousand-task-import-and-export",
+      "exported_bytes": 621656
+    },
+    {
+      "name": "reimport-diagnostics",
+      "created_count": 1000,
+      "errors": [],
+      "stored_count": 1000
+    },
+    {
+      "name": "own-export-reimports-into-a-fresh-task-store-without-loss"
+    },
+    {
+      "name": "bad-middle-file-reported-both-good-files-downloaded-with-correct-sha256",
+      "message": "已导入 2 项任务，1 项导入失败：\n第 2 项：任务 JSON 格式无效: expected value at line 1 column 1"
+    },
+    {
+      "name": "foreign-queue-falls-back-to-default-without-losing-task"
+    },
+    {
+      "name": "missing-post-body-rejected-before-task-creation",
+      "message": "已导入 0 项任务，1 项导入失败：\n第 1 项：任务列表不包含 POST 请求正文，无法安全重建；请从浏览器或 cURL 重新导入该请求"
+    }
+  ],
+  "engine_sha256": "a27d5a639d106c39dc12a47460db3dda59f0bf32c1ce8b2a8e3045d04bfad624"
+}

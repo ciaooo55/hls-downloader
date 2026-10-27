@@ -1,0 +1,71 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "cases": [
+    {
+      "mode": "direct",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "dual-source",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "shadow",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "dynamic-shadow",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "mse",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "hls-mse",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "ll-hls-mse",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "dash-mse",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "multi-mse",
+      "players": 2,
+      "passed": true
+    },
+    {
+      "mode": "dash-unknown-mse",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "iframe",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "cross-iframe",
+      "players": 1,
+      "passed": true
+    },
+    {
+      "mode": "srcdoc",
+      "players": 1,
+      "passed": true
+    }
+  ]
+}

@@ -1,0 +1,1133 @@
+{
+  "schema": 1,
+  "scope": "loopback non-resumable single-response transfer and whole-product resources; no segmentation or UI-response claim",
+  "samples": [
+    {
+      "product": "hls",
+      "round": 1,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 45.588799999677576,
+      "first_byte_ms": 47.909599999911734,
+      "verified_output_ms": 1220.7901999995556,
+      "last_ten_percent_ms": 513.8856999997188,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 223764480,
+        "private": 241102848,
+        "cpu": 5.859375,
+        "threads": 92,
+        "handles": 1337,
+        "read_bytes": 21698722,
+        "write_bytes": 128666,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "peak": {
+        "rss": 234127360,
+        "private": 249110528,
+        "cpu": 5.859375,
+        "threads": 96,
+        "handles": 1369,
+        "read_bytes": 21698722,
+        "write_bytes": 128666,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "after": {
+        "rss": 234102784,
+        "private": 248549376,
+        "cpu": 6.96875,
+        "threads": 94,
+        "handles": 1364,
+        "read_bytes": 22402513,
+        "write_bytes": 134523485,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "cpu_seconds": 1.109375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 196608,
+          "started": 3651.7365844
+        },
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 134217728,
+          "started": 3651.7466438
+        }
+      ],
+      "server_bytes_sent": 134414336,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 1,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 46.00780000009763,
+      "first_byte_ms": 119.88350000001446,
+      "verified_output_ms": 16476.12570000001,
+      "last_ten_percent_ms": 1827.0137999998042,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 234201088,
+        "private": 248549376,
+        "cpu": 6.984375,
+        "threads": 94,
+        "handles": 1364,
+        "read_bytes": 22403017,
+        "write_bytes": 134556950,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "peak": {
+        "rss": 256626688,
+        "private": 267706368,
+        "cpu": 6.984375,
+        "threads": 99,
+        "handles": 1384,
+        "read_bytes": 22403017,
+        "write_bytes": 134556950,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "after": {
+        "rss": 250916864,
+        "private": 259244032,
+        "cpu": 8.859375,
+        "threads": 92,
+        "handles": 1375,
+        "read_bytes": 23032225,
+        "write_bytes": 204604351,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "cpu_seconds": 1.875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 65536,
+          "started": 3653.6229494
+        },
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 67108864,
+          "started": 3653.7122931
+        }
+      ],
+      "server_bytes_sent": 67174400,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "ab",
+      "round": 1,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 428.39390000017374,
+      "first_byte_ms": 524.1386000002421,
+      "verified_output_ms": 3722.285499999998,
+      "last_ten_percent_ms": 824.4433999998364,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 231456768,
+        "private": 288718848,
+        "cpu": 16.203125,
+        "threads": 65,
+        "handles": 846,
+        "read_bytes": 35765486,
+        "write_bytes": 344941,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "peak": {
+        "rss": 274735104,
+        "private": 326324224,
+        "cpu": 16.203125,
+        "threads": 76,
+        "handles": 895,
+        "read_bytes": 35765486,
+        "write_bytes": 344941,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "after": {
+        "rss": 293945344,
+        "private": 348016640,
+        "cpu": 24.421875,
+        "threads": 73,
+        "handles": 888,
+        "read_bytes": 38544671,
+        "write_bytes": 134565970,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "cpu_seconds": 8.21875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 17170432,
+          "started": 3688.2247845
+        },
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 134217728,
+          "started": 3688.4134782
+        }
+      ],
+      "server_bytes_sent": 151388160,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "ab",
+      "round": 1,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 52.6598000001286,
+      "first_byte_ms": 135.23950000035256,
+      "verified_output_ms": 16704.19630000015,
+      "last_ten_percent_ms": 1934.707100000196,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 286294016,
+        "private": 342155264,
+        "cpu": 24.640625,
+        "threads": 73,
+        "handles": 888,
+        "read_bytes": 38544671,
+        "write_bytes": 134565970,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "peak": {
+        "rss": 300294144,
+        "private": 352182272,
+        "cpu": 24.640625,
+        "threads": 75,
+        "handles": 906,
+        "read_bytes": 38544671,
+        "write_bytes": 134565970,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "after": {
+        "rss": 301821952,
+        "private": 354209792,
+        "cpu": 32.0,
+        "threads": 69,
+        "handles": 896,
+        "read_bytes": 38632803,
+        "write_bytes": 201680220,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "cpu_seconds": 7.359375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 524288,
+          "started": 3692.0348369
+        },
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 67108864,
+          "started": 3692.2580908
+        }
+      ],
+      "server_bytes_sent": 67633152,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "ab",
+      "round": 2,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 541.1692000002404,
+      "first_byte_ms": 648.3408000003692,
+      "verified_output_ms": 4856.966300000295,
+      "last_ten_percent_ms": 1226.5096999999514,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 233828352,
+        "private": 290308096,
+        "cpu": 17.890625,
+        "threads": 64,
+        "handles": 839,
+        "read_bytes": 36215637,
+        "write_bytes": 315739,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "peak": {
+        "rss": 282206208,
+        "private": 333877248,
+        "cpu": 17.890625,
+        "threads": 75,
+        "handles": 888,
+        "read_bytes": 36215637,
+        "write_bytes": 315739,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "after": {
+        "rss": 276176896,
+        "private": 334905344,
+        "cpu": 27.640625,
+        "threads": 72,
+        "handles": 885,
+        "read_bytes": 38729483,
+        "write_bytes": 134536766,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "cpu_seconds": 9.75,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 11534336,
+          "started": 3861.0872022
+        },
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 134217728,
+          "started": 3861.311022
+        }
+      ],
+      "server_bytes_sent": 145752064,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "ab",
+      "round": 2,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 43.94800000000032,
+      "first_byte_ms": 127.65870000021096,
+      "verified_output_ms": 16809.505600000193,
+      "last_ten_percent_ms": 1998.0074999998578,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 276123648,
+        "private": 334811136,
+        "cpu": 27.640625,
+        "threads": 71,
+        "handles": 883,
+        "read_bytes": 38729483,
+        "write_bytes": 134536766,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "peak": {
+        "rss": 296452096,
+        "private": 356466688,
+        "cpu": 27.640625,
+        "threads": 75,
+        "handles": 906,
+        "read_bytes": 38729483,
+        "write_bytes": 134536766,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "after": {
+        "rss": 297152512,
+        "private": 349212672,
+        "cpu": 37.71875,
+        "threads": 71,
+        "handles": 897,
+        "read_bytes": 38745640,
+        "write_bytes": 201651016,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "cpu_seconds": 10.078125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 524288,
+          "started": 3865.7606474
+        },
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 67108864,
+          "started": 3865.9929079
+        }
+      ],
+      "server_bytes_sent": 67633152,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "hls",
+      "round": 2,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 129.1016000000127,
+      "first_byte_ms": 128.10160000026372,
+      "verified_output_ms": 2561.2402000001566,
+      "last_ten_percent_ms": 573.8012000001618,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 222130176,
+        "private": 243654656,
+        "cpu": 9.5,
+        "threads": 92,
+        "handles": 1334,
+        "read_bytes": 24422365,
+        "write_bytes": 20894,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "peak": {
+        "rss": 242089984,
+        "private": 259522560,
+        "cpu": 9.5,
+        "threads": 97,
+        "handles": 1373,
+        "read_bytes": 24422365,
+        "write_bytes": 20894,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "after": {
+        "rss": 232349696,
+        "private": 243167232,
+        "cpu": 13.203125,
+        "threads": 94,
+        "handles": 1364,
+        "read_bytes": 25171897,
+        "write_bytes": 134551368,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "cpu_seconds": 3.703125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 327680,
+          "started": 3896.4401821
+        },
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 134217728,
+          "started": 3896.4505813
+        }
+      ],
+      "server_bytes_sent": 134545408,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 2,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 48.25010000013208,
+      "first_byte_ms": 125.01770000017132,
+      "verified_output_ms": 16520.17650000016,
+      "last_ten_percent_ms": 1851.646200000232,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 232869888,
+        "private": 243576832,
+        "cpu": 13.203125,
+        "threads": 94,
+        "handles": 1364,
+        "read_bytes": 25180597,
+        "write_bytes": 134584838,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "peak": {
+        "rss": 256303104,
+        "private": 264716288,
+        "cpu": 13.203125,
+        "threads": 98,
+        "handles": 1379,
+        "read_bytes": 25180597,
+        "write_bytes": 134584838,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "after": {
+        "rss": 252960768,
+        "private": 260812800,
+        "cpu": 18.296875,
+        "threads": 91,
+        "handles": 1370,
+        "read_bytes": 25906580,
+        "write_bytes": 204705223,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "cpu_seconds": 5.09375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 65536,
+          "started": 3899.348543
+        },
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 67108864,
+          "started": 3899.4452709
+        }
+      ],
+      "server_bytes_sent": 67174400,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "hls",
+      "round": 3,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 44.41939999969691,
+      "first_byte_ms": 42.4697999997079,
+      "verified_output_ms": 1336.4606000000094,
+      "last_ten_percent_ms": 545.2663000000939,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 224309248,
+        "private": 237645824,
+        "cpu": 6.578125,
+        "threads": 92,
+        "handles": 1338,
+        "read_bytes": 22980439,
+        "write_bytes": 21025,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "peak": {
+        "rss": 239448064,
+        "private": 250580992,
+        "cpu": 6.578125,
+        "threads": 97,
+        "handles": 1373,
+        "read_bytes": 22980439,
+        "write_bytes": 21025,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "after": {
+        "rss": 239316992,
+        "private": 250281984,
+        "cpu": 8.078125,
+        "threads": 94,
+        "handles": 1364,
+        "read_bytes": 23712557,
+        "write_bytes": 134435882,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "cpu_seconds": 1.5,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 131072,
+          "started": 3929.4794253
+        },
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 134217728,
+          "started": 3929.4889991
+        }
+      ],
+      "server_bytes_sent": 134348800,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "hls",
+      "round": 3,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 46.527099999821075,
+      "first_byte_ms": 123.76169999970443,
+      "verified_output_ms": 16479.800299999624,
+      "last_ten_percent_ms": 1820.9105999999338,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 239419392,
+        "private": 250347520,
+        "cpu": 8.09375,
+        "threads": 94,
+        "handles": 1364,
+        "read_bytes": 23721257,
+        "write_bytes": 134469352,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "peak": {
+        "rss": 259313664,
+        "private": 268484608,
+        "cpu": 8.09375,
+        "threads": 98,
+        "handles": 1377,
+        "read_bytes": 23721257,
+        "write_bytes": 134469352,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "after": {
+        "rss": 246177792,
+        "private": 254050304,
+        "cpu": 10.953125,
+        "threads": 91,
+        "handles": 1368,
+        "read_bytes": 24356781,
+        "write_bytes": 204543692,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "cpu_seconds": 2.859375,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 65536,
+          "started": 3931.2506859
+        },
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 67108864,
+          "started": 3931.3399206
+        }
+      ],
+      "server_bytes_sent": 67174400,
+      "unique_server_bytes": 67108864
+    },
+    {
+      "product": "ab",
+      "round": 3,
+      "scenario": "fast",
+      "payload_bytes": 134217728,
+      "submission_ms": 491.004200000134,
+      "first_byte_ms": 605.4659000001266,
+      "verified_output_ms": 3584.398400000282,
+      "last_ten_percent_ms": 618.5107999999673,
+      "sha256": "a626d17da2e502f5b4b8e3ebd23f0bf9daef6255688d8e0bb482b3ae3794a682",
+      "before": {
+        "rss": 243863552,
+        "private": 297869312,
+        "cpu": 15.796875,
+        "threads": 64,
+        "handles": 839,
+        "read_bytes": 36218724,
+        "write_bytes": 315739,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "peak": {
+        "rss": 293351424,
+        "private": 346923008,
+        "cpu": 15.796875,
+        "threads": 75,
+        "handles": 892,
+        "read_bytes": 36218724,
+        "write_bytes": 315739,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "after": {
+        "rss": 290877440,
+        "private": 344895488,
+        "cpu": 23.5,
+        "threads": 72,
+        "handles": 885,
+        "read_bytes": 38733086,
+        "write_bytes": 134536766,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "cpu_seconds": 7.703125,
+      "requests": [
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 8257536,
+          "started": 3966.4164761
+        },
+        {
+          "start": 0,
+          "end": 134217727,
+          "status": 200,
+          "sent": 134217728,
+          "started": 3966.653076
+        }
+      ],
+      "server_bytes_sent": 142475264,
+      "unique_server_bytes": 134217728
+    },
+    {
+      "product": "ab",
+      "round": 3,
+      "scenario": "limited",
+      "payload_bytes": 67108864,
+      "submission_ms": 57.99779999961174,
+      "first_byte_ms": 141.74689999981638,
+      "verified_output_ms": 16969.474699999864,
+      "last_ten_percent_ms": 2170.0409000000036,
+      "sha256": "281e519df3077b557c6b03f5da83c4e8d397219259615dd7c3308f89cae8f2a6",
+      "before": {
+        "rss": 290906112,
+        "private": 344875008,
+        "cpu": 23.625,
+        "threads": 71,
+        "handles": 883,
+        "read_bytes": 38733086,
+        "write_bytes": 134536766,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "peak": {
+        "rss": 302919680,
+        "private": 355430400,
+        "cpu": 23.625,
+        "threads": 75,
+        "handles": 905,
+        "read_bytes": 38733086,
+        "write_bytes": 134536766,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "after": {
+        "rss": 301207552,
+        "private": 354840576,
+        "cpu": 32.59375,
+        "threads": 68,
+        "handles": 895,
+        "read_bytes": 38949133,
+        "write_bytes": 201651016,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "cpu_seconds": 8.96875,
+      "requests": [
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 524288,
+          "started": 3969.8833933
+        },
+        {
+          "start": 0,
+          "end": 67108863,
+          "status": 200,
+          "sent": 67108864,
+          "started": 3970.0961075
+        }
+      ],
+      "server_bytes_sent": 67633152,
+      "unique_server_bytes": 67108864
+    }
+  ],
+  "errors": [
+    {
+      "product": "idm",
+      "round": 1,
+      "error": "TimeoutError('idm fast: 0/134217728; files=[]')"
+    }
+  ],
+  "installed_bytes": {
+    "hls": 471449339,
+    "ab": 172564357,
+    "idm": 26332870
+  },
+  "binaries": {
+    "hls": {
+      "path": "C:\\QAWork\\runtime\\HLSDownloader.exe",
+      "sha256": "841b23b44128b652efa457f733272faa06ba6a6ed803af41fd5550bbdc0e535d"
+    },
+    "ab": {
+      "path": "C:\\ABDownloadManager\\ABDownloadManager.exe",
+      "sha256": "843d936ded4952ff845e6c42720e394c7e6e1b997177b046f21cd5f1e89650b7"
+    },
+    "idm": {
+      "path": "C:\\Program Files (x86)\\Internet Download Manager\\IDMan.exe",
+      "sha256": "3b5dc9ce53eb31933effa3fd973bec068a78e0f8c1d15a919b081f0c4d9325ba"
+    }
+  },
+  "idle": [
+    {
+      "product": "hls",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 216903680,
+        "private": 236761088,
+        "cpu": 5.859375,
+        "threads": 84,
+        "handles": 1191,
+        "read_bytes": 21601005,
+        "write_bytes": 128178,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "after": {
+        "rss": 223764480,
+        "private": 241102848,
+        "cpu": 5.859375,
+        "threads": 92,
+        "handles": 1337,
+        "read_bytes": 21698722,
+        "write_bytes": 128666,
+        "pids": [
+          3084,
+          4252,
+          4720,
+          7012
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "ab",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 245313536,
+        "private": 305291264,
+        "cpu": 16.203125,
+        "threads": 65,
+        "handles": 846,
+        "read_bytes": 35762946,
+        "write_bytes": 344941,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "after": {
+        "rss": 231456768,
+        "private": 288718848,
+        "cpu": 16.203125,
+        "threads": 65,
+        "handles": 846,
+        "read_bytes": 35765486,
+        "write_bytes": 344941,
+        "pids": [
+          1332,
+          5256
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "idm",
+      "round": 1,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 18018304,
+        "private": 3891200,
+        "cpu": 0.265625,
+        "threads": 8,
+        "handles": 369,
+        "read_bytes": 283954,
+        "write_bytes": 0,
+        "pids": [
+          1504
+        ]
+      },
+      "after": {
+        "rss": 18018304,
+        "private": 3891200,
+        "cpu": 0.265625,
+        "threads": 8,
+        "handles": 369,
+        "read_bytes": 283954,
+        "write_bytes": 0,
+        "pids": [
+          1504
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "ab",
+      "round": 2,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 239730688,
+        "private": 301850624,
+        "cpu": 17.890625,
+        "threads": 64,
+        "handles": 839,
+        "read_bytes": 36213097,
+        "write_bytes": 315739,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "after": {
+        "rss": 233828352,
+        "private": 290308096,
+        "cpu": 17.890625,
+        "threads": 64,
+        "handles": 839,
+        "read_bytes": 36215637,
+        "write_bytes": 315739,
+        "pids": [
+          4716,
+          6804
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "hls",
+      "round": 2,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 236572672,
+        "private": 252215296,
+        "cpu": 9.484375,
+        "threads": 84,
+        "handles": 1187,
+        "read_bytes": 24324724,
+        "write_bytes": 20530,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "after": {
+        "rss": 222130176,
+        "private": 243654656,
+        "cpu": 9.5,
+        "threads": 92,
+        "handles": 1334,
+        "read_bytes": 24422365,
+        "write_bytes": 20894,
+        "pids": [
+          3120,
+          3412,
+          4380,
+          4580
+        ]
+      },
+      "cpu_seconds": 0.015625
+    },
+    {
+      "product": "hls",
+      "round": 3,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 218177536,
+        "private": 234090496,
+        "cpu": 6.578125,
+        "threads": 84,
+        "handles": 1192,
+        "read_bytes": 22882729,
+        "write_bytes": 20535,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "after": {
+        "rss": 224309248,
+        "private": 237645824,
+        "cpu": 6.578125,
+        "threads": 92,
+        "handles": 1338,
+        "read_bytes": 22980439,
+        "write_bytes": 21025,
+        "pids": [
+          1600,
+          2424,
+          6432,
+          6688
+        ]
+      },
+      "cpu_seconds": 0.0
+    },
+    {
+      "product": "ab",
+      "round": 3,
+      "sample_seconds": 5,
+      "before": {
+        "rss": 243843072,
+        "private": 297869312,
+        "cpu": 15.78125,
+        "threads": 64,
+        "handles": 839,
+        "read_bytes": 36216184,
+        "write_bytes": 315739,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "after": {
+        "rss": 243863552,
+        "private": 297869312,
+        "cpu": 15.796875,
+        "threads": 64,
+        "handles": 839,
+        "read_bytes": 36218724,
+        "write_bytes": 315739,
+        "pids": [
+          2696,
+          4044
+        ]
+      },
+      "cpu_seconds": 0.015625
+    }
+  ],
+  "passed": false
+}

@@ -1,0 +1,267 @@
+{
+  "passed": true,
+  "browser": "edge",
+  "checks": [
+    {
+      "name": "direct: one Core file, no browser copy",
+      "actual": {
+        "created_events": [],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "cancel: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "opaque: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 1,
+            "observed_at_ms": 1793094458043,
+            "url": "http://127.0.0.1/opaque"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "github: cancel starts no browser fallback",
+      "actual": {
+        "created_events": []
+      }
+    },
+    {
+      "name": "scripted-link: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 2,
+            "observed_at_ms": 1793094460199,
+            "url": "http://127.0.0.1/scripted-export"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "delegated-link: one Core file, no browser copy",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 3,
+            "observed_at_ms": 1793094460913,
+            "url": "http://127.0.0.1/delegated-export"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "media-attachment: completed response preserved and imported; zero-item criterion NOT met",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 4,
+            "observed_at_ms": 1793094461576,
+            "url": "http://127.0.0.1/media-attachment"
+          }
+        ],
+        "strict_zero_download_items": false,
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "audio-attachment: completed response preserved and imported; zero-item criterion NOT met",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 5,
+            "observed_at_ms": 1793094463324,
+            "url": "http://127.0.0.1/audio-attachment"
+          }
+        ],
+        "strict_zero_download_items": false,
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "image-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 6,
+            "observed_at_ms": 1793094465137,
+            "url": "http://127.0.0.1/image-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "json-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 7,
+            "observed_at_ms": 1793094465911,
+            "url": "http://127.0.0.1/json-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "html-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 8,
+            "observed_at_ms": 1793094466732,
+            "url": "http://127.0.0.1/html-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-attachment: Core saved unknown file type with exact bytes",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 9,
+            "observed_at_ms": 1793094467802,
+            "url": "http://127.0.0.1/unknown-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "redirect-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 10,
+            "observed_at_ms": 1793094468866,
+            "url": "http://127.0.0.1/redirect-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "form-attachment: takeover without a link click, cancel starts no fallback",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 11,
+            "observed_at_ms": 1793094469628,
+            "url": "http://127.0.0.1/media-attachment"
+          }
+        ]
+      }
+    },
+    {
+      "name": "newtab-attachment: completed response preserved and imported; zero-item criterion NOT met",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 12,
+            "observed_at_ms": 1793094470529,
+            "url": "http://127.0.0.1/media-attachment"
+          }
+        ],
+        "strict_zero_download_items": false,
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "post-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 13,
+            "observed_at_ms": 1793094472485,
+            "url": "http://127.0.0.1/post-export"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    },
+    {
+      "name": "blob-export: one request, one local-file import, browser source removed",
+      "actual": {
+        "created_events": [
+          {
+            "filename": "",
+            "id": 14,
+            "observed_at_ms": 1793094473947,
+            "url": "blob:http://127.0.0.1/85ffc79b-5456-456e-8071-18c03cf9c2f9"
+          }
+        ],
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "request_count": 1
+      }
+    },
+    {
+      "name": "disabled: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "excluded: original browser transfer exactly once",
+      "actual": true
+    },
+    {
+      "name": "offline: original browser transfer exactly once",
+      "actual": true
+    }
+  ],
+  "decision_method": "Core IPC",
+  "browser_input": "CDP mouse",
+  "runtime_component_sha256": {
+    "HLSDownloaderEngine.exe": "a27d5a639d106c39dc12a47460db3dda59f0bf32c1ce8b2a8e3045d04bfad624",
+    "HLSDownloaderNativeHost.exe": "425397564dc4527d6fce44de4959c2e453a9d6165ac551d54956fee0d2ad5578"
+  },
+  "browser_version": "156.0.4314.42",
+  "extension_background_sha256": "345d6678b399d577287165a9ffbb06576dc105354e280c10553626794c60f893",
+  "extension_takeover_sha256": "d4d36f94ee75d270cea0dd8de394a24ffde5db9cb08e2f107a6b1850f2038f04",
+  "offline_probe": {
+    "error": "Error: 下载器连接已断开",
+    "ok": false,
+    "reconnecting": true
+  },
+  "requests": {
+    "/": 21,
+    "/favicon.ico": 21,
+    "/direct.zip": 2,
+    "/opaque": 3,
+    "/scripted-export": 3,
+    "/delegated-export": 3,
+    "/media-attachment": 2,
+    "/audio-attachment": 1,
+    "/image-attachment": 1,
+    "/json-attachment": 1,
+    "/html-attachment": 1,
+    "/unknown-attachment": 4,
+    "/redirect-attachment": 1,
+    "/media-attachment?": 1,
+    "POST /post-export": 1,
+    "/blob-payload": 1,
+    "/disabled.zip": 1,
+    "/excluded.zip": 1,
+    "/offline.zip": 1
+  }
+}

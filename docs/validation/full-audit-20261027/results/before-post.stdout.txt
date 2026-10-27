@@ -1,0 +1,18 @@
+
+running 1 test
+test task_export::tests::task_lists_do_not_replay_requests_without_their_body ... FAILED
+
+failures:
+
+---- task_export::tests::task_lists_do_not_replay_requests_without_their_body stdout ----
+
+thread 'task_export::tests::task_lists_do_not_replay_requests_without_their_body' (5320) panicked at src\task_export.rs:418:54:
+called `Result::unwrap_err()` on an `Ok` value: ("json", "{\n  \"schema\": \"hls-downloader.tasks.v1\",\n  \"product_version\": \"7.0.3\",\n  \"tasks\": [\n    {\n      \"id\": \"post\",\n      \"title\": \"report.bin\",\n      \"filename\": \"report.bin\",\n      \"url\": \"https://cdn.test/report\",\n      \"resource_kind\": \"file\",\n      \"status\": \"paused\",\n      \"downloaded_bytes\": 0,\n      \"total_bytes\": null,\n      \"request_method\": \"POST\",\n      \"download_dir\": \"\",\n      \"speed_limit_kib\": 0,\n      \"expected_checksum\": \"\",\n      \"max_workers\": 0,\n      \"mirrors\": [],\n      \"scheduled_start_at\": \"\",\n      \"scheduled_stop_at\": \"\",\n      \"queue_id\": \"default\"\n    }\n  ]\n}", 1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    task_export::tests::task_lists_do_not_replay_requests_without_their_body
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 654 filtered out; finished in 1.40s
+

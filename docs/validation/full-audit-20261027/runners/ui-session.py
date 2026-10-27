@@ -94,7 +94,8 @@ def state():
         return None
 
 
-initial = wait(state, 'Workbench did not expose state', 90)
+initial = wait(lambda: (s if (s := state()) and '已连接' in s.get('engineText', '')
+                       and s.get('controlBounds') else None), 'Workbench did not connect/render', 90)
 (reports / 'ui-session-state.json').write_text(json.dumps(initial, ensure_ascii=False, indent=2), 'utf8')
 record = {'ready': True, 'port': port, 'token': token, 'pid': ui_process.pid,
           'tasks': {'media': media, 'failed': failed, 'paused': paused, 'scheduled': scheduled},

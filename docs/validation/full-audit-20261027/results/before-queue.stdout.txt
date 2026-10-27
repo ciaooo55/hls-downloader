@@ -1,0 +1,18 @@
+
+running 1 test
+test download_worker::tests::task_list_import_uses_default_for_a_queue_missing_on_this_computer ... FAILED
+
+failures:
+
+---- download_worker::tests::task_list_import_uses_default_for_a_queue_missing_on_this_computer stdout ----
+
+thread 'download_worker::tests::task_list_import_uses_default_for_a_queue_missing_on_this_computer' (5516) panicked at src\download_worker.rs:9630:9:
+[EventEnvelope { sequence: 2, event: Error { code: "import_partial_failure", message: "已导入 0 项任务，1 项导入失败：\n第 1 项：任务所属队列不存在: another-computers-queue" } }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    download_worker::tests::task_list_import_uses_default_for_a_queue_missing_on_this_computer
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 654 filtered out; finished in 0.46s
+

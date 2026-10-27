@@ -1,0 +1,638 @@
+[
+  {
+    "renderer": "SOFTWARE",
+    "state": {
+      "selectedCount": 0,
+      "selectedTaskIds": [],
+      "inputTarget": "",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-11": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-11.play": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "taskrow.task-12": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-12.retry": [
+          1413,
+          282,
+          1456,
+          325
+        ],
+        "taskrow.task-13": [
+          238,
+          336,
+          1509,
+          401
+        ],
+        "task.action.task-13.resume": [
+          1413,
+          347,
+          1456,
+          390
+        ],
+        "taskrow.task-14": [
+          238,
+          401,
+          1509,
+          466
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    },
+    "samples": [
+      {
+        "seconds": 5.014999999999873,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "private_bytes": 273944576
+      },
+      {
+        "seconds": 5.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "private_bytes": 273858560
+      },
+      {
+        "seconds": 5.016000000000076,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "private_bytes": 273817600
+      }
+    ]
+  },
+  {
+    "renderer": "SOFTWARE_COMPAT",
+    "state": {
+      "selectedCount": 0,
+      "selectedTaskIds": [],
+      "inputTarget": "",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-11": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-11.play": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "taskrow.task-12": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-12.retry": [
+          1413,
+          282,
+          1456,
+          325
+        ],
+        "taskrow.task-13": [
+          238,
+          336,
+          1509,
+          401
+        ],
+        "task.action.task-13.resume": [
+          1413,
+          347,
+          1456,
+          390
+        ],
+        "taskrow.task-14": [
+          238,
+          401,
+          1509,
+          466
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    },
+    "samples": [
+      {
+        "seconds": 5.0,
+        "cpu_one_core_percent": 0.3125,
+        "cpu_machine_percent": 0.0390625,
+        "private_bytes": 278188032
+      },
+      {
+        "seconds": 5.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "private_bytes": 278155264
+      },
+      {
+        "seconds": 5.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "private_bytes": 278220800
+      }
+    ]
+  },
+  {
+    "renderer": "DIRECT3D",
+    "state": {
+      "selectedCount": 0,
+      "selectedTaskIds": [],
+      "inputTarget": "",
+      "contextMenuPosition": [],
+      "contextMenuTaskIds": [],
+      "contextMenuActions": [],
+      "activeFilter": "全部",
+      "activeCategory": "",
+      "activeQueueId": "",
+      "controlBounds": {
+        "toolbar.新建": [
+          19,
+          53,
+          95,
+          98
+        ],
+        "toolbar.粘贴链接": [
+          105,
+          53,
+          211,
+          98
+        ],
+        "toolbar.全部开始": [
+          228,
+          53,
+          334,
+          98
+        ],
+        "toolbar.全部暂停": [
+          336,
+          53,
+          442,
+          98
+        ],
+        "toolbar.工具": [
+          444,
+          53,
+          520,
+          98
+        ],
+        "toolbar.设置": [
+          1378,
+          53,
+          1454,
+          98
+        ],
+        "toolbar.深色模式": [
+          1455,
+          53,
+          1500,
+          98
+        ],
+        "sidebar.status.全部": [
+          11,
+          154,
+          221,
+          199
+        ],
+        "sidebar.status.进行中": [
+          11,
+          199,
+          221,
+          244
+        ],
+        "sidebar.status.排队中": [
+          11,
+          244,
+          221,
+          289
+        ],
+        "sidebar.status.已暂停": [
+          11,
+          289,
+          221,
+          334
+        ],
+        "sidebar.status.已完成": [
+          11,
+          334,
+          221,
+          379
+        ],
+        "sidebar.status.失败": [
+          11,
+          379,
+          221,
+          424
+        ],
+        "sidebar.toggle_queues": [
+          11,
+          439,
+          188,
+          482
+        ],
+        "sidebar.toggle_categories": [
+          11,
+          497,
+          221,
+          540
+        ],
+        "sidebar.category.媒体": [
+          11,
+          540,
+          221,
+          585
+        ],
+        "sidebar.category.程序": [
+          11,
+          585,
+          221,
+          630
+        ],
+        "sidebar.category.压缩包": [
+          11,
+          630,
+          221,
+          675
+        ],
+        "sidebar.category.其他": [
+          11,
+          675,
+          221,
+          720
+        ],
+        "content_header.clear_completed": [
+          1262,
+          113,
+          1381,
+          156
+        ],
+        "content_header.refresh": [
+          1381,
+          113,
+          1455,
+          156
+        ],
+        "toolbar.更多操作": [
+          1455,
+          112,
+          1500,
+          157
+        ],
+        "taskrow.task-11": [
+          238,
+          206,
+          1509,
+          271
+        ],
+        "task.action.task-11.play": [
+          1413,
+          217,
+          1456,
+          260
+        ],
+        "taskrow.task-12": [
+          238,
+          271,
+          1509,
+          336
+        ],
+        "task.action.task-12.retry": [
+          1413,
+          282,
+          1456,
+          325
+        ],
+        "taskrow.task-13": [
+          238,
+          336,
+          1509,
+          401
+        ],
+        "task.action.task-13.resume": [
+          1413,
+          347,
+          1456,
+          390
+        ],
+        "taskrow.task-14": [
+          238,
+          401,
+          1509,
+          466
+        ]
+      },
+      "engineText": "下载引擎 · 已连接",
+      "noticeHistory": []
+    },
+    "samples": [
+      {
+        "seconds": 5.0,
+        "cpu_one_core_percent": 0.0,
+        "cpu_machine_percent": 0.0,
+        "private_bytes": 356204544
+      },
+      {
+        "seconds": 5.016000000000076,
+        "cpu_one_core_percent": 0.31150318979265873,
+        "cpu_machine_percent": 0.03893789872408234,
+        "private_bytes": 356204544
+      },
+      {
+        "seconds": 5.0,
+        "cpu_one_core_percent": 0.9375,
+        "cpu_machine_percent": 0.1171875,
+        "private_bytes": 356274176
+      }
+    ]
+  }
+]

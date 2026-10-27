@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "mode": "verify-resume",
+  "task_id": "task-1",
+  "status": "completed",
+  "downloaded_bytes": 33554432,
+  "active_workers": 0,
+  "data_db": "C:\\QAWork\\installed-checkpoint\\data\\data.db",
+  "data_db_sha256": "da63a52bdf62b3fc863995d79f497584be3ba97c1de4c55d1d301afbafab6cfc",
+  "engine_pid": 7148,
+  "file_sha256": "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0",
+  "expected_sha256": "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0"
+}
