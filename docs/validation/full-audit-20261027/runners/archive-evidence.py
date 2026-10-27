@@ -66,6 +66,15 @@ files += [(render_source/name, Path('render-followup')/name) for name in (
     'render-installed-audit.json', 'render-installed-audit.runtime.log',
     'render-installed-audit.png', 'render-installed-audit.paint.png',
 )]
+history_source = repo/'.tool-cache/handoff-history-20261027'
+files += [(path, Path('handoff-history')/path.relative_to(history_source))
+          for path in sorted((history_source/'reports').glob('*'))
+          if path.suffix in ('.json', '.txt')]
+files += [(history_source/name, Path('handoff-history')/name) for name in (
+    'build-tests.stderr.txt', 'build-tests-fixed.stderr.txt', 'core-build.txt',
+    'ui-build.txt', 'ui-build-fixed.txt', 'presenter-build.txt', 'repack.txt',
+    'rollback-contract.txt',
+)]
 for path, relative in files:
     if not path.is_file():
         continue
@@ -73,7 +82,7 @@ for path, relative in files:
     if relative.suffix == '.log':
         relative = relative.with_suffix('.txt')
     destination = target/relative
-    destination.parent.mkdir(exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
     if relative.suffix == '.png':
         destination.write_bytes(raw)
     else:
