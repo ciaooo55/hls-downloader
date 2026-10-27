@@ -1,0 +1,702 @@
+{
+  "base_commit": "9711a8cd72155f9c987fc1d77feacf37c60a945e",
+  "scope": "Static entrypoint inventory; references are navigation aids, not proof of behavior or test coverage",
+  "core_commands": [
+    {
+      "name": "CreateTask",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:694",
+        "native_shell/src/core_server.rs:952",
+        "native_shell/src/core_server.rs:1028",
+        "native_shell/src/core_server.rs:1274",
+        "native_shell/src/download_worker.rs:1434",
+        "native_shell/src/download_worker.rs:1599",
+        "native_shell/src/download_worker.rs:1709",
+        "native_shell/src/download_worker.rs:1780",
+        "native_shell/src/download_worker.rs:2457",
+        "native_shell/src/download_worker.rs:6411",
+        "native_shell/src/download_worker.rs:6521",
+        "native_shell/src/download_worker.rs:6620",
+        "native_shell/src/download_worker.rs:6695",
+        "native_shell/src/download_worker.rs:6900",
+        "native_shell/src/download_worker.rs:6927",
+        "native_shell/src/download_worker.rs:7088",
+        "native_shell/src/download_worker.rs:7188",
+        "native_shell/src/download_worker.rs:7498",
+        "native_shell/src/download_worker.rs:7721",
+        "native_shell/src/download_worker.rs:7933",
+        "native_shell/src/download_worker.rs:8119",
+        "native_shell/src/download_worker.rs:8159",
+        "native_shell/src/download_worker.rs:8194",
+        "native_shell/src/download_worker.rs:8336",
+        "native_shell/src/download_worker.rs:8560",
+        "native_shell/src/download_worker.rs:8970",
+        "native_shell/src/download_worker.rs:9039",
+        "native_shell/src/download_worker.rs:9054",
+        "native_shell/src/download_worker.rs:9092",
+        "native_shell/src/download_worker.rs:9102",
+        "native_shell/src/download_worker.rs:9126",
+        "native_shell/src/download_worker.rs:9154",
+        "native_shell/src/download_worker.rs:9198",
+        "native_shell/src/download_worker.rs:9215",
+        "native_shell/src/download_worker.rs:9324",
+        "native_shell/src/download_worker.rs:9341",
+        "native_shell/src/download_worker.rs:9366",
+        "native_shell/src/download_worker.rs:9409",
+        "native_shell/src/download_worker.rs:9458",
+        "native_shell/src/download_worker.rs:9478",
+        "native_shell/src/download_worker.rs:10100",
+        "native_shell/src/download_worker.rs:10195",
+        "native_shell/src/download_worker.rs:10197",
+        "native_shell/src/download_worker.rs:10254",
+        "native_shell/src/download_worker.rs:10334",
+        "native_shell/src/core_runtime.rs:91",
+        "native_shell/src/core_runtime.rs:1078",
+        "native_shell/src/core_runtime.rs:1123",
+        "native_shell/src/core_runtime.rs:1161",
+        "native_shell/src/core_runtime.rs:1205",
+        "native_shell/src/core_runtime.rs:1244",
+        "native_shell/src/core_runtime.rs:1362",
+        "native_shell/src/core_runtime.rs:1363",
+        "native_shell/src/core_runtime.rs:1373",
+        "native_shell/src/core_runtime.rs:1391",
+        "native_shell/src/core_runtime.rs:1392",
+        "native_shell/src/core_runtime.rs:1410",
+        "native_shell/src/core_runtime.rs:1411",
+        "native_shell/src/core_runtime.rs:1412",
+        "native_shell/src/core_runtime.rs:1445"
+      ]
+    },
+    {
+      "name": "ImportCurl",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1464",
+        "native_shell/src/download_worker.rs:9794",
+        "native_shell/src/core_runtime.rs:207"
+      ]
+    },
+    {
+      "name": "GetTask",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1499",
+        "native_shell/src/download_worker.rs:7510",
+        "native_shell/src/core_runtime.rs:97",
+        "native_shell/src/core_runtime.rs:189",
+        "native_shell/src/core_runtime.rs:217",
+        "native_shell/src/core_runtime.rs:1079",
+        "native_shell/src/core_runtime.rs:1089"
+      ]
+    },
+    {
+      "name": "TaskAction",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1420",
+        "native_shell/src/download_worker.rs:1795",
+        "native_shell/src/download_worker.rs:1820",
+        "native_shell/src/download_worker.rs:1854",
+        "native_shell/src/download_worker.rs:1905",
+        "native_shell/src/download_worker.rs:1975",
+        "native_shell/src/download_worker.rs:2037",
+        "native_shell/src/download_worker.rs:2147",
+        "native_shell/src/download_worker.rs:2364",
+        "native_shell/src/download_worker.rs:5791",
+        "native_shell/src/download_worker.rs:6556",
+        "native_shell/src/download_worker.rs:6638",
+        "native_shell/src/download_worker.rs:6712",
+        "native_shell/src/download_worker.rs:6757",
+        "native_shell/src/download_worker.rs:7108",
+        "native_shell/src/download_worker.rs:7208",
+        "native_shell/src/download_worker.rs:7308",
+        "native_shell/src/download_worker.rs:7389",
+        "native_shell/src/download_worker.rs:7396",
+        "native_shell/src/download_worker.rs:7750",
+        "native_shell/src/download_worker.rs:9065",
+        "native_shell/src/download_worker.rs:9073",
+        "native_shell/src/download_worker.rs:9078",
+        "native_shell/src/download_worker.rs:9224",
+        "native_shell/src/download_worker.rs:10224",
+        "native_shell/src/download_worker.rs:10347",
+        "native_shell/src/download_worker.rs:10355",
+        "native_shell/src/core_runtime.rs:107",
+        "native_shell/src/core_runtime.rs:1166",
+        "native_shell/src/core_runtime.rs:1171",
+        "native_shell/src/core_runtime.rs:1226",
+        "native_shell/src/core_runtime.rs:1245",
+        "native_shell/src/core_runtime.rs:1257",
+        "native_shell/src/core_runtime.rs:1285"
+      ]
+    },
+    {
+      "name": "UpdateProgress",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:2008",
+        "native_shell/src/download_worker.rs:2772",
+        "native_shell/src/download_worker.rs:2841",
+        "native_shell/src/download_worker.rs:3672",
+        "native_shell/src/download_worker.rs:3961",
+        "native_shell/src/download_worker.rs:6533",
+        "native_shell/src/download_worker.rs:6569",
+        "native_shell/src/download_worker.rs:8053",
+        "native_shell/src/core_runtime.rs:108",
+        "native_shell/src/core_runtime.rs:1249",
+        "native_shell/src/core_runtime.rs:1262",
+        "native_shell/src/core_runtime.rs:1289"
+      ]
+    },
+    {
+      "name": "OfferResource",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:1087",
+        "native_shell/src/core_server.rs:1138",
+        "native_shell/src/core_server.rs:1186",
+        "native_shell/src/download_worker.rs:8649",
+        "native_shell/src/download_worker.rs:8692",
+        "native_shell/src/download_worker.rs:8773",
+        "native_shell/src/download_worker.rs:8835",
+        "native_shell/src/download_worker.rs:8941",
+        "native_shell/src/core_runtime.rs:126",
+        "native_shell/src/core_runtime.rs:1463",
+        "native_shell/src/core_runtime.rs:1512"
+      ]
+    },
+    {
+      "name": "OpenMain",
+      "implementation_references": [
+        "native_shell/src/core_runtime.rs:173"
+      ]
+    },
+    {
+      "name": "HideMain",
+      "implementation_references": [
+        "native_shell/src/core_runtime.rs:178"
+      ]
+    },
+    {
+      "name": "Shutdown",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:163",
+        "native_shell/src/core_server.rs:294",
+        "native_shell/src/core_server.rs:844",
+        "native_shell/src/download_worker.rs:1404",
+        "native_shell/src/core_runtime.rs:183"
+      ]
+    },
+    {
+      "name": "Ping",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:1223",
+        "native_shell/src/core_server.rs:1228",
+        "native_shell/src/core_runtime.rs:85",
+        "native_shell/src/core_runtime.rs:1542"
+      ]
+    },
+    {
+      "name": "SetSetting",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1911",
+        "native_shell/src/core_runtime.rs:204"
+      ]
+    },
+    {
+      "name": "AcceptHandoff",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:1088",
+        "native_shell/src/download_worker.rs:1509",
+        "native_shell/src/download_worker.rs:8659",
+        "native_shell/src/download_worker.rs:8667",
+        "native_shell/src/download_worker.rs:8706",
+        "native_shell/src/core_runtime.rs:135",
+        "native_shell/src/core_runtime.rs:1485"
+      ]
+    },
+    {
+      "name": "RejectHandoff",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1518",
+        "native_shell/src/download_worker.rs:1526",
+        "native_shell/src/download_worker.rs:8944",
+        "native_shell/src/core_runtime.rs:141",
+        "native_shell/src/core_runtime.rs:1520"
+      ]
+    },
+    {
+      "name": "PresentHandoff",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:1139",
+        "native_shell/src/core_server.rs:1188",
+        "native_shell/src/core_server.rs:1198",
+        "native_shell/src/download_worker.rs:1531",
+        "native_shell/src/download_worker.rs:8787",
+        "native_shell/src/download_worker.rs:8844",
+        "native_shell/src/download_worker.rs:8860",
+        "native_shell/src/download_worker.rs:8867",
+        "native_shell/src/download_worker.rs:8874",
+        "native_shell/src/download_worker.rs:8896",
+        "native_shell/src/core_runtime.rs:230"
+      ]
+    },
+    {
+      "name": "PlayTask",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1915",
+        "native_shell/src/download_worker.rs:8064",
+        "native_shell/src/core_runtime.rs:208"
+      ]
+    },
+    {
+      "name": "CastTask",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1918",
+        "native_shell/src/core_runtime.rs:209"
+      ]
+    },
+    {
+      "name": "PlayerControl",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1933",
+        "native_shell/src/download_worker.rs:8073",
+        "native_shell/src/download_worker.rs:8082",
+        "native_shell/src/download_worker.rs:8091",
+        "native_shell/src/download_worker.rs:8101",
+        "native_shell/src/core_runtime.rs:210"
+      ]
+    },
+    {
+      "name": "ReorderQueue",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1877",
+        "native_shell/src/download_worker.rs:1883",
+        "native_shell/src/core_runtime.rs:184",
+        "native_shell/src/core_runtime.rs:1366",
+        "native_shell/src/core_runtime.rs:1374",
+        "native_shell/src/core_runtime.rs:1428"
+      ]
+    },
+    {
+      "name": "CheckUpdate",
+      "implementation_references": [
+        "native_shell/src/core_runtime.rs:203"
+      ]
+    },
+    {
+      "name": "DownloadUpdate",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1942",
+        "native_shell/src/core_runtime.rs:211"
+      ]
+    },
+    {
+      "name": "InstallUpdate",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1945",
+        "native_shell/src/core_runtime.rs:212"
+      ]
+    },
+    {
+      "name": "ProbeUrl",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1936",
+        "native_shell/src/core_runtime.rs:213"
+      ]
+    },
+    {
+      "name": "RefreshTaskRequest",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1484",
+        "native_shell/src/download_worker.rs:7448",
+        "native_shell/src/core_runtime.rs:214"
+      ]
+    },
+    {
+      "name": "ProbeTorrent",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:267",
+        "native_shell/src/download_worker.rs:1493",
+        "native_shell/src/core_runtime.rs:215"
+      ]
+    },
+    {
+      "name": "SelectTorrentFiles",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1496",
+        "native_shell/src/core_runtime.rs:216"
+      ]
+    },
+    {
+      "name": "GetTaskTorrentFiles",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1499",
+        "native_shell/src/download_worker.rs:7510",
+        "native_shell/src/core_runtime.rs:217"
+      ]
+    },
+    {
+      "name": "SetTaskTorrentFiles",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1502",
+        "native_shell/src/download_worker.rs:7532",
+        "native_shell/src/download_worker.rs:7744",
+        "native_shell/src/download_worker.rs:7777",
+        "native_shell/src/core_runtime.rs:218"
+      ]
+    },
+    {
+      "name": "DiscoverCastDevices",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1939",
+        "native_shell/src/download_worker.rs:8375",
+        "native_shell/src/core_runtime.rs:219"
+      ]
+    },
+    {
+      "name": "CastToDevice",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1921",
+        "native_shell/src/core_runtime.rs:220"
+      ]
+    },
+    {
+      "name": "ShareMedia",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1924",
+        "native_shell/src/core_runtime.rs:221"
+      ]
+    },
+    {
+      "name": "RequestMediaPush",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1282",
+        "native_shell/src/download_worker.rs:1539",
+        "native_shell/src/download_worker.rs:8420",
+        "native_shell/src/download_worker.rs:8484",
+        "native_shell/src/download_worker.rs:8489",
+        "native_shell/src/download_worker.rs:8545",
+        "native_shell/src/core_runtime.rs:145",
+        "native_shell/src/core_runtime.rs:1303"
+      ]
+    },
+    {
+      "name": "ResolveMediaPush",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1295",
+        "native_shell/src/download_worker.rs:1542",
+        "native_shell/src/download_worker.rs:8430",
+        "native_shell/src/download_worker.rs:8451",
+        "native_shell/src/download_worker.rs:8500",
+        "native_shell/src/download_worker.rs:8508",
+        "native_shell/src/core_runtime.rs:150",
+        "native_shell/src/core_runtime.rs:1316",
+        "native_shell/src/core_runtime.rs:1331",
+        "native_shell/src/core_runtime.rs:1344"
+      ]
+    },
+    {
+      "name": "OpenCompleted",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1948",
+        "native_shell/src/core_runtime.rs:222"
+      ]
+    },
+    {
+      "name": "ConfirmPowerAction",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1951",
+        "native_shell/src/core_runtime.rs:223"
+      ]
+    },
+    {
+      "name": "CancelPowerAction",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1963",
+        "native_shell/src/core_runtime.rs:224"
+      ]
+    },
+    {
+      "name": "ClearCompleted",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1410",
+        "native_shell/src/download_worker.rs:10310",
+        "native_shell/src/core_runtime.rs:231"
+      ]
+    },
+    {
+      "name": "SaveSiteProfile",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1427",
+        "native_shell/src/core_runtime.rs:225"
+      ]
+    },
+    {
+      "name": "ImportPaths",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1430",
+        "native_shell/src/download_worker.rs:9577",
+        "native_shell/src/download_worker.rs:9612",
+        "native_shell/src/download_worker.rs:9633",
+        "native_shell/src/core_runtime.rs:226"
+      ]
+    },
+    {
+      "name": "ExportTasks",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1467",
+        "native_shell/src/download_worker.rs:9510",
+        "native_shell/src/download_worker.rs:9552",
+        "native_shell/src/core_runtime.rs:227"
+      ]
+    },
+    {
+      "name": "PlaceQueue",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1865",
+        "native_shell/src/download_worker.rs:1871",
+        "native_shell/src/core_runtime.rs:185",
+        "native_shell/src/core_runtime.rs:1393",
+        "native_shell/src/core_runtime.rs:1399"
+      ]
+    },
+    {
+      "name": "AssignQueue",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1551",
+        "native_shell/src/download_worker.rs:1564",
+        "native_shell/src/core_runtime.rs:186",
+        "native_shell/src/core_runtime.rs:1414",
+        "native_shell/src/core_runtime.rs:1446"
+      ]
+    },
+    {
+      "name": "HarvestPage",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1476",
+        "native_shell/src/download_worker.rs:6222",
+        "native_shell/src/download_worker.rs:6262",
+        "native_shell/src/download_worker.rs:6284",
+        "native_shell/src/core_runtime.rs:228"
+      ]
+    },
+    {
+      "name": "GetTaskLog",
+      "implementation_references": [
+        "native_shell/src/core_runtime.rs:189"
+      ]
+    },
+    {
+      "name": "BrowserHello",
+      "implementation_references": [
+        "native_shell/src/core_server.rs:982",
+        "native_shell/src/core_runtime.rs:190",
+        "native_shell/src/core_runtime.rs:1061"
+      ]
+    },
+    {
+      "name": "ControlCast",
+      "implementation_references": [
+        "native_shell/src/download_worker.rs:1568",
+        "native_shell/src/core_runtime.rs:229"
+      ]
+    }
+  ],
+  "desktop_control_identifiers": [
+    {
+      "id_expression": "toolbar.$label",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2562"
+    },
+    {
+      "id_expression": "toolbar.clear_search",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2596"
+    },
+    {
+      "id_expression": "toolbar.$label",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2602"
+    },
+    {
+      "id_expression": "toolbar.$text",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2603"
+    },
+    {
+      "id_expression": "sidebar.status.${item.label}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2675"
+    },
+    {
+      "id_expression": "sidebar.toggle_queues",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2681"
+    },
+    {
+      "id_expression": "sidebar.queue.${profile.name}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2690"
+    },
+    {
+      "id_expression": "sidebar.toggle_categories",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2695"
+    },
+    {
+      "id_expression": "sidebar.category.${item.label}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2702"
+    },
+    {
+      "id_expression": "rail.status.${item.label}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2724"
+    },
+    {
+      "id_expression": "rail.queue.${profile.name}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2733"
+    },
+    {
+      "id_expression": "rail.category.${item.label}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2738"
+    },
+    {
+      "id_expression": "rail.manage",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2747"
+    },
+    {
+      "id_expression": "content_header.clear_completed",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2833"
+    },
+    {
+      "id_expression": "content_header.clear_completed",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2840"
+    },
+    {
+      "id_expression": "content_header.refresh",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2842"
+    },
+    {
+      "id_expression": "tasks.reset_filters",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:2958"
+    },
+    {
+      "id_expression": "taskrow.${task.id}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3252"
+    },
+    {
+      "id_expression": "task.action.${task.id}.$primaryAction",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3309"
+    },
+    {
+      "id_expression": "dialog.primary.$label",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3525"
+    },
+    {
+      "id_expression": "dialog.secondary.$label",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3526"
+    },
+    {
+      "id_expression": "newtask.tab.$item",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3878"
+    },
+    {
+      "id_expression": "newtask.url",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3886"
+    },
+    {
+      "id_expression": "newtask.method.$value",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3920"
+    },
+    {
+      "id_expression": "newtask.probe",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:3956"
+    },
+    {
+      "id_expression": "task_details.select_all",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:4191"
+    },
+    {
+      "id_expression": "task_details.select_none",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:4192"
+    },
+    {
+      "id_expression": "task_details.refresh_link",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:4230"
+    },
+    {
+      "id_expression": "extension.firefox_install",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:4498"
+    },
+    {
+      "id_expression": "device.${device.id}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:4937"
+    },
+    {
+      "id_expression": "device.rescan",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:4963"
+    },
+    {
+      "id_expression": "dialog.primary.确认删除",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt:5055"
+    },
+    {
+      "id_expression": "settings.day.$day",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt:682"
+    },
+    {
+      "id_expression": "settings.choice.$value",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt:712"
+    },
+    {
+      "id_expression": "name",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/UiTestApi.kt:391"
+    },
+    {
+      "id_expression": "video.header",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:300"
+    },
+    {
+      "id_expression": "video.surface",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:308"
+    },
+    {
+      "id_expression": "video.timeline",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:345"
+    },
+    {
+      "id_expression": "video.volume",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:366"
+    },
+    {
+      "id_expression": "video.$label",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:439"
+    },
+    {
+      "id_expression": "video.rate",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:450"
+    },
+    {
+      "id_expression": "video.rate.$value",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:453"
+    },
+    {
+      "id_expression": "video.$label",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:463"
+    },
+    {
+      "id_expression": "video.$label.no",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:465"
+    },
+    {
+      "id_expression": "video.$label.${track.id}",
+      "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/VideoPlayer.kt:468"
+    }
+  ],
+  "settings_tabs": [
+    "通用",
+    "下载",
+    "计划",
+    "网络",
+    "媒体",
+    "BT",
+    "字幕翻译",
+    "投屏与推送",
+    "安全",
+    "浏览器",
+    "外观"
+  ],
+  "source_sha256": {
+    "native_shell/src/contract.rs": "c0515d7ee74b373d5986be21fa068a89af5971b43b49445096af71282e2ac536",
+    "native_shell/src/core_server.rs": "eb66b9aef82c5a0878d0a2cbb98172164519c12fbdad66ea20413a965d896ce9",
+    "native_shell/src/download_worker.rs": "6869f4f23c0598e3b69fb490acc9fbddac14326159273cb54835f3b2fa57fdad",
+    "native_shell/src/core_runtime.rs": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+    "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt": "a73f19cb03750988f88a4d75e988b6d9a9c074ff33060b4466e28b8607891927"
+  }
+}

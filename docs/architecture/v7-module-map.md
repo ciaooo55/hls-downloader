@@ -1,6 +1,6 @@
 # HLS Downloader 7.0.3 模块与功能衔接
 
-更新于 2026-10-18。当前交付为 r12 未签名预发布版；验收范围见 [验证索引](../validation/v7-verification.md)。历史版本的固定安装路径和独立播放器说明不再描述本版。
+更新于 2026-10-27。已发布候选为 r18，当前全功能复核与后续候选状态见[本轮记录](../validation/full-audit-20261027/README.md)；验收索引见[验证索引](../validation/v7-verification.md)。历史版本的固定安装路径和独立播放器说明不再描述本版。
 
 | 板块 | 主要实现 | 当前行为 |
 | --- | --- | --- |
@@ -18,4 +18,4 @@
 
 主窗口关闭和传输生命周期由不同进程负责，关闭播放器不会删除任务。任务删除、删除任务及文件、筛选清理的范围不同，操作按界面确认执行。安装目录大小主要来自 FFmpeg、libmpv 和裁剪 JRE，不等同于常驻内存。
 
-当前 canonical 功能合同为 `config/release/feature-parity.json`：29 项中 27 verified、2 partial，`release_ready=true` 带有其自身排除条件。该合同不等于本轮所有板块都重新完成发布级认证；r12 包的 `BUILD-PROVENANCE.json` 明确为 `release_ready=false`、未签名预发布。
+当前 canonical 功能合同为 `config/release/feature-parity.json`，发布门禁为 `release_ready=false`。其中历史 verified 记录只说明所列版本与场景已有证据，不能继承为当前源码及成品的全功能认证。当前二进制、逐项实测和未完成项以本轮记录与交付来源文件为准。

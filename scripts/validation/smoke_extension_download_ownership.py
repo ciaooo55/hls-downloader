@@ -33,8 +33,8 @@ def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Windows Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
     # Chromium 的配置数据库不能放在 Sandbox 共享文件夹中。
-    stage = Path('C:/QAWork') / (args.browser + '-ownership-' + args.report.parent.name)
-    stage.mkdir(exist_ok=True)
+    stage = Path('C:/QAWork') / (args.browser + '-ownership-' + args.report.stem)
+    stage.mkdir(exist_ok=False)
     report = {'passed': False, 'browser': args.browser, 'checks': [], 'decision_method': 'Core IPC',
               'browser_input': 'CDP mouse' if args.browser == 'edge' else 'WebDriver element click'}
     requests = Counter()
@@ -231,11 +231,35 @@ def run(args):
             def absent():
                 return not _download_items(driver, inspector)
 
+            def accept_completed_response(name, offered, before_tasks, delta):
+                source = Path(offered['offer']['local_source_path'])
+                assert source.is_file() and source.read_bytes() == PAYLOAD
+                command({'kind':'accept_handoff', 'handoff_id':offered['id'],
+                         'filename':name+'.bin', 'download_dir':''})
+                def imported():
+                    matches = [t for t in core({'type':'snapshot','request_id':3})['tasks']
+                               if t['task_id'] not in before_tasks]
+                    assert len(matches) <= 1, matches
+                    if matches and matches[0]['status'] == 'failed':
+                        raise AssertionError(matches[0])
+                    return matches[0] if matches and matches[0]['status'] == 'completed' else None
+                task = wait(imported, 'Completed response import did not finish', 70)
+                output = Path(task['output_path'])
+                assert output.read_bytes() == PAYLOAD
+                wait(absent, 'Browser source remained after successful import', 20)
+                assert not source.exists(), source
+                record(f'{name}: completed response preserved and imported; zero-item criterion NOT met', {
+                    'created_events':delta, 'strict_zero_download_items':False,
+                    'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),
+                })
+                command({'kind':'task_action','task_id':task['task_id'],'action':'delete_files'})
+
             # 对明确链接和服务器附件分别验证；零创建事件与事后删除是不同的验收结果。
             cases = ('direct', 'cancel', 'double', 'previous-post') if args.direct_links_only else (
                 'direct', 'cancel', 'opaque', 'github', 'scripted-link', 'delegated-link')
             for name in cases:
                 before = {h['id'] for h in handoffs()}
+                before_tasks = {t['task_id'] for t in core({'type':'snapshot','request_id':3})['tasks']}
                 prior_events = len(events())
                 click(name)
                 offered = pending(before)
@@ -248,8 +272,12 @@ def run(args):
                     assert len(new_offers) == 1, new_offers
                 if name in ('scripted-link', 'delegated-link'):
                     export = 'scripted-export' if name == 'scripted-link' else 'delegated-export'
-                    assert offered['offer']['url'] == url+export, offered
+                    assert offered['offer'].get('local_source_path') or offered['offer']['url'] == url+export, offered
                     assert requests['/stale.zip'] == requests['/stale-delegated.zip'] == 0, requests
+                if offered['offer'].get('local_source_path'):
+                    assert name not in ('cancel', 'github'), 'Explicit cancellation unexpectedly downloaded a file'
+                    accept_completed_response(name, offered, before_tasks, events()[prior_events:])
+                    continue
                 wait(absent, 'Browser copy remained while confirmation pending', 15)
                 delta = events()[prior_events:]
                 if name not in ('opaque', 'scripted-link', 'delegated-link') or args.browser == 'firefox':
@@ -284,6 +312,7 @@ def run(args):
                          'json-attachment', 'html-attachment', 'unknown-attachment',
                          'redirect-attachment', 'form-attachment', 'newtab-attachment')):
                 before = {h['id'] for h in handoffs()}
+                before_tasks = {t['task_id'] for t in core({'type':'snapshot','request_id':3})['tasks']}
                 prior_events = len(events())
                 driver.switch_to.window(page)
                 driver.get(url)
@@ -301,6 +330,15 @@ def run(args):
                 else:
                     driver.execute_cdp_cmd('Page.navigate', {'url':target}) if args.browser == 'edge' else driver.execute_script('location.assign(arguments[0])', target)
                 offered = pending(before)
+                delta = events()[prior_events:]
+                if args.browser == 'firefox':
+                    assert not delta, delta
+                if offered['offer'].get('local_source_path'):
+                    accept_completed_response(name, offered, before_tasks, delta)
+                    if name == 'newtab-attachment':
+                        driver.switch_to.window(extra)
+                        driver.close()
+                    continue
                 wait(absent, 'Browser copy remained for attachment navigation', 15)
                 delta = events()[prior_events:]
                 if args.browser == 'firefox':
