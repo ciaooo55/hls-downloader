@@ -78,6 +78,8 @@ mod profile_paths;
 #[cfg(feature = "full-core")]
 mod recognize;
 #[cfg(feature = "full-core")]
+mod runtime_log;
+#[cfg(feature = "full-core")]
 mod sftp_engine;
 #[cfg(feature = "full-core")]
 mod sftp_live;
@@ -172,6 +174,8 @@ pub use player::{run_player_process, PLAYER_WINDOW_TITLE};
 pub use profile_paths::{default_v7_database_path, default_v7_download_dir};
 #[cfg(feature = "full-core")]
 pub use recognize::{classify_url, kind_label, probe_url};
+#[cfg(feature = "full-core")]
+pub use runtime_log::{init_runtime_log, record_runtime_log};
 #[cfg(feature = "full-core")]
 pub use site_rules::{format_site_rules, parse_site_rules, upsert_site_rule, SiteRule};
 #[cfg(feature = "full-core")]

@@ -47,6 +47,8 @@ impl PersistentCore {
             status,
         } = &command
         {
+            let state_changed = self.runtime.snapshot(task_id)
+                .is_some_and(|previous| previous.stage != *stage || previous.status != *status);
             let event = self.runtime.progress_event(
                 task_id,
                 *downloaded_bytes,
@@ -63,6 +65,12 @@ impl PersistentCore {
             self.store.apply_events(&events)?;
             self.runtime.commit_progress(events[0].event.clone());
             self.notify_committed(&events);
+            if state_changed {
+                crate::record_runtime_log("task_state_changed", serde_json::json!({
+                    "task_id": task_id, "stage": stage, "status": status,
+                    "downloaded_bytes": downloaded_bytes, "total_bytes": total_bytes,
+                }));
+            }
             return Ok(events);
         }
         if let CoreCommand::RequestMediaPush { request } = &command {

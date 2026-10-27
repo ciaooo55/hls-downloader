@@ -126,6 +126,9 @@ pub fn import_tasks(text: &str) -> Result<Vec<TaskSpec>, String> {
         .tasks
         .into_iter()
         .map(|task| {
+            if task.request_method.trim().eq_ignore_ascii_case("POST") {
+                return Err("任务列表不包含 POST 请求正文，无法安全重建；请从浏览器或 cURL 重新导入该请求".into());
+            }
             let url = task.url.trim().to_string();
             if !crate::http_engine::remote_resource_url_allowed(&url) {
                 return Err("任务 JSON 包含不受支持的链接".to_string());
@@ -192,6 +195,9 @@ pub fn export_tasks(
         return Err(format!(
             "JSON 一次最多导出 {MAX_IMPORT_TASKS} 项任务，请分批选择后导出"
         ));
+    }
+    if format == "json" && tasks.iter().any(|task| task.request_method.eq_ignore_ascii_case("POST")) {
+        return Err("选中任务包含 POST 请求，JSON 不保存请求正文；请排除这些任务，或导出 CSV 作为记录".into());
     }
     let data = match format {
         "json" => serde_json::to_string_pretty(&ExportDocument {
@@ -409,5 +415,16 @@ mod tests {
             r#"{"schema":"hls-downloader.tasks.v1","tasks":[{"url":"file:///secret"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn task_lists_do_not_replay_requests_without_their_body() {
+        let mut source = task("post", 0, "report.bin", "https://cdn.test/report");
+        source.request_method = "POST".into();
+        assert!(export_tasks(&[source], &[], "json").unwrap_err().contains("POST"));
+        let error = import_tasks(
+            r#"{"schema":"hls-downloader.tasks.v1","tasks":[{"url":"https://cdn.test/report","request_method":"POST"}]}"#,
+        ).unwrap_err();
+        assert!(error.contains("POST"));
     }
 }

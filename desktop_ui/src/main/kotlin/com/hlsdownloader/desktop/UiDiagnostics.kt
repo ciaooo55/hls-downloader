@@ -6,7 +6,6 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.buildJsonObject
@@ -22,8 +21,8 @@ internal object UiDiagnostics {
     init {
         thread(start = true, isDaemon = true, name = "hls-ui-diagnostics") {
             while (true) {
-                val line = runCatching { queue.poll(1, TimeUnit.SECONDS) }.getOrNull()
-                if (line != null) runCatching { writeLine(line) }
+                val line = runCatching { queue.take() }.getOrElse { return@thread }
+                runCatching { writeLine(line) }
             }
         }
     }
@@ -55,13 +54,13 @@ internal object UiDiagnostics {
     private fun writeLine(line: String) {
         val path = logPath()
         Files.createDirectories(path.parent)
-        if (Files.exists(path) && Files.size(path) >= MAX_LOG_BYTES) {
+        val encoded = (line + System.lineSeparator()).toByteArray(StandardCharsets.UTF_8)
+        if (Files.exists(path) && Files.size(path) + encoded.size > MAX_LOG_BYTES) {
             Files.move(path, path.resolveSibling("workbench.previous.jsonl"), StandardCopyOption.REPLACE_EXISTING)
         }
-        Files.writeString(
+        Files.write(
             path,
-            line + System.lineSeparator(),
-            StandardCharsets.UTF_8,
+            encoded,
             java.nio.file.StandardOpenOption.CREATE,
             java.nio.file.StandardOpenOption.APPEND,
         )
@@ -73,7 +72,9 @@ internal object UiDiagnostics {
         return WorkbenchPaths.dataDirectory.resolve("logs").resolve("workbench.jsonl")
     }
 
-    private fun clean(value: String, limit: Int): String = value
+    internal fun clean(value: String, limit: Int): String = value
+        .replace(Regex("(?i)\\b(?:https?|ftps?|sftp)://[^\\s<>\"']+"), "[地址已隐藏]")
+        .replace(Regex("(?i)(authorization|cookie|api[-_ ]?key|access[-_ ]?token|password|secret)\\s*[:=][^\\r\\n]*"), "$1=[已隐藏]")
         .replace('\r', ' ')
         .replace('\n', ' ')
         .take(limit)

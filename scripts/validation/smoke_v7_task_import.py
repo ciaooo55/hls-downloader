@@ -122,6 +122,24 @@ def run(args):
                     assert done["status"] == "completed", done
                     assert hashlib.sha256(Path(done["output_path"]).read_bytes()).digest() == hashlib.sha256(payload).digest()
                 record("bad-middle-file-reported-both-good-files-downloaded-with-correct-sha256", message=errors[0]["message"])
+                portable = root / "foreign-queue.json"
+                portable.write_text(json.dumps({"schema":"hls-downloader.tasks.v1", "tasks":[{
+                    "url":f"http://127.0.0.1:{server.server_port}/foreign-queue.bin",
+                    "queue_id":"not-on-this-computer", "scheduled_start_at":"2999-01-01T00:00:00Z"
+                }]}), encoding="utf8")
+                imported_queue = created(command(ipc, "import_paths", paths=[str(portable)]))
+                assert len(imported_queue) == 1 and imported_queue[0]["queue_id"] == "default", imported_queue
+                record("foreign-queue-falls-back-to-default-without-losing-task")
+                post = root / "missing-post-body.json"
+                post.write_text(json.dumps({"schema":"hls-downloader.tasks.v1", "tasks":[{
+                    "url":f"http://127.0.0.1:{server.server_port}/must-not-request",
+                    "request_method":"POST"
+                }]}), encoding="utf8")
+                response = command(ipc, "import_paths", paths=[str(post)])
+                assert created(response) == [], response
+                errors = [event["event"] for event in response["events"] if event["event"]["kind"] == "error"]
+                assert len(errors) == 1 and "POST" in errors[0]["message"], response
+                record("missing-post-body-rejected-before-task-creation", message=errors[0]["message"])
             result["passed"] = True
         except Exception as error:
             result["error"] = str(error)

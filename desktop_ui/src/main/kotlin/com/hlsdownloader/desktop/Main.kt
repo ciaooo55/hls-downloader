@@ -2484,8 +2484,7 @@ private fun exportTaskList(path: java.nio.file.Path, taskIds: List<String>): Tas
         else -> "json"
     }
     val result = EnginePipeClient.exportTasks(taskIds, format)
-    path.parent?.let(Files::createDirectories)
-    Files.writeString(path, result.data, Charsets.UTF_8)
+    writeTaskExport(path, result.data)
     return result
 }
 internal fun loadDesktopIcon(): ImageBitmap? = runCatching {

@@ -1630,7 +1630,8 @@ impl CoreCoordinator {
             )
         };
         if let Some(imported) = crate::task_export::import_tasks_from_source(&spec.url)? {
-            let download_dir = self.settings()?.download_dir;
+            let settings = self.settings()?;
+            let download_dir = settings.download_dir;
             return imported
                 .into_iter()
                 .map(|mut imported| {
@@ -1640,6 +1641,9 @@ impl CoreCoordinator {
                         .is_err()
                     {
                         imported.download_dir.clear();
+                    }
+                    if !settings.queue_profiles.iter().any(|queue| queue.id == imported.queue_id) {
+                        imported.queue_id = crate::DEFAULT_QUEUE_ID.into();
                     }
                     imported.allow_duplicate = spec.allow_duplicate;
                     self.apply_defaults_to_spec(imported)
@@ -2820,16 +2824,19 @@ impl CoreCoordinator {
                             .task_spec(&task_id)
                             .map(|spec| (spec.url.clone(), spec.credential_ref.is_some()))
                             .unwrap_or_default();
-                        let _ = core.report_failure(
-                            &task_id,
-                            task_failure_from_error(
+                        let failure = task_failure_from_error(
                                 &error,
                                 &stage,
                                 &url,
                                 attempt,
                                 has_credential_ref,
-                            ),
-                        );
+                            );
+                        crate::record_runtime_log("task_failed", serde_json::json!({
+                            "task_id": task_id, "stage": stage, "code": failure.code,
+                            "http_status": failure.http_status, "attempt": attempt,
+                            "downloaded_bytes": downloaded, "total_bytes": total,
+                        }));
+                        let _ = core.report_failure(&task_id, failure);
                     } else {
                         let _ = core.handle(CoreCommand::UpdateProgress {
                             task_id: task_id.clone(),
@@ -9612,6 +9619,25 @@ mod tests {
                 && message.contains("2 项任务") && message.contains("第 2 项")
         )));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn task_list_import_uses_default_for_a_queue_missing_on_this_computer() {
+        let path = std::env::temp_dir().join(format!("hls-import-queue-{}.json", std::process::id()));
+        fs::write(&path, serde_json::json!({"schema":"hls-downloader.tasks.v1", "tasks":[{
+            "url":"https://cdn.test/queued.bin", "queue_id":"another-computers-queue",
+            "scheduled_start_at":"2999-01-01T00:00:00Z"
+        }]}).to_string()).unwrap();
+        let target = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        target.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
+        let events = target.dispatch(CoreCommand::ImportPaths {
+            paths: vec![path.to_string_lossy().into_owned()],
+        }).unwrap();
+        let _ = fs::remove_file(path);
+        assert!(!events.iter().any(|event| matches!(event.event, CoreEvent::Error { .. })), "{events:?}");
+        let tasks = target.tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].queue_id, crate::DEFAULT_QUEUE_ID);
     }
 
     #[test]

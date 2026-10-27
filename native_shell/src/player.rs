@@ -685,6 +685,7 @@ impl PlayerChild {
         if line.len() + 1 > PLAYER_FRAME_LIMIT {
             return Err("播放器请求过大".into());
         }
+        let started = std::time::Instant::now();
         let result = (|| {
             self.requests
                 .as_ref()
@@ -701,6 +702,10 @@ impl PlayerChild {
         let value = match result {
             Ok(value) => value,
             Err(error) => {
+                crate::record_runtime_log("player_transport_failed", serde_json::json!({
+                    "operation": op, "elapsed_ms": started.elapsed().as_millis(),
+                    "child_exited": self.process.try_wait().ok().flatten().is_some(),
+                }));
                 self.terminate();
                 return Err(error);
             }
