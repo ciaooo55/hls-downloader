@@ -3102,14 +3102,18 @@ private data class TaskContextMenuRequest(
                         // 实测在这台机器上画不出来（1000 行、确定溢出，预期位置整段都是 rail 底色，
                         // 悬停也没有任何变化）。而 ScrollState 那条路是画得出来的（设置内容区实测有 389px 竖条）。
                         // 任务表是主界面、行数最多，不能没有滚动提示，所以这里用 listState 自己画。
-                        val taskTotal = listState.layoutInfo.totalItemsCount
-                        val taskVisible = listState.layoutInfo.visibleItemsInfo.size
-                        if (taskTotal > taskVisible && taskVisible > 0) {
+                        // layoutInfo 每次测量都会更新；组合期读取会让列表重新组合、再测量，
+                        // 即使任务静止也形成逐帧循环。滚动条只在绘制期订阅布局结果。
+                        run {
                             val taskThumbColor = muted.copy(alpha = 0.42f)   // muted 是 @Composable get()，必须在 Composable 上下文里取
                             val taskThumbMin = 28.dp
                             Box(
                                 Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(7.dp).padding(vertical = 3.dp)
                                     .drawBehind {
+                                        val layout = listState.layoutInfo
+                                        val taskTotal = layout.totalItemsCount
+                                        val taskVisible = layout.visibleItemsInfo.size
+                                        if (taskTotal <= taskVisible || taskVisible == 0) return@drawBehind
                                         val track = size.height
                                         if (track <= 0f) return@drawBehind
                                         val ratio = taskVisible.toFloat() / taskTotal.toFloat()
