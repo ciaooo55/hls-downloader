@@ -1,3 +1,4 @@
+param([string]$BaselineLabel='r19')
 $ErrorActionPreference='Stop'
 if($env:USERNAME -ne 'WDAGUtilityAccount'){throw 'Windows Sandbox only'}
 New-Item -ItemType Directory -Force C:\QAWork,C:\QAWork\tmp | Out-Null
@@ -43,7 +44,7 @@ try {
     if([HistoryAudit.MSI]::MsiQueryProductState($old.product_code) -ne -1 -or [HistoryAudit.MSI]::MsiQueryProductState($meta.product_code) -ne 5){throw 'Upgrade registration mismatch'}
     $components=Get-Content C:\QAInput\components.json -Raw | ConvertFrom-Json
     foreach($p in $components.PSObject.Properties){if((Get-FileHash (Join-Path $install $p.Name)).Hash.ToLowerInvariant() -ne $p.Value){throw "Payload mismatch: $($p.Name)"}}
-    Record 'running r19 upgrade, custom path and exact installed component hashes' @($components.PSObject.Properties).Count
+    Record "running $BaselineLabel upgrade, custom path and exact installed component hashes" @($components.PSObject.Properties).Count
     Checkpoint 'verify-resume'
     Record 'paused task survives and resumes to original SHA256' $true
     Run C:\QAWork\python\python.exe @('C:\QAScripts\smoke_v7_handoff_history.py','--runtime',"$install\app\resources",'--report','C:\QAReports\installed-large-history.json') 'installed-large-history'

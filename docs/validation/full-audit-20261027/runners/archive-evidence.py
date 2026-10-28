@@ -75,6 +75,13 @@ files += [(history_source/name, Path('handoff-history')/name) for name in (
     'ui-build.txt', 'ui-build-fixed.txt', 'presenter-build.txt', 'repack.txt',
     'rollback-contract.txt',
 )]
+recovery_source = repo/'.tool-cache/core-recovery-20261028'
+files += [(path, Path('core-recovery')/path.relative_to(recovery_source))
+          for path in sorted((recovery_source/'reports').glob('*'))
+          if path.suffix in ('.json', '.txt')]
+files += [(recovery_source/name, Path('core-recovery')/name) for name in (
+    'build-tests.stderr.txt', 'engine-build.txt', 'repack.txt', 'rollback-contract.txt',
+)]
 for path, relative in files:
     if not path.is_file():
         continue

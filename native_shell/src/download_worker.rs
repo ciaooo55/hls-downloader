@@ -2495,7 +2495,7 @@ impl CoreCoordinator {
         }
         let mut core = self.lock()?;
         let mut updated = false;
-        for encoded in core.store().load_handoffs()? {
+        for encoded in core.store().query_handoffs(Some(&handoff_id), None, false)? {
             let Ok(mut value) = serde_json::from_str::<Value>(&encoded) else {
                 continue;
             };
@@ -2625,7 +2625,7 @@ impl CoreCoordinator {
             .and_then(|value| value.as_str().map(str::to_string))
             .unwrap_or_else(|| "file".into());
         let mut core = self.lock()?;
-        for encoded in core.store().load_handoffs()? {
+        for encoded in core.store().query_handoffs(Some(handoff_id), None, false)? {
             let Ok(mut value) = serde_json::from_str::<Value>(&encoded) else {
                 continue;
             };

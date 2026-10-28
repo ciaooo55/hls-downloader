@@ -76,7 +76,7 @@ impl PersistentCore {
         if let CoreCommand::RequestMediaPush { request } = &command {
             let active = self
                 .store
-                .load_handoffs()?
+                .query_handoffs(None, None, true)?
                 .into_iter()
                 .filter_map(|encoded| {
                     serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok()
@@ -100,7 +100,7 @@ impl PersistentCore {
             if matches!(status.as_str(), "done" | "failed" | "canceled") {
                 let persisted = self
                     .store
-                    .load_handoffs()?
+                    .query_handoffs(Some(request_id), None, false)?
                     .into_iter()
                     .filter_map(|encoded| {
                         serde_json::from_str::<crate::MediaPushRequest>(&encoded).ok()
@@ -374,7 +374,7 @@ impl PersistentCore {
         let sequence = store.latest_sequence()?;
         let mut runtime = CoreRuntime::from_state(snapshots, specs, sequence);
         let mut restored_media_push = false;
-        for encoded in store.load_handoffs()? {
+        for encoded in store.query_handoffs(None, None, true)? {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&encoded) {
                 if let Ok(mut request) =
                     serde_json::from_value::<crate::MediaPushRequest>(value.clone())
