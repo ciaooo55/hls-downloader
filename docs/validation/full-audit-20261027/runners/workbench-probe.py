@@ -102,9 +102,10 @@ try:
             'proxy': 'hls-downloader://direct-proxy', **extra}}})
         ids.append(next(event['event']['snapshot']['task_id'] for event in response['events']
                         if event['event']['kind'] == 'task_created'))
-    tasks = wait(lambda: (items if sum(t['status'] == 'completed' for t in
-                 (items := core({'type': 'snapshot', 'request_id': 3})['tasks'])) == 2 else None),
-                 'Actual fixture downloads did not complete', 60)
+    def downloads_complete():
+        items = core({'type': 'snapshot', 'request_id': 3})['tasks']
+        return items if sum(t['status'] == 'completed' for t in items) == 2 else None
+    tasks = wait(downloads_complete, 'Actual fixture downloads did not complete', 60)
     completed = next(t for t in tasks if t['task_id'] == ids[0])
     assert hashlib.sha256(Path(completed['output_path']).read_bytes()).digest() == hashlib.sha256(payload).digest()
     core({'type': 'store_settings', 'request_id': 4, 'values': {'task_column_layout': layout, 'dark_mode': False}})
