@@ -138,6 +138,10 @@ pub enum CorePipeRequest {
         client_request_id: Option<String>,
         #[serde(default)]
         pending_only: bool,
+        #[serde(default)]
+        paged: bool,
+        #[serde(default)]
+        after: Option<[i64; 2]>,
     },
     Subtitle {
         request_id: u64,
@@ -317,6 +321,8 @@ pub enum CorePipeResponse {
     Handoffs {
         request_id: u64,
         items: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next: Option<[i64; 2]>,
     },
     Subtitle {
         request_id: u64,
@@ -1297,15 +1303,28 @@ impl CoreIpcClient {
         client_request_id: Option<&str>,
         pending_only: bool,
     ) -> Result<Vec<String>, String> {
-        match self.request(&CorePipeRequest::LoadHandoffs {
-            request_id: 1,
-            handoff_id: handoff_id.map(str::to_owned),
-            client_request_id: client_request_id.map(str::to_owned),
-            pending_only,
-        })? {
-            CorePipeResponse::Handoffs { items, .. } => Ok(items),
-            CorePipeResponse::Error { message, .. } => Err(message),
-            other => Err(format!("unexpected handoff response: {other:?}")),
+        let mut result = Vec::new();
+        let mut after = None;
+        loop {
+            match self.request(&CorePipeRequest::LoadHandoffs {
+                request_id: 1,
+                handoff_id: handoff_id.map(str::to_owned),
+                client_request_id: client_request_id.map(str::to_owned),
+                pending_only,
+                paged: true,
+                after,
+            })? {
+                CorePipeResponse::Handoffs { items, next, .. } => {
+                    result.extend(items);
+                    match next {
+                        Some(key) if after.is_none_or(|previous| key > previous) => after = Some(key),
+                        Some(_) => return Err("接管分页游标未前进".into()),
+                        None => return Ok(result),
+                    }
+                }
+                CorePipeResponse::Error { message, .. } => return Err(message),
+                other => return Err(format!("unexpected handoff response: {other:?}")),
+            }
         }
     }
 }

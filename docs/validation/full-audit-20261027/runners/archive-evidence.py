@@ -81,6 +81,8 @@ files += [(path, Path('core-recovery')/path.relative_to(recovery_source))
           if path.suffix in ('.json', '.txt')]
 files += [(recovery_source/name, Path('core-recovery')/name) for name in (
     'build-tests.stderr.txt', 'engine-build.txt', 'repack.txt', 'rollback-contract.txt',
+    'paged-build-tests.stderr.txt', 'paged-core-build.txt', 'paged-presenter-build.txt',
+    'paged-ui-build.txt', 'paged-ui-build-fixed.txt',
 )]
 for path, relative in files:
     if not path.is_file():

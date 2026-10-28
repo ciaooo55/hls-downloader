@@ -575,6 +575,47 @@ impl CoreStore {
             .collect()
     }
 
+    pub fn query_handoffs_page(
+        &self,
+        handoff_id: Option<&str>,
+        client_request_id: Option<&str>,
+        pending_only: bool,
+        after: Option<[i64; 2]>,
+    ) -> Result<(Vec<String>, Option<[i64; 2]>), String> {
+        let selection = if handoff_id.is_some() { "handoff_id = ?1" } else { "?1 IS NULL" };
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT created_at_ms, rowid, public_json FROM handoffs WHERE \
+             ({selection}) \
+             AND (?2 IS NULL OR CASE WHEN json_valid(public_json) THEN json_extract(public_json, '$.request_id') END = ?2) \
+             AND (?3 = 0 OR status = 'pending') \
+             AND (?4 IS NULL OR (created_at_ms, rowid) > (?4, ?5)) \
+             ORDER BY created_at_ms, rowid LIMIT 65"
+        )).map_err(|error| format!("prepare Core handoff page: {error}"))?;
+        let rows = statement.query_map(
+            params![handoff_id, client_request_id, pending_only, after.map(|key| key[0]), after.map(|key| key[1])],
+            |row| Ok(([row.get::<_, i64>(0)?, row.get::<_, i64>(1)?], row.get::<_, String>(2)?)),
+        ).map_err(|error| format!("query Core handoff page: {error}"))?;
+        let mut items = Vec::new();
+        let mut bytes = 0;
+        let mut last = None;
+        for row in rows {
+            let (key, encoded) = row.map_err(|error| format!("read Core handoff page: {error}"))?;
+            // IPC carries each saved JSON document as a string, so budget its
+            // escaped wire size rather than database bytes or item count alone.
+            let wire_bytes = serde_json::to_string(&encoded).map_err(|error| error.to_string())?.len() + 1;
+            if wire_bytes > crate::core_ipc::V7_PIPE_MAX_FRAME - 512 {
+                return Err("接管记录超过单帧大小限制，无法读取".into());
+            }
+            if !items.is_empty() && (items.len() == 64 || bytes + wire_bytes > 1024 * 1024) {
+                return Ok((items, last));
+            }
+            items.push(encoded);
+            bytes += wire_bytes;
+            last = Some(key);
+        }
+        Ok((items, None))
+    }
+
     fn initialize(&mut self, existing_version: u32) -> Result<(), String> {
         let started = std::time::Instant::now();
         let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
@@ -932,6 +973,45 @@ mod tests {
             vec![r#"{"request_id":"client-new"}"#]
         );
         assert_eq!(store.load_handoffs().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn handoff_pages_preserve_order_and_bound_escaped_wire_bytes() {
+        let mut store = CoreStore::in_memory().unwrap();
+        for index in 0..70 {
+            let status = if index == 12 { "accepted" } else { "pending" };
+            let encoded = serde_json::json!({
+                "id": format!("page-{index}"), "request_id": "page-client",
+                "title": if index < 3 { "\\\"".repeat(120 * 1024) } else { String::new() },
+                "status": status,
+            }).to_string();
+            store.save_handoff(&format!("page-{index}"), &encoded, status, None, if index < 3 { 2 } else { 1 }).unwrap();
+        }
+        let mut after = None;
+        let mut seen = Vec::new();
+        let mut pages = 0;
+        loop {
+            let (items, next) = store.query_handoffs_page(None, Some("page-client"), true, after).unwrap();
+            assert!(items.len() <= 64);
+            let wire = crate::core_ipc::encode_message(&crate::CorePipeResponse::Handoffs {
+                request_id: 1, items: items.clone(), next,
+            }).unwrap();
+            assert!(wire.len() <= crate::core_ipc::V7_PIPE_MAX_FRAME + 4);
+            seen.extend(items.iter().map(|item| serde_json::from_str::<serde_json::Value>(item).unwrap()["id"].as_str().unwrap().to_string()));
+            pages += 1;
+            match next {
+                Some(key) => { assert!(after.is_none_or(|previous| key > previous)); after = Some(key); }
+                None => break,
+            }
+        }
+        let expected: Vec<_> = (3..70).filter(|index| *index != 12).chain(0..3).map(|index| format!("page-{index}")).collect();
+        assert_eq!(seen, expected);
+        assert!(pages > 1);
+        let (one, next) = store.query_handoffs_page(Some("page-0"), None, true, None).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(next, None);
+        store.save_handoff("too-large", &"x".repeat(crate::core_ipc::V7_PIPE_MAX_FRAME), "pending", None, 3).unwrap();
+        assert!(store.query_handoffs_page(Some("too-large"), None, true, None).unwrap_err().contains("单帧"));
     }
 
     #[test]

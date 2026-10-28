@@ -1217,6 +1217,7 @@ mod tests {
             crate::core_ipc::encode_message(&crate::CorePipeResponse::Handoffs {
                 request_id: 1,
                 items: history,
+                next: None,
             })
             .is_err(),
             "The fixture must exceed the real IPC frame limit"
@@ -1255,6 +1256,14 @@ mod tests {
             session.core.query_handoffs(None, None, true).unwrap().len(),
             1
         );
+        for index in 0..12 {
+            row.id = format!("history-{index}");
+            row.title = "x".repeat(384 * 1024);
+            session.persist_handoff(&row).unwrap();
+        }
+        // Pending requests can also exceed one frame; the IPC client must read
+        // every page instead of dropping requests or disconnecting the pipe.
+        assert_eq!(session.core.query_handoffs(None, None, true).unwrap().len(), 13);
         server.shutdown();
     }
 

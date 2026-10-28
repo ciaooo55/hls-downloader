@@ -22,11 +22,13 @@ def run(args):
     data.mkdir(parents=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {'passed': False, 'expected_legacy_failure': args.expect_legacy_failure,
+              'expected_pending_overflow': args.expect_pending_overflow,
+              'pending_history': args.pending_history, 'paged': args.paged,
               'engine_sha256': hashlib.sha256((args.runtime/'HLSDownloaderEngine.exe').read_bytes()).hexdigest(),
               'native_host_sha256': hashlib.sha256((args.runtime/'HLSDownloaderNativeHost.exe').read_bytes()).hexdigest()}
     row = {'id': '', 'offer': {'url': 'https://cdn.test/history.bin', 'resource_kind': 'file'},
            'filename': 'history.bin', 'title': 'x'*(384*1024), 'mime_type': '', 'size': 1,
-           'status': 'accepted', 'presentation': 'presented', 'task_id': None,
+           'status': 'pending' if args.pending_history else 'accepted', 'presentation': 'presented', 'task_id': None,
            'created_at_ms': 1, 'request_id': ''}
     with sqlite3.connect(data/'data.db') as db:
         db.execute('CREATE TABLE handoffs (handoff_id TEXT PRIMARY KEY, public_json TEXT NOT NULL, '
@@ -92,16 +94,38 @@ def run(args):
                 assert host.returncode == 0 and len(decoded) == 2 and all(r.get('ok') is True for r in decoded), report
                 assert decoded[1]['handoff']['id'] == 'pending-one' and report['save']['ok'], report
                 with connect(port) as ipc:
+                    pending_ids = ([f'history-{index}' for index in range(12)] if args.pending_history else [])
                     for filters, expected in (({'handoff_id': row['id']}, [row['id']]),
                                               ({'client_request_id': 'client-7'}, ['history-7']),
-                                              ({'pending_only': True}, ['pending-one', row['id']])):
-                        response = send(ipc, {'type': 'load_handoffs', 'request_id': 2, **filters})
-                        actual = [json.loads(item)['id'] for item in response['items']]
+                                              ({'pending_only': True}, pending_ids+['pending-one', row['id']])):
+                        actual = []
+                        after = None
+                        pages = 0
+                        while True:
+                            response = send(ipc, {'type': 'load_handoffs', 'request_id': 2,
+                                                  'paged': args.paged, 'after': after, **filters})
+                            assert len(json.dumps(response).encode()) <= 4*1024*1024
+                            actual.extend(json.loads(item)['id'] for item in response['items'])
+                            pages += 1
+                            cursor = response.get('next')
+                            if cursor is None:
+                                break
+                            assert after is None or cursor > after, cursor
+                            after = cursor
                         assert actual == expected, (filters, actual)
+                        if filters == {'pending_only': True}:
+                            report['pending_page_count'] = pages
+                            if args.pending_history and args.paged:
+                                assert pages > 1
                 report['filtered_reads_passed'] = True
             report['passed'] = not args.expect_legacy_failure
     except Exception:
         report['error'] = traceback.format_exc()
+        if args.expect_pending_overflow:
+            assert args.pending_history and not args.paged
+            assert report.get('row_committed') and report.get('save', {}).get('ok')
+            assert 'Core IPC closed' in report['error'], report['error']
+            report['legacy_pending_overflow_reproduced'] = True
     finally:
         if process:
             try:
@@ -113,7 +137,7 @@ def run(args):
                 process.wait(timeout=5)
             report['core_exit_code'] = process.returncode
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf8')
-    return 0 if report.get('legacy_failure_reproduced') or report['passed'] else 1
+    return 0 if report.get('legacy_failure_reproduced') or report.get('legacy_pending_overflow_reproduced') or report['passed'] else 1
 
 
 if __name__ == '__main__':
@@ -121,4 +145,7 @@ if __name__ == '__main__':
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--expect-legacy-failure', action='store_true')
+    parser.add_argument('--pending-history', action='store_true')
+    parser.add_argument('--paged', action='store_true')
+    parser.add_argument('--expect-pending-overflow', action='store_true')
     raise SystemExit(run(parser.parse_args()))

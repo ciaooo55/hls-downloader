@@ -4,8 +4,13 @@ New-Item -ItemType Directory -Force C:\QAWork,C:\QAWork\tmp | Out-Null
 $env:TEMP='C:\QAWork\tmp';$env:TMP=$env:TEMP
 . C:\QARunners\common.ps1
 Copy-Item C:\QAInput\tests.exe,C:\QAPerf\throttle\vcruntime140.dll,C:\QAPerf\runtime\app\resources\app-icon.ico C:\QAWork
+Copy-Item C:\QAPerf\python C:\QAWork\python -Recurse
+"python312.zip`n.`nC:\QAScripts" | Set-Content C:\QAWork\python\python312._pth -Encoding ASCII
 try {
-    foreach($filter in @('core_service::tests::','download_worker::tests::browser_media_push','download_worker::tests::expired_presenter_lease','download_worker::tests::presenter_lease','download_worker::tests::rejected_handoff','native_host::tests::native_host_connection_and_handoff_io','store::tests::handoff_queries')){
+    New-Item -ItemType Directory C:\QAWork\legacy | Out-Null
+    Copy-Item C:\QABaseline\HLSDownloaderEngine.exe,C:\QABaseline\HLSDownloaderNativeHost.exe,C:\QAPerf\throttle\vcruntime140.dll C:\QAWork\legacy
+    Run C:\QAWork\python\python.exe @('C:\QAScripts\smoke_v7_handoff_history.py','--runtime','C:\QAWork\legacy','--report','C:\QAReports\before-pending-history.json','--pending-history','--expect-pending-overflow') 'before-pending-history'
+    foreach($filter in @('core_service::tests::','download_worker::tests::browser_media_push','download_worker::tests::expired_presenter_lease','download_worker::tests::presenter_lease','download_worker::tests::rejected_handoff','native_host::tests::','store::tests::','core_ipc::tests::','core_server::tests::')){
         $name='tests-'+($filter -replace '::','-').TrimEnd('-')
         Run C:\QAWork\tests.exe @($filter,'--test-threads=1') $name
     }
@@ -15,6 +20,7 @@ try {
         if([DateTime]::UtcNow -gt $deadline){throw 'Candidate package was not provided'}
         Start-Sleep -Seconds 2
     }
-    & C:\QARunners\handoff-installed-guest.ps1 -BaselineLabel 'r20'
+    & C:\QARunners\handoff-installed-guest.ps1 -BaselineLabel 'r20' -PendingPagination
+    if(-not (Get-Content C:\QAReports\installed-history.json -Raw | ConvertFrom-Json).passed){throw 'Installed candidate did not pass'}
 } catch {$_ | Out-String | Set-Content C:\QAReports\core-recovery-error.txt;throw}
 finally {'finished' | Set-Content C:\QAReports\core-recovery-finished.txt}

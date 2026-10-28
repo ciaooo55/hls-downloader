@@ -727,22 +727,32 @@ object EnginePipeClient {
         response.arrayOrNull("events").orEmpty().map { protocolJson.decodeFromJsonElement(EventEnvelopeDto.serializer(), it) }
     }
 
+    private fun PipeConnection.loadHandoffRows(handoffId: String? = null): List<JsonElement> {
+        val items = mutableListOf<JsonElement>()
+        var after: JsonArray? = null
+        do {
+            val response = request(buildJsonObject {
+                put("type", "load_handoffs"); put("request_id", nextRequestId()); put("paged", true)
+                if (handoffId != null) put("handoff_id", handoffId) else put("pending_only", true)
+                after?.let { put("after", it) }
+            })
+            response.requireType("handoffs", "读取浏览器交接记录失败")
+            items.addAll(response.arrayOrNull("items").orEmpty())
+            val next = response.arrayOrNull("next")
+            check(next == null || next != after) { "接管分页游标未前进" }
+            after = next
+        } while (after != null)
+        return items
+    }
+
     fun loadHandoffStatuses(handoffId: String): List<HandoffStatusDto> = session { connection ->
-        val response = connection.request(buildJsonObject {
-            put("type", "load_handoffs"); put("request_id", nextRequestId()); put("handoff_id", handoffId)
-        })
-        response.requireType("handoffs", "读取浏览器接管状态失败")
-        response.arrayOrNull("items").orEmpty().mapNotNull { item ->
+        connection.loadHandoffRows(handoffId).mapNotNull { item ->
             runCatching { protocolJson.decodeFromString(HandoffStatusDto.serializer(), item.stringOrNull() ?: return@mapNotNull null) }.getOrNull()
         }
     }
 
     fun loadHandoffs(): List<HandoffOfferDto> = session { connection ->
-        val response = connection.request(buildJsonObject {
-            put("type", "load_handoffs"); put("request_id", nextRequestId()); put("pending_only", true)
-        })
-        response.requireType("handoffs", "读取浏览器接管请求失败")
-        response.arrayOrNull("items").orEmpty().mapNotNull { item ->
+        connection.loadHandoffRows().mapNotNull { item ->
             runCatching {
                 val handoff = protocolJson.parseToJsonElement(item.stringOrNull() ?: return@runCatching null).jsonObject
                 if (handoff.stringOrNull("status") != "pending") return@runCatching null
@@ -764,11 +774,7 @@ object EnginePipeClient {
     }
 
     fun loadMediaPushRequests(): List<MediaPushRequestDto> = session { connection ->
-        val response = connection.request(buildJsonObject {
-            put("type", "load_handoffs"); put("request_id", nextRequestId()); put("pending_only", true)
-        })
-        response.requireType("handoffs", "读取媒体推送状态失败")
-        response.arrayOrNull("items").orEmpty().mapNotNull { item ->
+        connection.loadHandoffRows().mapNotNull { item ->
             runCatching { protocolJson.decodeFromString(MediaPushRequestDto.serializer(), item.stringOrNull() ?: return@mapNotNull null) }.getOrNull()
         }.filter { it.id.startsWith("media-push-") && it.status == "pending" }
     }

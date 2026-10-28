@@ -508,6 +508,7 @@ fn dispatch(
                 request_id,
                 // 保存调用只需要持久化回执，不应重传无关历史或让回执超过帧上限。
                 items: Vec::new(),
+                next: None,
             },
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
@@ -520,12 +521,15 @@ fn dispatch(
             handoff_id,
             client_request_id,
             pending_only,
-        } => match coordinator.query_handoffs(
-            handoff_id.as_deref(),
-            client_request_id.as_deref(),
-            pending_only,
-        ) {
-            Ok(items) => CorePipeResponse::Handoffs { request_id, items },
+            paged,
+            after,
+        } => match if paged {
+            coordinator.query_handoffs_page(handoff_id.as_deref(), client_request_id.as_deref(), pending_only, after)
+        } else {
+            coordinator.query_handoffs(handoff_id.as_deref(), client_request_id.as_deref(), pending_only)
+                .map(|items| (items, None))
+        } {
+            Ok((items, next)) => CorePipeResponse::Handoffs { request_id, items, next },
             Err(error) => CorePipeResponse::Error {
                 request_id: Some(request_id),
                 code: "handoff_failed".into(),

@@ -1,10 +1,10 @@
-param([string]$BaselineLabel='r19')
+param([string]$BaselineLabel='r19',[switch]$PendingPagination)
 $ErrorActionPreference='Stop'
 if($env:USERNAME -ne 'WDAGUtilityAccount'){throw 'Windows Sandbox only'}
 New-Item -ItemType Directory -Force C:\QAWork,C:\QAWork\tmp | Out-Null
 $env:TEMP='C:\QAWork\tmp';$env:TMP=$env:TEMP
 . C:\QARunners\common.ps1
-Copy-Item C:\QAPerf\python C:\QAWork\python -Recurse
+if(-not(Test-Path C:\QAWork\python\python.exe)){Copy-Item C:\QAPerf\python C:\QAWork\python -Recurse}
 "python312.zip`n.`nC:\QAScripts" | Set-Content C:\QAWork\python\python312._pth -Encoding ASCII
 Add-Type -Namespace HistoryAudit -Name MSI -MemberDefinition '[System.Runtime.InteropServices.DllImport("msi.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern int MsiQueryProductState(string product);'
 $meta=Get-Content C:\QAInput\installer.json -Raw | ConvertFrom-Json
@@ -49,6 +49,10 @@ try {
     Record 'paused task survives and resumes to original SHA256' $true
     Run C:\QAWork\python\python.exe @('C:\QAScripts\smoke_v7_handoff_history.py','--runtime',"$install\app\resources",'--report','C:\QAReports\installed-large-history.json') 'installed-large-history'
     Record 'actual installed Core and Native Host work with history beyond 4MiB' $true
+    if($PendingPagination){
+        Run C:\QAWork\python\python.exe @('C:\QAScripts\smoke_v7_handoff_history.py','--runtime',"$install\app\resources",'--report','C:\QAReports\installed-pending-history.json','--pending-history','--paged') 'installed-pending-history'
+        Record 'installed pending requests beyond 4MiB are read completely through bounded pages' $true
+    }
     Run "$install\app\resources\HLSDownloaderPresenter.exe" @('--self-test') 'installed-presenter-self-test'
     Record 'installed Presenter constructs its confirmation component' $true
     Msi @('/x',$meta.product_code,'/qn') 'history-uninstall'
