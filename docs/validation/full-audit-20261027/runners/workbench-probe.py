@@ -95,13 +95,15 @@ try:
         'download_complete_popup_enabled': False}})
     ids = []
     for name, extra in (('sample.bin', {}), ('sample.mp4', {}),
-                        ('queued.bin', {'scheduled_start_at': '2999-01-01T00:00:00Z'})):
+                        ('queued.bin', {'scheduled_start_at': '2999-01-01T00:00:00Z', 'allow_duplicate': True})):
         response = core({'type': 'command', 'request_id': 2, 'command': {'kind': 'create_task', 'spec': {
             'url': f'http://127.0.0.1:{server.server_port}/'+('sample.bin' if name == 'queued.bin' else name),
             'filename': name, 'resource_kind': 'file', 'concurrency': 1,
             'proxy': 'hls-downloader://direct-proxy', **extra}}})
-        ids.append(next(event['event']['snapshot']['task_id'] for event in response['events']
-                        if event['event']['kind'] == 'task_created'))
+        created = [event['event']['snapshot']['task_id'] for event in response['events']
+                   if event['event']['kind'] == 'task_created']
+        assert len(created) == 1, response
+        ids.append(created[0])
     def downloads_complete():
         items = core({'type': 'snapshot', 'request_id': 3})['tasks']
         return items if sum(t['status'] == 'completed' for t in items) == 2 else None
