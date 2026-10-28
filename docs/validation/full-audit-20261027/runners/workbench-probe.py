@@ -117,13 +117,12 @@ try:
     assert settings['task_column_layout'] == layout, settings
     result['layout_survives_core_restart'] = True
     result['real_download_sha256'] = hashlib.sha256(payload).hexdigest()
-    for label, width, scale, dark in (('light-wide', 1400, '1.0', False), ('dark-compact-150', 1024, '1.5', True)):
+    for label, scale, dark in (('light-100-normal', '1.0', False), ('dark-150-normal', '1.5', True)):
         core({'type': 'store_settings', 'request_id': 6, 'values': {'dark_mode': dark}})
         configured = re.sub(r'java-options=-Dsun\.java2d\.uiScale=[^\r\n]+\r?\n?', '', original)
         config.write_text(configured+'\njava-options=-Dsun.java2d.uiScale='+scale+'\n', 'utf8')
         log = (reports/f'workbench-{label}.txt').open('wb')
-        proc = subprocess.Popen([str(runtime/'HLSDownloader.exe')], env={**env,
-            'HLS_UI_AUDIT_WIDTH': str(width), 'HLS_UI_AUDIT_HEIGHT': '820'},
+        proc = subprocess.Popen([str(runtime/'HLSDownloader.exe')], env=env,
             cwd=runtime, stdout=log, stderr=log)
         processes.append(proc)
 
@@ -149,7 +148,13 @@ try:
             return any(capture_state.values())
 
         wait(capture, 'Screen and paint captures stayed blank', 20)
-        result['captures'].append({'label': label, 'window': ui('window'), 'state': ui('state'), 'capture': dict(capture_state)})
+        window = ui('window')
+        with Image.open(io.BytesIO(ui('screen', raw=True))) as screen:
+            screen_size = list(screen.size)
+        within_screen = window['x'] >= 0 and window['y'] >= 0 and window['x']+window['width'] <= screen_size[0] and window['y']+window['height'] <= screen_size[1]
+        result['captures'].append({'label': label, 'window': window, 'screen_size': screen_size,
+            'within_screen': within_screen, 'state': ui('state'), 'capture': dict(capture_state)})
+        assert within_screen, result['captures'][-1]
         stop(proc)
     core({'type': 'store_settings', 'request_id': 7, 'values': {'task_column_layout': ''}})
     stop(engine)
