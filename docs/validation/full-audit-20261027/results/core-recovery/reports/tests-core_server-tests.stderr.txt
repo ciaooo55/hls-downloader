@@ -1,0 +1,4 @@
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007
+v7 task task-1 failed: WinHttpSendRequest 12007

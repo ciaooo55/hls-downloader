@@ -1,0 +1,19 @@
+
+running 15 tests
+test core_service::tests::concurrent_media_push_is_failed_without_replacing_active_request ... ok
+test core_service::tests::failed_commit_restores_snapshot_spec_sequence_and_notification ... ok
+test core_service::tests::file_store_new_task_after_restart_never_reuses_a_restored_task_id ... ok
+test core_service::tests::file_store_restores_pending_media_push_after_core_restart ... ok
+test core_service::tests::file_store_restores_tasks_after_core_restart ... ok
+test core_service::tests::media_push_terminal_resolution_rehydrates_missing_runtime_request ... ok
+test core_service::tests::media_push_terminal_resolution_retry_is_idempotent_after_restart ... ok
+test core_service::tests::persisted_progress_preserves_runtime_lifecycle_and_other_tasks ... ok
+test core_service::tests::queue_profile_removal_migrates_tasks_and_settings_together ... ok
+test core_service::tests::restart_normalizes_legacy_overlapping_media_pushes ... ok
+test core_service::tests::service_persists_commands_through_the_shared_boundary ... ok
+test core_service::tests::side_rows_and_checkpoint_commit_and_restore_together ... ok
+test core_service::tests::spec_updates_refresh_snapshot_and_task_log ... ok
+test core_service::tests::verification_and_mirror_results_survive_core_restart ... ok
+test core_service::tests::worker_commit_wakes_subscriber_without_an_ipc_command ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 646 filtered out; finished in 0.45s

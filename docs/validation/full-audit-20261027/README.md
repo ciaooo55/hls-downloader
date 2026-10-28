@@ -125,7 +125,7 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 
 本轮未改变插件生产源码，因此复用r19双插件和插件源码归档，不重跑无关的插件全套。未操作桌面鼠标、键盘或窗口；后台协议与组件构造验收不代替真实按钮验收。其余原计划未完成门槛继续保留。
 
-## 当前交付：r20及清理阻塞
+## r20交付及清理阻塞（历史）
 
 生产修复提交`67e8139`，构建来源快照`71f1dfbe6bca8ed6c6b4fec73f7b48777f7bbb8f`；验收和文档后续提交不改变二进制。最终r20 MSI为203456512字节，SHA256：`dcb603869ba2b79937589785ab9ad5e004beae1e731beb7e8d6e9af2c5bc8d1d`，比r19减少24576字节，不作为明显体积优化的结论。
 
@@ -143,8 +143,22 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 
 沙盒现有回归23项通过：core_service全部15项，Coordinator投送3项、租约2项、站点抑制1项，Native Host大历史1项及Store筛选1项。未为五行调用变更重跑完整下载/插件/UI测试；最终安装包尚待验证。
 
-边界复核又实际复现了r20的待确认队列溢出：12条待处理历史合计4721908字节，Native Host指定ID查询及50字节保存回执正常，但非分页待处理列表读取断开IPC。因此没有发布只含五处调用修改的中间包，而是补齐分页：`load_handoffs`新增可选`paged`/`after`，`handoffs`响应增加可选`next`；旧非分页调用保留原语义。分页保持`created_at_ms,rowid`顺序，目标每页1MiB且最多64项，按实际转义后的字符串字节计算；一条可合法传输的大记录可单独成页，超过单帧的记录明确返回错误。Rust客户端（含Native Host/Presenter）及桌面客户端读至无后续游标，不丢弃队列项目。没有扩大4MiB帧上限或删除用户记录。
+边界复核又实际复现了r20的待确认队列溢出：12条待处理历史合计4721896字节，Native Host指定ID查询及50字节保存回执正常，但非分页待处理列表读取断开IPC。因此没有发布只含五处调用修改的中间包，而是补齐分页：`load_handoffs`新增可选`paged`/`after`，`handoffs`响应增加可选`next`；旧非分页调用保留原语义。分页保持`created_at_ms,rowid`顺序，目标每页1MiB且最多64项，按实际转义后的字符串字节计算；一条可合法传输的大记录可单独成页，超过单帧的记录明确返回错误。Rust客户端（含Native Host/Presenter）及桌面客户端读至无后续游标，不丢弃队列项目。没有扩大4MiB帧上限或删除用户记录。
 
 分页后的定向回归86项通过：Core服务15、Store10、Native Host23、IPC16、CoreServer16，以及Coordinator投送/租约/抑制6项。新增Store回归验证转义膨胀、同时间戳稳定顺序、64项上限、精确ID及单项超限；扩展既有真实IPC回归验证13条待处理记录跨帧完整读取。初次23项中的两个孤立测试输出不再计入这86项。桌面分页JAR构建通过，Core/Host/Presenter及最终安装链路仍待完成。初次桌面命令的Gradle属性被PowerShell拆分为任务名，修正引用后构建通过，失败日志保留。
 
 另以r20同SHA安装包在全新、无网络/无虚拟GPU沙盒单独复测原1500ms首次响应门槛，4个并发Host仅启动1个Core，新任务库首次响应1952.00–1955.57ms，仍未达标。SQLite切换WAL阶段累计1171479微秒、建表提交累计1827082微秒；Core的注册、实例锁和IPC就绪均有独立时间戳。安装/卸载返回0，失败结果保留；后续常驻/重启阶段因门槛失败未运行。此次证据确认慢点仍在新库持久化，并未证明五处查询修改能改善空库首次启动，未降低同步保证或放宽门槛。
+
+## 当前交付：r21（2026-10-28）
+
+五处查询收敛提交`bf16991`，分页修复提交及构建来源快照`6c71bb4c80fb885c46b0606af4ac8a0250d61e33`。当前MSI为203448320字节，SHA256：`401128356da7adc05f7039481f8fcb117d7216410476c4ad1ca1fb173a815ffb`。Core/Native Host/Updater/Presenter release及桌面分页JAR均构建通过，86项定向回归通过；未修改插件生产源码，未重复完整Core/UI/插件测试，也未测量新的CPU或性能收益。
+
+同SHA包的无网络/无虚拟GPU沙盒验证通过：启动旧r20 Core/UI后覆盖升级，沿用自选含空格目录；旧MSI登记移除，新登记生效；220项安装组件哈希与输入清单一致；暂停任务恢复后的32MiB文件长度和SHA256一致。已安装Core/Native Host的大历史交接、保存回执和落库通过；另以4721896字节待确认历史验证6页完整读取，未丢失14个预期待处理ID。Presenter组件构造和正常卸载通过。证据：[安装及升级](results/core-recovery/reports/installed-history.json)、[待确认分页](results/core-recovery/reports/installed-pending-history.json)、[修前真实溢出](results/core-recovery/reports/before-pending-history.json)、[86项统计](results/core-recovery/reports/targeted-summary.json)、[组件哈希](results/core-recovery/input/components.json)。后台协议和组件构造不作为完整原生按钮验收。
+
+[r21](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r21)已公开为未签名预发布，`release_ready=false`；9个资产在发布前后核对大小及服务端SHA256，见[发布结果](results/release-assets-r21.json)。r20发布已删除，源码标签保留；v6/v5/v3/v1未改，Latest仍是v6.0.1。桌面`HLSDownloader/最新-20261025`当前包为`HLSDownloader-7.0.3-20261028-未签名.msi`，已替换并更名原20261027文件，没有保留这一份重复安装包；配套插件、源码、说明、清单和哈希均已核对。旧20261026 MSI此前被拒绝删除，仍未操作。
+
+沙盒及本轮构建进程已结束，宿主没有安装产品或写产品注册表。补齐只读审计路径：旧脚本只列了无空格的`HLSDownloader`，本次按`profile_paths.rs`同时核查含空格的真实数据目录`HLS Downloader`，以及Roaming、Local Programs、Program Files和x86目录的两个产品名称，十个精确路径均未发现；卸载登记、相关MSI、Native Host键和产品进程仍未发现。具体检查范围写入[宿主记录](results/host-state.json)，不是全盘零痕迹保证。
+
+**清理仍未完成**：本轮新建`.tool-cache/core-recovery-20261028`共91文件、3子目录、638503202字节（约609MiB），证据及成品验证后唯一一次删除被自动审批拒绝，仅返回`blocked by policy`，未提供进一步原因；没有重试或换方式绕过，见[清理记录](results/core-recovery-cleanup.json)。此前拒绝的目录和旧安装包未重试。复用的`full-audit-20261027`已只读更新为5547文件、2368子目录、2698703703字节；其用户清理脚本支持当前安装包文件名，并修正了FileInfo没有Parent目录属性导致的检查失败，最终不带`-Apply`的只读检查通过，未执行删除模式。
+
+首次新库冷启动1500ms门槛、Chromium全入口零DownloadItem、指定原站直播403/HLS卡死/播放器超时现场、完整原生UI矩阵及当前三产品对照仍未闭环；收费云端与实体接收设备仍排除。r21修复两个已复现的交接历史/队列边界，不能据此宣布整个项目全部完成。

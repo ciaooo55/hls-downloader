@@ -1,0 +1,17 @@
+{
+  "tag": "v7.0.3-r21",
+  "verified_files": [
+    "BUILD-PROVENANCE.json",
+    "HLSDownloader-7.0.3-20261028-未签名.msi",
+    "HLSDownloader-7.0.3-Chromium.zip",
+    "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+    "HLSDownloader-7.0.3-Firefox-未签名.zip",
+    "HLSDownloader-7.0.3-插件完整源码.zip",
+    "交付清单.json",
+    "验收说明.txt"
+  ],
+  "all_hashes_match": true,
+  "current_installer_name": "HLSDownloader-7.0.3-20261028-未签名.msi",
+  "previous_20261027_file_replaced_and_renamed": true,
+  "old_refused_20261026_msi_not_touched": true
+}

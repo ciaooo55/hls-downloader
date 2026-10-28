@@ -1,0 +1,8 @@
+{
+  "passed": false,
+  "msi_sha256": "dcb603869ba2b79937589785ab9ad5e004beae1e731beb7e8d6e9af2c5bc8d1d",
+  "install_exit": 0,
+  "startup_gate_passed": false,
+  "uninstall_exit": 0,
+  "error": "cold-start failed: 1"
+}

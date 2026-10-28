@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "tests": 86,
+  "counts": {
+    "core_service-tests": 15,
+    "download_worker-tests-browser_media_push": 3,
+    "download_worker-tests-expired_presenter_lease": 1,
+    "download_worker-tests-presenter_lease": 1,
+    "download_worker-tests-rejected_handoff": 1,
+    "native_host-tests": 23,
+    "store-tests": 10,
+    "core_ipc-tests": 16,
+    "core_server-tests": 16
+  },
+  "excluded_initial_isolated_reports": [
+    "tests-native_host-tests-native_host_connection_and_handoff_io.stdout.txt",
+    "tests-store-tests-handoff_queries.stdout.txt"
+  ]
+}

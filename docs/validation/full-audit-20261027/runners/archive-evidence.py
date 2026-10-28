@@ -83,6 +83,7 @@ files += [(recovery_source/name, Path('core-recovery')/name) for name in (
     'build-tests.stderr.txt', 'engine-build.txt', 'repack.txt', 'rollback-contract.txt',
     'paged-build-tests.stderr.txt', 'paged-core-build.txt', 'paged-presenter-build.txt',
     'paged-ui-build.txt', 'paged-ui-build-fixed.txt',
+    'input/installer.json', 'input/components.json', 'input/BUILD-PROVENANCE.json',
 )]
 for path, relative in files:
     if not path.is_file():

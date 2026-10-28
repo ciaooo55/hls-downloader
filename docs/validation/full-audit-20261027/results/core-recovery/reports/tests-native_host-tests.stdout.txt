@@ -1,0 +1,27 @@
+
+running 23 tests
+test native_host::tests::browser_cannot_write_subtitle_configuration ... ok
+test native_host::tests::browser_credentials_are_vaulted_or_rejected_without_echoing_them ... ok
+test native_host::tests::browser_download_creates_a_durable_rust_task_without_http ... ok
+test native_host::tests::browser_download_reports_core_start_errors_instead_of_false_success ... ok
+test native_host::tests::browser_offer_rejects_javascript_and_file_urls ... ok
+test native_host::tests::credential_refs_advance_without_handoff_progress ... ok
+test native_host::tests::download_credential_rollback_is_transactional ... ok
+test native_host::tests::local_file_offer_requires_an_absolute_existing_file_with_matching_size ... ok
+test native_host::tests::manifest_response_length_is_not_the_downloaded_media_length ... ok
+test native_host::tests::media_push_new_request_reopens_ui_after_previous_request_resolves ... ok
+test native_host::tests::media_push_overlap_after_host_restart_reopens_restored_picker ... ok
+test native_host::tests::media_push_returns_a_request_id ... ok
+test native_host::tests::media_push_returns_core_overlap_rejection_without_reopening_ui ... ok
+test native_host::tests::native_host_connection_and_handoff_io_ignore_unrelated_history ... ok
+test native_host::tests::native_message_frame_roundtrip_is_little_endian ... ok
+test native_host::tests::offer_coerces_non_http_methods ... ok
+test native_host::tests::offer_handoff_persistence_failure_rolls_back_browser_credential ... ok
+test native_host::tests::offer_is_idempotent_for_the_extension_request_id ... ok
+test native_host::tests::ordinary_browser_headers_are_replay_context ... ok
+test native_host::tests::rejects_unknown_operations_before_dispatch ... ok
+test native_host::tests::ui_accept_updates_handoff_status_with_task_fields ... ok
+test native_host::tests::v7_ping_does_not_advertise_fastapi_loopback ... ok
+test native_host::tests::write_response_replaces_oversized_payload_with_correlatable_fallback_error ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 638 filtered out; finished in 0.86s

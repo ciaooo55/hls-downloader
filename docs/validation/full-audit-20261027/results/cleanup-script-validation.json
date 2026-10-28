@@ -1,0 +1,9 @@
+{
+  "readonly_passed": true,
+  "apply_executed": false,
+  "current_desktop_installer": "HLSDownloader-7.0.3-20261028-未签名.msi",
+  "previous_failure": "FileInfo.Parent was null, causing Log escaped workspace before deletion",
+  "fix": "Check FileInfo link attributes, then traverse its Directory and DirectoryInfo.Parent",
+  "tested_working_copy_sha256": "10fc9d79240e806ed2d75f2815dd57b208f0b567dd6407670e02372296ccdf8b",
+  "existing_denied_deletion_not_retried": true
+}

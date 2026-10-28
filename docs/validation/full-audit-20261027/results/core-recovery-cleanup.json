@@ -1,0 +1,13 @@
+{
+  "path": ".tool-cache/core-recovery-20261028",
+  "status": "blocked_by_automatic_approval",
+  "files": 91,
+  "directories": 3,
+  "bytes": 638503202.0,
+  "archive_hashes_verified": true,
+  "desktop_and_github_hashes_verified": true,
+  "task_sandbox_stopped": true,
+  "old_denied_targets_not_retried": true,
+  "reason": "blocked by policy; no further reason supplied",
+  "deletion_attempts": 1
+}

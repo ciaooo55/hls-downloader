@@ -1,0 +1,22 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html in the Gradle documentation.
+Daemon will be stopped at the end of the build
+Calculating task graph as no cached configuration is available for tasks: .compiler.execution.strategy=in-process jar
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Selection failed
+  Task '.compiler.execution.strategy=in-process' not found in root project 'HLSDownloaderDesktop'.
+
+* Try:
+> Run gradlew tasks to get a list of available tasks.
+> For more on name expansion, please refer to https://docs.gradle.org/9.7.1/userguide/command_line_interface.html in the Gradle documentation.
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 1m 3s
+[Incubating] Problems report is available at: file:///A:/Ubuntu/%E6%B5%8B%E8%AF%95/hls-downloader/.tool-cache/full-audit-20261027/compose-build/reports/problems/problems-report.html
+Configuration cache entry stored.

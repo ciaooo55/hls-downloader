@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-27T11:56:14.7338668Z",
+  "checked_at": "2026-10-28T11:41:38.3871767Z",
   "host_install_performed": false,
   "registry_writes_performed": false,
   "scope": "Exact product keys, related MSI products, product process names and named default directories; no whole-disk zero-trace claim",
@@ -7,5 +7,17 @@
   "uninstall_records": [],
   "related_msi_products": [],
   "product_processes": [],
-  "named_directories": []
+  "named_directories": [],
+  "checked_directories": [
+    "C:\\Users\\lee\\AppData\\Local\\HLSDownloader",
+    "C:\\Users\\lee\\AppData\\Local\\HLS Downloader",
+    "C:\\Users\\lee\\AppData\\Roaming\\HLSDownloader",
+    "C:\\Users\\lee\\AppData\\Roaming\\HLS Downloader",
+    "C:\\Users\\lee\\AppData\\Local\\Programs\\HLSDownloader",
+    "C:\\Users\\lee\\AppData\\Local\\Programs\\HLS Downloader",
+    "C:\\Program Files\\HLSDownloader",
+    "C:\\Program Files\\HLS Downloader",
+    "C:\\Program Files (x86)\\HLSDownloader",
+    "C:\\Program Files (x86)\\HLS Downloader"
+  ]
 }

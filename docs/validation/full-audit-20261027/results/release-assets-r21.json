@@ -1,0 +1,58 @@
+{
+  "checked_at": "2026-10-28T11:38:59.413089+00:00",
+  "release_id": 426591492,
+  "tag": "v7.0.3-r21",
+  "draft": false,
+  "prerelease": true,
+  "release_ready": false,
+  "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r21",
+  "target_commitish": "6c71bb4c80fb885c46b0606af4ac8a0250d61e33",
+  "all_asset_sizes_and_server_sha256_match": true,
+  "assets": [
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 19989,
+      "sha256": "a49263dac324f60da6b2dfbf9e18a42dae6a9187ffc8a9dff33b5765a4e5b928"
+    },
+    {
+      "name": "DELIVERY-MANIFEST.json",
+      "bytes": 2501,
+      "sha256": "b3759391d252043c94840bd5e482ce94b1cd6ab49a865b1d4f96ec3ea9838582"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 327935,
+      "sha256": "982e11945eb27e74cc3e9bd742db8e5ee512b655acbcaffd2a321531a1b303b2"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-extension-source.zip",
+      "bytes": 368896,
+      "sha256": "80695c46e95f1287e408cbc9a737b77f7f64d2c1ad9f0ec80d7c39ff45ece9d0"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-review-source.zip",
+      "bytes": 282713,
+      "sha256": "435b42e19f87fc68c92419f78c7b6f57975ac587fbbf3b254ccce2231bd55512"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-unsigned.zip",
+      "bytes": 327254,
+      "sha256": "ded82485beaa016e046937f84eaf2fab0948986e0f9aec832b7af3631a69b9fa"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-r21-Windows-x64-unsigned.msi",
+      "bytes": 203448320,
+      "sha256": "401128356da7adc05f7039481f8fcb117d7216410476c4ad1ca1fb173a815ffb"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 798,
+      "sha256": "182c50dd1cf3b1b373400dd282d54448fc4138b54e7b8508b712a74073d2e231"
+    },
+    {
+      "name": "VALIDATION.txt",
+      "bytes": 1720,
+      "sha256": "9b63731639a435b565fdf764ed6539a32854005d58186ca05936c0b837c03b65"
+    }
+  ]
+}

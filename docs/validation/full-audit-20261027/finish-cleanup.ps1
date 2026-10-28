@@ -34,7 +34,9 @@ foreach($log in $record.duplicate_logs){
         $log.path -ne "docs/validation/full-audit-20261027/results/$name"){throw 'Unexpected duplicate log'}
     $path=Join-Path $repo $log.path
     if(Test-Path -LiteralPath $path){
-        $logParent=Get-Item -LiteralPath $path -Force
+        $logItem=Get-Item -LiteralPath $path -Force
+        if($logItem.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked log preserved'}
+        $logParent=$logItem.Directory
         while($logParent.FullName -ne $repo){
             if($logParent.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked log preserved'}
             $logParent=$logParent.Parent
@@ -46,7 +48,9 @@ foreach($log in $record.duplicate_logs){
         if($proof.Count -ne 1 -or (Get-FileHash -LiteralPath $replacement).Hash.ToLowerInvariant() -ne $proof[0].archived_sha256){throw 'Archived log replacement is missing or changed'}
     }
 }
-$desktop=Join-Path $env:USERPROFILE 'Desktop\HLSDownloader\最新-20261025\HLSDownloader-7.0.3-20261027-未签名.msi'
+$desktopName=if($record.desktop_current_msi_filename){[string]$record.desktop_current_msi_filename}else{'HLSDownloader-7.0.3-20261027-未签名.msi'}
+if($desktopName -notmatch '^HLSDownloader-7\.0\.3-\d{8}-未签名\.msi$'){throw 'Unexpected current installer filename'}
+$desktop=Join-Path (Join-Path $env:USERPROFILE 'Desktop\HLSDownloader\最新-20261025') $desktopName
 if((Get-FileHash -LiteralPath $desktop).Hash.ToLowerInvariant() -ne $record.desktop_current_msi_sha256){throw 'Latest desktop delivery is missing or changed'}
 Write-Host "$($record.path): $($record.files) files, $($record.bytes) bytes; archived evidence and desktop MSI verified."
 if(-not $Apply){Write-Host '只读检查；加 -Apply 仅清理本轮缓存及两份已有归档替代的日志，不串联其他清理脚本。';return}

@@ -1,0 +1,7 @@
+
+running 3 tests
+test download_worker::tests::browser_media_push_coordinator_enforces_single_pending_and_first_terminal_wins ... ok
+test download_worker::tests::browser_media_push_coordinator_rejects_nonpending_request_state ... ok
+test download_worker::tests::browser_media_push_is_persisted_and_resolved_through_core ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 658 filtered out; finished in 0.17s

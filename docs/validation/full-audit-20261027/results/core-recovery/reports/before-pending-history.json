@@ -1,0 +1,63 @@
+{
+  "passed": false,
+  "expected_legacy_failure": false,
+  "expected_pending_overflow": true,
+  "pending_history": true,
+  "paged": false,
+  "engine_sha256": "80ef1e6191e294a171bf8901bde872961f4d07aa5d5469c6e69dba273f701eb6",
+  "native_host_sha256": "86ed4facba28cc99ded1da028791c85e5e66a81b7a2604f43d08d18cb678f0cd",
+  "history_json_bytes": 4721896,
+  "native_host": {
+    "exit_code": 0,
+    "stdout_bytes": 748,
+    "elapsed_ms": 78.00000000000296,
+    "stderr": "",
+    "responses": [
+      {
+        "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+        "minimum_extension_version": "2.0.11",
+        "ok": true,
+        "protocol": "hls-downloader-v7-core",
+        "protocol_version": 1,
+        "recommended_extension_version": "7.0.3",
+        "takeover_enabled": true,
+        "takeover_minimum_bytes": 0,
+        "version": "7.0.3"
+      },
+      {
+        "handoff": {
+          "confidence": 0.0,
+          "created_at_ms": 1,
+          "evidence": [],
+          "filename": "history.bin",
+          "id": "pending-one",
+          "mime_type": "",
+          "owner": "",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1,
+          "source_page_url": "",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "https://cdn.test/history.bin"
+        },
+        "ok": true
+      }
+    ]
+  },
+  "save": {
+    "ok": true,
+    "response_bytes": 50
+  },
+  "row_committed": true,
+  "error": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\smoke_v7_handoff_history.py\", line 105, in run\n    response = send(ipc, {'type': 'load_handoffs', 'request_id': 2,\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\msi_checkpoint_fixture.py\", line 84, in send\n    return json.loads(read_exact(stream, struct.unpack(\"<I\", read_exact(stream, 4))[0]))\n                                                             ^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\msi_checkpoint_fixture.py\", line 76, in read_exact\n    raise RuntimeError(\"Core IPC closed\")\nRuntimeError: Core IPC closed\n",
+  "legacy_pending_overflow_reproduced": true,
+  "core_exit_code": 0
+}

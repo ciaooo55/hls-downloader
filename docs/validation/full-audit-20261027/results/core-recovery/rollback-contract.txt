@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\core-recovery-20261028\\input\\candidate.msi",
+  "original_product_code": "{C5BB8C12-113D-45A8-BBF0-2E6ED12E5F37}",
+  "verified_product_code": "{0D52D468-6576-40D1-9708-223859B3FE3E}",
+  "original_package_code": "{6D0456D3-3527-4029-892A-F4E2E4318308}",
+  "verified_package_code": "{F5EE123D-DBA0-427B-9CA2-0B04184D48D9}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "B5672AE770647CC8A3C7DF1E45D8DF6DD1090A2362A36BBF7CB97420724C5CF7",
+  "sha256_after": "401128356DA7ADC05F7039481F8FCB117D7216410476C4AD1CA1FB173A815FFB"
+}

@@ -32,7 +32,14 @@ $installer=New-Object -ComObject WindowsInstaller.Installer
 try{$result.related_msi_products=@($installer.RelatedProducts('{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}'))}finally{[Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)|Out-Null}
 $names=@('HLSDownloader.exe','HLSDownloaderEngine.exe','HLSDownloaderNativeHost.exe','HLSDownloaderPresenter.exe','HLSDownloaderUpdater.exe')
 $result.product_processes=@(Get-CimInstance Win32_Process | Where-Object {$_.Name -in $names} | Select-Object Name,ProcessId,ExecutablePath)
-foreach($path in @((Join-Path $env:LOCALAPPDATA 'HLSDownloader'),(Join-Path $env:APPDATA 'HLSDownloader'),(Join-Path $env:LOCALAPPDATA 'Programs\HLSDownloader'))){if(Test-Path -LiteralPath $path){$result.named_directories+=$path}}
+$result['checked_directories']=@()
+foreach($root in @($env:LOCALAPPDATA,$env:APPDATA,(Join-Path $env:LOCALAPPDATA 'Programs'),$env:ProgramFiles,${env:ProgramFiles(x86)}) | Where-Object {$_}){
+    foreach($name in @('HLSDownloader','HLS Downloader')){
+        $path=Join-Path $root $name
+        $result.checked_directories+=$path
+        if(Test-Path -LiteralPath $path){$result.named_directories+=$path}
+    }
+}
 $out=Join-Path $PSScriptRoot '..\results\host-state.json'
 $result | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $out -Encoding UTF8
 $result | ConvertTo-Json -Depth 7

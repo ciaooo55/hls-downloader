@@ -1,0 +1,31 @@
+{
+  "passed": true,
+  "candidate_sha256": "401128356da7adc05f7039481f8fcb117d7216410476c4ad1ca1fb173a815ffb",
+  "checks": [
+    {
+      "actual": 220,
+      "name": "running r20 upgrade, custom path and exact installed component hashes"
+    },
+    {
+      "actual": true,
+      "name": "paused task survives and resumes to original SHA256"
+    },
+    {
+      "actual": true,
+      "name": "actual installed Core and Native Host work with history beyond 4MiB"
+    },
+    {
+      "actual": true,
+      "name": "installed pending requests beyond 4MiB are read completely through bounded pages"
+    },
+    {
+      "actual": true,
+      "name": "installed Presenter constructs its confirmation component"
+    },
+    {
+      "actual": true,
+      "name": "candidate MSI registration and launcher removed"
+    }
+  ],
+  "scope": "Installed payload, running upgrade, paused checkpoint, large handoff history and uninstall; no desktop input or full button acceptance"
+}
