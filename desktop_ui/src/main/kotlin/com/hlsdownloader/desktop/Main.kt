@@ -20,6 +20,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -77,6 +78,9 @@ import androidx.compose.ui.input.pointer.isCtrlPressed as isPointerCtrlPressed
 import androidx.compose.ui.input.pointer.isShiftPressed as isPointerShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -118,6 +122,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -208,14 +214,14 @@ internal fun selectionAfterDrag(taskIds: List<String>, firstIndex: Int, lastInde
  *
  * 返回 null 表示"这个键不属于本表"，由调用方交还给焦点链上游。
  */
-internal enum class TaskTableKeyCommand { SelectAll, ClearSelection, DeleteSelection, OpenDetails, MoveSelection }
+internal enum class TaskTableKeyCommand { SelectAll, ClearSelection, DeleteSelection, ActivateSelection, MoveSelection }
 
 internal fun resolveTaskTableKeyCommand(key: Key, ctrl: Boolean, selectedCount: Int, taskCount: Int): TaskTableKeyCommand? = when {
     // Ctrl+A 不判断空列表：与原有行为一致——0 行时也消费该键并清空选择/锚点。
     ctrl && key == Key.A -> TaskTableKeyCommand.SelectAll
     key == Key.Escape && selectedCount > 0 -> TaskTableKeyCommand.ClearSelection
     key == Key.Delete && selectedCount > 0 -> TaskTableKeyCommand.DeleteSelection
-    key == Key.Enter && selectedCount > 0 -> TaskTableKeyCommand.OpenDetails
+    key == Key.Enter && selectedCount > 0 -> TaskTableKeyCommand.ActivateSelection
     (key == Key.DirectionDown || key == Key.DirectionUp) && taskCount > 0 -> TaskTableKeyCommand.MoveSelection
     else -> null
 }
@@ -287,6 +293,7 @@ private val mediaFileExtensions = setOf(
     "mkv", "mov", "mp3", "mp4", "mpd", "mpeg", "mpg", "ogg", "opus", "ts", "wav", "webm", "wma", "wmv",
 )
 private val executableFileExtensions = setOf("appx", "bat", "cmd", "com", "exe", "msi", "msix", "ps1")
+private val shellLaunchExtensions = executableFileExtensions + setOf("hta", "inf", "js", "jse", "lnk", "reg", "scr", "url", "vbe", "vbs", "wsf", "wsh")
 private fun taskFileExtension(task: TaskDto): String = task.filename
     .substringBefore('?')
     .substringAfterLast('/')
@@ -297,6 +304,14 @@ internal fun taskSupportsMediaActions(task: TaskDto): Boolean {
     if (task.resourceKind.lowercase() in setOf("hls", "dash", "live", "media", "video", "audio")) return true
     return taskFileExtension(task) in mediaFileExtensions
 }
+internal fun taskActivationAction(task: TaskDto): String? {
+    if (task.status.lowercase() !in setOf("completed", "done") || task.outputMissing) return null
+    if (taskSupportsMediaActions(task) && "play" in task.availableActions) return "play"
+    return "open".takeIf { it in task.availableActions && taskFileExtension(task) !in shellLaunchExtensions }
+}
+
+internal fun toolbarTaskTargets(all: List<DownloadTask>, visible: List<DownloadTask>, selected: Set<String>): List<DownloadTask> =
+    if (selected.isEmpty()) all else visible.filter { it.id in selected }
 internal fun taskMenuActions(task: TaskDto): List<String> {
     val mediaCapable = taskSupportsMediaActions(task)
     val base = task.availableActions.ifEmpty { listOf("start", "pause", "resume", "retry", "open", "delete") }
@@ -382,9 +397,6 @@ internal sealed interface UiSignal {
 private data class DestructiveRequest(val action: String, val taskIds: Set<String>)
 private data class MediaSourceSelection(val path: String = "", val url: String = "", val title: String = "")
 
-/** 任务表切精简列的可用宽度门槛，`taskColumnsForWidth` 与 `resolveTaskColumns` 共用。 */
-internal val TASK_TABLE_COMPACT_WIDTH = 930.dp
-
 /** 展开态侧栏宽度；折叠态见 [SidebarRail]。 */
 internal val SIDEBAR_WIDTH = 190.dp
 
@@ -401,33 +413,6 @@ internal val SIDEBAR_RAIL_WIDTH = 56.dp
  * 门槛之上折叠是纯损失（侧栏的计数和分组标题都还有位置放），所以只在门槛之下折叠。
  */
 internal val SIDEBAR_COLLAPSE_WIDTH = TASK_TABLE_COMPACT_WIDTH + SIDEBAR_WIDTH
-
-internal data class TaskColumns(val name: Dp, val progress: Dp, val status: Dp, val speed: Dp, val size: Dp, val actions: Dp, val compact: Boolean) {
-    val requiredWidth: Dp get() = name + progress + status + speed + size + actions + 30.dp
-}
-internal fun taskColumnsForWidth(width: Dp) = if (width < TASK_TABLE_COMPACT_WIDTH)
-    TaskColumns(maxOf(250.dp, width - 520.dp), 140.dp, 100.dp, 85.dp, 95.dp, 70.dp, true)
-else
-    TaskColumns(maxOf(330.dp, width - 600.dp), 180.dp, 110.dp, 100.dp, 110.dp, 70.dp, false)
-
-internal data class ResolvedTaskColumn(val id: String, val label: String, val width: Dp)
-internal data class ResolvedTaskColumns(val items: List<ResolvedTaskColumn>, val compact: Boolean) {
-    val requiredWidth: Dp get() = items.fold(30.dp) { total, item -> total + item.width }
-}
-
-internal fun resolveTaskColumns(width: Dp): ResolvedTaskColumns {
-    val compact = width < TASK_TABLE_COMPACT_WIDTH
-    val responsive = taskColumnsForWidth(width)
-    val items = listOf(
-        ResolvedTaskColumn("name", "名称", responsive.name),
-        ResolvedTaskColumn("progress", "进度", responsive.progress),
-        ResolvedTaskColumn("status", "状态", responsive.status),
-        ResolvedTaskColumn("speed", "速度", responsive.speed),
-        ResolvedTaskColumn("size", "大小", responsive.size),
-        ResolvedTaskColumn("actions", "操作", responsive.actions),
-    )
-    return ResolvedTaskColumns(items, compact)
-}
 
 internal fun sortTasks(tasks: List<DownloadTask>, raw: String): List<DownloadTask> {
     val (field, direction) = raw.split(':', limit = 2).let {
@@ -770,6 +755,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     // 反过来（取回的优先）会让弹窗停在打开那一刻的快照，因为事件更新的是 tasks 而不是这份兜底拷贝。
     var detailTaskFallback by remember { mutableStateOf<DownloadTask?>(null) }
     var settings by remember { mutableStateOf(EngineSettingsDto()) }
+    val columnLayoutWrites = remember { Mutex() }
     // 本地先行修改（深色模式/排序）的代数：异步加载返回时若代数已前进则丢弃结果，避免旧值回跳
     var settingsEpoch by remember { mutableIntStateOf(0) }
     var settingsSaveBusy by remember { mutableStateOf(false) }
@@ -1451,6 +1437,17 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         probeResult != null || torrentDraft != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
         (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
         preparedUpdate != null || powerPending != null || destructiveRequest != null || aboutDialog || noticesDialog || playerOverlayVisible
+    fun updateTaskColumns(layout: String) {
+        settingsEpoch++
+        settings = settings.copy(taskColumnLayout = layout)
+        scope.launch {
+            columnLayoutWrites.withLock {
+                runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("task_column_layout", layout) } }
+                    .onFailure { notice = UiSignal.Notice("error", "列宽已调整，但未能保存；重启后可能恢复原布局。${describeFailure(it, "列宽保存失败")}") }
+            }
+        }
+    }
+    val toolbarTargets = toolbarTaskTargets(tasks, visible, selected)
     CompositionLocalProvider(LocalWorkbenchPalette provides if (darkMode) darkPalette else lightPalette) {
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().focusRequester(shellFocus).focusable().onPreviewKeyEvent { playerOverlayVisible }.clip(RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).background(canvas).border(1.dp, border, RoundedCornerShape(if (maximized) 0.dp else Radius.lg)).then(if (modalVisible) Modifier.clearAndSetSemantics { } else Modifier)) {
@@ -1460,7 +1457,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 val clipboard = runCatching { withContext(Dispatchers.IO) { Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as? String } }.getOrNull().orEmpty()
                 newTaskUrl = clipboard.trim(); newTaskDialog = true
             }
-        }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(tasks.mapNotNull { task -> taskStartAction(task.source)?.let { task.id to it } }) }, { launchTaskActions(tasks.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
+        }, { batchDialog = true }, { harvestDialog = true }, { launchTaskActions(toolbarTargets.mapNotNull { task -> taskStartAction(task.source)?.let { task.id to it } }) }, { launchTaskActions(toolbarTargets.filter { "pause" in it.source.availableActions }.map { it.id to "pause" }) }, { mediaSourceDialog = "cast" }, { mediaSourceDialog = "tvbox" }, { extensionDialog = true }, { settingsDialog = true }, darkMode, {
             settingsEpoch++
             darkMode = !darkMode
             val requestedDarkMode = darkMode
@@ -1468,7 +1465,13 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                 runCatching { withContext(Dispatchers.IO) { EnginePipeClient.storeSetting("dark_mode", requestedDarkMode) } }
                     .onFailure { notice = UiSignal.Notice("error", "主题已切换，但未能保存；重启后可能恢复原主题。${describeFailure(it, "主题保存失败")}") }
             }
-        }, canStartAll = tasks.any { taskStartAction(it.source) != null }, canPauseAll = tasks.any { "pause" in it.source.availableActions }, onSearchFocus = { searchFocused = it })
+        }, canStart = toolbarTargets.any { taskStartAction(it.source) != null }, canPause = toolbarTargets.any { "pause" in it.source.availableActions },
+            selectedCount = selected.size,
+            canDeleteSelected = selected.isNotEmpty() && toolbarTargets.any { "delete" in taskMenuActions(it.source) },
+            onDeleteSelected = {
+                val ids = selectedTaskActionTargets(toolbarTargets.map { it.source }, "delete").mapTo(mutableSetOf()) { it.first }
+                if (ids.isNotEmpty()) destructiveRequest = DestructiveRequest("delete", ids)
+            }, onSearchFocus = { searchFocused = it })
         Row(Modifier.weight(1f).fillMaxWidth()) {
                 // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
                 // maxWidth 就是"窗口内容区宽度"，正是断点需要比较的量。
@@ -1495,6 +1498,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                         "update" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.checkUpdate(silent = false) } }.onFailure { notice = UiSignal.Notice("error", describeTaskActionFailure(it, "检查更新失败")) } }
                         "cancel_power" -> scope.launch { runCatching { withContext(Dispatchers.IO) { EnginePipeClient.cancelPowerAction() } }.onFailure { notice = UiSignal.Notice("error", describeFailure(it, "取消电源动作失败")) } }
                         "notices" -> noticesDialog = true
+                        "reset_columns" -> updateTaskColumns("")
                         "about" -> aboutDialog = true
                         "exit" -> onExit()
                     }
@@ -1535,6 +1539,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
                                 .onFailure { notice = UiSignal.Notice("error", "排序已切换，但未能保存；重启后可能恢复原排序。${describeFailure(it, "排序保存失败")}") }
                         }
                     },
+                    columnLayout = settings.taskColumnLayout,
+                    onColumnLayoutChange = ::updateTaskColumns,
                 ) { taskId, action -> performTaskAction(taskId, action) }
                 }
         }
@@ -2506,7 +2512,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
     }
 }
 
-@Composable private fun DesktopToolbar(query: String, onQuery: (String) -> Unit, onNew: () -> Unit, onPaste: () -> Unit, onBatch: () -> Unit, onHarvest: () -> Unit, onStartAll: () -> Unit, onPauseAll: () -> Unit, onCastMedia: () -> Unit, onPushMedia: () -> Unit, onExtension: () -> Unit, onSettings: () -> Unit, dark: Boolean, onTheme: () -> Unit, canStartAll: Boolean, canPauseAll: Boolean, onSearchFocus: (Boolean) -> Unit) {
+@Composable private fun DesktopToolbar(query: String, onQuery: (String) -> Unit, onNew: () -> Unit, onPaste: () -> Unit, onBatch: () -> Unit, onHarvest: () -> Unit, onStart: () -> Unit, onPause: () -> Unit, onCastMedia: () -> Unit, onPushMedia: () -> Unit, onExtension: () -> Unit, onSettings: () -> Unit, dark: Boolean, onTheme: () -> Unit, canStart: Boolean, canPause: Boolean, selectedCount: Int, canDeleteSelected: Boolean, onDeleteSelected: () -> Unit, onSearchFocus: (Boolean) -> Unit) {
     var toolsOpen by remember { mutableStateOf(false) }
     BoxWithConstraints(Modifier.height(52.dp).fillMaxWidth().background(rail)) {
         val compact = maxWidth < 1050.dp
@@ -2515,18 +2521,19 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
             val (icon, label, action) = when (id) {
                 "new" -> Triple(Icons.Outlined.Add, "新建", onNew)
                 "paste" -> Triple(Icons.Outlined.ContentPaste, "粘贴链接", onPaste)
-                "start_all" -> Triple(Icons.Outlined.PlayArrow, "全部开始", onStartAll)
-                "pause_all" -> Triple(Icons.Outlined.Pause, "全部暂停", onPauseAll)
+                "start_all" -> Triple(Icons.Outlined.PlayArrow, if (selectedCount > 0) "开始 / 继续" else "全部开始", onStart)
+                "pause_all" -> Triple(Icons.Outlined.Pause, if (selectedCount > 0) "暂停" else "全部暂停", onPause)
                 else -> return
             }
             val enabled = when (id) {
-                "start_all" -> canStartAll
-                "pause_all" -> canPauseAll
+                "start_all" -> canStart
+                "pause_all" -> canPause
                 else -> true
             }
             val hint = when {
                 id == "start_all" && !enabled -> "没有可开始、继续或重试的任务"
                 id == "pause_all" && !enabled -> "没有可暂停的任务"
+                selectedCount > 0 && id in setOf("start_all", "pause_all") -> "$label（已选 $selectedCount 项）"
                 else -> label
             }
             if (id == "new") ToolbarButton(icon, label, action, true)
@@ -2540,6 +2547,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
             Spacer(Modifier.width(12.dp))
             Action("start_all")
             Action("pause_all")
+            if (selectedCount > 0) ToolbarIcon(Icons.Outlined.DeleteOutline, "删除所选任务", enabled = canDeleteSelected, hint = "删除所选任务记录；保留已下载文件", action = onDeleteSelected)
             Box {
                 ToolbarButton(Icons.Outlined.MoreHoriz, "工具", { toolsOpen = true })
                 DropdownMenu(toolsOpen, { toolsOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) {
@@ -2815,15 +2823,12 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
                 Spacer(Modifier.width(if (compact) 8.dp else 16.dp))
                 Text("已选 ${selection.size} 项", color = blue, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold)
                 ToolbarIcon(Icons.Outlined.Close, "取消选择", action = onClearSelection)
-                SelectedAction(Icons.Outlined.FileDownload, "开始", "start")
-                SelectedAction(Icons.Outlined.Pause, "暂停", "pause")
                 SelectedAction(Icons.AutoMirrored.Outlined.DriveFileMove, "移动队列", "move_queue")
                 selection.singleOrNull()?.takeIf { taskSupportsMediaActions(it.source) }?.let { task ->
                     SelectedAction(Icons.Outlined.PlayCircle, taskPlayLabel(task.source), "play")
                     SelectedAction(Icons.Outlined.Cast, "投屏", "cast")
                     SelectedAction(Icons.Outlined.Tv, "TVBox 推送", "push_tvbox")
                 }
-                SelectedAction(Icons.Outlined.DeleteOutline, "删除", "delete")
             } else if (!compact) {
                 Spacer(Modifier.width(14.dp)); Text("选择任务后可进行批量操作", color = faint, fontSize = TypeScale.caption)
             }
@@ -2841,7 +2846,7 @@ private fun categoryIcon(category: TaskCategory): ImageVector = when (category) 
                 }
                 TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp), hoverColor = surface3, pressedColor = pressedSurface, modifier = Modifier.reportControlBounds("content_header.refresh")) { Icon(Icons.Outlined.Refresh, null, Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("刷新", fontSize = TypeScale.caption) }
             }
-            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = TypeScale.body) }, onClick = { menuOpen = false; onMore(action) }) } } }
+            Box { ToolbarIcon(Icons.Outlined.MoreHoriz, "更多操作") { menuOpen = true }; DropdownMenu(menuOpen, { menuOpen = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) { listOf("import" to "导入任务或种子", "export" to "导出任务列表", "reset_columns" to "恢复默认列宽", "update" to "检查更新", "cancel_power" to "取消完成后电源动作", "notices" to "通知中心", "about" to "关于 HLS Downloader", "exit" to "退出程序").forEach { (action, label) -> DropdownMenuItem(text = { Text(label, fontSize = TypeScale.body) }, onClick = { menuOpen = false; onMore(action) }) } } }
         }
     }
 }
@@ -2851,11 +2856,19 @@ private data class TaskContextMenuRequest(
     val position: IntOffset,
 )
 @OptIn(ExperimentalComposeUiApi::class)
-@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (String) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, hasTasks: Boolean, onClearFilters: () -> Unit, onSort: (String) -> Unit, onAction: (String, String) -> Unit) {
+@Composable private fun TaskTable(tasks: List<DownloadTask>, selected: Set<String>, appIcon: ImageBitmap?, taskSort: String, onSelection: (Set<String>) -> Unit, onDetails: (String) -> Unit, onDeleteSelection: () -> Unit, onQueueMove: (String, Int) -> Unit, modifier: Modifier = Modifier, onBatchAction: (Set<String>, String) -> Unit, hasTasks: Boolean, onClearFilters: () -> Unit, onSort: (String) -> Unit, columnLayout: String, onColumnLayoutChange: (String) -> Unit, onAction: (String, String) -> Unit) {
     var anchorId by remember { mutableStateOf<String?>(null) }
     var tableFocused by remember { mutableStateOf(false) }
     var contextMenu by remember { mutableStateOf<TaskContextMenuRequest?>(null) }
     val focusRequester = remember { FocusRequester() }
+    var columnDraft by remember(columnLayout) { mutableStateOf(columnLayout) }
+    val savedColumnLayout by rememberUpdatedState(columnLayout)
+    val commitColumnLayout by rememberUpdatedState(onColumnLayoutChange)
+    val density = LocalDensity.current
+    fun activate(task: DownloadTask) {
+        val action = taskActivationAction(task.source)
+        if (action == null) onDetails(task.id) else onAction(task.id, action)
+    }
     fun selectTask(id: String, shift: Boolean, toggle: Boolean): Set<String> {
         val next = selectionAfterClick(tasks.map { it.id }, selected, anchorId, id, shift, toggle)
         anchorId = id
@@ -2913,7 +2926,7 @@ private data class TaskContextMenuRequest(
                     }
                     TaskTableKeyCommand.ClearSelection -> { onSelection(emptySet()); anchorId = null; true }
                     TaskTableKeyCommand.DeleteSelection -> { onDeleteSelection(); true }
-                    TaskTableKeyCommand.OpenDetails -> { tasks.firstOrNull { it.id in selected }?.let { onDetails(it.id) }; true }
+                    TaskTableKeyCommand.ActivateSelection -> { tasks.firstOrNull { it.id in selected }?.let(::activate); true }
                     TaskTableKeyCommand.MoveSelection -> {
                         val current = tasks.indexOfFirst { it.id == anchorId }.let { if (it < 0) 0 else it }
                         val next = (current + if (event.key == Key.DirectionDown) 1 else -1).coerceIn(0, tasks.lastIndex)
@@ -2923,7 +2936,8 @@ private data class TaskContextMenuRequest(
                 }
             }.border(1.dp, if (tableFocused) blue.copy(alpha = .7f) else Color.Transparent)
     ) {
-        val columns = resolveTaskColumns(maxWidth)
+        val viewportWidth = maxWidth
+        val columns = resolveTaskColumns(viewportWidth, columnDraft)
         val tableWidth = maxOf(maxWidth, columns.requiredWidth)
         val horizontalState = rememberScrollState()
         Box(Modifier.fillMaxSize().padding(bottom = if (tableWidth > maxWidth) 9.dp else 0.dp).horizontalScroll(horizontalState)) {
@@ -2931,14 +2945,43 @@ private data class TaskContextMenuRequest(
                 Row(Modifier.fillMaxWidth().height(36.dp).background(surface3).border(BorderStroke(1.dp, border)).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
                     columns.items.forEach { column ->
                         key(column.id) {
+                            val currentColumn by rememberUpdatedState(column)
+                            Box(Modifier.width(column.width).height(36.dp)) {
                             if (column.id == "name") {
-                                Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
+                                Row(Modifier.fillMaxSize().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(tasks.isNotEmpty() && selected.size == tasks.size, { checked -> onSelection(if (checked) tasks.mapTo(mutableSetOf()) { it.id } else emptySet()) }, Modifier.size(18.dp), accessibilityLabel = "选择全部任务")
                                     Spacer(Modifier.width(8.dp))
                                     TaskHeader(column.label, Modifier.weight(1f), column.id, taskSort, onSort)
                                 }
                             } else {
-                                TaskHeader(column.label, Modifier.width(column.width), column.id, taskSort, onSort)
+                                TaskHeader(column.label, Modifier.fillMaxSize().padding(end = 8.dp), column.id, taskSort, onSort)
+                            }
+                            Box(
+                                Modifier.align(Alignment.CenterEnd).width(8.dp).fillMaxHeight()
+                                    .pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR)))
+                                    .semantics { contentDescription = "${column.label}列宽；拖动或用左右方向键调整" }
+                                    .onPreviewKeyEvent { event ->
+                                        if (event.type != KeyEventType.KeyDown || event.key !in setOf(Key.DirectionLeft, Key.DirectionRight)) false
+                                        else {
+                                            val delta = if (event.key == Key.DirectionRight) 8.dp else (-8).dp
+                                            columnDraft = resizeTaskColumnLayout(columnDraft, viewportWidth, column.id, currentColumn.width + delta)
+                                            commitColumnLayout(columnDraft)
+                                            true
+                                        }
+                                    }.focusable()
+                                    .pointerInput(column.id, density, viewportWidth) {
+                                        var dragWidth = 0f
+                                        detectHorizontalDragGestures(
+                                            onDragStart = { dragWidth = currentColumn.width.value },
+                                            onDragCancel = { columnDraft = savedColumnLayout },
+                                            onDragEnd = { if (columnDraft != savedColumnLayout) commitColumnLayout(columnDraft) },
+                                        ) { change, delta ->
+                                            change.consume()
+                                            dragWidth = (dragWidth + delta / density.density).coerceIn(if (column.id == "name") 160f else 48f, 800f)
+                                            columnDraft = resizeTaskColumnLayout(columnDraft, viewportWidth, column.id, dragWidth.dp)
+                                        }
+                                    }, contentAlignment = Alignment.Center,
+                            ) { Box(Modifier.width(1.dp).height(16.dp).background(border)) }
                             }
                         }
                     }
@@ -3086,6 +3129,7 @@ private data class TaskContextMenuRequest(
                                 taskSort == "queue:asc",
                                 task.id in selected,
                                 { shift, toggle -> if (System.nanoTime() >= suppressRowClickUntilNanos) { focusRequester.requestFocus(); selectTask(task.id, shift, toggle) } },
+                                { activate(task) },
                                 { onDetails(task.id) },
                                 { delta -> onQueueMove(task.id, delta) },
                                 { position ->
@@ -3224,7 +3268,7 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
     }
 }
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
-@Composable private fun TaskRow(task: DownloadTask, columns: ResolvedTaskColumns, queueOrder: Boolean, isSelected: Boolean, select: (Boolean, Boolean) -> Unit, onDetails: () -> Unit, onQueueMove: (Int) -> Unit, onContextMenu: (IntOffset) -> Unit, onAction: (String) -> Unit) {
+@Composable private fun TaskRow(task: DownloadTask, columns: ResolvedTaskColumns, queueOrder: Boolean, isSelected: Boolean, select: (Boolean, Boolean) -> Unit, onActivate: () -> Unit, onDetails: () -> Unit, onQueueMove: (Int) -> Unit, onContextMenu: (IntOffset) -> Unit, onAction: (String) -> Unit) {
     var overflowOpen by remember { mutableStateOf(false) }
     var rowWindowOrigin by remember { mutableStateOf(Offset.Zero) }
     var rowSize by remember { mutableStateOf(IntSize.Zero) }
@@ -3260,7 +3304,7 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
             if (!isSelected) select(false, false)
             onContextMenu(contextMenuWindowPosition(rowWindowOrigin, rowSize, it.changes.firstOrNull()?.position ?: Offset.Zero))
         }
-    }.combinedClickable(interactionSource = rowInteraction, indication = null, onDoubleClick = { select(false, false); onDetails() }, onClick = { select(clickShift, clickCtrl) }).padding(horizontal = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+    }.combinedClickable(interactionSource = rowInteraction, indication = null, onDoubleClick = { select(false, false); onActivate() }, onClick = { select(clickShift, clickCtrl) }).padding(horizontal = 11.dp), verticalAlignment = Alignment.CenterVertically) {
         columns.items.forEach { column ->
             key(column.id) {
                 when (column.id) {

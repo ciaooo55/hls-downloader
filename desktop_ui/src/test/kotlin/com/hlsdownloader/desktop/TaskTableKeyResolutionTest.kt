@@ -45,8 +45,8 @@ class TaskTableKeyResolutionTest {
     }
 
     @Test
-    fun enter_opens_details_only_when_something_is_selected() {
-        assertEquals(TaskTableKeyCommand.OpenDetails, resolveTaskTableKeyCommand(Key.Enter, ctrl = false, selectedCount = 1, taskCount = 12))
+    fun enter_activates_only_when_something_is_selected() {
+        assertEquals(TaskTableKeyCommand.ActivateSelection, resolveTaskTableKeyCommand(Key.Enter, ctrl = false, selectedCount = 1, taskCount = 12))
         assertNull(resolveTaskTableKeyCommand(Key.Enter, ctrl = false, selectedCount = 0, taskCount = 12))
     }
 

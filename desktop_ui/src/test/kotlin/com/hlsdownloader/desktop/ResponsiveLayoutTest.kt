@@ -9,6 +9,32 @@ import kotlin.test.assertTrue
 
 class ResponsiveLayoutTest {
     @Test
+    fun resizing_preserves_hidden_columns_order_and_saved_width_across_viewports() {
+        val layout = "name:420:1,size:110:1,progress:180:1,status:100:1,speed:85:0,actions:70:0"
+        val resized = resizeTaskColumnLayout(layout, 834.dp, "progress", 220.dp)
+        assertTrue(resized.contains("speed:85:0"))
+        assertTrue(resized.contains("actions:70:0"))
+        listOf(834.dp, 1600.dp).forEach { viewport ->
+            val columns = resolveTaskColumns(viewport, resized)
+            assertEquals(listOf("name", "size", "progress", "status"), columns.items.map { it.id })
+            assertEquals(420.dp, columns.items.first().width)
+            assertEquals(220.dp, columns.items.first { it.id == "progress" }.width)
+        }
+        val clamped = resizeTaskColumnLayout(resized, 834.dp, "name", 10.dp)
+        assertEquals(160.dp, resolveTaskColumns(834.dp, clamped).items.first().width)
+        val wide = resizeTaskColumnLayout(clamped, 834.dp, "progress", 5000.dp)
+        assertEquals(800.dp, resolveTaskColumns(834.dp, wide).items.first { it.id == "progress" }.width)
+        assertEquals(resolveTaskColumns(834.dp), resolveTaskColumns(834.dp, ""))
+    }
+
+    @Test
+    fun corrupt_saved_columns_keep_the_automatic_layout_usable() {
+        listOf("name:320:0", "unknown:300:1", "name:300:1,name:400:1", "name:NaN:1").forEach { raw ->
+            assertEquals(resolveTaskColumns(834.dp), resolveTaskColumns(834.dp, raw))
+        }
+    }
+
+    @Test
     fun compact_task_columns_fit_the_1024_workbench_content_area() {
         val columns = taskColumnsForWidth(834.dp)
         assertTrue(columns.compact)

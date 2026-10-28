@@ -5,8 +5,34 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class TaskIndexTest {
+    @Test
+    fun toolbar_actions_never_expand_a_hidden_or_ineligible_selection_to_all_tasks() {
+        val active = downloadTask(TaskDto("active", "active.bin", status = "downloading", availableActions = listOf("pause", "delete")))
+        val paused = downloadTask(TaskDto("paused", "paused.bin", status = "paused", availableActions = listOf("resume", "delete")))
+        val hidden = downloadTask(TaskDto("hidden", "hidden.bin", status = "failed", availableActions = listOf("retry", "delete")))
+        val all = listOf(active, paused, hidden)
+        val visible = listOf(active, paused)
+        val selected = toolbarTaskTargets(all, visible, setOf("paused", "hidden"))
+        assertEquals(listOf("paused" to "resume"), selectedTaskActionTargets(selected.map { it.source }, "start"))
+        assertEquals(emptyList(), selectedTaskActionTargets(selected.map { it.source }, "pause"))
+        assertEquals(emptyList(), toolbarTaskTargets(all, visible, setOf("hidden")))
+        assertEquals(all, toolbarTaskTargets(all, visible, emptySet()))
+    }
+
+    @Test
+    fun completed_media_activates_the_embedded_player_while_unfinished_missing_and_executable_items_keep_details() {
+        val media = TaskDto("media", "movie.mp4", status = "completed", availableActions = listOf("open", "play"))
+        assertEquals("play", taskActivationAction(media))
+        assertNull(taskActivationAction(media.copy(status = "downloading")))
+        assertNull(taskActivationAction(media.copy(outputMissing = true)))
+        assertNull(taskActivationAction(media.copy(filename = "setup.exe", availableActions = listOf("open", "launch"))))
+        assertNull(taskActivationAction(media.copy(filename = "script.vbs", availableActions = listOf("open"))))
+        assertEquals("open", taskActivationAction(media.copy(filename = "manual.pdf", availableActions = listOf("open"))))
+    }
+
     private fun task(id: String) = downloadTask(TaskDto(
         id = id, filename = "$id.mp4", status = "downloading",
     ))
