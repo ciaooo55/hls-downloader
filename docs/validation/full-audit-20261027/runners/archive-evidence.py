@@ -85,6 +85,14 @@ files += [(recovery_source/name, Path('core-recovery')/name) for name in (
     'paged-ui-build.txt', 'paged-ui-build-fixed.txt',
     'input/installer.json', 'input/components.json', 'input/BUILD-PROVENANCE.json',
 )]
+workbench_source = repo/'.tool-cache/workbench-interaction-20261028'
+files += [(path, Path('workbench-interaction')/path.relative_to(workbench_source))
+          for path in sorted((workbench_source/'reports').glob('*'))
+          if path.suffix in ('.json', '.txt', '.png')]
+files += [(workbench_source/name, Path('workbench-interaction')/name) for name in (
+    'ui-build-tests.txt', 'ui-build-tests-retry.txt', 'rollback-contract.txt',
+    'input/installer.json', 'input/components.json', 'input/BUILD-PROVENANCE.json',
+)]
 for path, relative in files:
     if not path.is_file():
         continue

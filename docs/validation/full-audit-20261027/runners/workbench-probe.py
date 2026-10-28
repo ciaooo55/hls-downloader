@@ -138,15 +138,18 @@ try:
         ui('action', body={'type': 'select_task', 'index': 0})
         wait(lambda: ui('state')['selectedCount'] == 1, 'Internal selection did not update')
 
+        capture_state = {}
         def capture():
-            data = ui('screenshot?mode=paint', raw=True)
-            (reports/f'workbench-{label}.png').write_bytes(data)
-            with Image.open(io.BytesIO(data)) as image:
-                counts = sorted((n for n, _ in image.convert('RGB').getcolors(image.width*image.height)), reverse=True)
-                return image.width*image.height-sum(counts[:2]) > 500
+            for mode, endpoint in (('screen', 'screenshot'), ('paint', 'screenshot?mode=paint')):
+                data = ui(endpoint, raw=True)
+                (reports/f'workbench-{label}-{mode}.png').write_bytes(data)
+                with Image.open(io.BytesIO(data)) as image:
+                    counts = sorted((n for n, _ in image.convert('RGB').getcolors(image.width*image.height)), reverse=True)
+                    capture_state[mode+'_nonblank'] = image.width*image.height-sum(counts[:2]) > max(500, image.width*image.height*.005)
+            return any(capture_state.values())
 
-        wait(capture, 'Paint capture stayed blank', 20)
-        result['captures'].append({'label': label, 'window': ui('window'), 'state': ui('state')})
+        wait(capture, 'Screen and paint captures stayed blank', 20)
+        result['captures'].append({'label': label, 'window': ui('window'), 'state': ui('state'), 'capture': dict(capture_state)})
         stop(proc)
     core({'type': 'store_settings', 'request_id': 7, 'values': {'task_column_layout': ''}})
     stop(engine)

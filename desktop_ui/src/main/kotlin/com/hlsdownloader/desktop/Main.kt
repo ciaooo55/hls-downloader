@@ -2946,6 +2946,7 @@ private data class TaskContextMenuRequest(
                     columns.items.forEach { column ->
                         key(column.id) {
                             val currentColumn by rememberUpdatedState(column)
+                            var resizeFocused by remember { mutableStateOf(false) }
                             Box(Modifier.width(column.width).height(36.dp)) {
                             if (column.id == "name") {
                                 Row(Modifier.fillMaxSize().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2968,7 +2969,7 @@ private data class TaskContextMenuRequest(
                                             commitColumnLayout(columnDraft)
                                             true
                                         }
-                                    }.focusable()
+                                    }.onFocusChanged { resizeFocused = it.isFocused }.focusable()
                                     .pointerInput(column.id, density, viewportWidth) {
                                         var dragWidth = 0f
                                         detectHorizontalDragGestures(
@@ -2981,7 +2982,7 @@ private data class TaskContextMenuRequest(
                                             columnDraft = resizeTaskColumnLayout(columnDraft, viewportWidth, column.id, dragWidth.dp)
                                         }
                                     }, contentAlignment = Alignment.Center,
-                            ) { Box(Modifier.width(1.dp).height(16.dp).background(border)) }
+                            ) { Box(Modifier.width(if (resizeFocused) 2.dp else 1.dp).height(16.dp).background(if (resizeFocused) blue else border)) }
                             }
                         }
                     }
