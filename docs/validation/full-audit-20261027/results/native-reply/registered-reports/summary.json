@@ -1,0 +1,55 @@
+{
+  "passed": true,
+  "finished": true,
+  "phase": "edge-reply-recovery",
+  "host_install_performed": false,
+  "browsers": [
+    "edge"
+  ],
+  "checks": [
+    {
+      "name": "edge-reply-recovery",
+      "passed": true
+    }
+  ],
+  "component_reference_msi_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+  "installer_validation_performed": false,
+  "components": [
+    {
+      "sha256": "9b1904d0bb862f46e0394b52e9fa2785aac6f49efc23753968955d282afedabb",
+      "name": "HLSDownloaderNativeHost.exe"
+    },
+    {
+      "sha256": "4b079efd65cc4fd1e58bef4497aa513936bf85b38e04f9703b13224b2b8f3c23",
+      "name": "HLSDownloaderEngine.exe"
+    },
+    {
+      "sha256": "2763617883fc9ca1f4c8b5c26a8c8aefaa9bb05027adde89cb5f2e5834c213db",
+      "name": "HLSDownloaderPresenter.exe"
+    },
+    {
+      "sha256": "02c6aa0e6e624411a9f19b0360a7865ab15908e26024510e5c38a9c08362c35a",
+      "name": "vcruntime140.dll"
+    }
+  ],
+  "invocation": {
+    "executable": "C:\\QAWork\\python\\python.exe",
+    "arguments": [
+      "C:\\QARunners\\native-reply-probe.py",
+      "--browser",
+      "edge",
+      "--extension",
+      "C:\\QAExtensions\\chrome-mv3",
+      "--binary",
+      "\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\"",
+      "--driver",
+      "C:\\QAFollowup\\edge-driver\\msedgedriver.exe",
+      "--proxy",
+      "C:\\QAWork\\NativeReplyProxy.exe",
+      "--state",
+      "C:\\QAWork\\edge-state",
+      "--report",
+      "C:\\QAReports\\edge.json"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "status": "blocked_by_automatic_approval",
+  "path": "artifacts/native-reply-20261028",
+  "reason": "blocked by policy; no further reason supplied",
+  "deletion_attempts": 1,
+  "deletion_not_retried": true,
+  "files": 44,
+  "directories": 10,
+  "bytes": 77473,
+  "reparse_points": 0,
+  "task_sandbox_stopped": true,
+  "evidence_archive": "docs/validation/full-audit-20261027/results/native-reply/MANIFEST.json",
+  "previously_refused_targets_not_retried": true,
+  "host_install_performed": false,
+  "registry_writes_performed_on_host": false,
+  "desktop_delivery_updated": false,
+  "release_created": false
+}

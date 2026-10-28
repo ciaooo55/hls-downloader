@@ -1,0 +1,246 @@
+{
+  "base_commit": "1d309cad33ad484809b1efd1b842042ee6f255cc",
+  "production_files": [
+    "extension/lib/nativeBridge.ts"
+  ],
+  "production_sha256": "b614e006f5115cd8d395686e0b12179de9c33f980575d5c2a4045ad19fce69cb",
+  "firefox": {
+    "report": "firefox-registered-reports/firefox.json",
+    "guest_finished": true,
+    "zero_download_item": true
+  },
+  "edge": {
+    "report": "registered-reports/edge.json",
+    "probe_passed": true,
+    "guest_finished": false,
+    "guest_stopped_after_probe": "The wrapper was still waiting; duplicate driver.quit was removed before the Firefox run.",
+    "zero_download_item": false
+  },
+  "misreported_retry": {
+    "report": "bridge-reports/edge.json",
+    "reason": "Core startup repaired the Native Host registry, so the successful retry bypassed the proxy. CDP bridge_trace captured the matching request ID, retry budget and successful same-handoff reply."
+  },
+  "validation_scope": "One injected Core reply error after durable offer; local attachment GET navigation; headless browser and actual r22 Host/Core. No desktop input, host installation or installer validation.",
+  "files": [
+    {
+      "path": "accept.wsb",
+      "original_sha256": "5e75e8144867255691429c0e2fe36f94ec2d5df89a2b097889d2c9a77d76a29c",
+      "archived_sha256": "44a7bd01cd0c25b291740c4a356d950d2fc68b0c71dd198d29d29467026675d8"
+    },
+    {
+      "path": "bridge-reports/edge-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "bridge-reports/edge-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "bridge-reports/edge.json",
+      "original_sha256": "0640a4ad9a46d2f63028823e1b6b18a98fe46a05c8a16490ee9dfce6bb6dd309",
+      "archived_sha256": "d32fdcb0e1ae93d1cab7bda311a81c832cdf6fd671fe19ea2c30d05db28f6cd3"
+    },
+    {
+      "path": "bridge-reports/summary.json",
+      "original_sha256": "917106a6d5be2473573ff00776f49f0bcda487431737afc20c4b8549a51172c3",
+      "archived_sha256": "f38cafe46e7a791b2de301661e64fac82380ba0a282138f69558cad5046cb17d"
+    },
+    {
+      "path": "browser-reports/firefox-install.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "browser-reports/firefox-install.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "browser-reports/firefox-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "browser-reports/firefox-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "browser-reports/firefox.json",
+      "original_sha256": "1e14cc1c8a7eaa5aa5cb482d5ef0fb6942f65018b2a53081edd68f7a96efaa43",
+      "archived_sha256": "a0ba56be5ec2912ea23976e3d74bb795cd5c7fd88cd9bb9ad13e7d9ad1bd82da"
+    },
+    {
+      "path": "browser-reports/summary.json",
+      "original_sha256": "f0fa575c96720cc9c6110abfb3dfa4ced1384f2af1a59876de13d5767fd0942d",
+      "archived_sha256": "95bb32fd5004d77376d0ed2687e5b620225db83956606264a0976d48036c8b3b"
+    },
+    {
+      "path": "crt-reports/firefox-install.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "crt-reports/firefox-install.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "crt-reports/firefox-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "crt-reports/firefox-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "crt-reports/firefox.json",
+      "original_sha256": "7e0b2fddb7dd2d78661f4083057a87b4607e5a988fb427da1f1532c4e3833a17",
+      "archived_sha256": "2e7efbcf8fcc11edaaf7f6855ca9e8da7c640eb5d40c5af659841dfde8b19ab6"
+    },
+    {
+      "path": "crt-reports/summary.json",
+      "original_sha256": "a0d86a51134d7530e51e8741e98d5855b27ec99b8705778697b6c1e0b4c38d81",
+      "archived_sha256": "9b4ff63a641512ae3b4b39e9561490a30c18bcc395cb4c51422269f5acc37101"
+    },
+    {
+      "path": "diagnostic-reports/firefox-install.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "diagnostic-reports/firefox-install.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "diagnostic-reports/summary.json",
+      "original_sha256": "02dd8b3cd5e33581623dc72e8d9fc037eeb10cd1e4e8549ea994799ceceb240f",
+      "archived_sha256": "ee6cd2faba03570835b1ac070e501789b63c6d69f079c8bac4dd0d54f45691be"
+    },
+    {
+      "path": "edge-reports/edge-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "edge-reports/edge-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "edge-reports/edge.json",
+      "original_sha256": "ef3e85149bb5954e0b9bba0aecebbbc72f86622b7b2ed328de9192e50705467d",
+      "archived_sha256": "64ac9e073ad4f9f4a37393bcd6448a34ef7f80fa9de602e18b6842a4414c6147"
+    },
+    {
+      "path": "edge-reports/summary.json",
+      "original_sha256": "917106a6d5be2473573ff00776f49f0bcda487431737afc20c4b8549a51172c3",
+      "archived_sha256": "f38cafe46e7a791b2de301661e64fac82380ba0a282138f69558cad5046cb17d"
+    },
+    {
+      "path": "firefox-registered-reports/firefox-install.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "firefox-registered-reports/firefox-install.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "firefox-registered-reports/firefox-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "firefox-registered-reports/firefox-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "firefox-registered-reports/firefox.json",
+      "original_sha256": "18f3f6a2b32e43d87b32f8d713ca20cbf4c0bac7eea2da5eaaec551d1678ce5b",
+      "archived_sha256": "206356823184ae5792ba112fac4b9b7cf75b693365554cc3fbdc5e3985050cd4"
+    },
+    {
+      "path": "firefox-registered-reports/summary.json",
+      "original_sha256": "2f45a5d2d898fc70a1990b7ce5f874ef57d2135839bee10fe7f33781128aee70",
+      "archived_sha256": "e3103e6cdac3c9f3a4163da608c0eb53b0ff7770337a219f731bf92648f4cf75"
+    },
+    {
+      "path": "protocol-reports/firefox-install.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "protocol-reports/firefox-install.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "protocol-reports/summary.json",
+      "original_sha256": "e394ea5a2bb9bfe10d674c2cd215c6c52c594b4324d7073746747cf1dab74720",
+      "archived_sha256": "acb194a75d7af4e39741d434121e29016bce92703a3ed44a677a332f271caa30"
+    },
+    {
+      "path": "registered-reports/edge-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "registered-reports/edge-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "registered-reports/edge.json",
+      "original_sha256": "3b88ee65153feae42a8c5599c1e5aebb4b7c6e8a0648ef9bb94c66abe777cdb6",
+      "archived_sha256": "7b8df462bfcda64b363c1e10820b4526d1426236e2781d8075543a5beba02a49"
+    },
+    {
+      "path": "registered-reports/summary.json",
+      "original_sha256": "b349fe11cb49ae601ba50aa33c3ca0dc8a107fce1bc8110be90cfb859e530854",
+      "archived_sha256": "2ccdf462950e1d009a3151d03e21c1c120700ec6d502dfcd2a3ab80945158a25"
+    },
+    {
+      "path": "reports/install.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reports/install.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reports/summary.json",
+      "original_sha256": "0f3b8187f06f41ef26fb02382db83cccd1b982a336653c565ef78511d129c815",
+      "archived_sha256": "7e55eaade5b5036361f8301639e3a8832804a55ff01d053ab77568c894df57f6"
+    },
+    {
+      "path": "wire-reports/edge-reply-recovery.stderr.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "wire-reports/edge-reply-recovery.stdout.txt",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "wire-reports/edge.json",
+      "original_sha256": "5732b5231f60a40fd9c7ece206722dd21b7b9808dddba25efbdb035647335cf8",
+      "archived_sha256": "2c03661b2e929e86f000d334e56730a4dca6c48c53279ed4d4135f9cd109a046"
+    },
+    {
+      "path": "wire-reports/summary.json",
+      "original_sha256": "917106a6d5be2473573ff00776f49f0bcda487431737afc20c4b8549a51172c3",
+      "archived_sha256": "f38cafe46e7a791b2de301661e64fac82380ba0a282138f69558cad5046cb17d"
+    }
+  ]
+}

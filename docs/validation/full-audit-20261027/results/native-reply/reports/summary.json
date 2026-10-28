@@ -1,0 +1,10 @@
+{
+  "passed": false,
+  "finished": true,
+  "phase": "install",
+  "host_install_performed": false,
+  "checks": [],
+  "msi_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+  "error": "install timed out",
+  "position": "At C:\\QARunners\\native-reply-guest.ps1:17 char:85\r\n+ ... ut)) { Stop-Process -Id $process.Id -Force; throw \"$name timed out\" }\r\n+                                                 ~~~~~~~~~~~~~~~~~~~~~~~"
+}

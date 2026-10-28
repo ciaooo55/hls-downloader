@@ -188,3 +188,21 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 宿主精确只读复核仍未发现本产品的卸载项、关联MSI、Native Host子键、产品进程或列明默认目录；没有在宿主安装产品或写其注册表。未完成门槛仍包括全入口接管、首次新库冷启动、活动慢尾分担、用户原站错误现场、完整原生UI矩阵及三产品性能对照；云端与实体投屏仍排除。不能将本轮任务工作台改进称为全部功能已完成。
 
 本轮沙盒与构建进程已结束，221份归档证据哈希核对通过。100%/150%由JVM的`sun.java2d.uiScale=1.0/1.5`提供并核对窗口返回的实际缩放值，没有修改宿主或沙盒的系统缩放设置。清理仍未完成：本轮独立缓存`.tool-cache/workbench-interaction-20261028`含86文件、3子目录、418397621字节（约399MiB），唯一一次精确删除被自动审批拒绝，仅返回`blocked by policy`，没有重试或更换删除方式，见[清理结果](results/workbench-cleanup.json)。此前拒绝目标均未重试。复用的`full-audit-20261027`仅只读刷新库存为5577文件、2376子目录、2699610330字节并更新当前桌面MSI哈希，见[库存](results/cleanup.json)；没有执行其删除脚本。不能声称只剩源码或整机绝对干净。
+
+## 2026-10-28：先收敛浏览器交接的回执故障
+
+从干净的`1d309cad`、一个`main`和一个worktree开始。本轮首先读取AB浏览器插件固定源码`658a0c70188d78033f478ba51c102a273322166f`的[公共接管链路](https://github.com/amir1376/ab-download-manager-browser-integration/blob/658a0c70188d78033f478ba51c102a273322166f/src/linkgrabber/DownloadLinkInterceptor.ts)、[MV2阻断实现](https://github.com/amir1376/ab-download-manager-browser-integration/blob/658a0c70188d78033f478ba51c102a273322166f/src/linkgrabber/Manifest2DownloadLinkInterceptor.ts)和[MV3实现](https://github.com/amir1376/ab-download-manager-browser-integration/blob/658a0c70188d78033f478ba51c102a273322166f/src/linkgrabber/Manifest3DownloadLinkInterceptor.ts)。MV3实现不返回阻断结果，公共链路另用`downloads.onCreated`取消浏览器项；这不能证明AB在Chromium所有入口均不创建DownloadItem。[Chrome官方文档](https://developer.chrome.com/docs/extensions/reference/api/webRequest)仍限制普通MV3扩展使用`webRequestBlocking`；[Firefox响应事件](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/webRequest/onHeadersReceived)可使用异步阻断。IDM为闭源产品，本轮没有其内部实现证据。
+
+确认缺陷位于`NativeBridge.handleMessage`：断线、超时已有调用方限定的重试，但Host正常返回JSON、其中报告Core管道读写失败时，却直接结束请求。特别是Core先持久化交接、回执丢失的情形，会把未知结果送到调用方的失败/浏览器回退路径。修复只让这类管道错误使用既定重试预算，原消息、`__request_id`和`client_request_id`保持一致；不会重建offer或增加重试上限。没有重试预算的字幕音频等操作仍不重放，明确业务拒绝也不重试。生产代码无新依赖、无Core协议变化。
+
+先补回归再修复：原代码23项中21通过、2失败，失败分别为已落库offer不重新握手和管道错误未使用预算；修复后NativeBridge、下载所有权、接管三个文件56项通过。随后仅新增“明确业务拒绝不可重试”的保护，再运行NativeBridge文件24项通过，合计57项不同用例。`wxt prepare`、TypeScript检查以及Chromium/Firefox生产构建通过。没有把单元测试当成浏览器实测，也没有重建未修改的Core和桌面程序。
+
+沙盒验证使用专用[回执故障代理](runners/NativeReplyProxy.cs)向真实Host发送offer、等待其落库成功，再把首个回执替换为Core管道错误；[后台浏览器探针](runners/native-reply-probe.py)核对重试消息哈希、交接和任务数量、浏览器创建事件、成品SHA256。探针只通过协议和无头浏览器脚本导航，不操作桌面鼠标、键盘或产品窗口。此用例只证明附件GET导航的单次回执故障恢复，不证明真实点击、POST、Blob、连续回执丢失或所有站点接管。首轮MSI安装和部分Firefox安装超时，失败保留且不计通过。后续改用与r22安装包清单一致的Host、Core、Presenter及CRT，哈希逐项核对，不把运行组件说成安装验收。
+
+最初探针在第二条代理日志缺失时误报“不重试”。[逐帧与浏览器调试证据](results/native-reply/bridge-reports/edge.json)实际捕获了同请求ID的错误、预算从1变0和同交接的成功回执。原因是Core首次启动自动修复Native Host注册，重连绕过了代理。修正夹具为先启动Core、等待IPC就绪，再登记代理；没有为此修改产品注册行为或延长重试超时。另移除探针退出时重复的`driver.quit()`，避免已关闭驱动的二次连接等待。
+
+修正后的[Edge 156记录](results/native-reply/registered-reports/edge.json)及[Firefox 158记录](results/native-reply/firefox-registered-reports/firefox.json)均确认：两次offer的消息SHA和`client_request_id`一致，返回同一交接，Core只有一个任务，1MiB成品SHA256为`fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83`。Firefox的`downloads.onCreated`事件为0，Edge为1且最终项目已清理，后者明确不满足零DownloadItem标准。Edge探针已完成并保存成功结果，但外层脚本仍等待时停止沙盒，不能将其整轮收尾标为完成；移除重复退出后，Firefox外层脚本正常结束、`passed=true,finished=true`。44份原始成功/失败记录已归档并逐项核对[哈希清单](results/native-reply/MANIFEST.json)。
+
+**本轮尚未形成新发布**，r22公开成品不包含这项源码修改。全入口零DownloadItem、重试耗尽后的所有权恢复、原站直播/HLS现场、冷启动、活动慢尾和完整UI/性能矩阵继续保持未完成；不以这项修复宣称计划已全部完成。沙盒的最终结果与本轮资源收尾另见后续记录。
+
+本轮沙盒已停止。[宿主精确只读复核](results/host-state.json)没有发现列明的产品安装、MSI、Native Host子键、产品进程及默认目录；未在宿主安装或写产品注册表。清理未完成：删除本轮`artifacts/native-reply-20261028`的唯一一次命令被自动审批拒绝，仅返回`blocked by policy`。随后只读库存为44文件、10目录、77473字节，无重解析点；此前被拒绝的构建缓存及旧包均未重试。见[清理记录](results/native-reply/cleanup.json)。桌面及GitHub的r22成品没有替换，不把源码修复等同用户正在使用的插件已更新。

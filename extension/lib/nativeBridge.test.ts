@@ -350,6 +350,55 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
+  it('recovers an admitted offer after a Core reply failure without creating another handoff', async () => {
+    const first = new FakePort(), second = new FakePort()
+    const bridge = new NativeBridge(vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second))
+    const admitted = new Map<string, string>()
+    const resource = { client_request_id: 'download:original', url: 'https://site.test/export' }
+    const request = bridge.request({ op: 'offer', resource }, 30_000, 1)
+    try {
+      // Core persisted the first offer, but its pipe reply never reached the Host.
+      admitted.set(resource.client_request_id, 'one-handoff')
+      first.onMessage.emit({ ok: false, error: 'Core pipe read: connection closed',
+        __request_id: first.posted[0].__request_id })
+      expect(second.posted).toHaveLength(1)
+      expect(second.posted[0]).toEqual(first.posted[0])
+      const replay = second.posted[0].resource as typeof resource
+      second.onMessage.emit({ ok: true, handoff: { id: admitted.get(replay.client_request_id) },
+        __request_id: second.posted[0].__request_id })
+      await expect(request).resolves.toMatchObject({ ok: true, handoff: { id: 'one-handoff' } })
+      expect(admitted.size).toBe(1)
+    } finally { bridge.close(); await request.catch(() => undefined) }
+  })
+
+  it('stops retrying a broken Core pipe at the caller-provided limit', async () => {
+    const first = new FakePort(), second = new FakePort()
+    const connect = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const bridge = new NativeBridge(connect)
+    const request = bridge.request({ op: 'ping' }, 30_000, 1)
+    try {
+      first.onMessage.emit({ ok: false, error: 'Core IPC read: closed', __request_id: first.posted[0].__request_id })
+      expect(second.posted).toHaveLength(1)
+      second.onMessage.emit({ ok: false, error: 'Core IPC read: closed', __request_id: second.posted[0].__request_id })
+      await expect(request).resolves.toMatchObject({ ok: false, error: 'Core IPC read: closed' })
+      expect(connect).toHaveBeenCalledTimes(2)
+    } finally { bridge.close(); await request.catch(() => undefined) }
+  })
+
+  it('does not replay an explicitly refused offer even when transport retries are available', async () => {
+    const port = new FakePort()
+    const connect = vi.fn(() => port)
+    const bridge = new NativeBridge(connect)
+    const request = bridge.request({ op: 'offer', resource: { client_request_id: 'refused' } }, 30_000, 1)
+    try {
+      port.onMessage.emit({ ok: false, error: 'download URL is not allowed', __request_id: port.posted[0].__request_id })
+      await expect(request).resolves.toMatchObject({ ok: false, error: 'download URL is not allowed' })
+      expect(port.posted).toHaveLength(1)
+      expect(connect).toHaveBeenCalledOnce()
+      expect(port.disconnect).not.toHaveBeenCalled()
+    } finally { bridge.close() }
+  })
+
   it('retries when opening the native port itself fails transiently', async () => {
     vi.useFakeTimers()
     const port = new FakePort()

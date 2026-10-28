@@ -1,0 +1,18 @@
+{
+  "passed": false,
+  "desktop_input_used": false,
+  "browser": "firefox",
+  "background_sha256": "a0188d8785768804f8a5cea5174d1fc4835a696b15e912ab8bbbba0e33f74e88",
+  "browser_version": "158.0.1",
+  "error": "Traceback (most recent call last):\n  File \"C:\\QARunners\\native-reply-probe.py\", line 105, in run\n    assert extension('chrome.runtime.sendMessage({type:\"ping\"}).then(done)')['ok']\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\nAssertionError\n",
+  "server_requests": [
+    {
+      "path": "/page",
+      "range": null
+    },
+    {
+      "path": "/favicon.ico",
+      "range": null
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "passed": false,
+  "desktop_input_used": false,
+  "browser": "edge",
+  "background_sha256": "f7c0e9920dffb70dcfd112efc72d7c21434b7b34b545869dda17a3a8d0c8cad2",
+  "phase": "offer-persisted",
+  "browser_version": "156.0.4314.50",
+  "ping": {
+    "__request_id": "mvs7u5d0-3",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "persisted_handoff": {
+    "id": "handoff-1a182ef3faa-2",
+    "offer": {
+      "url": "http://127.0.0.1:49686/recovery.bin",
+      "resource_kind": "file",
+      "local_source_path": null,
+      "owner": "tab:1277596154:frame:0:146",
+      "evidence": [
+        "response_headers",
+        "content_disposition",
+        "request_chain"
+      ],
+      "confidence": 0.99,
+      "source_page_url": "http://127.0.0.1:49686/page",
+      "credential_ref": "cred-1a182ef3f9f-1",
+      "replay_context_ref": null,
+      "request_method": "GET",
+      "handoff_id": "handoff-1a182ef3faa-2",
+      "filename": "recovery.bin",
+      "title": "",
+      "mime_type": "application/octet-stream",
+      "size": 1048576,
+      "preferred_bandwidth": 0,
+      "preferred_height": 0
+    },
+    "filename": "recovery.bin",
+    "title": "",
+    "mime_type": "application/octet-stream",
+    "size": 1048576,
+    "status": "pending",
+    "presentation": "queued",
+    "task_id": null,
+    "created_at_ms": 1793198079914,
+    "request_id": "download:3366c45d-737e-4e9e-ad57-f2a61980a5a1",
+    "suppression": null
+  },
+  "browser_state_at_close": {
+    "errors": {},
+    "events": [
+      {
+        "id": 1,
+        "url": "http://127.0.0.1:49686/recovery.bin"
+      }
+    ],
+    "items": []
+  },
+  "error": "Traceback (most recent call last):\n  File \"C:\\QARunners\\native-reply-probe.py\", line 153, in run\n    rows = wait(recovered, 'Native Bridge did not retry the acknowledged pipe error', 15)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: Native Bridge did not retry the acknowledged pipe error\n",
+  "server_requests": [
+    {
+      "path": "/page",
+      "range": null
+    },
+    {
+      "path": "/favicon.ico",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": null
+    }
+  ],
+  "offers_observed": [
+    {
+      "client_request_id": "download:3366c45d-737e-4e9e-ad57-f2a61980a5a1",
+      "request_sha256": "2283b002b52812007581f5b1cc0edba919b7c07b7224dfc0fdceef880a51a43f",
+      "handoff_id": "handoff-1a182ef3faa-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "proxy_diagnostics": {
+    "injected-reply.json": "{\"ok\":false,\"error\":\"Core pipe read: injected after durable offer\",\"__request_id\":\"mvs7u5ov-4\"}"
+  },
+  "proxy_trace": {
+    "proxy-6944.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T14:34:31.2957417Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs7tyyc-1"
+        },
+        "utc": "2026-10-28T14:34:32.0872810Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs7tyyc-1"
+        },
+        "utc": "2026-10-28T14:34:32.1765751Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs7u5c7-2"
+        },
+        "utc": "2026-10-28T14:34:39.3683340Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs7u5c7-2"
+        },
+        "utc": "2026-10-28T14:34:39.3953143Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs7u5d0-3"
+        },
+        "utc": "2026-10-28T14:34:39.3962819Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs7u5d0-3"
+        },
+        "utc": "2026-10-28T14:34:39.4288955Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs7u5ov-4"
+        },
+        "utc": "2026-10-28T14:34:39.8339927Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs7u5ov-4"
+        },
+        "utc": "2026-10-28T14:34:39.9554973Z"
+      }
+    ]
+  }
+}

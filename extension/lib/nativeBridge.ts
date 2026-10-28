@@ -233,6 +233,15 @@ export class NativeBridge {
     const responseId = String(response.__request_id || '')
     if (responseId !== request.requestId) return
     this.portLastResponseAt = Date.now()
+    const coreTransportFailed = response.ok === false
+      && /^Core (?:pipe|IPC|stream) (?:write|read|closed|frame|header)\b/i.test(String(response.error || ''))
+    // A Host error envelope can still mean Core committed an offer and lost
+    // its reply. Use the caller's idempotent retry budget and the same payload,
+    // rather than treating a broken pipe as an application-level refusal.
+    if (coreTransportFailed && request.retriesRemaining > 0) {
+      this.retryOrRejectActive(port, new Error(String(response.error)))
+      return
+    }
     if (request.timer) clearTimeout(request.timer)
     request.timer = undefined
     const resolvedResponse = String(request.message.op || '') === 'media_push_status'
@@ -247,9 +256,9 @@ export class NativeBridge {
     if (this.tryMediaPushAdmissionCheck(port, request, resolvedResponse)) return
     this.active = null
     this.queue.shift()
-    // Host 仍在运行不代表其 Core 管道有效。丢弃失效连接，让下一次操作重新握手；
-    // 已发送的开始/音频/下载请求不能自动重放，以免重复执行。
-    if (response.ok === false && /^Core (?:pipe|IPC|stream) (?:write|read|closed|frame|header)\b/i.test(String(response.error || ''))) {
+    // No retry budget remains (or replay was forbidden). Preserve the error,
+    // but detach the stale Host before processing another queued request.
+    if (coreTransportFailed) {
       this.port = null
       try { port.disconnect() } catch {}
       this.disconnected()

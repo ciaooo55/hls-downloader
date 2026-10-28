@@ -1,0 +1,264 @@
+{
+  "passed": true,
+  "desktop_input_used": false,
+  "browser": "edge",
+  "background_sha256": "f7c0e9920dffb70dcfd112efc72d7c21434b7b34b545869dda17a3a8d0c8cad2",
+  "phase": "offer-persisted",
+  "browser_version": "156.0.4314.50",
+  "ping": {
+    "__request_id": "mvs868rh-3",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "persisted_handoff": {
+    "id": "handoff-1a182f7dbea-2",
+    "offer": {
+      "url": "http://127.0.0.1:49694/recovery.bin",
+      "resource_kind": "file",
+      "local_source_path": null,
+      "owner": "tab:2130874871:frame:0:89",
+      "evidence": [
+        "response_headers",
+        "content_disposition",
+        "request_chain"
+      ],
+      "confidence": 0.99,
+      "source_page_url": "http://127.0.0.1:49694/page",
+      "credential_ref": "cred-1a182f7dbe1-1",
+      "replay_context_ref": null,
+      "request_method": "GET",
+      "handoff_id": "handoff-1a182f7dbea-2",
+      "filename": "recovery.bin",
+      "title": "",
+      "mime_type": "application/octet-stream",
+      "size": 1048576,
+      "preferred_bandwidth": 0,
+      "preferred_height": 0
+    },
+    "filename": "recovery.bin",
+    "title": "",
+    "mime_type": "application/octet-stream",
+    "size": 1048576,
+    "status": "pending",
+    "presentation": "queued",
+    "task_id": null,
+    "created_at_ms": 1793198644202,
+    "request_id": "download:c693af94-4538-48f4-bcdb-5353c077d1b9",
+    "suppression": null
+  },
+  "offers": [
+    {
+      "client_request_id": "download:c693af94-4538-48f4-bcdb-5353c077d1b9",
+      "request_sha256": "103cd14a9d9631f50ed33984ca1e10f531188ad2d09514b9da522ffaba49df5d",
+      "handoff_id": "handoff-1a182f7dbea-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    },
+    {
+      "client_request_id": "download:c693af94-4538-48f4-bcdb-5353c077d1b9",
+      "request_sha256": "103cd14a9d9631f50ed33984ca1e10f531188ad2d09514b9da522ffaba49df5d",
+      "handoff_id": "handoff-1a182f7dbea-2",
+      "injected": false,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "task_count": 1,
+  "handoff_count": 1,
+  "output_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+  "browser_state": {
+    "events": [
+      {
+        "id": 1,
+        "url": "http://127.0.0.1:49694/recovery.bin"
+      }
+    ],
+    "items": []
+  },
+  "zero_download_item": false,
+  "server_requests": [
+    {
+      "path": "/page",
+      "range": null
+    },
+    {
+      "path": "/favicon.ico",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=262144-524287"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=0-262143"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=524288-786431"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=786432-1048575"
+    }
+  ],
+  "browser_state_at_close": {
+    "errors": {},
+    "events": [
+      {
+        "id": 1,
+        "url": "http://127.0.0.1:49694/recovery.bin"
+      }
+    ],
+    "items": []
+  },
+  "offers_observed": [
+    {
+      "client_request_id": "download:c693af94-4538-48f4-bcdb-5353c077d1b9",
+      "request_sha256": "103cd14a9d9631f50ed33984ca1e10f531188ad2d09514b9da522ffaba49df5d",
+      "handoff_id": "handoff-1a182f7dbea-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    },
+    {
+      "client_request_id": "download:c693af94-4538-48f4-bcdb-5353c077d1b9",
+      "request_sha256": "103cd14a9d9631f50ed33984ca1e10f531188ad2d09514b9da522ffaba49df5d",
+      "handoff_id": "handoff-1a182f7dbea-2",
+      "injected": false,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "proxy_diagnostics": {
+    "injected-reply.json": "{\"ok\":false,\"error\":\"Core pipe read: injected after durable offer\",\"__request_id\":\"mvs86930-4\"}"
+  },
+  "proxy_trace": {
+    "proxy-6768.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T14:43:58.2617942Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs864dp-1"
+        },
+        "utc": "2026-10-28T14:43:59.2877838Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs864dp-1"
+        },
+        "utc": "2026-10-28T14:43:59.3173697Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs868qt-2"
+        },
+        "utc": "2026-10-28T14:44:03.6539173Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs868qt-2"
+        },
+        "utc": "2026-10-28T14:44:03.6870202Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs868rh-3"
+        },
+        "utc": "2026-10-28T14:44:03.6880532Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs868rh-3"
+        },
+        "utc": "2026-10-28T14:44:03.7197293Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs86930-4"
+        },
+        "utc": "2026-10-28T14:44:04.1093061Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs86930-4"
+        },
+        "utc": "2026-10-28T14:44:04.2541443Z"
+      }
+    ],
+    "proxy-7160.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T14:44:04.7397297Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs86930-4"
+        },
+        "utc": "2026-10-28T14:44:05.7124778Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs86930-4"
+        },
+        "utc": "2026-10-28T14:44:05.7308235Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "handoff_status",
+          "request_id": "mvs86ag7-5"
+        },
+        "utc": "2026-10-28T14:44:05.8629237Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "handoff_status",
+          "request_id": "mvs86ag7-5"
+        },
+        "utc": "2026-10-28T14:44:05.8796278Z"
+      }
+    ]
+  }
+}

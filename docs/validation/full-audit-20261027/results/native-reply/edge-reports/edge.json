@@ -1,0 +1,82 @@
+{
+  "passed": false,
+  "desktop_input_used": false,
+  "browser": "edge",
+  "background_sha256": "f7c0e9920dffb70dcfd112efc72d7c21434b7b34b545869dda17a3a8d0c8cad2",
+  "phase": "offer-persisted",
+  "browser_version": "156.0.4314.50",
+  "ping": {
+    "__request_id": "mvs7ncye-3",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "persisted_handoff": {
+    "id": "handoff-1a182ea6b5d-2",
+    "offer": {
+      "url": "http://127.0.0.1:49702/recovery.bin",
+      "resource_kind": "file",
+      "local_source_path": null,
+      "owner": "tab:504048929:frame:0:32",
+      "evidence": [
+        "response_headers",
+        "content_disposition",
+        "request_chain"
+      ],
+      "confidence": 0.99,
+      "source_page_url": "http://127.0.0.1:49702/page",
+      "credential_ref": "cred-1a182ea6b55-1",
+      "replay_context_ref": null,
+      "request_method": "GET",
+      "handoff_id": "handoff-1a182ea6b5d-2",
+      "filename": "recovery.bin",
+      "title": "",
+      "mime_type": "application/octet-stream",
+      "size": 1048576,
+      "preferred_bandwidth": 0,
+      "preferred_height": 0
+    },
+    "filename": "recovery.bin",
+    "title": "",
+    "mime_type": "application/octet-stream",
+    "size": 1048576,
+    "status": "pending",
+    "presentation": "queued",
+    "task_id": null,
+    "created_at_ms": 1793197763421,
+    "request_id": "download:10f73554-cb09-4cd3-a05b-fad5d0336a35",
+    "suppression": null
+  },
+  "error": "Traceback (most recent call last):\n  File \"C:\\QARunners\\native-reply-probe.py\", line 145, in run\n    rows = wait(recovered, 'Native Bridge did not retry the acknowledged pipe error', 15)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: Native Bridge did not retry the acknowledged pipe error\n",
+  "server_requests": [
+    {
+      "path": "/page",
+      "range": null
+    },
+    {
+      "path": "/favicon.ico",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": null
+    }
+  ],
+  "offers_observed": [
+    {
+      "client_request_id": "download:10f73554-cb09-4cd3-a05b-fad5d0336a35",
+      "request_sha256": "fdc00189c2cc4b0d6a4dbff134badbcddc5ed6070e549319fffb49a6a80435e9",
+      "handoff_id": "handoff-1a182ea6b5d-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "proxy_diagnostics": {}
+}

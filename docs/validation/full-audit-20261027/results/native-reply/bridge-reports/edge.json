@@ -1,0 +1,913 @@
+{
+  "passed": false,
+  "desktop_input_used": false,
+  "browser": "edge",
+  "background_sha256": "f7c0e9920dffb70dcfd112efc72d7c21434b7b34b545869dda17a3a8d0c8cad2",
+  "phase": "offer-persisted",
+  "browser_version": "156.0.4314.50",
+  "ping": {
+    "__request_id": "mvs82avs-3",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "persisted_handoff": {
+    "id": "handoff-1a182f51da6-2",
+    "offer": {
+      "url": "http://127.0.0.1:49701/recovery.bin",
+      "resource_kind": "file",
+      "local_source_path": null,
+      "owner": "tab:1508172763:frame:0:170",
+      "evidence": [
+        "response_headers",
+        "content_disposition",
+        "request_chain"
+      ],
+      "confidence": 0.99,
+      "source_page_url": "http://127.0.0.1:49701/page",
+      "credential_ref": "cred-1a182f51d9e-1",
+      "replay_context_ref": null,
+      "request_method": "GET",
+      "handoff_id": "handoff-1a182f51da6-2",
+      "filename": "recovery.bin",
+      "title": "",
+      "mime_type": "application/octet-stream",
+      "size": 1048576,
+      "preferred_bandwidth": 0,
+      "preferred_height": 0
+    },
+    "filename": "recovery.bin",
+    "title": "",
+    "mime_type": "application/octet-stream",
+    "size": 1048576,
+    "status": "pending",
+    "presentation": "queued",
+    "task_id": null,
+    "created_at_ms": 1793198464422,
+    "request_id": "download:10c7f7e1-7444-44fd-bee8-22b79a1dc4dd",
+    "suppression": null
+  },
+  "bridge_trace": [
+    {
+      "phase": "message",
+      "message": {
+        "ok": false,
+        "error": "Core pipe read: injected after durable offer",
+        "__request_id": "mvs82ee3-4"
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82ee3-4",
+        "retries": 1,
+        "op": "offer"
+      }
+    },
+    {
+      "phase": "retry",
+      "message": {},
+      "matches": true,
+      "active": {
+        "id": "mvs82ee3-4",
+        "retries": 1,
+        "op": "offer"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82ee3-4",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82ee3-4",
+        "retries": 0,
+        "op": "offer"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82eow-5",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82eow-5",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82fef-6",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82fef-6",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82g40-7",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82g40-7",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82gtk-8",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82gtk-8",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82hj6-9",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82hj6-9",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82i8r-10",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82i8r-10",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82iyd-11",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82iyd-11",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82jnn-12",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82jnn-12",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82kda-13",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82kda-13",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82l2x-14",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82l2x-14",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82ls4-15",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82ls4-15",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82mhm-16",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82mhm-16",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82n78-17",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82n78-17",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82nwz-18",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82nwz-18",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82omj-19",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82omj-19",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82pbq-20",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82pbq-20",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    },
+    {
+      "phase": "message",
+      "message": {
+        "__request_id": "mvs82q12-21",
+        "handoff": {
+          "confidence": 0.9900000095367432,
+          "created_at_ms": 1793198464422,
+          "evidence": [
+            "response_headers",
+            "content_disposition",
+            "request_chain"
+          ],
+          "filename": "recovery.bin",
+          "id": "handoff-1a182f51da6-2",
+          "mime_type": "application/octet-stream",
+          "owner": "tab:1508172763:frame:0:170",
+          "presentable": true,
+          "presentation": "presented",
+          "presentation_mode": "native-rust",
+          "presentation_ok": true,
+          "presentation_queued": false,
+          "presented": true,
+          "request_method": "GET",
+          "resource_kind": "file",
+          "size": 1048576,
+          "source_page_url": "http://127.0.0.1:49701/page",
+          "status": "pending",
+          "task_id": null,
+          "title": "",
+          "url": "http://127.0.0.1:49701/recovery.bin"
+        },
+        "ok": true
+      },
+      "matches": true,
+      "active": {
+        "id": "mvs82q12-21",
+        "retries": 1,
+        "op": "handoff_status"
+      }
+    }
+  ],
+  "browser_state_at_close": {
+    "errors": {},
+    "events": [
+      {
+        "id": 1,
+        "url": "http://127.0.0.1:49701/recovery.bin"
+      }
+    ],
+    "items": []
+  },
+  "error": "Traceback (most recent call last):\n  File \"C:\\QARunners\\native-reply-probe.py\", line 193, in run\n    rows = wait(recovered, 'Native Bridge did not retry the acknowledged pipe error', 15)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\smoke_v7_portable_app.py\", line 106, in wait\n    raise TimeoutError(description)\nTimeoutError: Native Bridge did not retry the acknowledged pipe error\n",
+  "server_requests": [
+    {
+      "path": "/page",
+      "range": null
+    },
+    {
+      "path": "/favicon.ico",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": null
+    }
+  ],
+  "offers_observed": [
+    {
+      "client_request_id": "download:10c7f7e1-7444-44fd-bee8-22b79a1dc4dd",
+      "request_sha256": "8b223d5146eade4c6ad344706d40ae49696d207d19fac4ea467bb82d513b6125",
+      "handoff_id": "handoff-1a182f51da6-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "proxy_diagnostics": {
+    "injected-reply.json": "{\"ok\":false,\"error\":\"Core pipe read: injected after durable offer\",\"__request_id\":\"mvs82ee3-4\"}"
+  },
+  "proxy_trace": {
+    "proxy-6964.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T14:40:53.9295374Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs82675-1"
+        },
+        "utc": "2026-10-28T14:40:54.7463870Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs82675-1"
+        },
+        "utc": "2026-10-28T14:40:54.8451325Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs82av7-2"
+        },
+        "utc": "2026-10-28T14:40:59.7808126Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs82av7-2"
+        },
+        "utc": "2026-10-28T14:40:59.8073703Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs82avs-3"
+        },
+        "utc": "2026-10-28T14:40:59.8073703Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs82avs-3"
+        },
+        "utc": "2026-10-28T14:40:59.8403098Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs82ee3-4"
+        },
+        "utc": "2026-10-28T14:41:04.3614624Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs82ee3-4"
+        },
+        "utc": "2026-10-28T14:41:04.4580213Z"
+      }
+    ]
+  }
+}
