@@ -1,0 +1,23 @@
+{
+  "msi": "A:\\Ubuntu\\测试\\hls-downloader\\.tool-cache\\workbench-interaction-20261028\\input\\candidate.msi",
+  "original_product_code": "{0D52D468-6576-40D1-9708-223859B3FE3E}",
+  "verified_product_code": "{3A9295FA-4518-40B6-A00C-3753238A0941}",
+  "original_package_code": "{7D9F971E-C85D-4A7B-81A9-9DE26DB4D6DF}",
+  "verified_package_code": "{270ABACC-865B-4159-825A-C4EE3206DFFF}",
+  "verified_word_count": 2,
+  "original_sequence": 1510,
+  "verified_sequence": 1510,
+  "install_initialize_sequence": 1500,
+  "upgrade_privilege_sequence": 1380,
+  "install_files_sequence": 4000,
+  "install_finalize_sequence": 6600,
+  "native_host_engine_file": "file0e33ddeb7bb23e088b78b14c9e854873",
+  "native_host_prepare_type": 1042,
+  "native_host_prepare_sequence": 4010,
+  "native_host_registry_count": 7,
+  "same_version_upgrade_attributes": 769,
+  "downgrade_detection_attributes": 1,
+  "related_product_detection": "Windows Installer FindRelatedProducts",
+  "sha256_before": "D712C50481CBD5521037FCE731B7C7919A27414321F4208596DFE09E2275CA37",
+  "sha256_after": "8945AB49B5A77DAC24F689CD80565184956345F2C8D8CC52C1B58426C7B70BD8"
+}

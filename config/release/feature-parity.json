@@ -7,10 +7,10 @@
     "rust_core": "worktree:native_shell",
     "compose": "worktree:desktop_ui",
     "browser_extension": "worktree:extension",
-    "ab_reference": "git:9b09a8906f6af3fda80de243db8a92e06c53fbb9"
+    "ab_reference": "git:08bfd440a30d367ae369739d866d30f8c1d4b3af"
   },
   "status_contract": {
-    "verified": "入口、Core 命令、状态事件、错误反馈和自动化或实机验证均存在",
+    "verified": "已记录的入口、Core命令、事件及验证均存在；须核对证据适用版本，不表示当前候选已通过全部功能验收",
     "partial": "主要路径可用，但未达到 v3 行为或发布门禁",
     "blocked": "缺少真实实现或发布级验证"
   },
@@ -36,7 +36,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "v7_0_3_prevalidated_pending_formal_gates",
+  "audit_state": "v7_0_3_r22_current_evidence_incomplete",
   "features": [
     {
       "id": "architecture.single_core",
@@ -67,12 +67,13 @@
     },
     {
       "id": "tasks.selection_keyboard_queue",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "TaskTable selection and queue reorder",
       "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
       "core_command": "task_action/reorder_queue/place_queue",
       "state_event": "task_updated",
-      "verification": "desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest"
+      "verification": "Historical evidence (not a current complete native-input certification): desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest; r22 default activation changed to completed media play/file open, otherwise details; targeted key/action/range tests passed.",
+      "gap": "当前候选未执行完整原生选择、键盘和拖动矩阵；完成项Enter/双击的新分派有定向回归，未进行物理输入验收。"
     },
     {
       "id": "tasks.named_queue_profiles",
@@ -139,12 +140,13 @@
     },
     {
       "id": "workbench.automatic_responsive_layout",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "fixed task columns and toolbar",
-      "compose_entry": "width-aware fixed task columns / automatic compact DesktopToolbar / sortable task headers",
-      "core_command": "none; legacy layout fields remain protocol-compatible but are ignored by the workbench",
+      "compose_entry": "responsive task columns with persisted drag/keyboard resize; selected-task toolbar; sortable headers",
+      "core_command": "store_settings(task_column_layout); existing task_action",
       "state_event": "task snapshots",
-      "verification": "ResponsiveLayoutTest product layout at compact and wide widths; SettingsV7Test; targeted Compose compilation"
+      "verification": "r22: 62 targeted desktop tests, final focus-indicator JAR build, installed exact 220 component hashes and normal-window light100/dark150 captures; see docs/validation/full-audit-20261027/results/workbench-interaction",
+      "gap": "真实列宽拖动、键盘焦点遍历与完整按钮矩阵未执行；后台选择钩子和实屏捕获不代替物理输入验收。"
     },
     {
       "id": "media.hls_transfer_parity",
@@ -238,12 +240,13 @@
     },
     {
       "id": "browser.takeover_and_recovery",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "BrowserExtensionDialog/handoff confirmation",
       "compose_entry": "ExtensionDialog/HandoffDialog",
       "core_command": "present_handoff/accept_handoff/reject_handoff",
       "state_event": "handoff_offered/handoff_resolved/browser_status",
-      "verification": "Rust Core IPC handoff tests; extension 48 test files/344 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation"
+      "verification": "Rust Core IPC handoff tests; extension 48 test files/344 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation",
+      "gap": "Chromium普通MV3全入口零DownloadItem未实现；历史接管、暂停及回退证据不等同浏览器从未创建下载项。r21历史/待确认队列修复已验证，插件生产代码在r22未变。"
     },
     {
       "id": "browser.media_push_device_selection",
@@ -303,10 +306,10 @@
     }
   ],
   "summary": {
-    "verified": 27,
-    "partial": 2,
+    "verified": 24,
+    "partial": 5,
     "blocked": 0,
     "total": 29,
-    "verified_percent": 93.1
+    "verified_percent": 82.8
   }
 }

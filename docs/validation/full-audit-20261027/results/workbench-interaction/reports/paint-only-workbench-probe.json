@@ -1,0 +1,7 @@
+{
+  "passed": false,
+  "scope": "Installed component hashes, real local downloads, Core settings persistence and paint capture. No native mouse/keyboard or drag/button acceptance.",
+  "captures": [],
+  "layout_survives_core_restart": true,
+  "real_download_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+}

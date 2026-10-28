@@ -90,7 +90,9 @@ files += [(path, Path('workbench-interaction')/path.relative_to(workbench_source
           for path in sorted((workbench_source/'reports').glob('*'))
           if path.suffix in ('.json', '.txt', '.png')]
 files += [(workbench_source/name, Path('workbench-interaction')/name) for name in (
-    'ui-build-tests.txt', 'ui-build-tests-retry.txt', 'rollback-contract.txt',
+    'ui-build-tests.txt', 'ui-build-tests-retry.txt', 'ui-focus-build.txt',
+    'rollback-contract.txt', 'rollback-contract-focus.txt',
+    'parity-contract.txt',
     'input/installer.json', 'input/components.json', 'input/BUILD-PROVENANCE.json',
 )]
 for path, relative in files:

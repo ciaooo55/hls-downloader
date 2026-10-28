@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "C:\QARunners\workbench-probe.py", line 148, in <module>
+    wait(capture, 'Paint capture stayed blank', 20)
+  File "C:\QAScripts\smoke_v7_portable_app.py", line 106, in wait
+    raise TimeoutError(description)
+TimeoutError: Paint capture stayed blank

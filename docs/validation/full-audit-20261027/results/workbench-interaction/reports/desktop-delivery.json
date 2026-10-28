@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "current_msi": "HLSDownloader-7.0.3-20261028-未签名.msi",
+  "msi_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+  "current_assets": [
+    "BUILD-PROVENANCE.json",
+    "HLSDownloader-7.0.3-20261028-未签名.msi",
+    "HLSDownloader-7.0.3-Chromium.zip",
+    "HLSDownloader-7.0.3-Firefox-审核源码.zip",
+    "HLSDownloader-7.0.3-Firefox-未签名.zip",
+    "HLSDownloader-7.0.3-插件完整源码.zip",
+    "交付清单.json",
+    "验收说明.txt"
+  ],
+  "prior_denied_msi_not_touched": true
+}

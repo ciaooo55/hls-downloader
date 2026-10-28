@@ -1,0 +1,13 @@
+{
+  "passed": false,
+  "candidate_sha256": "cde56fa10a458ac849c39bf84ddafd9c03ab859c827b4e319e8ed467bd23f44d",
+  "checks": [
+    {
+      "count": 220,
+      "name": "exact installed component hashes"
+    }
+  ],
+  "error": "workbench-probe failed: 1",
+  "position": "At C:\\QARunners\\common.ps1:14 char:30\r\n+     if ($p.ExitCode -ne 0) { throw \"$name failed: $($p.ExitCode)\" }\r\n+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+  "uninstalled": true
+}

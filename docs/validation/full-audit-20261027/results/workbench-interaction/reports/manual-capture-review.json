@@ -1,0 +1,20 @@
+{
+  "screens": [
+    "workbench-light-100-normal-screen.png",
+    "workbench-dark-150-normal-screen.png"
+  ],
+  "passed": true,
+  "scope": "Manual inspection of normal-production-geometry screenshots; no native input",
+  "observed": [
+    "Toolbar, task selection, saved reordered columns and hidden speed column visible",
+    "Normal and compact sidebar layouts visible",
+    "Footer and window bottom are visible; no black offscreen region",
+    "Both screenshots show actual completed local tasks and scheduled task"
+  ],
+  "not_validated": [
+    "Physical resize drag",
+    "Keyboard focus traversal",
+    "Every button",
+    "Three-product visual equivalence"
+  ]
+}

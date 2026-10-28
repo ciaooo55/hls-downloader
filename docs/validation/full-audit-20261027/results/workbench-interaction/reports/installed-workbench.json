@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "candidate_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+  "checks": [
+    {
+      "count": 220,
+      "name": "exact installed component hashes"
+    },
+    {
+      "name": "real downloads, settings restart and light/dark paint captures",
+      "passed": true
+    }
+  ],
+  "uninstalled": true
+}

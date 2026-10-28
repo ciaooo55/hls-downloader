@@ -162,3 +162,29 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 **清理仍未完成**：本轮新建`.tool-cache/core-recovery-20261028`共91文件、3子目录、638503202字节（约609MiB），证据及成品验证后唯一一次删除被自动审批拒绝，仅返回`blocked by policy`，未提供进一步原因；没有重试或换方式绕过，见[清理记录](results/core-recovery-cleanup.json)。此前拒绝的目录和旧安装包未重试。复用的`full-audit-20261027`已只读更新为5547文件、2368子目录、2698703703字节；其用户清理脚本支持当前安装包文件名，并修正了FileInfo没有Parent目录属性导致的检查失败，最终不带`-Apply`的只读检查通过，未执行删除模式。
 
 首次新库冷启动1500ms门槛、Chromium全入口零DownloadItem、指定原站直播403/HLS卡死/播放器超时现场、完整原生UI矩阵及当前三产品对照仍未闭环；收费云端与实体接收设备仍排除。r21修复两个已复现的交接历史/队列边界，不能据此宣布整个项目全部完成。
+
+## 2026-10-28：AB/IDM交互对照与任务工作台
+
+对照AB正式版v1.11.1（源码`08bfd440a30d367ae369739d866d30f8c1d4b3af`）的[首页布局](https://github.com/amir1376/ab-download-manager/blob/08bfd440a30d367ae369739d866d30f8c1d4b3af/desktop/app/src/main/kotlin/com/abdownloadmanager/desktop/pages/home/HomePage.kt)、[列表列定义](https://github.com/amir1376/ab-download-manager/blob/08bfd440a30d367ae369739d866d30f8c1d4b3af/desktop/app/src/main/kotlin/com/abdownloadmanager/desktop/pages/home/sections/DownloadList.kt)及[默认激活行为](https://github.com/amir1376/ab-download-manager/blob/08bfd440a30d367ae369739d866d30f8c1d4b3af/shared/app/src/commonMain/kotlin/com/abdownloadmanager/shared/pages/home/BaseHomeComponent.kt)。AB将主要操作放在列表上方、按选择处理、支持可调整列，并区分完成项打开和未完成项详情。IDM[主界面说明](https://www.internetdownloadmanager.com/support/using_idm/using_idm.html)也说明了选中状态与工具栏可用性的关联。没有成功读取AB官方截图，本轮不是三款软件的实屏视觉等效认证。
+
+本项目原来主工具栏始终开始/暂停全部任务，选中操作另放下一排；已有`task_column_layout`持久字段，却没有接入实际表格。源码已收敛为：有选择时主栏仅处理可见所选项，无选择时明确显示全部操作；删除所选仍走原确认且保留成品；移除第二排重复操作。完成媒体双击/Enter进入内置播放器，普通完成文件打开；未完成、文件缺失以及可执行/脚本/快捷方式保留详情，右键详情仍可用。表头支持拖动及左右键调整，按逻辑dp保存原配置格式，保留列顺序和隐藏项；保存串行化，取消拖动恢复原布局，更多菜单可恢复默认列宽，键盘调整手柄有焦点色。未增加依赖或改变Core协议。
+
+定向测试62项通过（Protocol26、ResponsiveLayout22、TaskIndex4、TaskTableKeyResolution10），覆盖选中范围不能扩大为全局、默认激活、坏配置回退、宽度边界和原协议行为；JAR构建通过。最后仅补充焦点颜色提示，单独JAR构建通过，没有重复运行不受其影响的62项。初次Kotlin构建的隐式`maxWidth`接收者错误已修，失败日志保留。
+
+安装验收脚本的两项错误分别为Python推导式语法和重复URL被合法去重，均修复并保留失败记录。随后同SHA安装包220组件、实际本地下载成品SHA和列宽配置跨Core重启通过，但只取AWT打印图得到空白，整轮保持失败。既有r19独立补验同样显示`screen_nonblank=true, paint_nonblank=false`，因此改为同时保存实屏与AWT打印图并人工核对内容，不能将打印图失败直接定为产品未绘制，也不能把接口已连接算绘制通过。最终同包验收尚待完成。全程没有宿主安装或鼠标键盘输入；内部选择钩子不作为真实按钮验收。
+
+下载调度继续保留明确差异：[AB HTTP调度](https://github.com/amir1376/ab-download-manager/blob/08bfd440a30d367ae369739d866d30f8c1d4b3af/downloader/core/src/commonMain/kotlin/ir/amirab/downloader/downloaditem/http/HttpDownloadJob.kt)及[IDM动态分段](https://www.internetdownloadmanager.com/support/segmentation.html)允许空闲连接接手最大活动剩余段，本项目当前只均衡未发出的范围。Windows实际实现已有WinHTTP会话与连接句柄池，不能归因为每次请求都重新连接。此前活动拆段候选有14.367秒异常，原记录没有请求时间戳或当时I/O，无法确定原因；本轮没有直接恢复候选或增加连接数，也没有声称已达到竞品速度。
+
+## 当前交付：r22（2026-10-28）
+
+生产交互修改`27c416d`，最后焦点提示及构建快照`745939370638cf13e21bcb549f75847c27cb2871`。最终MSI SHA256为`8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8`；Core、Host、Updater、Presenter与插件保持r21交付内容，仅替换桌面JAR与构建来源记录。源码中的验收脚本随后纠正固定窗口尺寸问题，未改变产品二进制。
+
+最终同SHA包的220项安装组件检查、实际本地下载成品SHA、列宽设置与恢复默认跨Core重启、正常卸载通过。人工复核发现固定尺寸夹具在150%缩放下超出沙盒工作区，初始截图裁切，原报告及人工驳回记录均保留；没有将其算作完整界面通过。改为正常产品窗口尺寸恢复后，100%浅色窗口1400×709、150%深色窗口1012×473，均完整位于工作区，底部状态栏可见；实屏通过、AWT打印图仍为空白，两者分别记录。证据：[最终安装](results/workbench-interaction/reports/installed-workbench.json)、[实际窗口与持久化](results/workbench-interaction/reports/workbench-probe.json)、[人工复核](results/workbench-interaction/reports/manual-capture-review.json)、[浅色实屏](results/workbench-interaction/reports/workbench-light-100-normal-screen.png)、[深色实屏](results/workbench-interaction/reports/workbench-dark-150-normal-screen.png)。内部选择钩子不代表物理输入，列宽拖动和完整键盘/按钮矩阵仍未执行。这五次沙盒启动是修正验收脚本及夹具后的定向验证，不是五轮全功能对抗测试。
+
+[r22](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r22)已公开为未签名预发布，`release_ready=false`。9资产公开前后均与服务端大小/SHA256一致；r21发布删除但源码标签保留，其他大版本发布未动，见[发布记录](results/release-assets-r22.json)。桌面同目录同名20261028安装包、构建记录、说明及清单已替换并核对，插件及插件源码复用已验证的未改内容；旧20261026安装包曾被拒绝删除，未重试。
+
+源码功能清单同步纠正三处状态：任务工作台、选择/键盘和浏览器接管标为`partial`，移除“布局字段被忽略”和“完成项仍双击详情”等旧描述；AB参考固定至本轮实际读取的v1.11.1源码。其余历史`verified`不代表本轮当前成品已逐项复验，百分比不作为完成标准。此次仅修正文档/发布元数据，不重建未变二进制；r22的来源记录继续对应其实际构建快照。结构合同检查通过，但提示部分旧证据不在当前检出中，未将这些警告视为当前功能已通过。
+
+宿主精确只读复核仍未发现本产品的卸载项、关联MSI、Native Host子键、产品进程或列明默认目录；没有在宿主安装产品或写其注册表。未完成门槛仍包括全入口接管、首次新库冷启动、活动慢尾分担、用户原站错误现场、完整原生UI矩阵及三产品性能对照；云端与实体投屏仍排除。不能将本轮任务工作台改进称为全部功能已完成。
+
+本轮沙盒与构建进程已结束，221份归档证据哈希核对通过。100%/150%由JVM的`sun.java2d.uiScale=1.0/1.5`提供并核对窗口返回的实际缩放值，没有修改宿主或沙盒的系统缩放设置。清理仍未完成：本轮独立缓存`.tool-cache/workbench-interaction-20261028`含86文件、3子目录、418397621字节（约399MiB），唯一一次精确删除被自动审批拒绝，仅返回`blocked by policy`，没有重试或更换删除方式，见[清理结果](results/workbench-cleanup.json)。此前拒绝目标均未重试。复用的`full-audit-20261027`仅只读刷新库存为5577文件、2376子目录、2699610330字节并更新当前桌面MSI哈希，见[库存](results/cleanup.json)；没有执行其删除脚本。不能声称只剩源码或整机绝对干净。

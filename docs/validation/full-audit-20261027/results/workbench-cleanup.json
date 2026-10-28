@@ -1,0 +1,13 @@
+{
+  "path": ".tool-cache/workbench-interaction-20261028",
+  "status": "blocked_by_automatic_approval",
+  "files": 86,
+  "directories": 3,
+  "bytes": 418397621.0,
+  "archive_hashes_verified": true,
+  "desktop_and_github_hashes_verified": true,
+  "task_sandbox_stopped": true,
+  "old_denied_targets_not_retried": true,
+  "deletion_attempts": 1,
+  "reason": "blocked by policy; no further reason supplied"
+}

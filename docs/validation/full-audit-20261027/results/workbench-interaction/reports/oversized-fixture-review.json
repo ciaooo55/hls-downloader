@@ -1,0 +1,5 @@
+{
+  "passed": false,
+  "artifact_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+  "reason": "Manual screen review found fixed audit window geometry exceeded the sandbox work area, cropping the lower window. Retest normal production geometry at both scales; original reports retained."
+}

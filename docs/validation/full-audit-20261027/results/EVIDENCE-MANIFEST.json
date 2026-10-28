@@ -813,5 +813,295 @@
     "path": "core-recovery/input/BUILD-PROVENANCE.json",
     "original_sha256": "a49263dac324f60da6b2dfbf9e18a42dae6a9187ffc8a9dff33b5765a4e5b928",
     "archived_sha256": "1cce17ce91e1d019b50b3b83c8f1d5ccace21554b791c6bc5e0991e997209eb6"
+  },
+  {
+    "path": "workbench-interaction/reports/before-fixture-fix-installed-workbench.json",
+    "original_sha256": "d403d9096be765a54ec634d23bccf35a1eeaa2d77e8c0c85cba150b59133cde1",
+    "archived_sha256": "1528b4effc3dcba67a736284d5048835d728fc7bfaa75d11db0175e016d37aac"
+  },
+  {
+    "path": "workbench-interaction/reports/before-fixture-fix-workbench-core.txt",
+    "original_sha256": "ef275195187a082e4dfe1dea3216af45e0378a089b4cb6a9abdafcfda165fd56",
+    "archived_sha256": "ef275195187a082e4dfe1dea3216af45e0378a089b4cb6a9abdafcfda165fd56"
+  },
+  {
+    "path": "workbench-interaction/reports/before-fixture-fix-workbench-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "workbench-interaction/reports/before-fixture-fix-workbench-probe.json",
+    "original_sha256": "308f54f3d7dc62af4362783282e3b9af2d089a9421661d930c9a1c47a0cc2fc1",
+    "archived_sha256": "94a4ac405a6035130a4767425a20987e78b8a496bcc86af4bdfc99acfe4de7a4"
+  },
+  {
+    "path": "workbench-interaction/reports/before-fixture-fix-workbench-probe.stderr.txt",
+    "original_sha256": "a0e4fe8d1cf05db1ae1d1f56b13db1086b9ca22942f41d0e5242525a8c890c49",
+    "archived_sha256": "e3329a84d66ff582e6afc7e202acc348adae441c38e43114e13e5a09c707958f"
+  },
+  {
+    "path": "workbench-interaction/reports/before-fixture-fix-workbench-probe.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/reports/before-focus-components.json",
+    "original_sha256": "4f07c141f5d86af6fe8b2e4ca005a6c043b4bcbe00bf6765fcd6ad818a028975",
+    "archived_sha256": "e82647edab7acfc5985611dcd45e344fc8d8ea737c334afb5eaa9462f8f11934"
+  },
+  {
+    "path": "workbench-interaction/reports/before-focus-installer.json",
+    "original_sha256": "bd995d720cfe9db58096f8dd53da0fe2a84de9e73427d23fe0d44f643ed2c14d",
+    "archived_sha256": "12ff739c1a20a4373ac76c91f42f35413e7de914beb07b6a99c39d2cf1b4b032"
+  },
+  {
+    "path": "workbench-interaction/reports/before-script-fix-installed-workbench.json",
+    "original_sha256": "d403d9096be765a54ec634d23bccf35a1eeaa2d77e8c0c85cba150b59133cde1",
+    "archived_sha256": "1528b4effc3dcba67a736284d5048835d728fc7bfaa75d11db0175e016d37aac"
+  },
+  {
+    "path": "workbench-interaction/reports/before-script-fix-workbench-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "workbench-interaction/reports/before-script-fix-workbench-probe.stderr.txt",
+    "original_sha256": "32bd00567a54de94acb0941a278a150888869cd5374e964351e0121a149930d9",
+    "archived_sha256": "7e0776fa2b3f167eda2f2e0313ed1ab121c1a9000c7a83de37a3c26b5f124a25"
+  },
+  {
+    "path": "workbench-interaction/reports/before-script-fix-workbench-probe.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/reports/desktop-delivery.json",
+    "original_sha256": "3929d3d52c5832b1420a33e6f1c1c36b6af834ba0bac174d79e40555b6fe692f",
+    "archived_sha256": "27f89df55506ce224b9e14bcb87bd72ccc8e7d3db0d39a585d8b7c9d9e514c6b"
+  },
+  {
+    "path": "workbench-interaction/reports/installed-workbench.json",
+    "original_sha256": "2729c07f0c7bc7aba6cb15c69f31b5c2adccd99ac4ebb9b79b6c234cbbdd7dce",
+    "archived_sha256": "338f27612e04a4f3e313b7191669c77ed50e150aeef5b4afb4057efb77755fcc"
+  },
+  {
+    "path": "workbench-interaction/reports/manual-capture-review.json",
+    "original_sha256": "fee781e81fa4323702ba762de3a54266da1b418239db7832a502361018db2427",
+    "archived_sha256": "9db6fdfb221178017622f46d6617cefd883eef38919263ada6d112122450c96c"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-installed-workbench.json",
+    "original_sha256": "2729c07f0c7bc7aba6cb15c69f31b5c2adccd99ac4ebb9b79b6c234cbbdd7dce",
+    "archived_sha256": "338f27612e04a4f3e313b7191669c77ed50e150aeef5b4afb4057efb77755fcc"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-review.json",
+    "original_sha256": "b7a8d17767e36054d6afa8dc1397efabbb99810e4c2bca60f69c3a753307b4f7",
+    "archived_sha256": "35280f4c109e4b96b0088c81a5a653bb1f4b3ac854f6bbfa9688ce58ee0504db"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-core.txt",
+    "original_sha256": "6b734bf5c58e3f1a860aaebe52cbc6ba974e0fefde4beeb57ef4a19b0b9ae591",
+    "archived_sha256": "6b734bf5c58e3f1a860aaebe52cbc6ba974e0fefde4beeb57ef4a19b0b9ae591"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-dark-compact-150-paint.png",
+    "original_sha256": "a60ed7d8b17e97b9d29865686ee187f36f82d610d86bd70b3dcba149a167abd9",
+    "archived_sha256": "a60ed7d8b17e97b9d29865686ee187f36f82d610d86bd70b3dcba149a167abd9"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-dark-compact-150-screen.png",
+    "original_sha256": "01dc1760cffc1d3e5200a76910ba3b8e3f931b264634b364e8272aa1b279ff7d",
+    "archived_sha256": "01dc1760cffc1d3e5200a76910ba3b8e3f931b264634b364e8272aa1b279ff7d"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-dark-compact-150.txt",
+    "original_sha256": "01e181c4d54d1f8b826f4bba8a786e38971aaf68646b8de04bc7c194762b68d8",
+    "archived_sha256": "9e2535e10869b17e66823fa25a1fc07c1c0a776a84d055f2cde399f14ea78f2e"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-light-wide-paint.png",
+    "original_sha256": "0ac1169d247f39adff7961fffc46b793a429d001d9b81976edb7a4756ca52fe0",
+    "archived_sha256": "0ac1169d247f39adff7961fffc46b793a429d001d9b81976edb7a4756ca52fe0"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-light-wide-screen.png",
+    "original_sha256": "8fa8935e2581f3a6547be2ce304fee86ade89a4390d877f60c60dbf379a65617",
+    "archived_sha256": "8fa8935e2581f3a6547be2ce304fee86ade89a4390d877f60c60dbf379a65617"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-light-wide.txt",
+    "original_sha256": "01e181c4d54d1f8b826f4bba8a786e38971aaf68646b8de04bc7c194762b68d8",
+    "archived_sha256": "9e2535e10869b17e66823fa25a1fc07c1c0a776a84d055f2cde399f14ea78f2e"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-probe.json",
+    "original_sha256": "ad72baa2af32cc19b9dcfcfa04af55f56a5a89fd8a506bd7d0ee395252468de5",
+    "archived_sha256": "2be0ba6740256d465656aeedd968bb71f64c1e3cd1be3f997df2e0259cce2ecf"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-probe.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/reports/oversized-fixture-workbench-probe.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-installed-workbench.json",
+    "original_sha256": "d403d9096be765a54ec634d23bccf35a1eeaa2d77e8c0c85cba150b59133cde1",
+    "archived_sha256": "1528b4effc3dcba67a736284d5048835d728fc7bfaa75d11db0175e016d37aac"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-core.txt",
+    "original_sha256": "7f80ae4a43c25a342313f410a3de8559c947c8390549908a5d129ecf0232e7bf",
+    "archived_sha256": "7f80ae4a43c25a342313f410a3de8559c947c8390549908a5d129ecf0232e7bf"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-light-wide.png",
+    "original_sha256": "0ac1169d247f39adff7961fffc46b793a429d001d9b81976edb7a4756ca52fe0",
+    "archived_sha256": "0ac1169d247f39adff7961fffc46b793a429d001d9b81976edb7a4756ca52fe0"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-light-wide.txt",
+    "original_sha256": "01e181c4d54d1f8b826f4bba8a786e38971aaf68646b8de04bc7c194762b68d8",
+    "archived_sha256": "9e2535e10869b17e66823fa25a1fc07c1c0a776a84d055f2cde399f14ea78f2e"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-probe.json",
+    "original_sha256": "40ee922c88036c504babdb860b7a8c39557f72f67e4209ae9fe8f3ed02ada9ec",
+    "archived_sha256": "083bde0991248fc35d28383cbaadadf7e1a4b6a4dac3f8e64ff3db60b3739f6b"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-probe.stderr.txt",
+    "original_sha256": "23730854942bf57e348dca06472a91cfb90c3c5307f59092770d3b9e6fa28593",
+    "archived_sha256": "2030b0f57b6eb2a9acf473c1a823bdc64f22e50ae7265de161976925092b04d6"
+  },
+  {
+    "path": "workbench-interaction/reports/paint-only-workbench-probe.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/reports/release-upload-state.json",
+    "original_sha256": "f4a147d3ec439800add6f415f986b827161df2d17fbc39aa947883812fd43fe5",
+    "archived_sha256": "c66bb60ecbc8f9a0e776a2be8ec4e2778a8399d1c15b113e3966022479b617d0"
+  },
+  {
+    "path": "workbench-interaction/reports/targeted-summary.json",
+    "original_sha256": "e97f5cdfa86ca59bb831aab04dd9f5f1345a78764f08ddcbaa75ee4f0dd053b7",
+    "archived_sha256": "9d0b8a6e855a286b29e45a655578dc0710b6b4227281b34210e80cb1db2bac49"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-core.txt",
+    "original_sha256": "6b734bf5c58e3f1a860aaebe52cbc6ba974e0fefde4beeb57ef4a19b0b9ae591",
+    "archived_sha256": "6b734bf5c58e3f1a860aaebe52cbc6ba974e0fefde4beeb57ef4a19b0b9ae591"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-dark-150-normal-paint.png",
+    "original_sha256": "81facf5f2491ecb015ee5c1537f708e120ab8230042cc7bfd69798410643269a",
+    "archived_sha256": "81facf5f2491ecb015ee5c1537f708e120ab8230042cc7bfd69798410643269a"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-dark-150-normal-screen.png",
+    "original_sha256": "15745df028438f32ca8e089d64dd2e31a9de0fbccabf5401d1a96d582f576def",
+    "archived_sha256": "15745df028438f32ca8e089d64dd2e31a9de0fbccabf5401d1a96d582f576def"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-dark-150-normal.txt",
+    "original_sha256": "01e181c4d54d1f8b826f4bba8a786e38971aaf68646b8de04bc7c194762b68d8",
+    "archived_sha256": "9e2535e10869b17e66823fa25a1fc07c1c0a776a84d055f2cde399f14ea78f2e"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-finished.txt",
+    "original_sha256": "5350918150f1698627c27bc435353e89047e7e03b8103099d93921961d379bba",
+    "archived_sha256": "161069badc0cc23058b13d7c068e45205f4333aa15fd78db9d68f5c9f1ae8983"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-light-100-normal-paint.png",
+    "original_sha256": "7533da81a36fe10bb4f7c17706e406606094bbaa363d99fdd168769c18b94677",
+    "archived_sha256": "7533da81a36fe10bb4f7c17706e406606094bbaa363d99fdd168769c18b94677"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-light-100-normal-screen.png",
+    "original_sha256": "ba7b39a033e3fff70ab5f0e0c6ebc1d9b31be45aba4ef9be2c05489b8b0988ad",
+    "archived_sha256": "ba7b39a033e3fff70ab5f0e0c6ebc1d9b31be45aba4ef9be2c05489b8b0988ad"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-light-100-normal.txt",
+    "original_sha256": "01e181c4d54d1f8b826f4bba8a786e38971aaf68646b8de04bc7c194762b68d8",
+    "archived_sha256": "9e2535e10869b17e66823fa25a1fc07c1c0a776a84d055f2cde399f14ea78f2e"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-probe.json",
+    "original_sha256": "36c84f170eefd14f25298f16edd9ae46f401e3bf128afc8a1230d34d027d1d76",
+    "archived_sha256": "2e6e38f8ba19ecea0fb3afc7839911e909307fd438b0cb8bcbf8581e1eb7d27c"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-probe.stderr.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/reports/workbench-probe.stdout.txt",
+    "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "archived_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "workbench-interaction/ui-build-tests.txt",
+    "original_sha256": "b14e8af6acfb0137bc35a214f4ffb6d1298af027f26286df0d78770e28fbcf5b",
+    "archived_sha256": "30ff4d712746c5c7d6fd3eb342228c83d6463cd08ff30af47afe62dbe9dccc4c"
+  },
+  {
+    "path": "workbench-interaction/ui-build-tests-retry.txt",
+    "original_sha256": "4ce227ff45904d7091d88a3834d70c029f5e3a340512fcd19dad7f3e354771d5",
+    "archived_sha256": "fbae69c63d87e0469c278258d1249ecc2d0fb16e4904029d379a0a320471e0db"
+  },
+  {
+    "path": "workbench-interaction/ui-focus-build.txt",
+    "original_sha256": "a61e8922b6b4865a1f850a1167c1cdbc480233aa98a256d5a1c62a62f99eb2bc",
+    "archived_sha256": "7e3ca635a3d0a1cafa26fb96a4d272cef4f71a9619b629b0ee7866dfc5a0cab5"
+  },
+  {
+    "path": "workbench-interaction/rollback-contract.txt",
+    "original_sha256": "9ea8cc642fdaedd98df9b1df82b295fac6d2b64fe0a1a1a86bcbf3040915e855",
+    "archived_sha256": "dfe17eea06cab7faaa8e8ca22451fd9dee34a000087b201803572e17816c79b6"
+  },
+  {
+    "path": "workbench-interaction/rollback-contract-focus.txt",
+    "original_sha256": "a33bf4daa5d2e26ced3fe32c61a23a403c0adb45ff7ed1bc11a4902380151216",
+    "archived_sha256": "6a9449fb250913a7d9ca32887a774b8434a52f4ec454c54e948c7a92739f6f67"
+  },
+  {
+    "path": "workbench-interaction/parity-contract.txt",
+    "original_sha256": "d6005f540c808ba32c78dc2ce12b381683be85de6f19b3c45d60187caf0508e7",
+    "archived_sha256": "6762f53c2d52a47df9184f91d5b80861c04a60f980169737e7c4f8589f46d081"
+  },
+  {
+    "path": "workbench-interaction/input/installer.json",
+    "original_sha256": "fc1543caceee72d97eceb08c482e28a8979603fc206a123ee4d9c806ff44fcc3",
+    "archived_sha256": "9a6963064b2a784274c7b3249a6ca89f033a0ee2d7e026c38a5377aca749b1f4"
+  },
+  {
+    "path": "workbench-interaction/input/components.json",
+    "original_sha256": "7e1f3e83418c0d764b961a011d4ae030f154f5b8875dca15847039dc2acc8e04",
+    "archived_sha256": "670dcfefe79d024debefe224b72006091b7131696060fefd28bd03186e143fae"
+  },
+  {
+    "path": "workbench-interaction/input/BUILD-PROVENANCE.json",
+    "original_sha256": "b6b3ddece223b19f88b379ce1d0851d1a6b0ab9449cb6be3889ff66a3ef8f6e6",
+    "archived_sha256": "21b2b14fc3d7ff08b63b02b02a40a06484c46cc7e3627f802ff5e8483018ecd4"
   }
 ]

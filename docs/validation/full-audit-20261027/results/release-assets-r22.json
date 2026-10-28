@@ -1,0 +1,67 @@
+{
+  "checked_at": "2026-10-28T12:34:26.1275563Z",
+  "release_id": 426645094,
+  "tag": "v7.0.3-r22",
+  "draft": false,
+  "prerelease": true,
+  "release_ready": false,
+  "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.3-r22",
+  "target_commitish": "745939370638cf13e21bcb549f75847c27cb2871",
+  "all_asset_sizes_and_server_sha256_match": true,
+  "assets": [
+    {
+      "name": "BUILD-PROVENANCE.json",
+      "bytes": 19875,
+      "sha256": "b6b3ddece223b19f88b379ce1d0851d1a6b0ab9449cb6be3889ff66a3ef8f6e6"
+    },
+    {
+      "name": "DELIVERY-MANIFEST.json",
+      "bytes": 3489,
+      "sha256": "b62bc5d352146e550f62aa205e0bb9044acce2a17864365edc74611366d1da8a"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Chromium.zip",
+      "bytes": 327935,
+      "sha256": "982e11945eb27e74cc3e9bd742db8e5ee512b655acbcaffd2a321531a1b303b2"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-extension-source.zip",
+      "bytes": 368896,
+      "sha256": "80695c46e95f1287e408cbc9a737b77f7f64d2c1ad9f0ec80d7c39ff45ece9d0"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-review-source.zip",
+      "bytes": 282713,
+      "sha256": "435b42e19f87fc68c92419f78c7b6f57975ac587fbbf3b254ccce2231bd55512"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-Firefox-unsigned.zip",
+      "bytes": 327254,
+      "sha256": "ded82485beaa016e046937f84eaf2fab0948986e0f9aec832b7af3631a69b9fa"
+    },
+    {
+      "name": "HLSDownloader-7.0.3-r22-Windows-x64-unsigned.msi",
+      "bytes": 203472896,
+      "sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 806,
+      "sha256": "e883b4b1dc08e05721d47565dbb2c21e95c53060448df8b5388bf3aa59f96762"
+    },
+    {
+      "name": "VALIDATION.txt",
+      "bytes": 1647,
+      "sha256": "41605468ad300dc8d8b4af268d94f9d189dbe56477d4d400c2fb2646951c3236"
+    }
+  ],
+  "removed_release": "v7.0.3-r21",
+  "source_tag_preserved": true,
+  "remaining_release_tags": [
+    "v7.0.3-r22",
+    "v6.0.1",
+    "v5.0.5",
+    "v3.0.39",
+    "v1.7.11"
+  ]
+}

@@ -1,0 +1,41 @@
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 49671)
+----------------------------------------
+Traceback (most recent call last):
+Exception occurred during processing of request from ('127.0.0.1', 49672)
+  File "socketserver.py", line 697, in process_request_thread
+Traceback (most recent call last):
+  File "socketserver.py", line 362, in finish_request
+  File "socketserver.py", line 697, in process_request_thread
+  File "C:\QARunners\workbench-probe.py", line 34, in __init__
+    super().__init__(*args, directory=str(fixtures), **kwargs)
+  File "http\server.py", line 672, in __init__
+  File "socketserver.py", line 362, in finish_request
+  File "socketserver.py", line 766, in __init__
+  File "C:\QARunners\workbench-probe.py", line 34, in __init__
+    super().__init__(*args, directory=str(fixtures), **kwargs)
+  File "http\server.py", line 672, in __init__
+  File "http\server.py", line 436, in handle
+  File "http\server.py", line 424, in handle_one_request
+  File "socketserver.py", line 766, in __init__
+  File "http\server.py", line 436, in handle
+  File "http\server.py", line 424, in handle_one_request
+  File "http\server.py", line 676, in do_GET
+  File "http\server.py", line 771, in send_head
+  File "http\server.py", line 538, in end_headers
+  File "http\server.py", line 676, in do_GET
+  File "http\server.py", line 542, in flush_headers
+  File "socketserver.py", line 845, in write
+  File "http\server.py", line 771, in send_head
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+  File "http\server.py", line 538, in end_headers
+----------------------------------------
+  File "http\server.py", line 542, in flush_headers
+  File "socketserver.py", line 845, in write
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+----------------------------------------
+Traceback (most recent call last):
+  File "C:\QARunners\workbench-probe.py", line 103, in <module>
+    ids.append(next(event['event']['snapshot']['task_id'] for event in response['events']
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+StopIteration

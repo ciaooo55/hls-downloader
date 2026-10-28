@@ -1,0 +1,4 @@
+  File "C:\QARunners\workbench-probe.py", line 106
+    (items := core({'type': 'snapshot', 'request_id': 3})['tasks'])) == 2 else None),
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: assignment expression cannot be used in a comprehension iterable expression

@@ -1,0 +1,30 @@
+{
+  "tests": 62.0,
+  "passed": true,
+  "suites": [
+    {
+      "name": "com.hlsdownloader.desktop.ProtocolTest",
+      "failures": 0,
+      "tests": 26,
+      "errors": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.ResponsiveLayoutTest",
+      "failures": 0,
+      "tests": 22,
+      "errors": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.TaskIndexTest",
+      "failures": 0,
+      "tests": 4,
+      "errors": 0
+    },
+    {
+      "name": "com.hlsdownloader.desktop.TaskTableKeyResolutionTest",
+      "failures": 0,
+      "tests": 10,
+      "errors": 0
+    }
+  ]
+}
