@@ -81,6 +81,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -2865,6 +2866,7 @@ private data class TaskContextMenuRequest(
     val savedColumnLayout by rememberUpdatedState(columnLayout)
     val commitColumnLayout by rememberUpdatedState(onColumnLayoutChange)
     val density = LocalDensity.current
+    val dragTouchSlop = LocalViewConfiguration.current.touchSlop
     fun activate(task: DownloadTask) {
         val action = taskActivationAction(task.source)
         if (action == null) onDetails(task.id) else onAction(task.id, action)
@@ -3081,12 +3083,19 @@ private data class TaskContextMenuRequest(
                                     }
                                 }
                             }
-                            .onPointerEvent(PointerEventType.Move, PointerEventPass.Initial) { event ->
+                            .onPointerEvent(PointerEventType.Move, PointerEventPass.Main) { event ->
                                 val start = dragStart ?: return@onPointerEvent
+                                // 子控件（列宽、队列排序等）优先拥有已经接管的拖动。
+                                if (event.changes.any { it.isConsumed }) {
+                                    dragStart = null
+                                    dragCurrent = null
+                                    dragSelecting = false
+                                    return@onPointerEvent
+                                }
                                 if (!event.buttons.isPrimaryPressed) return@onPointerEvent
                                 val current = event.changes.firstOrNull()?.position ?: return@onPointerEvent
                                 dragCurrent = current
-                                if (!dragSelecting && (current - start).getDistance() >= 5f) dragSelecting = true
+                                if (!dragSelecting && (current - start).getDistance() > dragTouchSlop) dragSelecting = true
                                 if (dragSelecting) {
                                     val top = minOf(start.y, current.y)
                                     val bottom = maxOf(start.y, current.y)
@@ -3335,7 +3344,22 @@ private fun TaskHeader(value: String, modifier: Modifier, field: String, taskSor
                     "actions" -> Row(Modifier.width(column.width), verticalAlignment = Alignment.CenterVertically) {
                         if (!columns.compact && queueOrder && task.status == "排队中") {
                             var dragY by remember { mutableFloatStateOf(0f) }
-                            Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint, modifier = Modifier.size(34.dp).padding(8.dp).pointerInput(task.id) { detectDragGestures(onDragStart = { dragY = 0f }, onDragEnd = { val delta = (dragY / 52f).toInt(); if (delta != 0) onQueueMove(delta); dragY = 0f }) { change, amount -> change.consume(); dragY += amount.y } })
+                            val rowHeightPx = with(LocalDensity.current) { 52.dp.toPx() }
+                            Icon(Icons.Outlined.DragHandle, "拖动排序", tint = faint,
+                                modifier = Modifier.size(34.dp).padding(8.dp).pointerInput(task.id, rowHeightPx) {
+                                    detectDragGestures(
+                                        onDragStart = { dragY = 0f },
+                                        onDragCancel = { dragY = 0f },
+                                        onDragEnd = {
+                                            val delta = (dragY / rowHeightPx).roundToInt()
+                                            if (delta != 0) onQueueMove(delta)
+                                            dragY = 0f
+                                        },
+                                    ) { change, amount ->
+                                        change.consume()
+                                        dragY += amount.y
+                                    }
+                                })
                         } else {
                             val startAction = taskStartAction(task.source)
                             val primaryAction = when {

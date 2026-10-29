@@ -1,0 +1,11 @@
+[
+  {
+    "step": "01-normal-maximized",
+    "at": "2026-10-29T10:10:35.485Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 1968164,
+      "title": "Windows 沙盒"
+    }
+  }
+]

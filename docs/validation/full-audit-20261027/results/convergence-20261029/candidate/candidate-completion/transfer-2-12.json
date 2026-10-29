@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "connections": 12,
+  "stage_volume": "C:",
+  "payload_bytes": 268435456,
+  "elapsed_ms": 3701.24,
+  "throughput_mib_s": 69.17,
+  "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+  "range_requests": 49,
+  "full_requests": 0,
+  "requested_range_bytes": 268435457,
+  "unique_requested_range_bytes": 268435456,
+  "overlapping_requested_range_bytes": 1,
+  "bytes_sent_at_publish": 268435457,
+  "post_publish_extra_network_bytes": 0,
+  "baseline_working_set_mib": 11.76,
+  "peak_working_set_mib": 24.58,
+  "settled_working_set_mib": 16.04,
+  "working_set_growth_mib": 12.82,
+  "thresholds": {
+    "minimum_local_throughput_mib_s": 20,
+    "maximum_working_set_growth_mib": 256,
+    "post_publish_extra_network_bytes": 0
+  },
+  "passed": true
+}

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.hlsdownloader.desktop.SelectionTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-10-29T10:38:11.071Z" hostname="DESKTOP-FTE6QH2" time="0.322">
+  <properties/>
+  <testcase name="shiftClickReplacesWithContiguousRange()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.174"/>
+  <testcase name="plainClickReplacesSelection()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.001"/>
+  <testcase name="emptyBatchHasNoActions()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.008"/>
+  <testcase name="archiveActionsNeverExposeMediaCommands()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.022"/>
+  <testcase name="playableMediaActionsRemainAvailable()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.001"/>
+  <testcase name="ctrlShiftClickAddsContiguousRange()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.002"/>
+  <testcase name="ctrlLeftDragAddsToExistingSelection()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.004"/>
+  <testcase name="batchMenuKeepsOnlyCommonBatchSafeActions()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.002"/>
+  <testcase name="executableFilesKeepLaunchAction()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.001"/>
+  <testcase name="startButtonResumesPausedRetriesFailedAndPreservesCompletedDownloads()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.001"/>
+  <testcase name="leftDragSelectsEveryCrossedRow()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.002"/>
+  <testcase name="derivedBatchActionsRequireEverySelectedTaskToSupportThem()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.002"/>
+  <testcase name="ctrlClickTogglesOneRow()" classname="com.hlsdownloader.desktop.SelectionTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

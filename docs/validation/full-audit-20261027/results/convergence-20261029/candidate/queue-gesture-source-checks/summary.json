@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "name": "com.hlsdownloader.desktop.SelectionTest",
+      "tests": "13",
+      "failures": "0",
+      "errors": "0"
+    },
+    {
+      "name": "com.hlsdownloader.desktop.TaskTableKeyResolutionTest",
+      "tests": "10",
+      "failures": "0",
+      "errors": "0"
+    }
+  ],
+  "scope": "Pure selection/key unit tests and Kotlin compilation; no host GUI automation. Native gesture validation pending new package.",
+  "offline_attempt": "Missing cached test dependencies; retained failed log",
+  "online_attempt": "BUILD SUCCESSFUL"
+}

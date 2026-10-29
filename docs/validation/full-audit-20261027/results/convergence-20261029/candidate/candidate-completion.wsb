@@ -1,0 +1,40 @@
+<Configuration>
+  <VGpu>Disable</VGpu>
+  <Networking>Disable</Networking>
+  <MemoryInMB>4096</MemoryInMB>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>A:\Ubuntu\测试\hls-downloader\artifacts\v7-productization\candidate</HostFolder>
+      <SandboxFolder>C:\QACandidate</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\convergence-20261029\candidate-completion-runners</HostFolder>
+      <SandboxFolder>C:\QACandidateRunners</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\convergence-20261029\candidate-completion</HostFolder>
+      <SandboxFolder>C:\QACandidateReports</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>A:\Ubuntu\测试\hls-downloader\scripts\validation</HostFolder>
+      <SandboxFolder>C:\QAScripts</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\Users\lee\.cache\codex-runtimes\codex-primary-runtime\dependencies\python</HostFolder>
+      <SandboxFolder>C:\QAPython</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>A:\Ubuntu\测试\hls-downloader\.tool-cache\paused-followup-20261029\input</HostFolder>
+      <SandboxFolder>C:\QACurrentInput</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    </MappedFolders>
+  <LogonCommand>
+    <Command>C:\QAPython\python.exe C:\QACandidateRunners\guest.py</Command>
+  </LogonCommand>
+</Configuration>

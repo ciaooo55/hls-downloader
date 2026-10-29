@@ -1,0 +1,21 @@
+{
+  "error": "real transfer performance thresholds failed",
+  "exit_code_before_cleanup": null,
+  "pid": 4636,
+  "engine": "C:\\QACandidateInstalled\\app\\resources\\HLSDownloaderEngine.exe",
+  "root": "C:\\QACandidateWork\\performance\\hls-v7-transfer-performance-ipftmopd",
+  "environment": {
+    "HLS_UI_TEST_API": "1",
+    "HLS_UI_TEST_PORT": "18744",
+    "HLS_UI_TEST_TOKEN": "candidate-local-20261029-ui",
+    "HLS_V7_CORE_BIND": "127.0.0.1:49749",
+    "HLS_V7_CORE_TCP": "1",
+    "HLS_V7_DATA_DIR": "C:\\QACandidateWork\\performance\\hls-v7-transfer-performance-ipftmopd\\data",
+    "HLS_V7_DOWNLOAD_DIR": "C:\\QACandidateWork\\performance\\hls-v7-transfer-performance-ipftmopd\\downloads",
+    "HLS_V7_PIPE": "\\\\.\\pipe\\HLSTransferSmoke-4680-49749",
+    "HLS_V6_SKIP_MIGRATE": "1",
+    "HLS_V7_STARTUP_PROFILE": "1",
+    "HLS_HTTP_IO_PROFILE": "1"
+  },
+  "runtime_logs": {}
+}

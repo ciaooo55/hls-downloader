@@ -86,8 +86,8 @@
       "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
       "core_command": "task_action/reorder_queue/place_queue",
       "state_event": "task_updated",
-      "verification": "Historical evidence (not a current complete native-input certification): desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest; r22 default activation changed to completed media play/file open, otherwise details; targeted key/action/range tests passed.",
-      "gap": "当前候选未执行完整原生选择、键盘和拖动矩阵；完成项Enter/双击的新分派有定向回归，未进行物理输入验收。"
+      "verification": "Historical evidence (not a current complete native-input certification): desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest; r22 default activation changed to completed media play/file open, otherwise details; targeted key/action/range tests passed. 2026-10-29 ce9a290b candidate native selection/key operations passed in limited scope; theme/search/column followup passed. Native reorder drag reproduced parent gesture interception; Main-pass consumption and DPI row-height source fix compiled with pure selection/key tests.",
+      "gap": "队列排序手势修复待新候选沙盒真实输入验收；完整原生矩阵尚未完成。原候选失败证据保留。"
     },
     {
       "id": "tasks.named_queue_profiles",
