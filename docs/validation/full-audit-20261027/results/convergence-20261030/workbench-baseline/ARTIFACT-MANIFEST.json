@@ -1,0 +1,36 @@
+{
+    "schema":  1,
+    "product_version":  "7.0.3",
+    "package_tier":  "candidate",
+    "source_commit":  "c95c61ce8cbe3b01a0cb02e346432f6234eeee96",
+    "source_tree":  "a87cf47fd5f2f3e8c46dbf7260c897abe371d597",
+    "feature_parity_path":  "FEATURE-PARITY.json",
+    "feature_parity_sha256":  "bb063c894260e0268899a504d47cb5d875c51ad4e7a2a838f2f0df06f0db25b0",
+    "artifacts":  {
+                      "exe":  {
+                                  "path":  "HLSDownloader-7.0.3-Windows-x64-candidate.exe",
+                                  "sha256":  "8b8e36f84f92a79c4ccae90fe8a258bc9a03872d97b769c2a62dcdc9691a7b9e"
+                              },
+                      "msi":  {
+                                  "path":  "HLSDownloader-7.0.3-Windows-x64-candidate.msi",
+                                  "sha256":  "be7bf1c650df10cfa897b01aae07c30adac76ec3ae2354de2d6ab28f28af5843"
+                              },
+                      "portable":  {
+                                       "path":  "HLSDownloader-7.0.3-Windows-x64-Portable-candidate.zip",
+                                       "sha256":  "41bdbf29d1cc9f2c3dccb8da90620d37153e215a1a1d34cda228d76b84e17a70"
+                                   }
+                  },
+    "extensions":  {
+                       "Chromium":  {
+                                        "version":  "7.0.3",
+                                        "path":  "extensions/HLSDownloader-7.0.3-Chromium.zip",
+                                        "sha256":  "c517dfeb3e25ac0526f8826e408b851b5cfc6ca85d5af00d2ce9c5c82d59671e"
+                                    },
+                       "Firefox":  {
+                                       "version":  "7.0.3",
+                                       "path":  "extensions/HLSDownloader-7.0.3-Firefox.zip",
+                                       "sha256":  "0d09ed34a0ee95f2415e313936898c37d8a41bb0d57222e57c718bf92610c51f"
+                                   }
+                   },
+    "generated_at_utc":  "2026-10-29T14:45:33.8008269Z"
+}

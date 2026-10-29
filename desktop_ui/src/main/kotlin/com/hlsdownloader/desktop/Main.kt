@@ -3782,29 +3782,33 @@ private fun QueueManagerDialog(
                         }, enabled = !saving && profiles.size < 32, modifier = Modifier.size(30.dp)) { Icon(Icons.Outlined.Add, "新建队列", tint = blue, modifier = Modifier.size(18.dp)) }
                     }
                     Spacer(Modifier.height(5.dp))
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                        profiles.forEach { profile ->
-                            val active = profile.id == selected.id
-                            val feedback = rememberPressFeedback(
-                                restColor = if (active) selectedSurface else Color.Transparent,
-                                hoverColor = if (active) selectedSurface else surface3,
-                                pressScale = .99f,
-                            )
-                            Row(
-                                Modifier.fillMaxWidth().pressFeedback(feedback, RoundedCornerShape(Radius.md))
-                                    .clickable(enabled = !saving, interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
-                                    .padding(horizontal = 10.dp, vertical = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(if (profile.enabled) Icons.Outlined.PlayCircleOutline else Icons.Outlined.PauseCircleOutline, null, tint = if (profile.enabled) blue else faint, modifier = Modifier.size(17.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(profile.name, color = ink, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    val speed = if (profile.speedLimitKib > 0) " · ${profile.speedLimitKib} KiB/s" else " · 不限速"
-                                    Text("优先级 ${profile.priority} · 并发 ${profile.maxActive}$speed", color = faint, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        val profilesScroll = rememberScrollState()
+                        Column(Modifier.fillMaxSize().verticalScroll(profilesScroll).padding(end = 12.dp)) {
+                            profiles.forEach { profile ->
+                                val active = profile.id == selected.id
+                                val feedback = rememberPressFeedback(
+                                    restColor = if (active) selectedSurface else Color.Transparent,
+                                    hoverColor = if (active) selectedSurface else surface3,
+                                    pressScale = .99f,
+                                )
+                                Row(
+                                    Modifier.fillMaxWidth().pressFeedback(feedback, RoundedCornerShape(Radius.md))
+                                        .clickable(enabled = !saving, interactionSource = feedback.interaction, indication = null) { selectedId = profile.id }
+                                        .padding(horizontal = 10.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(if (profile.enabled) Icons.Outlined.PlayCircleOutline else Icons.Outlined.PauseCircleOutline, null, tint = if (profile.enabled) blue else faint, modifier = Modifier.size(17.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(profile.name, color = ink, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        val speed = if (profile.speedLimitKib > 0) " · ${profile.speedLimitKib} KiB/s" else " · 不限速"
+                                        Text("优先级 ${profile.priority} · 并发 ${profile.maxActive}$speed", color = faint, fontSize = TypeScale.micro, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
                                 }
                             }
                         }
+                        VerticalScrollbar(rememberScrollbarAdapter(profilesScroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp), style = workbenchScrollbarStyle())
                     }
                     HorizontalDivider(color = border)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -3819,66 +3823,70 @@ private fun QueueManagerDialog(
                     }
                 }
                 Box(Modifier.width(1.dp).fillMaxHeight().background(border))
-                Column(Modifier.weight(1f).fillMaxHeight().padding(start = 16.dp).verticalScroll(rememberScrollState())) {
-                    DialogLabel("队列名称")
-                    OutlinedTextField(selected.name, { value -> update { it.copy(name = value.take(40)) } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = selected.name.isBlank(), shape = RoundedCornerShape(Radius.md))
-                    Spacer(Modifier.height(8.dp))
-                    SettingRow("启用队列", "停用后保留任务，但不会开始新的下载", selected.enabled) { value -> update { it.copy(enabled = value) } }
-                    Row(Modifier.fillMaxWidth()) {
-                        Column(Modifier.weight(1f)) {
-                            DialogLabel("优先级 (-100 至 100)")
-                            OutlinedTextField(priorityInput, { value -> priorityInput = value; value.toIntOrNull()?.takeIf { it in -100..100 }?.let { number -> update { it.copy(priority = number) } } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = !priorityValid, shape = RoundedCornerShape(Radius.md))
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            DialogLabel("最大活动任务")
-                            OutlinedTextField(maxActiveInput, { value -> maxActiveInput = value; value.toIntOrNull()?.takeIf { it in 1..64 }?.let { number -> update { it.copy(maxActive = number) } } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = !maxActiveValid, shape = RoundedCornerShape(Radius.md))
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    DialogLabel("队列总限速（KiB/s）")
-                    OutlinedTextField(
-                        speedInput,
-                        { value -> speedInput = value; value.toLongOrNull()?.takeIf { it in 0..1_048_576 }?.let { number -> update { it.copy(speedLimitKib = number) } } },
-                        Modifier.fillMaxWidth(),
-                        enabled = !saving,
-                        isError = !speedValid,
-                        singleLine = true,
-                        supportingText = { Text("0 表示不限速；同一队列的活动任务共享该速度", color = faint, fontSize = TypeScale.micro) },
-                        shape = RoundedCornerShape(Radius.md),
-                    )
-                    SettingRow("启用时间表", "只在指定星期和时段启动新任务", selected.scheduleEnabled) { value -> update { it.copy(scheduleEnabled = value) } }
-                    if (selected.scheduleEnabled) {
+                Box(Modifier.weight(1f).fillMaxHeight().padding(start = 16.dp)) {
+                    val editorScroll = rememberScrollState()
+                    Column(Modifier.fillMaxSize().verticalScroll(editorScroll).padding(end = 12.dp)) {
+                        DialogLabel("队列名称")
+                        OutlinedTextField(selected.name, { value -> update { it.copy(name = value.take(40)) } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = selected.name.isBlank(), shape = RoundedCornerShape(Radius.md))
+                        Spacer(Modifier.height(8.dp))
+                        SettingRow("启用队列", "停用后保留任务，但不会开始新的下载", selected.enabled) { value -> update { it.copy(enabled = value) } }
                         Row(Modifier.fillMaxWidth()) {
-                            Column(Modifier.weight(1f)) { DialogLabel("开始时间"); OutlinedTextField(selected.startTime, { value -> update { it.copy(startTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)) }
+                            Column(Modifier.weight(1f)) {
+                                DialogLabel("优先级 (-100 至 100)")
+                                OutlinedTextField(priorityInput, { value -> priorityInput = value; value.toIntOrNull()?.takeIf { it in -100..100 }?.let { number -> update { it.copy(priority = number) } } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = !priorityValid, shape = RoundedCornerShape(Radius.md))
+                            }
                             Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) { DialogLabel("停止时间"); OutlinedTextField(selected.stopTime, { value -> update { it.copy(stopTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)) }
-                        }
-                        Spacer(Modifier.height(8.dp)); DialogLabel("生效星期")
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { index, label ->
-                                val day = index + 1
-                                val days = selected.activeDays.split(',').mapNotNull(String::toIntOrNull)
-                                val active = day in days
-                                TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f), containerColor = segmentBackground(active, selectedSurface, surface2), contentPadding = PaddingValues(0.dp), hoverColor = if (active) selectedSurface else surface3, pressedColor = if (active) selectedSurface else pressedSurface, pressScale = SEGMENT_SCALE) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
+                            Column(Modifier.weight(1f)) {
+                                DialogLabel("最大活动任务")
+                                OutlinedTextField(maxActiveInput, { value -> maxActiveInput = value; value.toIntOrNull()?.takeIf { it in 1..64 }?.let { number -> update { it.copy(maxActive = number) } } }, Modifier.fillMaxWidth(), enabled = !saving, singleLine = true, isError = !maxActiveValid, shape = RoundedCornerShape(Radius.md))
                             }
                         }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    DialogLabel("队列全部完成后")
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
-                        POWER_ACTION_OPTIONS.forEach { (value, label) ->
-                            val active = selected.completionAction == value
-                            TextButton(
-                                onClick = { update { it.copy(completionAction = value) } },
-                                modifier = Modifier.weight(1f),
-                                containerColor = segmentBackground(active, selectedSurface, Color.Transparent),
-                                contentPadding = PaddingValues(horizontal = 4.dp), hoverColor = if (active) selectedSurface else surface3, pressedColor = if (active) selectedSurface else pressedSurface, pressScale = SEGMENT_SCALE,
-                            ) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.micro) }
+                        Spacer(Modifier.height(8.dp))
+                        DialogLabel("队列总限速（KiB/s）")
+                        OutlinedTextField(
+                            speedInput,
+                            { value -> speedInput = value; value.toLongOrNull()?.takeIf { it in 0..1_048_576 }?.let { number -> update { it.copy(speedLimitKib = number) } } },
+                            Modifier.fillMaxWidth(),
+                            enabled = !saving,
+                            isError = !speedValid,
+                            singleLine = true,
+                            supportingText = { Text("0 表示不限速；同一队列的活动任务共享该速度", color = faint, fontSize = TypeScale.micro) },
+                            shape = RoundedCornerShape(Radius.md),
+                        )
+                        SettingRow("启用时间表", "只在指定星期和时段启动新任务", selected.scheduleEnabled) { value -> update { it.copy(scheduleEnabled = value) } }
+                        if (selected.scheduleEnabled) {
+                            Row(Modifier.fillMaxWidth()) {
+                                Column(Modifier.weight(1f)) { DialogLabel("开始时间"); OutlinedTextField(selected.startTime, { value -> update { it.copy(startTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)) }
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) { DialogLabel("停止时间"); OutlinedTextField(selected.stopTime, { value -> update { it.copy(stopTime = value.take(5)) } }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(Radius.md)) }
+                            }
+                            Spacer(Modifier.height(8.dp)); DialogLabel("生效星期")
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { index, label ->
+                                    val day = index + 1
+                                    val days = selected.activeDays.split(',').mapNotNull(String::toIntOrNull)
+                                    val active = day in days
+                                    TextButton(onClick = { update { profile -> profile.copy(activeDays = (if (active) days - day else days + day).distinct().sorted().joinToString(",")) } }, modifier = Modifier.weight(1f), containerColor = segmentBackground(active, selectedSurface, surface2), contentPadding = PaddingValues(0.dp), hoverColor = if (active) selectedSurface else surface3, pressedColor = if (active) selectedSurface else pressedSurface, pressScale = SEGMENT_SCALE) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.caption) }
+                                }
+                            }
                         }
+                        Spacer(Modifier.height(8.dp))
+                        DialogLabel("队列全部完成后")
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.md)).background(surface2).padding(3.dp)) {
+                            POWER_ACTION_OPTIONS.forEach { (value, label) ->
+                                val active = selected.completionAction == value
+                                TextButton(
+                                    onClick = { update { it.copy(completionAction = value) } },
+                                    modifier = Modifier.weight(1f),
+                                    containerColor = segmentBackground(active, selectedSurface, Color.Transparent),
+                                    contentPadding = PaddingValues(horizontal = 4.dp), hoverColor = if (active) selectedSurface else surface3, pressedColor = if (active) selectedSurface else pressedSurface, pressScale = SEGMENT_SCALE,
+                                ) { Text(label, color = if (active) blue else muted, fontSize = TypeScale.micro) }
+                            }
+                        }
+                        Text("只有该队列中的任务全部成功完成后才会触发，执行前可取消。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 4.dp))
+                        if (!valid) Text("请检查名称是否重复、时间与星期，以及优先级、并发和限速范围。", color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 8.dp))
                     }
-                    Text("只有该队列中的任务全部成功完成后才会触发，执行前可取消。", color = faint, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 4.dp))
-                    if (!valid) Text("请检查名称是否重复、时间与星期，以及优先级、并发和限速范围。", color = errorStrong, fontSize = TypeScale.micro, modifier = Modifier.padding(top = 8.dp))
+                    VerticalScrollbar(rememberScrollbarAdapter(editorScroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp), style = workbenchScrollbarStyle())
                 }
             }
         },
@@ -4316,7 +4324,7 @@ private fun HarvestDialog(
             "连接" -> ConnectionMap(task.source.connectionParts, task.source.connectionHint)
             "速度" -> SpeedHistory(task.source.speedHistory)
             "预览" -> ImagePreview(preview)
-            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp, max = 320.dp), color = surface2, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody) }
+            else -> Surface(Modifier.fillMaxWidth().heightIn(min = 210.dp), color = surface2, shape = RoundedCornerShape(Radius.md), border = BorderStroke(1.dp, border)) { Text((logLines ?: task.source.logTail).ifEmpty { listOf("暂无日志记录") }.joinToString("\n"), Modifier.padding(12.dp), color = muted, fontSize = TypeScale.caption, lineHeight = TypeScale.lineBody) }
         }
     }, actions = {
         val mediaCapable = taskSupportsMediaActions(task.source)

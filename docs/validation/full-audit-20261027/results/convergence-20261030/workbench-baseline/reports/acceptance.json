@@ -1,0 +1,41 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Remaining workbench native UI inspection",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "be7bf1c650df10cfa897b01aae07c30adac76ec3ae2354de2d6ab28f28af5843",
+  "phase": "cleanup-uninstall",
+  "native": {
+    "passed": false,
+    "scope": "Baseline remaining-workbench inspection only",
+    "source_commit": "c95c61ce8cbe3b01a0cb02e346432f6234eeee96",
+    "observations": {
+      "queue_editor": "150% viewport clips lower settings with no visible scrollbar; wheel reaches additional settings",
+      "details_overview": "opened through native row menu",
+      "details_logs": "opened and scrolled outer dialog; source has fixed maximum and no inner scroll"
+    },
+    "defects": {
+      "queue_scroll_discoverability": "reproduced",
+      "log_height_clipping": "confirmed by bounded Surface source; runtime final-line check interrupted"
+    },
+    "interruption": "System Run dialog appeared during capture. No input to that dialog; native input stopped. The dialog screenshot was not stored.",
+    "not_completed": [
+      "remaining settings tabs",
+      "native import/export",
+      "full keyboard and input submission"
+    ],
+    "evidence": "native-input/actions.json"
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "error": "AssertionError({'name': 'uninstall', 'exit_code': 1603, 'passed': False})",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QARunners\\guest.py\", line 164, in <module>\n    assert item['passed'],item\n           ~~~~^^^^^^^^^^\nAssertionError: {'name': 'uninstall', 'exit_code': 1603, 'passed': False}\n",
+  "cleanup_uninstall": {
+    "name": "cleanup-uninstall",
+    "exit_code": 1603,
+    "passed": false
+  }
+}
