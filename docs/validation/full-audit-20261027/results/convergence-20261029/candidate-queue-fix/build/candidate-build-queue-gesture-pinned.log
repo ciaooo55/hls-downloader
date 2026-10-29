@@ -1,0 +1,164 @@
+WARNING: Feature 'architecture.single_core' cites artifact 
+'adversarial-2026-10-07/native-host-before-launch-lock-c.json', which is not present in this checkout, so that part of 
+the claim cannot be audited here.
+WARNING: Feature 'workbench.geometry' cites artifact 'adversarial-2026-10-08/portable-workbench.png', which is not 
+present in this checkout, so that part of the claim cannot be audited here.
+WARNING: Feature 'media.lan_share' cites artifact 'adversarial-2026-10-08/release-703-core-ci.log', which is not 
+present in this checkout, so that part of the claim cannot be audited here.
+WARNING: Feature 'updates.confirmed_download' cites artifact 'adversarial-2026-10-07/updater-corrected-tests.log', 
+which is not present in this checkout, so that part of the claim cannot be audited here.
+WARNING: Feature 'updates.confirmed_download' cites artifact 'adversarial-2026-10-07/updater-uac-corrected-smoke.log', 
+which is not present in this checkout, so that part of the claim cannot be audited here.
+WARNING: Feature 'browser.request_context_replay' cites artifact 
+'adversarial-2026-10-07/media-active-regression-edge.log', which is not present in this checkout, so that part of the 
+claim cannot be audited here.
+WARNING: Feature 'browser.request_context_replay' cites artifact 
+'adversarial-2026-10-07/media-active-regression-firefox.log', which is not present in this checkout, so that part of 
+the claim cannot be audited here.
+WARNING: Feature 'browser.request_context_replay' cites artifact 
+'adversarial-2026-10-07/public-media-active-edge.json', which is not present in this checkout, so that part of the 
+claim cannot be audited here.
+WARNING: Feature 'browser.request_context_replay' cites artifact 
+'adversarial-2026-10-07/public-media-active-firefox.json', which is not present in this checkout, so that part of the 
+claim cannot be audited here.
+WARNING: Feature 'browser.request_context_replay' cites artifact 
+'adversarial-2026-10-07/full-app-local-validation-final/installed-app.json', which is not present in this checkout, so 
+that part of the claim cannot be audited here.
+WARNING: Feature 'browser.request_context_replay' cites artifact 
+'adversarial-2026-10-07/public-download-standard-launch-lock.json', which is not present in this checkout, so that part
+ of the claim cannot be audited here.
+WARNING: Feature 'browser.hot_confirmation_process' cites artifact 
+'adversarial-2026-10-07/download-takeover-final.json', which is not present in this checkout, so that part of the claim
+ cannot be audited here.
+WARNING: Feature 'browser.hot_confirmation_process' cites artifact 'adversarial-2026-10-07/presenter-live.log', which 
+is not present in this checkout, so that part of the claim cannot be audited here.
+WARNING: Feature 'performance.release_thresholds' cites artifact 
+'adversarial-2026-10-08/release-703-native-host-wal-diagnostics.json', which is not present in this checkout, so that 
+part of the claim cannot be audited here.
+WARNING: Feature 'performance.release_thresholds' cites artifact 
+'adversarial-2026-10-08/release-703-native-host-wal-concurrent.json', which is not present in this checkout, so that 
+part of the claim cannot be audited here.
+WARNING: Feature 'performance.release_thresholds' cites artifact 
+'adversarial-2026-10-08/release-703-compose-frames-isolated.json', which is not present in this checkout, so that part 
+of the claim cannot be audited here.
+WARNING: Feature 'performance.release_thresholds' cites artifact 
+'adversarial-2026-10-08/release-703-runtime-soak.json', which is not present in this checkout, so that part of the 
+claim cannot be audited here.
+WARNING: Feature 'performance.release_thresholds' cites artifact 'adversarial-2026-10-08/release-703-transfer.json', 
+which is not present in this checkout, so that part of the claim cannot be audited here.
+WARNING: Feature 'performance.release_thresholds' cites artifact 
+'adversarial-2026-10-08/release-703-native-host-idle.json', which is not present in this checkout, so that part of the 
+claim cannot be audited here.
+WARNING: Feature 'package.install_upgrade_rollback' cites artifact 
+'adversarial-2026-10-07/isolated-msi-guard-final/result.json', which is not present in this checkout, so that part of 
+the claim cannot be audited here.
+WARNING: Feature 'package.install_upgrade_rollback' cites artifact 
+'adversarial-2026-10-07/isolated-msi-admin-final/result.json', which is not present in this checkout, so that part of 
+the claim cannot be audited here.
+WARNING: Feature 'package.install_upgrade_rollback' cites artifact 
+'adversarial-2026-10-07/full-app-local-validation-final/installed-app.json', which is not present in this checkout, so 
+that part of the claim cannot be audited here.
+WARNING: Feature 'package.install_upgrade_rollback' cites artifact 
+'adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json', which is not present in this 
+checkout, so that part of the claim cannot be audited here.
+FEATURE_PARITY=82.8% (24/29 verified, 5 partial, 0 blocked); CITED_ARTIFACTS=0/23 resolved; COMMIT=a2a75fe8899e859e907517f99a7d520a3b0cda6f; TREE=14a0b39bca7d6fae62319fb371f9131e7deeac4a; SHA256=20d6b353d305a2672236a8cb19dbc654fbd2a18d78da5e4a44b4a8ca98d160bd
+Already up to date
+Done in 938ms using pnpm v11.7.0
+$ wxt build -b chrome && wxt build -b firefox
+[log] 
+WXT 0.21.4
+[info] Building chrome-mv3 for production with Vite 8.1.5
+[?25l
+⠋ Preparing...[K
+⠋ [1/6] background[K
+⠙ [1/6] background[K
+⠹ [1/6] background[K
+⠹ [2/6] content[K
+⠸ [2/6] content[K
+⠼ [2/6] content[K
+⠼ [3/6] hooks[K
+⠴ [3/6] hooks[K
+⠴ [4/6] popup, subtitle-offscreen[K
+⠦ [4/6] popup, subtitle-offscreen[K
+⠧ [4/6] popup, subtitle-offscreen[K
+⠇ [4/6] popup, subtitle-offscreen[K
+⠏ [4/6] popup, subtitle-offscreen[K
+⠏ [5/6] subtitle-pcm[K
+⠋ [5/6] subtitle-pcm[K
+⠋ [6/6] takeover[K
+⠙ [6/6] takeover[K
+[K[?25h
+[K[?25h[success] Built extension in 2.921 s
+  ├─ .output\chrome-mv3\manifest.json                          1.64 kB  
+  ├─ .output\chrome-mv3\popup.html                             2.19 kB  
+  ├─ .output\chrome-mv3\subtitle-offscreen.html                281 B    
+  ├─ .output\chrome-mv3\background.js                          387.19 kB
+  ├─ .output\chrome-mv3\chunks\browser-B79nNR8W.js             788 B    
+  ├─ .output\chrome-mv3\chunks\popup-P9xw0Pcv.js               208.74 kB
+  ├─ .output\chrome-mv3\chunks\subtitle-offscreen-Duzk67A_.js  3.11 kB  
+  ├─ .output\chrome-mv3\content-scripts\content.js             90.77 kB 
+  ├─ .output\chrome-mv3\content-scripts\hooks.js               25.77 kB 
+  ├─ .output\chrome-mv3\content-scripts\takeover.js            13.58 kB 
+  ├─ .output\chrome-mv3\subtitle-pcm.js                        1.47 kB  
+  ├─ .output\chrome-mv3\assets\popup-DC57h4ym.css              11.57 kB 
+  ├─ .output\chrome-mv3\icon-128.png                           6.35 kB  
+  ├─ .output\chrome-mv3\icon-16.png                            729 B    
+  ├─ .output\chrome-mv3\icon-32.png                            1.50 kB  
+  ├─ .output\chrome-mv3\icon-48.png                            2.49 kB  
+  └─ .output\chrome-mv3\icon.png                               22.17 kB 
+Σ Total size: 780.34 kB                                      
+[success] Finished in 3.646 s
+[log] 
+WXT 0.21.4
+[info] Building firefox-mv3 for production with Vite 8.1.5
+[?25l
+⠋ Preparing...[K
+⠋ [1/6] background[K
+⠙ [1/6] background[K
+⠹ [1/6] background[K
+⠹ [2/6] content[K
+⠸ [2/6] content[K
+⠼ [2/6] content[K
+⠼ [3/6] hooks[K
+⠴ [3/6] hooks[K
+⠴ [4/6] popup, subtitle-offscreen[K
+⠦ [4/6] popup, subtitle-offscreen[K
+⠧ [4/6] popup, subtitle-offscreen[K
+⠇ [4/6] popup, subtitle-offscreen[K
+⠇ [5/6] subtitle-pcm[K
+⠇ [6/6] takeover[K
+⠏ [6/6] takeover[K
+[K[?25h
+[K[?25h[success] Built extension in 2.415 s
+  ├─ .output\firefox-mv3\manifest.json                          1.61 kB  
+  ├─ .output\firefox-mv3\popup.html                             2.19 kB  
+  ├─ .output\firefox-mv3\subtitle-offscreen.html                281 B    
+  ├─ .output\firefox-mv3\background.js                          388.05 kB
+  ├─ .output\firefox-mv3\chunks\browser-B79nNR8W.js             788 B    
+  ├─ .output\firefox-mv3\chunks\popup-P9xw0Pcv.js               208.74 kB
+  ├─ .output\firefox-mv3\chunks\subtitle-offscreen-Duzk67A_.js  3.11 kB  
+  ├─ .output\firefox-mv3\content-scripts\content.js             90.77 kB 
+  ├─ .output\firefox-mv3\content-scripts\hooks.js               25.77 kB 
+  ├─ .output\firefox-mv3\content-scripts\takeover.js            11.57 kB 
+  ├─ .output\firefox-mv3\subtitle-pcm.js                        1.47 kB  
+  ├─ .output\firefox-mv3\assets\popup-DC57h4ym.css              11.57 kB 
+  ├─ .output\firefox-mv3\icon-128.png                           6.35 kB  
+  ├─ .output\firefox-mv3\icon-16.png                            729 B    
+  ├─ .output\firefox-mv3\icon-32.png                            1.50 kB  
+  ├─ .output\firefox-mv3\icon-48.png                            2.49 kB  
+  └─ .output\firefox-mv3\icon.png                               22.17 kB 
+Σ Total size: 779.15 kB                                       
+[success] Finished in 3.153 s
+    Finished `release` profile [optimized] target(s) in 6.25s
+    Finished `release` profile [optimized] target(s) in 0.49s
+    Finished `release` profile [optimized] target(s) in 0.61s
+    Finished `release` profile [optimized] target(s) in 1.41s
+Candidate/formal packaging requires HLS_V7_FFMPEG_DIR, an ffmpeg-*/bin directory in the build cache, or ffmpeg.exe on P
+ATH.
+At A:\Ubuntu\测试\hls-downloader\scripts\build-v7.ps1:382 char:9
++         throw 'Candidate/formal packaging requires HLS_V7_FFMPEG_DIR, ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (Candidate/forma...eg.exe on PATH.:String) [], RuntimeException
+    + FullyQualifiedErrorId : Candidate/formal packaging requires HLS_V7_FFMPEG_DIR, an ffmpeg-*/bin directory in the  
+   build cache, or ffmpeg.exe on PATH.
+ 

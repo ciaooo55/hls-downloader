@@ -23,7 +23,8 @@
       "native_shell/src/core_service.rs",
       "native_shell/src/download_worker.rs",
       "native_shell/src/native_host.rs",
-      "native_shell/src/store.rs"
+      "native_shell/src/store.rs",
+      "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt"
     ]
   },
   "stage_1_scope": "复用29项清单的证据索引与差距分类；不将静态入口映射称为功能实测。每项完整证据不足时保留missing_evidence，限定范围的通过记录附在current_evidence中。",
@@ -785,10 +786,11 @@
       "historical_status_not_current_verdict": "partial",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
       "current_evidence": [
-        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/actions.json"
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/actions.json",
+        "results/convergence-20261029/candidate-queue-fix/summary.json"
       ],
-      "remaining": "同SHA候选实际完成单选、Ctrl+A、Escape、Shift+↓、↓、Enter、双击和右键目标核对；拖动排序、完整键盘矩阵尚未完成。",
-      "native_physical_input": "targeted_selection_keyboard_passed",
+      "remaining": "已复现队列手势缺陷在新候选闭环；其余原生交互仍按原矩阵逐项记录，不由协议检查代替。",
+      "native_physical_input": "本轮定向手势验收通过；不代表整项所有原生交互和全部控件通过。",
       "legacy_command_mapping": "task_action/reorder_queue/place_queue",
       "protocol": {
         "pipe_request_type": [
@@ -1048,10 +1050,11 @@
       "historical_status_not_current_verdict": "partial",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
       "current_evidence": [
-        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/workbench-probe.json"
+        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/workbench-probe.json",
+        "results/convergence-20261029/candidate-queue-fix/summary.json"
       ],
-      "remaining": "真实列宽拖动、键盘焦点遍历与完整按钮矩阵未执行；后台选择钩子和实屏捕获不代替物理输入验收。",
-      "native_physical_input": "not_performed",
+      "remaining": "已复现队列手势缺陷在新候选闭环；其余原生交互仍按原矩阵逐项记录，不由协议检查代替。",
+      "native_physical_input": "本轮定向手势验收通过；不代表整项所有原生交互和全部控件通过。",
       "legacy_command_mapping": "store_settings(task_column_layout); existing task_action",
       "protocol": {
         "pipe_request_type": [
@@ -1704,16 +1707,21 @@
       {
         "path": "native_shell/src/store.rs",
         "sha256": "6604006c0e0f31118229b6492743a339faa6c896ffe1034f247f1e8fe7d7f6fd"
+      },
+      {
+        "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+        "sha256": "8d8ae0cd28ebf4e82c6572aa258ee94664f8ee43d780d0b8474ea35784c77bad"
       }
     ],
     "scope": "Production changes committed and packaged in the local candidate. Later evidence-only commits do not alter candidate build provenance; this is not whole-project certification.",
     "implementation_commit": "95960f1d74f11131e4f4b5494ac73f138abd1285",
-    "packaging_commit": "ce9a290b117f0638d15c55b498ba257f47f64e1c"
+    "packaging_commit": "a2a75fe8899e859e907517f99a7d520a3b0cda6f",
+    "queue_gesture_commit": "a2a75fe8899e859e907517f99a7d520a3b0cda6f"
   },
   "local_candidate": {
     "source_commit": "ce9a290b117f0638d15c55b498ba257f47f64e1c",
     "msi_sha256": "15410198df9d67d3998a0a19087807e6ca375689399c4e9a534f8ae26cbd161b",
-    "path": "artifacts/v7-productization/candidate",
+    "path": "artifacts/v7-productization/candidate-history/ce9a290b",
     "report": "results/convergence-20261029/candidate/README.md",
     "release_ready": false,
     "signed": false,
@@ -1921,5 +1929,42 @@
       }
     },
     "fresh_uninstall_preserves_output": true
+  },
+  "queue_gesture_candidate": {
+    "source_commit": "a2a75fe8899e859e907517f99a7d520a3b0cda6f",
+    "msi_sha256": "179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355",
+    "path": "artifacts/v7-productization/candidate",
+    "report": "results/convergence-20261029/candidate-queue-fix/README.md",
+    "release_ready": false,
+    "signed": false,
+    "published": false,
+    "result": {
+      "passed": true,
+      "finished": true,
+      "scope": "Queue reorder and box selection regression on rebuilt candidate",
+      "host_product_install_performed": false,
+      "msi_sha256": "179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355",
+      "phase": "native-input-ready",
+      "native_input": {
+        "passed": true,
+        "scope": "Targeted native gesture regression only",
+        "queue_up_one": true,
+        "queue_down_one": true,
+        "box_selection_two": true,
+        "blank_clears_selection": true,
+        "column_resize": true,
+        "column_width_restore": true,
+        "application_java_scale_1_5": true,
+        "scaled_queue_up_two": true,
+        "scaled_queue_down_two": true,
+        "scaled_box_selection_two": true,
+        "system_dpi_changed": false,
+        "full_native_matrix": false
+      },
+      "performance": [],
+      "uninstall_preserves_output": true
+    },
+    "component_comparison": "candidate-queue-runners/component-comparison.json",
+    "scope": "Rebuilt UI candidate: fresh install, critical component hashes, pause/restart/resume SHA, native queue/selection regression and uninstall. Prior browser matrices apply only to the previously tested package and identical component payloads, not a newly executed same-MSI browser matrix."
   }
 }

@@ -1,0 +1,198 @@
+{
+  "selectedCount": 2,
+  "selectedTaskIds": [
+    "task-2",
+    "task-3"
+  ],
+  "inputTarget": "",
+  "contextMenuPosition": [],
+  "contextMenuTaskIds": [],
+  "contextMenuActions": [],
+  "activeFilter": "\u5168\u90e8",
+  "activeCategory": "",
+  "activeQueueId": "",
+  "controlBounds": {
+    "toolbar.\u65b0\u5efa": [
+      19,
+      53,
+      95,
+      98
+    ],
+    "toolbar.\u7c98\u8d34\u94fe\u63a5": [
+      105,
+      53,
+      211,
+      98
+    ],
+    "toolbar.\u5de5\u5177": [
+      474,
+      53,
+      550,
+      98
+    ],
+    "toolbar.\u8bbe\u7f6e": [
+      1610,
+      53,
+      1686,
+      98
+    ],
+    "toolbar.\u6df1\u8272\u6a21\u5f0f": [
+      1687,
+      53,
+      1732,
+      98
+    ],
+    "sidebar.status.\u5168\u90e8": [
+      11,
+      154,
+      221,
+      199
+    ],
+    "sidebar.status.\u8fdb\u884c\u4e2d": [
+      11,
+      199,
+      221,
+      244
+    ],
+    "sidebar.status.\u6392\u961f\u4e2d": [
+      11,
+      244,
+      221,
+      289
+    ],
+    "sidebar.status.\u5df2\u6682\u505c": [
+      11,
+      289,
+      221,
+      334
+    ],
+    "sidebar.status.\u5df2\u5b8c\u6210": [
+      11,
+      334,
+      221,
+      379
+    ],
+    "sidebar.status.\u5931\u8d25": [
+      11,
+      379,
+      221,
+      424
+    ],
+    "sidebar.toggle_queues": [
+      11,
+      439,
+      188,
+      482
+    ],
+    "sidebar.toggle_categories": [
+      11,
+      497,
+      221,
+      540
+    ],
+    "sidebar.category.\u5a92\u4f53": [
+      11,
+      540,
+      221,
+      585
+    ],
+    "sidebar.category.\u7a0b\u5e8f": [
+      11,
+      585,
+      221,
+      630
+    ],
+    "sidebar.category.\u538b\u7f29\u5305": [
+      11,
+      630,
+      221,
+      675
+    ],
+    "sidebar.category.\u5176\u4ed6": [
+      11,
+      675,
+      221,
+      720
+    ],
+    "content_header.clear_completed": [
+      1494,
+      113,
+      1613,
+      156
+    ],
+    "content_header.refresh": [
+      1613,
+      113,
+      1687,
+      156
+    ],
+    "toolbar.\u66f4\u591a\u64cd\u4f5c": [
+      1687,
+      112,
+      1732,
+      157
+    ],
+    "taskrow.task-1": [
+      238,
+      206,
+      1741,
+      271
+    ],
+    "task.action.task-1.open_folder": [
+      1645,
+      217,
+      1688,
+      260
+    ],
+    "taskrow.task-2": [
+      238,
+      271,
+      1741,
+      336
+    ],
+    "taskrow.task-3": [
+      238,
+      336,
+      1741,
+      401
+    ],
+    "taskrow.task-4": [
+      238,
+      401,
+      1741,
+      466
+    ],
+    "toolbar.\u5f00\u59cb / \u7ee7\u7eed": [
+      228,
+      53,
+      349,
+      98
+    ],
+    "toolbar.\u6682\u505c": [
+      351,
+      53,
+      427,
+      98
+    ],
+    "toolbar.\u5220\u9664\u6240\u9009\u4efb\u52a1": [
+      428,
+      53,
+      473,
+      98
+    ],
+    "toolbar.\u53d6\u6d88\u9009\u62e9": [
+      409,
+      112,
+      454,
+      157
+    ],
+    "toolbar.\u79fb\u52a8\u961f\u5217": [
+      454,
+      112,
+      499,
+      157
+    ]
+  },
+  "engineText": "\u4e0b\u8f7d\u5f15\u64ce \u00b7 \u5df2\u8fde\u63a5",
+  "noticeHistory": []
+}

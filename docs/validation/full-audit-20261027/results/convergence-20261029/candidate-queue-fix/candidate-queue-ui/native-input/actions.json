@@ -1,0 +1,110 @@
+[
+  {
+    "step": "01-new-candidate-ready",
+    "at": "2026-10-29T10:54:34.249Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "02-queue-up-one-row",
+    "at": "2026-10-29T10:54:48.267Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "03-queue-down-one-row",
+    "at": "2026-10-29T10:55:04.647Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "04-box-selection-observed",
+    "at": "2026-10-29T10:55:18.966Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "05-blank-clears-selection",
+    "at": "2026-10-29T10:55:54.430Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "06-column-resize",
+    "at": "2026-10-29T10:56:10.720Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "07-column-width-restored",
+    "at": "2026-10-29T10:56:29.388Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "08-application-scale-1_5",
+    "at": "2026-10-29T10:57:10.288Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "09-scaled-action-column",
+    "at": "2026-10-29T10:57:38.339Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "10-scaled-queue-up-two-rows",
+    "at": "2026-10-29T10:57:53.349Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "11-scaled-queue-down-two-rows",
+    "at": "2026-10-29T10:58:09.883Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  },
+  {
+    "step": "12-scaled-box-selection",
+    "at": "2026-10-29T10:58:35.490Z",
+    "window": {
+      "app": "process:C:\\Windows\\System32\\WindowsSandboxClient.exe",
+      "id": 3016688,
+      "title": "Windows 沙盒"
+    }
+  }
+]

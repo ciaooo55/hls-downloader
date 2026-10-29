@@ -137,7 +137,7 @@
   "candidate_acceptance": {
     "source_commit": "ce9a290b117f0638d15c55b498ba257f47f64e1c",
     "msi_sha256": "15410198df9d67d3998a0a19087807e6ca375689399c4e9a534f8ae26cbd161b",
-    "path": "artifacts/v7-productization/candidate",
+    "path": "artifacts/v7-productization/candidate-history/ce9a290b",
     "report": "results/convergence-20261029/candidate/README.md",
     "release_ready": false,
     "signed": false,
@@ -345,5 +345,42 @@
       }
     },
     "fresh_uninstall_preserves_output": true
+  },
+  "queue_gesture_candidate": {
+    "source_commit": "a2a75fe8899e859e907517f99a7d520a3b0cda6f",
+    "msi_sha256": "179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355",
+    "path": "artifacts/v7-productization/candidate",
+    "report": "results/convergence-20261029/candidate-queue-fix/README.md",
+    "release_ready": false,
+    "signed": false,
+    "published": false,
+    "result": {
+      "passed": true,
+      "finished": true,
+      "scope": "Queue reorder and box selection regression on rebuilt candidate",
+      "host_product_install_performed": false,
+      "msi_sha256": "179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355",
+      "phase": "native-input-ready",
+      "native_input": {
+        "passed": true,
+        "scope": "Targeted native gesture regression only",
+        "queue_up_one": true,
+        "queue_down_one": true,
+        "box_selection_two": true,
+        "blank_clears_selection": true,
+        "column_resize": true,
+        "column_width_restore": true,
+        "application_java_scale_1_5": true,
+        "scaled_queue_up_two": true,
+        "scaled_queue_down_two": true,
+        "scaled_box_selection_two": true,
+        "system_dpi_changed": false,
+        "full_native_matrix": false
+      },
+      "performance": [],
+      "uninstall_preserves_output": true
+    },
+    "component_comparison": "candidate-queue-runners/component-comparison.json",
+    "scope": "Rebuilt UI candidate: fresh install, critical component hashes, pause/restart/resume SHA, native queue/selection regression and uninstall. Prior browser matrices apply only to the previously tested package and identical component payloads, not a newly executed same-MSI browser matrix."
   }
 }

@@ -86,8 +86,8 @@
       "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
       "core_command": "task_action/reorder_queue/place_queue",
       "state_event": "task_updated",
-      "verification": "Historical evidence (not a current complete native-input certification): desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest; r22 default activation changed to completed media play/file open, otherwise details; targeted key/action/range tests passed. 2026-10-29 ce9a290b candidate native selection/key operations passed in limited scope; theme/search/column followup passed. Native reorder drag reproduced parent gesture interception; Main-pass consumption and DPI row-height source fix compiled with pure selection/key tests.",
-      "gap": "队列排序手势修复待新候选沙盒真实输入验收；完整原生矩阵尚未完成。原候选失败证据保留。"
+      "verification": "Historical evidence (not a current complete native-input certification): desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest; r22 default activation changed to completed media play/file open, otherwise details; targeted key/action/range tests passed. 2026-10-29 ce9a290b candidate native selection/key operations passed in limited scope; theme/search/column followup passed. Native reorder drag reproduced parent gesture interception; Main-pass consumption and DPI row-height source fix compiled with pure selection/key tests. a2a75fe candidate MSI 179c0ea3 native queue up/down one row, JVM1.5 up/down two rows, box select two in both scales, blank clear and column resize/restore passed; exact installed hashes and resumed output SHA passed. See full-audit-20261027/results/convergence-20261029/candidate-queue-fix.",
+      "gap": "本轮队列排序与框选手势缺陷已在新候选真实输入闭环；完整原生交互矩阵仍未全部验收，旧包失败保留。"
     },
     {
       "id": "tasks.named_queue_profiles",
@@ -160,7 +160,7 @@
       "core_command": "store_settings(task_column_layout); existing task_action",
       "state_event": "task snapshots",
       "verification": "r22: 62 targeted desktop tests, final focus-indicator JAR build, installed exact 220 component hashes and normal-window light100/dark150 captures; see docs/validation/full-audit-20261027/results/workbench-interaction",
-      "gap": "真实列宽拖动、键盘焦点遍历与完整按钮矩阵未执行；后台选择钩子和实屏捕获不代替物理输入验收。"
+      "gap": "新候选真实列宽拖动、还原及普通框选通过；原候选搜索/空结果重置和主题保存/重启通过。其余控件及完整原生矩阵仍未全部验收。"
     },
     {
       "id": "media.hls_transfer_parity",
@@ -260,7 +260,7 @@
       "core_command": "present_handoff/accept_handoff/reject_handoff",
       "state_event": "handoff_offered/handoff_resolved/browser_status",
       "verification": "Rust Core IPC handoff tests; extension 48 test files/344 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation",
-      "gap": "按用户确认的可靠性交接门槛，当前源码双浏览器GET/POST/Blob、回执故障、重载、重启和首次离线定向矩阵通过（convergence-20261029/validation.json）。尚待同SHA候选包与原生交互验证；DownloadItem按入口记录，真实站点全覆盖及签名扩展升级未完成。"
+      "gap": "用户确认的可靠性交接门槛在ce9a290b候选实际安装组件的Edge/Firefox定向矩阵及首次Host离线中通过。a2a75fe新候选相关二进制和扩展内部文件哈希相同，未重跑新MSI完整浏览器矩阵；DownloadItem按入口记录，真实站点全覆盖和签名扩展升级尚未完成。"
     },
     {
       "id": "browser.media_push_device_selection",
