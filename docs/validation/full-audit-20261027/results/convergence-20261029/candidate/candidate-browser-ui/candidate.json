@@ -1,0 +1,21 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "phase":  "prior-same-msi-selftest-and-performance",
+    "scope":  "Installation, recovery, installed browser matrices and native input; performance thresholds reported separately",
+    "host_product_install_performed":  false,
+    "checks":  [
+                   {
+                       "actual":  true,
+                       "name":  "same-msi-fresh-install"
+                   },
+                   {
+                       "actual":  "candidate-remaining: 1 connection 34.19MiB/s pass; 12 connections 12.19MiB/s fails 20MiB/s gate",
+                       "name":  "prior-same-msi-selftest-and-performance"
+                   }
+               ],
+    "native_input":  "pending",
+    "candidate_msi_sha256":  "15410198df9d67d3998a0a19087807e6ca375689399c4e9a534f8ae26cbd161b",
+    "error":  "edge-matrix exit 1",
+    "position":  "At C:\\QACandidateRunners\\candidate-acceptance-guest.ps1:14 char:24\r\n+  if($p.ExitCode -ne 0){throw \"$name exit $($p.ExitCode)\"}\r\n+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}

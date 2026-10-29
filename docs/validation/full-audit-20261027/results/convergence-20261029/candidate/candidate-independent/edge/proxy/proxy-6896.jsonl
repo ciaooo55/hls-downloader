@@ -1,0 +1,15 @@
+{"phase":"started","metadata":null,"utc":"2026-10-29T08:01:06.1043981Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt97vpf-5"},"utc":"2026-10-29T08:01:07.2097746Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt97vpf-5"},"utc":"2026-10-29T08:01:07.2306989Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt97vt2-6"},"utc":"2026-10-29T08:01:07.2306989Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt97vt2-6"},"utc":"2026-10-29T08:01:07.2349958Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt97uiw-1"},"utc":"2026-10-29T08:01:07.2360695Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt97uiw-1"},"utc":"2026-10-29T08:01:07.2677105Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt97ujd-2"},"utc":"2026-10-29T08:01:07.2707706Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt97ujd-2"},"utc":"2026-10-29T08:01:07.3020123Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt97um8-4"},"utc":"2026-10-29T08:01:07.3050345Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt97um8-4"},"utc":"2026-10-29T08:01:07.3367805Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt97xgy-7"},"utc":"2026-10-29T08:01:08.1456841Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt97xgy-7"},"utc":"2026-10-29T08:01:08.1617997Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt97xjp-8"},"utc":"2026-10-29T08:01:08.2445056Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt97xjp-8"},"utc":"2026-10-29T08:01:08.2656087Z"}

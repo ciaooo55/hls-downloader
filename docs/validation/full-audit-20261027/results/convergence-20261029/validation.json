@@ -133,5 +133,50 @@
         "name": "ffmpeg.exe"
       }
     ]
+  },
+  "candidate_acceptance": {
+    "source_commit": "ce9a290b117f0638d15c55b498ba257f47f64e1c",
+    "msi_sha256": "15410198df9d67d3998a0a19087807e6ca375689399c4e9a534f8ae26cbd161b",
+    "path": "artifacts/v7-productization/candidate",
+    "report": "results/convergence-20261029/candidate/README.md",
+    "release_ready": false,
+    "signed": false,
+    "published": false,
+    "lifecycle": "Forced rollback, running upgrade, installed component hashes, paused transfer resume and upgrade uninstall passed; fresh exact payload hashes passed.",
+    "performance": {
+      "one_connection_mib_s": 34.19,
+      "twelve_connections_mib_s": 12.19,
+      "minimum_mib_s": 20,
+      "twelve_connection_passed": false,
+      "output_hashes_correct": true,
+      "post_publish_extra_network_bytes": 0,
+      "scope": "Single local sandbox samples; no stable gain or competitive superiority claimed."
+    },
+    "browser": {
+      "edge": {
+        "passed": true,
+        "checks": 8,
+        "mode": "headful",
+        "report": "candidate-independent/edge/edge.json"
+      },
+      "firefox": {
+        "passed": true,
+        "checks": 8,
+        "report": "candidate-independent/firefox/firefox.json"
+      },
+      "initial_offline": {
+        "edge_checks": 2,
+        "firefox_checks": 2,
+        "passed": true
+      },
+      "retained_failure": "candidate-browser-ui: headless Edge restart ping timed out before reaching proxy; headful pass does not establish cause. Firefox temporary addon reinstalled, not signed upgrade."
+    },
+    "native_ui": {
+      "passed": false,
+      "status": "stopped_by_user_physical_escape",
+      "actual_native_actions_completed": 0,
+      "scope": "No native button/keyboard acceptance claimed; do not resume automatically."
+    },
+    "fresh_uninstall_preserves_output": true
   }
 }

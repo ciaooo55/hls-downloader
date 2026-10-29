@@ -1,0 +1,18 @@
+{
+  "error": "real transfer performance thresholds failed",
+  "exit_code_before_cleanup": null,
+  "pid": 5648,
+  "engine": "C:\\QACandidateInstalled\\app\\resources\\HLSDownloaderEngine.exe",
+  "root": "C:\\QACandidateWork\\performance\\hls-v7-transfer-performance-nrawseq_",
+  "environment": {
+    "HLS_V7_DATA_DIR": "C:\\QACandidateWork\\performance\\hls-v7-transfer-performance-nrawseq_\\data",
+    "HLS_VM_ACCEPTANCE": "1",
+    "HLS_V7_DOWNLOAD_DIR": "C:\\QACandidateWork\\performance\\hls-v7-transfer-performance-nrawseq_\\downloads",
+    "HLS_V7_CORE_TCP": "1",
+    "HLS_V7_CORE_BIND": "127.0.0.1:49677",
+    "HLS_V7_PIPE": "\\\\.\\pipe\\HLSTransferSmoke-4340-49677",
+    "HLS_V6_SKIP_MIGRATE": "1",
+    "HLS_V7_STARTUP_PROFILE": "1"
+  },
+  "runtime_logs": {}
+}

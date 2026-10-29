@@ -1,0 +1,44 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "phase":  "forced-rollback-preserves-old-binary-database-paused-task",
+    "scope":  "Installation, recovery, installed browser matrices and native input; performance thresholds reported separately",
+    "host_product_install_performed":  false,
+    "checks":  [
+                   {
+                       "actual":  true,
+                       "name":  "forced-rollback-preserves-old-binary-database-paused-task"
+                   }
+               ],
+    "native_input":  "pending",
+    "candidate_msi_sha256":  "15410198df9d67d3998a0a19087807e6ca375689399c4e9a534f8ae26cbd161b",
+    "baseline_performance":  {
+                                 "schema":  1,
+                                 "connections":  12,
+                                 "stage_volume":  "C:",
+                                 "payload_bytes":  268435456,
+                                 "elapsed_ms":  17329.53,
+                                 "throughput_mib_s":  14.77,
+                                 "sha256":  "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+                                 "range_requests":  49,
+                                 "full_requests":  0,
+                                 "requested_range_bytes":  268435457,
+                                 "unique_requested_range_bytes":  268435456,
+                                 "overlapping_requested_range_bytes":  1,
+                                 "bytes_sent_at_publish":  268435457,
+                                 "post_publish_extra_network_bytes":  0,
+                                 "baseline_working_set_mib":  11.79,
+                                 "peak_working_set_mib":  23.26,
+                                 "settled_working_set_mib":  15.91,
+                                 "working_set_growth_mib":  11.47,
+                                 "thresholds":  {
+                                                    "minimum_local_throughput_mib_s":  20,
+                                                    "maximum_working_set_growth_mib":  256,
+                                                    "post_publish_extra_network_bytes":  0
+                                                },
+                                 "passed":  false
+                             },
+    "baseline_performance_reused_from":  "candidate-reports/baseline-transfer-12.json",
+    "error":  "Cannot find path \u0027C:\\QACandidateInstalled\\app\\skiko-awt-runtime-windows-x64-0.150.1-7688828fa6d914af87c9c8fd5cdfb46.jar\u0027 because it does not exist.",
+    "position":  "At C:\\Windows\\system32\\WindowsPowerShell\\v1.0\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psm1:106 char:36\r\n+ ...     $pathsToProcess += Resolve-Path -LiteralPath $LiteralPath | Forea ...\r\n+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}

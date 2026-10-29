@@ -1,0 +1,17 @@
+{"phase":"started","metadata":null,"utc":"2026-10-29T07:59:15.9167646Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt95inx-2"},"utc":"2026-10-29T07:59:17.5213174Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt95inx-2"},"utc":"2026-10-29T07:59:17.5423429Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt95ine-1"},"utc":"2026-10-29T07:59:17.5528184Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt95ine-1"},"utc":"2026-10-29T07:59:17.5840437Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt95jf2-3"},"utc":"2026-10-29T07:59:17.5840437Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt95jf2-3"},"utc":"2026-10-29T07:59:17.6073992Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt95jg4-4"},"utc":"2026-10-29T07:59:17.6183964Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt95jg4-4"},"utc":"2026-10-29T07:59:17.6536933Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt95kws-5"},"utc":"2026-10-29T07:59:18.5535430Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt95kws-5"},"utc":"2026-10-29T07:59:18.5783643Z"}
+{"phase":"forwarded","metadata":{"op":"offer_local_file","request_id":"mvt95ml0-6"},"utc":"2026-10-29T07:59:20.7274887Z"}
+{"phase":"returned","metadata":{"op":"offer_local_file","request_id":"mvt95ml0-6"},"utc":"2026-10-29T07:59:20.7806718Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt95mn9-7"},"utc":"2026-10-29T07:59:20.8018140Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt95mn9-7"},"utc":"2026-10-29T07:59:20.8127592Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt95mqb-8"},"utc":"2026-10-29T07:59:21.1618222Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt95mqb-8"},"utc":"2026-10-29T07:59:21.1786505Z"}

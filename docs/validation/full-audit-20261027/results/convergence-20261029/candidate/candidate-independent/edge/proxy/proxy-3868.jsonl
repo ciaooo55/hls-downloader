@@ -1,0 +1,5 @@
+{"phase":"started","metadata":null,"utc":"2026-10-29T08:01:04.6469727Z"}
+{"phase":"forwarded","metadata":{"op":"offer_local_file","request_id":"mvt97ujl-3"},"utc":"2026-10-29T08:01:05.8212544Z"}
+{"phase":"returned","metadata":{"op":"offer_local_file","request_id":"mvt97ujl-3"},"utc":"2026-10-29T08:01:05.8553054Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt97uiw-1"},"utc":"2026-10-29T08:01:05.8573787Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt97uiw-1"},"utc":"2026-10-29T08:01:05.8863743Z"}

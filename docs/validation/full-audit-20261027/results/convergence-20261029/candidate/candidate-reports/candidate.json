@@ -1,0 +1,13 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "phase":  "setup",
+    "host_product_install_performed":  false,
+    "checks":  [
+
+               ],
+    "native_input":  "pending",
+    "candidate_msi_sha256":  "15410198df9d67d3998a0a19087807e6ca375689399c4e9a534f8ae26cbd161b",
+    "error":  "baseline-transfer-12 exit 1",
+    "position":  "At C:\\QACandidateRunners\\candidate-acceptance-guest.ps1:14 char:24\r\n+  if($p.ExitCode -ne 0){throw \"$name exit $($p.ExitCode)\"}\r\n+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}
