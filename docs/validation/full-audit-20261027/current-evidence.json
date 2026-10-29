@@ -1989,7 +1989,7 @@
   "dialog_gutter_candidate": {
     "source_commit": "c95c61ce8cbe3b01a0cb02e346432f6234eeee96",
     "msi_sha256": "be7bf1c650df10cfa897b01aae07c30adac76ec3ae2354de2d6ab28f28af5843",
-    "path": "artifacts/v7-productization/candidate",
+    "path": "artifacts/v7-productization/candidate-history/c95c61ce",
     "report": "results/convergence-20261029/candidate-dialog-gutter/README.md",
     "passed": true,
     "finished": true,
@@ -2000,5 +2000,46 @@
     "published": false,
     "uninstall_preserves_protocol_fixture": true,
     "previous_failure_retained": "results/convergence-20261029/candidate-visual-controls/README.md"
+  },
+  "workbench_layout_candidate": {
+    "date": "2026-10-30",
+    "source_commit": "63861dc0b3decf40e48887f7eb5677cff3409929",
+    "candidate_path": "artifacts/v7-productization/candidate",
+    "msi_sha256": "796b6af2e7b004d9b19ca9146244a125c55d5bd6311e094964075a3c1f4b6b25",
+    "release_ready": false,
+    "signed": false,
+    "published": false,
+    "build_passed": true,
+    "native_targeted_visual_passed": true,
+    "overall_acceptance_passed": false,
+    "reports": {
+      "baseline": "workbench-baseline/README.md",
+      "queue_logs_and_settings_defect": "workbench-scroll-regression/README.md",
+      "current_candidate": "settings-navigation-candidate/README.md"
+    },
+    "uninstall": {
+      "exit_code": 1603,
+      "cleanup_exit_code": 1603,
+      "action": "V7StopRunningApplications",
+      "output_hash_preserved": true,
+      "diagnostics": "empty helper logs; root cause unresolved"
+    },
+    "scope": "Queue scrollbars, full log readability and settings navigation. Initial layout pages only; not full UI or non-recording parity.",
+    "remaining": [
+      "installer preflight intermittent uninstall failure",
+      "full native text input submission",
+      "native import/export",
+      "full settings state and keyboard matrix",
+      "same MSI browser matrix",
+      "competitive throughput"
+    ],
+    "cleanup": {
+      "sandbox_closed": true,
+      "gradle_stopped": true,
+      "host_product_install_performed": false,
+      "evidence_and_candidates_retained": true
+    },
+    "report": "results/convergence-20261030/settings-navigation-candidate/README.md",
+    "validation": "results/convergence-20261030/validation.json"
   }
 }

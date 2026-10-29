@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "scope": "Settings navigation scrollbar and bounded workbench visual regression only",
+  "source_commit": "63861dc0b3decf40e48887f7eb5677cff3409929",
+  "checks": {
+    "settings_navigation_light_150_top_and_bottom": true,
+    "settings_navigation_dark_150_top_and_bottom": true,
+    "settings_appearance_native_save": true,
+    "theme_persists_after_ui_restart": true,
+    "settings_navigation_dark_default_small_bottom": true,
+    "queue_list_dark_default_drag_to_last": true,
+    "queue_editor_default_all_controls_visible": true,
+    "log_last_line_light_default": "completed finished 33554432/33554432",
+    "escape_closes_settings_and_queue": true,
+    "queue_fixture_completion_actions_none": true
+  },
+  "settings_initial_layout_pages": [
+    "通用",
+    "下载",
+    "计划",
+    "网络",
+    "媒体",
+    "BT",
+    "字幕翻译",
+    "投屏与推送",
+    "安全",
+    "浏览器",
+    "外观"
+  ],
+  "settings_initial_layout_note": "Pages checked across this and previous scoped run; not all settings states. Security read-only; no cloud call or device scan triggered.",
+  "not_completed": [
+    "full native text input submission",
+    "native import/export",
+    "all settings controls/states and keyboard matrix",
+    "same MSI browser matrix",
+    "competitive throughput"
+  ],
+  "evidence": "native-input/actions.json",
+  "system_dpi_changed": false,
+  "host_product_install_performed": false
+}
