@@ -1933,7 +1933,7 @@
   "queue_gesture_candidate": {
     "source_commit": "a2a75fe8899e859e907517f99a7d520a3b0cda6f",
     "msi_sha256": "179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355",
-    "path": "artifacts/v7-productization/candidate",
+    "path": "artifacts/v7-productization/candidate-history/a2a75fe",
     "report": "results/convergence-20261029/candidate-queue-fix/README.md",
     "release_ready": false,
     "signed": false,
@@ -1966,5 +1966,23 @@
     },
     "component_comparison": "candidate-queue-runners/component-comparison.json",
     "scope": "Rebuilt UI candidate: fresh install, critical component hashes, pause/restart/resume SHA, native queue/selection regression and uninstall. Prior browser matrices apply only to the previously tested package and identical component payloads, not a newly executed same-MSI browser matrix."
+  },
+  "shared_control_visual_candidate": {
+    "source_commit": "4699166b5ed2436e32fc1c9d481e380dad9e722f",
+    "msi_sha256": "a1a692b1dd86c37837a40b0cc8fc1f73baec31cbcb3932ed007068d4e35bdd9f",
+    "report": "results/convergence-20261029/candidate-visual-controls/README.md",
+    "passed": false,
+    "finished": true,
+    "public_ftps": true,
+    "lan_share": true,
+    "native_host_cold_first_response_ms": 155.46,
+    "native_host_threshold_ms": 1500,
+    "visual_defect": "150% new-download dialog scrollbar overlaps input right border",
+    "full_native_matrix": false,
+    "comparison": "IDM installation prerequisite failed; no performance samples",
+    "uninstall": true,
+    "uninstall_preserves_outputs": false,
+    "published": false,
+    "release_ready": false
   }
 }

@@ -246,3 +246,8 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 修复后的真实 Edge 接收、持久回执丢失重试、拒绝、一次性 POST、Blob，以及全新配置首次离线均通过限定链路验收；成品哈希一致，离线原响应只请求一次且没有新增 Core 任务。Chromium 的附件仍先创建 DownloadItem，当前 Firefox 实浏览器、完整矩阵及一次性响应保全仍未完成，**第2阶段仍未通过，不打包发布**。未使用桌面鼠标键盘；未在宿主运行或安装产品。全部本轮沙盒已关闭，删除曾遭拒绝的缓存未重试。原始失败、修复及当前源码哈希见[真实浏览器记录](results/browser-ownership/current-browser-20261029/README.md)。
 
 新队列修复候选来自 `a2a75fe`，MSI SHA256 `179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355`。关键安装组件10项、暂停重启续传SHA、默认缩放上下1行及JVM1.5倍上下2行排序、两种缩放框选2项、空白清空和列宽拖动/还原通过。正常卸载保留成品，沙盒已关闭，构建守护进程已停止；缓存和原始证据保留。详情见 [新候选报告](results/convergence-20261029/candidate-queue-fix/README.md)。旧候选完整包保留在 `artifacts/v7-productization/candidate-history/ce9a290b`；旧浏览器矩阵没有冒称在新MSI上重跑。
+
+
+## 2026-10-29：基础圆角与边框修正
+
+共享按钮、输入框、开关、菜单和弹窗的背景/边框/裁切及缩放顺序已修，源码 `4699166`。该候选FTPS、局域网分享和首次Host定向检查通过；默认缩放深浅主题若干画面正常，但150%新建弹窗发现滚动条覆盖输入框描边，整体保持失败，正在修正共享内容区间距。竞品对比安装准备失败，没有吞吐样本；输入与完整原生矩阵未完成。详见 [实屏记录](results/convergence-20261029/candidate-visual-controls/README.md)。此前非录制套件记录见 [原始归档](results/convergence-20261029/nonrecording/)；各自候选SHA独立，不计为本轮新MSI全部重跑。旧队列候选现位于 `artifacts/v7-productization/candidate-history/a2a75fe`。

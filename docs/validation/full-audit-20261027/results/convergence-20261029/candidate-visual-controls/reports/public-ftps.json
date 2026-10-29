@@ -1,0 +1,29 @@
+{
+  "passed": true,
+  "engine_sha256": "73dad52d2727f07a56fae114a7f53929622bbc6ccf08eb1e927369a829facd82",
+  "checks": [
+    {
+      "name": "public FTPS Rebex endpoint actual TLS and independent file SHA256",
+      "passed": true,
+      "actual": {
+        "bytes": 379,
+        "sha256": "b004de45d8a133e9713a369f9c912237e8ad35dd9140c0279d27bada067797f4",
+        "resume_file_bytes": 80000,
+        "resume_sha256": "23947a161ed84ed08525209bcf34ea4d1e39c717a6ed8430ce52ef824d6989c1",
+        "resume_checkpoints": [
+          {
+            "mode": "explicit",
+            "paused_bytes": 16384
+          }
+        ],
+        "server_documentation": "https://test.rebex.net/",
+        "reference_protocol": "explicit FTPS (public test file)",
+        "core_protocols": [
+          "explicit"
+        ]
+      }
+    }
+  ],
+  "sftp_host_key_persisted": false,
+  "isolated_process_stopped": true
+}

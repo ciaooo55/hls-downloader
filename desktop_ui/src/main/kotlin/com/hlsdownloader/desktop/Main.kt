@@ -3572,7 +3572,7 @@ internal fun WorkbenchDialog(
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .then(if (scrollable) Modifier.verticalScroll(dialogContentScroll) else Modifier),
+                                .then(if (scrollable) Modifier.verticalScroll(dialogContentScroll).padding(end = 12.dp) else Modifier),
                             content = content,
                         )
                         if (scrollable) {

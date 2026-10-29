@@ -1,0 +1,22 @@
+{
+    "schema":  1,
+    "record_scope":  "build_snapshot",
+    "validation_note":  "构建时快照；不随后续验收改写。最终验收以交付清单和报告为准，必须核对安装包 SHA256；release_ready 表示正式发布门禁，不等于候选包测试结果。",
+    "product_version":  "7.0.3",
+    "source_commit":  "4699166b5ed2436e32fc1c9d481e380dad9e722f",
+    "source_tree":  "d004396dff6b70dbf68ba08cd1aacc0e5054b2c4",
+    "source_branch":  "main",
+    "source_tag":  "",
+    "git_worktree_clean":  true,
+    "package_tier":  "candidate",
+    "release_ready":  false,
+    "feature_parity_path":  "config/release/feature-parity.json",
+    "feature_parity_sha256":  "bb063c894260e0268899a504d47cb5d875c51ad4e7a2a838f2f0df06f0db25b0",
+    "feature_summary":  {
+                            "verified":  24,
+                            "partial":  5,
+                            "blocked":  0,
+                            "total":  29
+                        },
+    "generated_at_utc":  "2026-10-29T13:46:25.2560646Z"
+}

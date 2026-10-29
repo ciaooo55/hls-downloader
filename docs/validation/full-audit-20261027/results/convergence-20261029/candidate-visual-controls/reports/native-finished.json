@@ -1,0 +1,20 @@
+{
+  "passed": false,
+  "scope": "Targeted shared-control inspection; default-scale light/dark and 150% dark new-task dialog only",
+  "source_commit": "4699166b5ed2436e32fc1c9d481e380dad9e722f",
+  "checks": {
+    "default_light_main_tools_batch_general_download_schedule_appearance": "observed_no_obvious_corner_break",
+    "theme_toggle_save": "observed_dark_main_after_save",
+    "default_dark_task_menu_and_new_dialog": "observed_no_obvious_corner_break",
+    "scale150_dark_main": "observed_responsive_sidebar",
+    "scale150_new_dialog": "failed_scrollbar_overlaps_input_right_border"
+  },
+  "limitations": [
+    "Single-line and multiline type_text did not reach guest; text-entry acceptance not passed",
+    "Tab outcome not confirmed because subsequent capture returned a non-target foreground window; no input sent to that window",
+    "No completed native download: scheduled fixture remains queued",
+    "Light scale150, normal smaller window, full keyboard and full workbench matrix not completed"
+  ],
+  "evidence": "native-input/actions.json",
+  "followup": "Reserve 12dp gutter in shared scrollable WorkbenchDialog; rebuild and inspect exact candidate"
+}

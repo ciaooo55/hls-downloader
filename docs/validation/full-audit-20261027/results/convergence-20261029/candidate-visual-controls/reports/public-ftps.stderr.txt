@@ -1,0 +1,5 @@
+[I 2026-10-29 22:02:28] concurrency model: async
+[I 2026-10-29 22:02:28] masquerade (NAT) address: None
+[I 2026-10-29 22:02:28] passive ports: None
+[I 2026-10-29 22:02:28] >>> starting FTP server on 127.0.0.1:49700, pid=6488 <<<
+[I 2026-10-29 22:03:05] >>> shutting down FTP server, pid=6488, 0 open socket(s) <<<

@@ -1,0 +1,12 @@
+{
+  "app/HLSDownloaderDesktop-7.0.3-*.jar": "230196394e5178db9e215221c394e5431b668fb83ea5c121db7baaa98b9c3517",
+  "app/resources/BUILD-PROVENANCE.json": "ed783644fa854c75fe4508b1878d28a105a6d47e73096353eeb01a75a838057d",
+  "app/resources/ffmpeg.exe": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98",
+  "app/resources/HLSDownloaderEngine.exe": "73dad52d2727f07a56fae114a7f53929622bbc6ccf08eb1e927369a829facd82",
+  "app/resources/HLSDownloaderNativeHost.exe": "15664eeffde79a78540f8ddc56ea269244926c609eca095f2d235cb494071922",
+  "app/resources/HLSDownloaderPresenter.exe": "0762c265e07fb536a72da29aaa4e1493ea781b61de20bf5d72d35bb3412fd032",
+  "app/resources/HLSDownloaderUpdater.exe": "67793b1cde98580cfe6b49540288a93d41a33e23c1741477581260db9d970959",
+  "app/resources/libmpv-2.dll": "f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea",
+  "app/resources/extensions/HLSDownloader-7.0.3-Chromium.zip": "259b09fc91f4adb8500f44e088d43fb940a7ea30ebece85c6265737fbaa93713",
+  "app/resources/extensions/HLSDownloader-7.0.3-Firefox.zip": "3fb49e6645029238f40e5b33b26bb64f4ca253b3d41344a850914c4e11b7ab28"
+}

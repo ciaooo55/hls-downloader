@@ -1,0 +1,51 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Shared control visual correction and targeted native acceptance",
+  "host_product_install_performed": false,
+  "suites": [
+    {
+      "name": "public-ftps",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "lan-share",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "native-host",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "msi_sha256": "a1a692b1dd86c37837a40b0cc8fc1f73baec31cbcb3932ed007068d4e35bdd9f",
+  "phase": "uninstall",
+  "native": {
+    "passed": false,
+    "scope": "Targeted shared-control inspection; default-scale light/dark and 150% dark new-task dialog only",
+    "source_commit": "4699166b5ed2436e32fc1c9d481e380dad9e722f",
+    "checks": {
+      "default_light_main_tools_batch_general_download_schedule_appearance": "observed_no_obvious_corner_break",
+      "theme_toggle_save": "observed_dark_main_after_save",
+      "default_dark_task_menu_and_new_dialog": "observed_no_obvious_corner_break",
+      "scale150_dark_main": "observed_responsive_sidebar",
+      "scale150_new_dialog": "failed_scrollbar_overlaps_input_right_border"
+    },
+    "limitations": [
+      "Single-line and multiline type_text did not reach guest; text-entry acceptance not passed",
+      "Tab outcome not confirmed because subsequent capture returned a non-target foreground window; no input sent to that window",
+      "No completed native download: scheduled fixture remains queued",
+      "Light scale150, normal smaller window, full keyboard and full workbench matrix not completed"
+    ],
+    "evidence": "native-input/actions.json",
+    "followup": "Reserve 12dp gutter in shared scrollable WorkbenchDialog; rebuild and inspect exact candidate"
+  },
+  "comparison": {
+    "name": "comparison",
+    "exit_code": 1,
+    "passed": false
+  },
+  "uninstall_preserves_outputs": false
+}

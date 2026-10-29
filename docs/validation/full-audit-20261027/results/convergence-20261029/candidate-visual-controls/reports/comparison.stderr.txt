@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "C:\QARunners\compare.py", line 28, in <module>
+    IDM = next(p for p in [Path(r'C:\Program Files (x86)\Internet Download Manager\IDMan.exe'),Path(r'C:\Program Files\Internet Download Manager\IDMan.exe')] if p.is_file())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+StopIteration
