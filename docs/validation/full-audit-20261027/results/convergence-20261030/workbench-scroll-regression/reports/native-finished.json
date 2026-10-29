@@ -1,0 +1,25 @@
+{
+  "passed": false,
+  "scope": "Queue scrollbars and complete logs passed; settings navigation defect found",
+  "source_commit": "dbc675914955db0dad47cd78df4df4fdf9beb3a0",
+  "checks": {
+    "queue_left_drag_to_last_profile": true,
+    "queue_right_drag_to_bottom": true,
+    "queue_light_dark_150": true,
+    "queue_native_save": true,
+    "queue_escape": true,
+    "log_last_line_dark_150": "completed finished 33554432/33554432"
+  },
+  "defects": {
+    "settings_navigation": "150% left tabs scroll but no visible scrollbar; source confirms no scrollbar bound to tabsScroll"
+  },
+  "not_completed": [
+    "default scale",
+    "remaining settings pages",
+    "native import/export",
+    "full text input submission"
+  ],
+  "evidence": "native-input/actions.json",
+  "system_dpi_changed": false,
+  "host_product_install_performed": false
+}

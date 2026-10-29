@@ -181,42 +181,45 @@ internal fun FullSettingsDialog(
 
     WorkbenchDialog(dismiss, "设置", "HLS Downloader ${Product.version}", 880.dp, scrollable = false, content = {
         Row(Modifier.fillMaxWidth().fillMaxHeight(), verticalAlignment = Alignment.Top) {
-            Column(
-                Modifier.width(138.dp).fillMaxHeight().verticalScroll(tabsScroll).padding(end = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                tabs.forEach { tab ->
-                    val active = tab.label == selected
-                    // 左侧标签栏：悬停把底色从 surface2 提到 surface3，按下缩 2%。
-                    // 选中态在悬停时不改底色（选中底上压着 blue 图标，往 blue 混会压低比值）。
-                    val feedback = rememberPressFeedback(
-                        restColor = if (active) selectedSurface else surface2,
-                        hoverColor = if (active) selectedSurface else surface3,
-                        pressScale = .98f,
-                        hoverMillis = 120,
-                    )
-                    Row(
-                        Modifier.fillMaxWidth().height(38.dp).pressFeedback(feedback, RoundedCornerShape(Radius.md))
-                            .selectable(
-                                selected = active,
-                                interactionSource = feedback.interaction,
-                                indication = null,
-                                role = Role.Tab,
-                                onClick = { selected = tab.label },
-                            )
-                            .padding(horizontal = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.width(3.dp).height(18.dp)
-                                .clip(RoundedCornerShape(Radius.sm))
-                                .background(if (active) blue else Color.Transparent),
+            Box(Modifier.width(138.dp).fillMaxHeight()) {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(tabsScroll).padding(end = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    tabs.forEach { tab ->
+                        val active = tab.label == selected
+                        // 左侧标签栏：悬停把底色从 surface2 提到 surface3，按下缩 2%。
+                        // 选中态在悬停时不改底色（选中底上压着 blue 图标，往 blue 混会压低比值）。
+                        val feedback = rememberPressFeedback(
+                            restColor = if (active) selectedSurface else surface2,
+                            hoverColor = if (active) selectedSurface else surface3,
+                            pressScale = .98f,
+                            hoverMillis = 120,
                         )
-                        Spacer(Modifier.width(7.dp))
-                        Icon(tab.icon, null, modifier = Modifier.size(17.dp), tint = if (active) blue else muted)
-                        Spacer(Modifier.width(8.dp)); Text(tab.label, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, color = ink)
+                        Row(
+                            Modifier.fillMaxWidth().height(38.dp).pressFeedback(feedback, RoundedCornerShape(Radius.md))
+                                .selectable(
+                                    selected = active,
+                                    interactionSource = feedback.interaction,
+                                    indication = null,
+                                    role = Role.Tab,
+                                    onClick = { selected = tab.label },
+                                )
+                                .padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier.width(3.dp).height(18.dp)
+                                    .clip(RoundedCornerShape(Radius.sm))
+                                    .background(if (active) blue else Color.Transparent),
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Icon(tab.icon, null, modifier = Modifier.size(17.dp), tint = if (active) blue else muted)
+                            Spacer(Modifier.width(8.dp)); Text(tab.label, fontSize = TypeScale.body, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, color = ink)
+                        }
                     }
                 }
+                VerticalScrollbar(rememberScrollbarAdapter(tabsScroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp), style = workbenchScrollbarStyle())
             }
             VerticalDivider(Modifier.fillMaxHeight().padding(end = 14.dp), color = border)
             Box(Modifier.weight(1f).fillMaxHeight()) {
