@@ -1983,6 +1983,22 @@
     "uninstall": true,
     "uninstall_preserves_outputs": false,
     "published": false,
-    "release_ready": false
+    "release_ready": false,
+    "path": "artifacts/v7-productization/candidate-history/4699166"
+  },
+  "dialog_gutter_candidate": {
+    "source_commit": "c95c61ce8cbe3b01a0cb02e346432f6234eeee96",
+    "msi_sha256": "be7bf1c650df10cfa897b01aae07c30adac76ec3ae2354de2d6ab28f28af5843",
+    "path": "artifacts/v7-productization/candidate",
+    "report": "results/convergence-20261029/candidate-dialog-gutter/README.md",
+    "passed": true,
+    "finished": true,
+    "scope": "Scrollable dialog gutter visual regression only",
+    "full_native_matrix": false,
+    "release_ready": false,
+    "signed": false,
+    "published": false,
+    "uninstall_preserves_protocol_fixture": true,
+    "previous_failure_retained": "results/convergence-20261029/candidate-visual-controls/README.md"
   }
 }

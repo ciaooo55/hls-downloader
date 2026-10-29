@@ -1,0 +1,234 @@
+{
+  "files": [
+    {
+      "path": ".gitattributes",
+      "bytes": 8,
+      "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da"
+    },
+    {
+      "path": "ARTIFACT-MANIFEST.json",
+      "bytes": 2074,
+      "sha256": "a21966d40924e20a17bccc5903761368ca51a641c8069a493e9619e5131cded6"
+    },
+    {
+      "path": "BUILD-PROVENANCE.json",
+      "bytes": 1061,
+      "sha256": "ae0728459a3c9bb289869ff08f9a72f04d9cff557ada0cb1c23dadd87945a1d5"
+    },
+    {
+      "path": "dialog-gutter-build.log.gz",
+      "bytes": 9843,
+      "sha256": "c805f1f6e28f20923631d03c92ea94c2104cfc748302e6aa8e4aa975af3a3dd1"
+    },
+    {
+      "path": "dialog-gutter-compile.log.gz",
+      "bytes": 352,
+      "sha256": "73fe15d4b5c9efe4ce6fcccf52d18ce8e0201213c5f2e48c146b4926fc9ce92a"
+    },
+    {
+      "path": "dialog-gutter.wsb",
+      "bytes": 1852,
+      "sha256": "57356e13f1cf98a7911eddc93972499ee1d081b5391ec1e20d035ae09d1999f5"
+    },
+    {
+      "path": "FEATURE-PARITY.json",
+      "bytes": 29707,
+      "sha256": "bb063c894260e0268899a504d47cb5d875c51ad4e7a2a838f2f0df06f0db25b0"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3097,
+      "sha256": "a64b8f9b01439ed654a8346306455dd06cd7edb62f2324801503e5be3e840ed5"
+    },
+    {
+      "path": "reports/acceptance.json",
+      "bytes": 1640,
+      "sha256": "7cad2a200faefcacf8219c05347d12bd9726c6989e5d60ee4b3b79188c1b0944"
+    },
+    {
+      "path": "reports/component-comparison.json",
+      "bytes": 11341,
+      "sha256": "1603b4a8a536db250d634f6ba50bf9c2225dca7e16199ea766bf03a934246154"
+    },
+    {
+      "path": "reports/core-final.json",
+      "bytes": 10567,
+      "sha256": "9b543b2a70df4ae7b82d1728ff908b8bc04a5a929f384275fb566429f82099cb"
+    },
+    {
+      "path": "reports/core-latest.json",
+      "bytes": 10567,
+      "sha256": "7d3c183959eb4d21c5baeb3be3fe78cc0037cea570a2313016e2a9660f6dcfd7"
+    },
+    {
+      "path": "reports/install.log.gz",
+      "bytes": 68465,
+      "sha256": "b7d8da21247dcce9adff8d9e53c235cbd4058187a219dfd402c1692989ca7854"
+    },
+    {
+      "path": "reports/install.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reports/install.stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reports/installed-critical-components.json",
+      "bytes": 1143,
+      "sha256": "71b9dd8560bb53f7a08c8e0e5164cccbac4efd68fd726e8f584f57842da4e6fa"
+    },
+    {
+      "path": "reports/native-core.log",
+      "bytes": 45,
+      "sha256": "c902779880e19af26517414dde6d4f01c3df9886e82ab98e92bdd60d2f222bdd"
+    },
+    {
+      "path": "reports/native-finished.json",
+      "bytes": 1093,
+      "sha256": "22e4f9c4754b5ae0d239dced65d8b31c49231792738c57c48292c88cc9d5a705"
+    },
+    {
+      "path": "reports/native-fixture-settings.json",
+      "bytes": 2355,
+      "sha256": "b72ec202f00f27ff5e0ed5449735fe836574c24d4559cd56886844085bed95e0"
+    },
+    {
+      "path": "reports/native-fixtures.json",
+      "bytes": 394,
+      "sha256": "bbe3c1bc0e71130f4d0fd085a8ada8e2fcd84a086cb29bde76a72af55f211c9a"
+    },
+    {
+      "path": "reports/native-input/01-main-light-scale150.png",
+      "bytes": 70321,
+      "sha256": "43563dc9f19426ecba7b3dcba25d00c57577ee8ad39b0ebe2658398c2349ce38"
+    },
+    {
+      "path": "reports/native-input/02-new-dialog-light-scale150-gutter-fixed.png",
+      "bytes": 77189,
+      "sha256": "6926306bed7b3bbbd42346a5c2eddfc853edf49cba9acc1dda0fbcc4cb00854f"
+    },
+    {
+      "path": "reports/native-input/03-new-dialog-light-scale150-tab-filename.png",
+      "bytes": 76836,
+      "sha256": "aaa873cd96ea3127a97b3b3aea01fc517ebbd2a860211efe4399be2106624709"
+    },
+    {
+      "path": "reports/native-input/04-new-dialog-light-scale150-shift-tab-link.png",
+      "bytes": 77193,
+      "sha256": "289aaa525bf7e6650361eeeb9cde41d1d06b281c1110d3fb86ffc5ecae66a364"
+    },
+    {
+      "path": "reports/native-input/05-new-dialog-light-scale150-scroll-bottom.png",
+      "bytes": 79308,
+      "sha256": "c8c6ec7bc80bc9e54d5034a9e1cc00fe87f00ddd6305ec115d8fc039b31bf1bf"
+    },
+    {
+      "path": "reports/native-input/06-escape-returns-to-main.png",
+      "bytes": 70222,
+      "sha256": "fb77bdbe6bad10d28d2e6f3204a9c7bc5a4ed4eccedd5163f2e3447105c7c032"
+    },
+    {
+      "path": "reports/native-input/07-main-dark-scale150.png",
+      "bytes": 69110,
+      "sha256": "e9e2ca55162e43152584e729be63faab4d692ae6fcf50c3b04151e8f68183c43"
+    },
+    {
+      "path": "reports/native-input/08-new-dialog-dark-scale150-gutter-fixed.png",
+      "bytes": 73323,
+      "sha256": "e86f0d51a8e305ab214fc7b6f8df740edf9b9117fe7af9462a8dd10ddf3533f2"
+    },
+    {
+      "path": "reports/native-input/09-main-dark-default-small.png",
+      "bytes": 65149,
+      "sha256": "a5412d0e8cae699ed72635444a1a515a4d2fabaa6bd3772da34ac4e0191e3d9a"
+    },
+    {
+      "path": "reports/native-input/10-new-dialog-dark-default-small.png",
+      "bytes": 71084,
+      "sha256": "824c066b69138a510c43cde3ee19974738b197fb4304ccc6d8162ff5772c5d44"
+    },
+    {
+      "path": "reports/native-input/11-main-light-default-small.png",
+      "bytes": 66323,
+      "sha256": "5689c2778bd215ab1fce75b38c05b41a6fcca98b42ce5006473c590f3e1f5610"
+    },
+    {
+      "path": "reports/native-input/12-new-dialog-light-default-small.png",
+      "bytes": 73122,
+      "sha256": "2292241b5a99c0234271f2ecd619a2f6459c5b1b3c90399ebce53ab9070d32cf"
+    },
+    {
+      "path": "reports/native-input/actions.json",
+      "bytes": 1127,
+      "sha256": "1b120bf088678bd6081ee189d6c289eada93ba9e66c949c005f84380f9c71bee"
+    },
+    {
+      "path": "reports/output-fixture-completed.json",
+      "bytes": 4745,
+      "sha256": "d7213412db3ce990158e980128de7443ac13d3ff617811c5b94bbc04c79e2773"
+    },
+    {
+      "path": "reports/output-fixture-create.json",
+      "bytes": 2084,
+      "sha256": "024126301fd95fcaaa3539472894a65e87d5477e4093a4c0032fdaf814df74f1"
+    },
+    {
+      "path": "reports/output-hashes.json",
+      "bytes": 127,
+      "sha256": "a287510a67f7fec04a967964f04d00dc79e6d54967c8fc02bcce1da31d416050"
+    },
+    {
+      "path": "reports/restart-completed-1.json",
+      "bytes": 23,
+      "sha256": "ebaffec56c38ad26bcec8c622d01f1075705aebe90d7627628e91e2de0dd2071"
+    },
+    {
+      "path": "reports/restart-ui-1.json",
+      "bytes": 16,
+      "sha256": "df83fe0e20dd8848dbc5ea09209e42587474cb016f13de27c89d300ddf351e95"
+    },
+    {
+      "path": "reports/settings-final.json",
+      "bytes": 2356,
+      "sha256": "fe538297c4bd826695b9a7714932b1894d71e7d34f6510276555e53e965dd456"
+    },
+    {
+      "path": "reports/settings-latest.json",
+      "bytes": 2356,
+      "sha256": "fcda34b55df2f007439a9d9384014cc2feafd0fd09ed95d6c7b45bc8f77f6a7d"
+    },
+    {
+      "path": "reports/state-latest.json",
+      "bytes": 3350,
+      "sha256": "8da30ff7ffdae68d803f508926546e303f5b4d9ab1f8313b504f45c019e10b31"
+    },
+    {
+      "path": "reports/uninstall.log.gz",
+      "bytes": 58425,
+      "sha256": "7d92ac59a91e7ad8e4ecb64900533485fb7c02dc899500a95b36625948400078"
+    },
+    {
+      "path": "reports/uninstall.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "reports/uninstall.stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runners/expected.json",
+      "bytes": 1268,
+      "sha256": "b2b92443d79e16726394fc4d5b0e9e609fe7dc67269f40900705e31f387985a0"
+    },
+    {
+      "path": "runners/guest.py",
+      "bytes": 9865,
+      "sha256": "6f05b21e52832da6ebd5fd03829a7a7bb056b0bb60ba84633196ca66392afbff"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "passed": true,
+  "finished": true,
+  "scope": "Scrollable dialog gutter visual regression only",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "be7bf1c650df10cfa897b01aae07c30adac76ec3ae2354de2d6ab28f28af5843",
+  "phase": "uninstall",
+  "native": {
+    "passed": true,
+    "scope": "Targeted dialog gutter and basic corner visual regression only",
+    "source_commit": "c95c61ce8cbe3b01a0cb02e346432f6234eeee96",
+    "checks": {
+      "scale150_light_input_border_separate_from_scrollbar": true,
+      "scale150_dark_input_border_separate_from_scrollbar": true,
+      "scale150_light_scroll_to_bottom_and_fixed_actions": true,
+      "tab_link_to_filename": true,
+      "shift_tab_filename_to_link": true,
+      "escape_closes_dialog": true,
+      "theme_switch_light_dark": true,
+      "dark_theme_survives_ui_restart": true,
+      "default_scale_light_normal_window_dialog": true,
+      "default_scale_dark_normal_window_dialog": true
+    },
+    "full_native_matrix": false,
+    "system_dpi_changed": false,
+    "limitations": [
+      "Single-line/multiline text submission not verified; prior transport failures retained",
+      "This is visual regression on new dialog and main window; not all product screens/states",
+      "Output fixture was created through Core protocol, not a native new-task action",
+      "Previous network suites and failed comparison were not rerun"
+    ]
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "Narrow UI gutter regression; previous comparison failure retained separately"
+  },
+  "uninstall_preserves_outputs": true
+}

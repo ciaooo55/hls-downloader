@@ -1,0 +1,231 @@
+{
+  "selectedCount": 0,
+  "selectedTaskIds": [],
+  "inputTarget": "",
+  "contextMenuPosition": [],
+  "contextMenuTaskIds": [],
+  "contextMenuActions": [],
+  "activeFilter": "全部",
+  "activeCategory": "",
+  "activeQueueId": "",
+  "controlBounds": {
+    "toolbar.新建": [
+      15,
+      42,
+      76,
+      78
+    ],
+    "toolbar.粘贴链接": [
+      84,
+      42,
+      169,
+      78
+    ],
+    "toolbar.全部开始": [
+      182,
+      42,
+      218,
+      78
+    ],
+    "toolbar.全部暂停": [
+      218,
+      42,
+      254,
+      78
+    ],
+    "toolbar.工具": [
+      255,
+      42,
+      316,
+      78
+    ],
+    "toolbar.设置": [
+      938,
+      42,
+      974,
+      78
+    ],
+    "rail.status.全部": [
+      8,
+      97,
+      46,
+      137
+    ],
+    "rail.status.进行中": [
+      8,
+      139,
+      46,
+      179
+    ],
+    "rail.status.排队中": [
+      8,
+      181,
+      46,
+      221
+    ],
+    "rail.status.已暂停": [
+      8,
+      223,
+      46,
+      263
+    ],
+    "rail.status.已完成": [
+      8,
+      265,
+      46,
+      305
+    ],
+    "rail.status.失败": [
+      8,
+      307,
+      46,
+      347
+    ],
+    "rail.queue.默认队列": [
+      8,
+      366,
+      46,
+      406
+    ],
+    "rail.category.媒体": [
+      8,
+      425,
+      46,
+      465
+    ],
+    "rail.category.程序": [
+      8,
+      467,
+      46,
+      507
+    ],
+    "rail.category.压缩包": [
+      8,
+      509,
+      46,
+      549
+    ],
+    "rail.category.其他": [
+      8,
+      551,
+      46,
+      591
+    ],
+    "rail.manage": [
+      8,
+      521,
+      48,
+      561
+    ],
+    "content_header.clear_completed": [
+      820,
+      90,
+      915,
+      124
+    ],
+    "content_header.refresh": [
+      915,
+      90,
+      974,
+      124
+    ],
+    "toolbar.更多操作": [
+      974,
+      89,
+      1010,
+      125
+    ],
+    "taskrow.task-1": [
+      56,
+      164,
+      1017,
+      216
+    ],
+    "taskrow.task-2": [
+      56,
+      216,
+      1017,
+      268
+    ],
+    "taskrow.task-3": [
+      56,
+      268,
+      1017,
+      320
+    ],
+    "taskrow.task-4": [
+      56,
+      320,
+      1017,
+      372
+    ],
+    "task.action.task-4.open_folder": [
+      939,
+      329,
+      973,
+      363
+    ],
+    "toolbar.深色模式": [
+      974,
+      42,
+      1010,
+      78
+    ],
+    "newtask.tab.基本": [
+      153,
+      156,
+      329,
+      190
+    ],
+    "newtask.tab.连接": [
+      329,
+      156,
+      505,
+      190
+    ],
+    "newtask.tab.请求": [
+      505,
+      156,
+      682,
+      190
+    ],
+    "newtask.tab.计划": [
+      682,
+      156,
+      859,
+      190
+    ],
+    "newtask.url": [
+      150,
+      228,
+      862,
+      283
+    ],
+    "dialog.secondary.选择目录": [
+      786,
+      378,
+      862,
+      412
+    ],
+    "dialog.secondary.取消": [
+      666,
+      483,
+      716,
+      517
+    ],
+    "newtask.probe": [
+      716,
+      483,
+      792,
+      517
+    ],
+    "dialog.primary.创建下载": [
+      792,
+      483,
+      874,
+      517
+    ]
+  },
+  "engineText": "下载引擎 · 已连接",
+  "noticeHistory": []
+}

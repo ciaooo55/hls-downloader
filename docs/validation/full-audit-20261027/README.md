@@ -251,3 +251,6 @@ AB参考固定正式版1.11.1，前端取其选择、信息层级、共享交互
 ## 2026-10-29：基础圆角与边框修正
 
 共享按钮、输入框、开关、菜单和弹窗的背景/边框/裁切及缩放顺序已修，源码 `4699166`。该候选FTPS、局域网分享和首次Host定向检查通过；默认缩放深浅主题若干画面正常，但150%新建弹窗发现滚动条覆盖输入框描边，整体保持失败，正在修正共享内容区间距。竞品对比安装准备失败，没有吞吐样本；输入与完整原生矩阵未完成。详见 [实屏记录](results/convergence-20261029/candidate-visual-controls/README.md)。此前非录制套件记录见 [原始归档](results/convergence-20261029/nonrecording/)；各自候选SHA独立，不计为本轮新MSI全部重跑。旧队列候选现位于 `artifacts/v7-productization/candidate-history/a2a75fe`。
+
+
+上述150%弹窗遮边已在 `c95c61c` 修复并重建，新MSI SHA256 `be7bf1c650df10cfa897b01aae07c30adac76ec3ae2354de2d6ab28f28af5843`。默认/150%浅深主题新建弹窗、正常小窗口、Tab/Shift+Tab焦点和Escape关闭定向复验通过；正常卸载保留协议准备的32MiB成品。完整原生矩阵仍未完成，不将局部通过升级为全项目通过。见 [修复复验](results/convergence-20261029/candidate-dialog-gutter/README.md)。候选未签名、推送或发布。
