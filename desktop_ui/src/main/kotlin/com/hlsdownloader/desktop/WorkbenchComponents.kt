@@ -46,6 +46,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -140,22 +141,22 @@ internal fun workbenchScrollbarStyle(): ScrollbarStyle = ScrollbarStyle(
     hoverColor = blue.copy(alpha = 0.82f),
 )
 
-/**
- * 圆角刻度。原来有 10 种取值（2/3/4/5/6/7/8/9/10/12dp），
- * 其中 7dp 占 2/3 已是事实标准，这里把它定为默认值，其余归位。
- */
+/** 圆角随控件尺寸分级；内嵌控件的圆角小于外壳，避免两层轮廓相挤。 */
 internal object Radius {
     /** 细进度条、骨架块、柱状图 —— 视觉上等同胶囊 */
     val tiny = 3.dp
 
-    /** 小控件：复选框、分段按钮、工具提示、细进度条 */
+    /** 18dp 复选框保持方形轮廓，不与胶囊开关混淆。 */
+    val checkbox = 4.dp
+
+    /** 小控件：分段按钮、菜单项、工具提示 */
     val sm = 6.dp
 
     /** 默认：按钮、输入框、列表项、面板、卡片、菜单 */
-    val md = 7.dp
+    val md = 8.dp
 
     /** 大容器：弹窗外壳、拖放浮层 */
-    val lg = 10.dp
+    val lg = 12.dp
 
     /** 百分比圆角，用于胶囊与圆形（`RoundedCornerShape(percent)` 重载） */
     const val pill = 50
@@ -241,9 +242,10 @@ internal fun Surface(
     Box(
         modifier
             .then(if (shadowElevation > 0.dp) Modifier.shadow(shadowElevation, shape, clip = false) else Modifier)
-            .clip(shape)
-            .background(color)
-            .then(if (border != null) Modifier.border(border, shape) else Modifier),
+            .background(color, shape)
+            .then(if (border != null) Modifier.border(border, shape) else Modifier)
+            // 仅裁切子内容，保留外层描边的抗锯齿和阴影。
+            .clip(shape),
     ) {
         CompositionLocalProvider(LocalControlContentColor provides contentColor, content = { content() })
     }
@@ -308,25 +310,11 @@ internal class PressFeedback(
     val scale: Float,
 )
 
-/**
- * 把 [rememberPressFeedback] 产出的状态接到修饰链上。
- *
- * 在此之前，三行一模一样的修饰被手抄了 12 处：
- * ```kotlin
- * .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
- * .background(feedback.background)
- * .hoverable(feedback.interaction)
- * ```
- * 状态收敛在 [rememberPressFeedback]、**应用**它却是复制的，改一处忘记另一处就会
- * "有的按钮有按压缩放、有的没有"。这里把顺序也固定下来：先缩放、再铺底、最后注册悬停，
- * 与既有的每一处写法逐字一致，所以是纯收敛，不改变任何视觉结果。
- *
- * 只覆盖这三步；`clickable` / `selectable` / `toggleable` 的 `interactionSource`、
- * `role`、`enabled` 每个调用点都不一样，仍然由调用方接着写。
- */
-internal fun Modifier.pressFeedback(feedback: PressFeedback): Modifier =
+/** 缩放包含背景与圆角裁切；点击语义仍由调用方提供。 */
+internal fun Modifier.pressFeedback(feedback: PressFeedback, shape: Shape = RectangleShape): Modifier =
     this
         .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+        .clip(shape)
         .background(feedback.background)
         .hoverable(feedback.interaction)
 
@@ -414,11 +402,11 @@ internal fun Button(
     Row(
         modifier
             .defaultMinSize(minHeight = 34.dp)
-            .clip(shape)
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .background(feedback.background)
+            .background(feedback.background, shape)
             .border(2.dp, blue.copy(alpha = focusAlpha), shape)
             .then(if (!(focused && enabled) && border != null) Modifier.border(border, shape) else Modifier)
+            .clip(shape)
             .hoverable(interaction)
             .pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
@@ -439,18 +427,18 @@ internal fun TextButton(
     hoverColor: Color? = null,
     pressedColor: Color? = null,
     pressScale: Float? = null,
+    containerColor: Color = Color.Transparent,
+    border: BorderStroke? = null,
     content: @Composable RowScope.() -> Unit,
 ) = Button(
     onClick = onClick,
     modifier = modifier,
     enabled = enabled,
     shape = RoundedCornerShape(Radius.sm),
+    border = border,
     contentPadding = contentPadding,
-    colors = ButtonDefaults.buttonColors(Color.Transparent, if (enabled) blue else faint),
-    // 注意：这里**不能**默认给 hoverColor。分段控件（GET/POST、详情页 tab）用的是同一个
-    // TextButton，底色由调用方 `.background(segmentBackground(...))` 提供；一旦在这里
-    // 默认铺一档 surface3，悬停时就会盖掉选中段的颜色（选中态反而被抹掉）。
-    // 需要可见悬停档位的调用方（DialogSecondary、非 primary 的 ToolbarButton）显式传。
+    colors = ButtonDefaults.buttonColors(containerColor, if (enabled) blue else faint),
+    // 分段按钮由调用方提供选中底色及悬停颜色，背景与描边随整个按钮一起缩放。
     hoverColor = hoverColor,
     pressedColor = pressedColor,
     pressScale = pressScale,
@@ -488,10 +476,10 @@ internal fun IconButton(
     Box(
         modifier
             .defaultMinSize(34.dp, 34.dp)
-            .clip(RoundedCornerShape(Radius.sm))
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .background(feedback.background)
+            .background(feedback.background, RoundedCornerShape(Radius.sm))
             .border(2.dp, blue.copy(alpha = focusAlpha), RoundedCornerShape(Radius.sm))
+            .clip(RoundedCornerShape(Radius.sm))
             .hoverable(interaction)
             .pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
@@ -506,7 +494,7 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
     // 对勾画在 blue 填充上，必须用 onBlue：深色主题的 blue 是浅蓝，白勾只有 2.65:1，
     // 连 3:1 的图形底线都不到（勾是承担"已选中"信息的图形，不是装饰）。
     val checkColor = onBlue
-    val shape = RoundedCornerShape(Radius.sm)
+    val shape = RoundedCornerShape(Radius.checkbox)
     val reduceMotion by MotionPreferences.reduceMotion
     // 悬停给一层灰底（surface3），不把边框染成 blue —— 后者会被读成"已选中"。
     val feedback = rememberPressFeedback(
@@ -532,9 +520,9 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
         modifier
             .defaultMinSize(18.dp, 18.dp)
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .clip(shape)
-            .background(feedback.background)
+            .background(feedback.background, shape)
             .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) ink else animatedBorder, shape)
+            .clip(shape)
             .alpha(if (enabled) 1f else .42f)
             .semantics {
                 stateDescription = if (checked) "已选中" else "未选中"
@@ -597,9 +585,9 @@ internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modif
         modifier
             .defaultMinSize(18.dp, 18.dp)
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .clip(CircleShape)
-            .background(feedback.background)
+            .background(feedback.background, CircleShape)
             .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) ink else if (selected) blue else border, CircleShape)
+            .clip(CircleShape)
             .alpha(if (enabled) 1f else .42f)
             .semantics {
                 stateDescription = if (selected) "已选择" else "未选择"
@@ -647,9 +635,9 @@ internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifi
             .width(36.dp)
             .height(20.dp)
             .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
-            .clip(CircleShape)
-            .background(feedback.background)
+            .background(feedback.background, CircleShape)
             .border(if (focused) 2.dp else 1.dp, if (focused) ink else animatedBorder, CircleShape)
+            .clip(CircleShape)
             .semantics {
                 stateDescription = if (checked) "已开启" else "已关闭"
                 if (accessibilityLabel != null) contentDescription = accessibilityLabel
@@ -669,14 +657,13 @@ internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifi
                 .align(Alignment.CenterStart)
                 .offset(x = 16.dp * knobFraction)
                 .size(14.dp)
-                .clip(CircleShape)
+                .shadow(Elevation.e1, CircleShape)
                 // 拇指一律取"与轨道相反的亮度"：
                 //   浅色 未选中（浅灰轨）→ faint 灰拇指 4.03:1；选中（深蓝轨）→ 白拇指 5.17:1
                 //   深色 未选中（深灰轨）→ faint 灰拇指 4.81:1；选中（浅蓝轨）→ onBlue 近黑拇指 6.76:1
                 // 原先写死 Color.White：深色选中态只有 2.65:1（和 Checkbox 的对勾同一个坑），
                 // 浅色未选中态更是 1.18:1 —— 只靠 e1 阴影分辨拇指边界。两处都不足 3:1。
-                .background(if (checked) onBlue else faint)
-                .shadow(Elevation.e1, CircleShape),
+                .background(if (checked) onBlue else faint, CircleShape),
         )
     }
 }
@@ -871,9 +858,9 @@ internal fun DropdownMenu(
     expanded: Boolean,
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(Radius.md),
+    shape: Shape = RoundedCornerShape(Radius.lg),
     containerColor: Color = dialogSurface,
-    shadowElevation: Dp = 7.dp,
+    shadowElevation: Dp = Elevation.e2,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (!expanded) return
@@ -900,7 +887,7 @@ internal fun DropdownMenu(
             },
             shape, containerColor, shadowElevation = shadowElevation, border = BorderStroke(1.dp, border),
         ) {
-            Column(Modifier.padding(vertical = 5.dp), content = content)
+            Column(Modifier.padding(6.dp), content = content)
         }
     }
 }
@@ -923,7 +910,7 @@ internal fun DropdownMenuItem(
         modifier
             .fillMaxWidth()
             .heightIn(min = 34.dp)
-            .pressFeedback(feedback)
+            .pressFeedback(feedback, RoundedCornerShape(Radius.sm))
             .clickable(
                 interactionSource = feedback.interaction,
                 indication = null,
@@ -989,12 +976,12 @@ internal fun OutlinedTextField(
                 .fillMaxWidth()
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .defaultMinSize(minHeight = if (singleLine) 36.dp else 64.dp)
-                .clip(shape)
-                .background(rail)
+                .background(rail, shape)
                 // 显式 hoverable：BasicTextField 的 interactionSource 主要发 Press/Focus，
                 // 悬停态不能指望它，否则 `hovered` 分支就是死代码。
                 .hoverable(interaction, enabled = enabled)
                 .border(animatedBorderWidth, animatedBorderColor, shape)
+                .clip(shape)
                 .padding(horizontal = 10.dp, vertical = 9.dp),
             decorationBox = { inner ->
                 Box {

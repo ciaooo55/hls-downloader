@@ -1,0 +1,13 @@
+{"check": "signed-redirect-cookie-referer-complete-sha256"}
+{"check": "actual-post-body-download-sha256"}
+{"check": "http-403-fails-with-visible-task-error"}
+{"check": "failed-http-download-retry-recovers-sha256"}
+{"check": "http-404-fails-with-visible-task-error"}
+{"check": "actual-http-connection-loss-visible-error-and-retry-sha256"}
+{"check": "login-html-never-published-as-video"}
+{"check": "browser-media-mime-survives-opaque-filename"}
+{"check": "offer-confirmation-preserves-media-mime-and-rejects-html-without-extension"}
+{"check": "intentional-html-file-download-still-works"}
+{"check": "invalid-save-directory-visible-error-preserves-existing-file"}
+{"check": "invalid-directory-task-does-not-block-following-download"}
+{"check": "actual-core-restart-preserves-paused-task-and-resumes-sha256"}

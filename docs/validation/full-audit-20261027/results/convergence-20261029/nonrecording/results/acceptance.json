@@ -1,0 +1,56 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Non-recording candidate acceptance",
+  "host_product_install_performed": false,
+  "suites": [
+    {
+      "name": "native-host",
+      "exit_code": 1,
+      "passed": false
+    },
+    {
+      "name": "http-boundaries",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "http-stall",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "protocol-features",
+      "exit_code": 1,
+      "passed": false
+    },
+    {
+      "name": "task-import",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "closed-diagnostics",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "download-playback",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "msi_sha256": "179c0ea3684c19c90e2ca0085c114a4ec9379e723942fee8c62d0c08ed88d355",
+  "phase": "uninstall",
+  "native": {
+    "passed": false,
+    "scope": "Targeted native observations before visual correction",
+    "new_task_created_and_completed": true,
+    "tools_menu_opened": true,
+    "settings_opened": true,
+    "batch_text_injection": "sky type_text did not reach guest; physical a key was received; no product defect attributed",
+    "full_matrix": false,
+    "reason": "User prioritized shared control visual defects; remaining native acceptance follows rebuilt UI"
+  },
+  "uninstall_preserves_outputs": true
+}

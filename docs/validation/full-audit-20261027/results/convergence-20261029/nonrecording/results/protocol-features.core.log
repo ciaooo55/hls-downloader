@@ -1,0 +1,12 @@
+download engine listening on 127.0.0.1:49758
+v7 task task-1 paused: paused
+v7 task task-2 paused: paused
+v7 task task-5 failed: checksum mismatch: expected 0000000000000000000000000000000000000000000000000000000000000000, got 7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f
+v7 task task-9 paused: paused
+v7 task task-10 failed: HTTP 403
+v7 task task-11 failed: HTTP 403
+v7 task task-12 failed: HTTP 404
+v7 task task-13 failed: 服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试
+v7 task task-15 failed: range 32768-2097151 made no progress after 5 attempts: range response ended without data
+v7 task task-16 failed: WinHttpSendRequest 12029
+v7 task task-17 failed: WinHttpReceiveResponse 12002

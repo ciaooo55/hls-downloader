@@ -1,6 +1,7 @@
 package com.hlsdownloader.desktop
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -195,8 +196,7 @@ internal fun FullSettingsDialog(
                         hoverMillis = 120,
                     )
                     Row(
-                        Modifier.fillMaxWidth().height(38.dp).clip(RoundedCornerShape(Radius.md))
-                            .pressFeedback(feedback)
+                        Modifier.fillMaxWidth().height(38.dp).pressFeedback(feedback, RoundedCornerShape(Radius.md))
                             .selectable(
                                 selected = active,
                                 interactionSource = feedback.interaction,
@@ -418,8 +418,7 @@ internal fun FullSettingsDialog(
                                     hoverMillis = 120,
                                 )
                                 Row(
-                                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(Radius.md))
-                                        .pressFeedback(feedback)
+                                    Modifier.fillMaxWidth().heightIn(min = 52.dp).pressFeedback(feedback, RoundedCornerShape(Radius.md))
                                         .clickable(interactionSource = feedback.interaction, indication = null) { draft = draft.copy(preferredCastDeviceId = device.id) }
                                         .padding(horizontal = 11.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -517,7 +516,7 @@ private fun V7SubtitleLanguage(label: String, selected: String, allowAuto: Boole
     DialogLabel(label)
     Box {
         DialogSecondary(options.firstOrNull { it.first == selected }?.second ?: selected) { expanded = true }
-        DropdownMenu(expanded, { expanded = false }, shape = RoundedCornerShape(Radius.md), containerColor = dialogSurface, shadowElevation = Elevation.e2) {
+        DropdownMenu(expanded, { expanded = false }, shape = RoundedCornerShape(Radius.lg), containerColor = dialogSurface, shadowElevation = Elevation.e2) {
             options.forEach { (code, text) -> DropdownMenuItem(text = { Text(text, fontSize = TypeScale.body) }, onClick = { expanded = false; onSelect(code) }) }
         }
     }
@@ -676,10 +675,9 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
                     if (next.isNotEmpty()) onValue(next.sorted().joinToString(","))
                 },
                 modifier = Modifier.weight(1f)
-                    .clip(RoundedCornerShape(Radius.sm))
-                    .background(segmentBackground(selected, selectedSurface, surface2))
-                    .border(1.dp, if (selected) blue else Color.Transparent, RoundedCornerShape(Radius.sm))
                     .reportControlBounds("settings.day.$day"),
+                containerColor = segmentBackground(selected, selectedSurface, surface2),
+                border = BorderStroke(1.dp, if (selected) blue else Color.Transparent),
                 contentPadding = PaddingValues(0.dp),
                 hoverColor = if (selected) selectedSurface else surface3,
                 pressScale = SEGMENT_SCALE,
@@ -706,12 +704,11 @@ private fun V7WeekdayChoice(value: String, onValue: (String) -> Unit) {
             TextButton(
                 onClick = { onSelect(value) },
                 Modifier.weight(1f)
-                    .clip(RoundedCornerShape(Radius.sm))
-                    .background(segmentBackground(selected == value, selectedSurface, Color.Transparent))
-                    .border(1.dp, if (selected == value) blue else Color.Transparent, RoundedCornerShape(Radius.sm))
                     .reportControlBounds("settings.choice.$value"),
-            hoverColor = if (selected == value) selectedSurface else surface3,
-            pressScale = SEGMENT_SCALE,
+                containerColor = segmentBackground(selected == value, selectedSurface, Color.Transparent),
+                border = BorderStroke(1.dp, if (selected == value) blue else Color.Transparent),
+                hoverColor = if (selected == value) selectedSurface else surface3,
+                pressScale = SEGMENT_SCALE,
             ) { Text(text, fontSize = TypeScale.caption, color = if (selected == value) blue else muted) }
         }
     }
