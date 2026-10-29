@@ -1,0 +1,325 @@
+{
+  "passed": true,
+  "finished": true,
+  "scope": "Built background scripts; browser APIs and Native Host simulated; no real browser or UI acceptance",
+  "checks": [
+    {
+      "family": "chrome",
+      "scenario": "local-transport",
+      "passed": true,
+      "background_sha256": "59a44df4bbee62bad0c22bf108f0b0e214abe97319121ecbf75836e2dec9a6cd",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1060000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060120
+        }
+      ]
+    },
+    {
+      "family": "chrome",
+      "scenario": "local-empty",
+      "passed": true,
+      "background_sha256": "59a44df4bbee62bad0c22bf108f0b0e214abe97319121ecbf75836e2dec9a6cd",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1060000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060120
+        }
+      ]
+    },
+    {
+      "family": "chrome",
+      "scenario": "local-storage",
+      "passed": true,
+      "background_sha256": "59a44df4bbee62bad0c22bf108f0b0e214abe97319121ecbf75836e2dec9a6cd",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        }
+      ]
+    },
+    {
+      "family": "chrome",
+      "scenario": "local-status",
+      "passed": true,
+      "background_sha256": "59a44df4bbee62bad0c22bf108f0b0e214abe97319121ecbf75836e2dec9a6cd",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000000
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000000
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000120
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000120
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060120
+        }
+      ]
+    },
+    {
+      "family": "firefox",
+      "scenario": "local-transport",
+      "passed": true,
+      "background_sha256": "5dd2e9d3b83d773e9b88d4c64396b2ce4cad8c9180641103a69f8587374b0ee6",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1060000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060120
+        }
+      ]
+    },
+    {
+      "family": "firefox",
+      "scenario": "local-empty",
+      "passed": true,
+      "background_sha256": "5dd2e9d3b83d773e9b88d4c64396b2ce4cad8c9180641103a69f8587374b0ee6",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1060000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060120
+        }
+      ]
+    },
+    {
+      "family": "firefox",
+      "scenario": "local-storage",
+      "passed": true,
+      "background_sha256": "5dd2e9d3b83d773e9b88d4c64396b2ce4cad8c9180641103a69f8587374b0ee6",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        }
+      ]
+    },
+    {
+      "family": "firefox",
+      "scenario": "local-status",
+      "passed": true,
+      "background_sha256": "5dd2e9d3b83d773e9b88d4c64396b2ce4cad8c9180641103a69f8587374b0ee6",
+      "imported_file_sha256": "f3e1599ff50e8ee5b7bec312b94a76bc748801dacc606ce9f212dd4db51983c4",
+      "calls": [
+        {
+          "op": "ping",
+          "at": 1000000
+        },
+        {
+          "op": "offer_local_file",
+          "at": 1000000,
+          "requestId": "original-local-request"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000000
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000000
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000120
+        },
+        {
+          "op": "handoff_status",
+          "at": 1000120
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060000
+        },
+        {
+          "op": "remove-file"
+        },
+        {
+          "op": "erase"
+        },
+        {
+          "op": "handoff_status",
+          "at": 1060120
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "finished_validation_processes": true,
+  "deletion_completed": false,
+  "new_build_directory_delete": {
+    "attempts": 1,
+    "result": "blocked by policy",
+    "detailed_reason_provided": false
+  },
+  "earlier_denied_targets_not_retried": true,
+  "remaining_generated": [
+    {
+      "path": ".tool-cache/handoff-admission-20261029",
+      "files": 3734,
+      "bytes": 1624562311,
+      "links_not_followed": 0
+    },
+    {
+      "path": "extension/node_modules",
+      "files": 10629,
+      "bytes": 171727380,
+      "links_not_followed": 1003
+    },
+    {
+      "path": "extension/.wxt",
+      "files": 8,
+      "bytes": 11215,
+      "links_not_followed": 0
+    }
+  ],
+  "preserved": [
+    "tracked and uncommitted source",
+    "validation evidence",
+    "outputs/private-user-backup",
+    "user downloads",
+    "Desktop deliverables"
+  ],
+  "host_product_install_or_registry_changes": false
+}

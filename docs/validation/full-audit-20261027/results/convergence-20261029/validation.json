@@ -1,0 +1,137 @@
+{
+  "date": "2026-10-29",
+  "source_base": "fa233537f11c5255297850c7dc5248f06cb1552a",
+  "scope": "Source-level targeted acceptance; no host product installation or desktop input. Candidate package acceptance pending.",
+  "release_ready": false,
+  "browser": {
+    "edge": {
+      "report": "edge/restart-diagnostic/edge.json",
+      "passed": true,
+      "checks": 8,
+      "background_sha256": "59e523aa63fb77c88cdb8fee48b1279e0bc615c2065dc034cf3782958ce17dc0",
+      "report_sha256": "3ab4dac002f6b49d5c3efb38641d1022b3de45eccb4e2ae05b9fb0638c01a360"
+    },
+    "edge_initial_offline": {
+      "report": "edge/restart-diagnostic/initial-offline/edge.json",
+      "passed": true,
+      "checks": 2,
+      "background_sha256": "59e523aa63fb77c88cdb8fee48b1279e0bc615c2065dc034cf3782958ce17dc0",
+      "report_sha256": "21d1d3b532877ee96c6e034d3868a8aac1a70835db25d7d31bb2fb78bf3b4ed0"
+    },
+    "firefox": {
+      "report": "firefox/current-source/firefox.json",
+      "passed": true,
+      "checks": 8,
+      "background_sha256": "9ffdbb3989832812d1f944cd570ce5e08fcca6070baa71c5ee8817d2b443905f",
+      "report_sha256": "f156ce39c5242261fd844d8955308233d9ab18474fae62c9141dbfbcc4b8a92f"
+    },
+    "firefox_initial_offline": {
+      "report": "firefox/current-source/initial-offline/firefox.json",
+      "passed": true,
+      "checks": 2,
+      "background_sha256": "9ffdbb3989832812d1f944cd570ce5e08fcca6070baa71c5ee8817d2b443905f",
+      "report_sha256": "dae619a8f5ae7e01b32636e1a9f49b8adbe818dab47814df981a9695e36ae50a"
+    }
+  },
+  "source_files": [
+    {
+      "path": "extension/entrypoints/background.ts",
+      "sha256": "2e64a850ab951322534afe1f1c49d2f55e48b44364f4f2ee80ddfa31ccdef429"
+    },
+    {
+      "path": "extension/lib/nativeBridge.ts",
+      "sha256": "35a6504f42137900c820c08d198bb3bb49fa17db9991c9f16a918bff1d9ab31d"
+    },
+    {
+      "path": "extension/lib/pausedHandoffFollowups.ts",
+      "sha256": "413d1ee4fe55d27f8cd96ef6396d1fe4d291eb2ca5720cbd702588e7c1349dab"
+    },
+    {
+      "path": "extension/lib/takeover.ts",
+      "sha256": "c8f2aca26c6c42ab37061da4c91a747a71a05f3167ab038d4089161e3e081a57"
+    },
+    {
+      "path": "native_shell/src/connection_parts.rs",
+      "sha256": "2b53cb47e15bc215d058fa68925a93fc844687968f30f527f709b039435bbeec"
+    },
+    {
+      "path": "native_shell/src/contract.rs",
+      "sha256": "e9df0577c497b128b6917589179a42706d54d7847f5fd6fbcfba7052411eec9f"
+    },
+    {
+      "path": "native_shell/src/core_ipc.rs",
+      "sha256": "8ff9831ff264bf4c735234fb3e552e44155d9a0bc40f5aa9af3a70ced07d199f"
+    },
+    {
+      "path": "native_shell/src/core_server.rs",
+      "sha256": "08d9a10d095f37ac8941be1e02da403b4acb4961011046dcbff4a1c12f6ed8e5"
+    },
+    {
+      "path": "native_shell/src/core_service.rs",
+      "sha256": "074b2ce7271598a4aa97b9b2426fc1b10fb419be8db64ab78c9899080b459f6a"
+    },
+    {
+      "path": "native_shell/src/download_worker.rs",
+      "sha256": "4cdbed5f58c21dce7ed8103d135e4e75c76b0d1b6603e40cdd93f67761de456a"
+    },
+    {
+      "path": "native_shell/src/native_host.rs",
+      "sha256": "fb4b40566f43d66c2eb968fc2e749953630492597af8129298e714fa20cf6e43"
+    },
+    {
+      "path": "native_shell/src/store.rs",
+      "sha256": "6604006c0e0f31118229b6492743a339faa6c896ffe1034f247f1e8fe7d7f6fd"
+    }
+  ],
+  "executed": {
+    "extension_targeted_tests": {
+      "report": "handoff-tests.json",
+      "passed": 89,
+      "failed": 0
+    },
+    "earlier_extension_suite": {
+      "report": "extension-tests.json",
+      "passed": 456,
+      "scope": "Earlier source snapshot; superseded changed behavior covered by targeted 89 tests"
+    },
+    "typescript": "tsc --noEmit passed",
+    "extension_builds": [
+      "Chromium production build passed",
+      "Firefox production build passed"
+    ],
+    "rust_connection_parts": {
+      "passed": 3,
+      "scope": "Completed known total and unknown-total paused boundary"
+    },
+    "rust_local_source": {
+      "passed": 5,
+      "scope": "Local source copy, cancellation and path safety"
+    },
+    "rust_release_core_host_updater": "passed",
+    "compose_compileKotlin": "passed; Gradle 9.7.1 / JDK 21.0.12.1+1"
+  },
+  "limitations": [
+    "Ordinary response-based file/media downloads create a browser DownloadItem; original bytes are imported only after browser completion.",
+    "Firefox temporary addon reinstalled at restart; not a signed distribution upgrade test.",
+    "Browser matrix uses current dev Core/Host and unchanged r22 Presenter; not same-SHA package verification.",
+    "Edge current-source failure remains retained; the diagnostic runner observes the pending native Promise separately from CDP. No production timeout was changed; the earlier intermittent cause is not conclusively established.",
+    "Native UI, same-SHA installation lifecycle, final performance comparison and original external media failures remain separate gates."
+  ],
+  "packaging_dependencies": {
+    "passed": true,
+    "finished": true,
+    "phase": "verified-r22-media-dependencies-extracted",
+    "host_install_performed": false,
+    "presenter_source_msi_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+    "dependencies": [
+      {
+        "sha256": "f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea",
+        "name": "libmpv-2.dll"
+      },
+      {
+        "sha256": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98",
+        "name": "ffmpeg.exe"
+      }
+    ]
+  }
+}

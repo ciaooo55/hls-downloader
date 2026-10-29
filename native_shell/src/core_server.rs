@@ -490,6 +490,21 @@ fn dispatch(
                 message: error,
             },
         },
+        CorePipeRequest::AdmitHandoff {
+            request_id,
+            handoff_json,
+        } => match coordinator.admit_handoff(&handoff_json) {
+            Ok(encoded) => CorePipeResponse::Handoffs {
+                request_id,
+                items: vec![encoded],
+                next: None,
+            },
+            Err(message) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "handoff_failed".into(),
+                message,
+            },
+        },
         CorePipeRequest::SaveHandoff {
             request_id,
             handoff_id,
@@ -1024,6 +1039,54 @@ mod tests {
         );
         client.delete_credential("rollback-test").unwrap();
         assert_eq!(client.load_credential("rollback-test").unwrap(), None);
+        server.shutdown();
+    }
+
+    #[test]
+    fn handoff_admission_ipc_retry_returns_same_receipt_and_one_task() {
+        let server = CoreServer::in_memory().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _worker = server.serve(listener);
+        let mut first = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut retry = CoreIpcClient::connect_addr(addr).unwrap();
+        let admission = |id: &str| {
+            CorePipeRequest::AdmitHandoff {
+            request_id: 1,
+            handoff_json: serde_json::json!({
+                "id": id, "request_id": "same-request",
+                "offer": ResourceOffer { handoff_id: id.into(), url: "https://cdn.test/setup.exe".into(), ..Default::default() },
+                "filename": "setup.exe", "title": "", "mime_type": "", "size": 0,
+                "status": "pending", "presentation": "queued", "task_id": null, "created_at_ms": 1
+            }).to_string(),
+        }
+        };
+        let original = first.request(&admission("first")).unwrap();
+        assert_eq!(retry.request(&admission("duplicate")).unwrap(), original);
+        assert_eq!(first.load_handoffs().unwrap().len(), 1);
+        // Exercise the runtime half as well as the durable row without starting
+        // network transfer: direct Core acceptance creates one task only.
+        server
+            .coordinator()
+            .lock()
+            .unwrap()
+            .handle(CoreCommand::AcceptHandoff {
+                handoff_id: "first".into(),
+                filename: "setup.exe".into(),
+                download_dir: String::new(),
+                trusted_ui: true,
+            })
+            .unwrap();
+        let receipt = retry.request(&admission("late")).unwrap();
+        match receipt {
+            CorePipeResponse::Handoffs { items, .. } => {
+                let row: Value = serde_json::from_str(&items[0]).unwrap();
+                assert_eq!(row["id"], "first");
+                assert_eq!(row["status"], "accepted");
+            }
+            other => panic!("unexpected admission receipt: {other:?}"),
+        }
+        assert_eq!(retry.snapshot().unwrap().len(), 1);
         server.shutdown();
     }
 

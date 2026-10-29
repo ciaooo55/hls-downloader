@@ -65,6 +65,19 @@ function followUp(overrides: Partial<PausedHandoffFollowUp> = {}): PausedHandoff
 }
 
 describe('paused handoff follow-up store', () => {
+  it('restores an unknown receipt by request key without storing request credentials', async () => {
+    const storage = new MemoryStorage()
+    const first = new PausedHandoffFollowUpStore(storage)
+    await first.remember(followUp({ handoffId: '', clientRequestId: 'download:lost-reply' }))
+    const restarted = new PausedHandoffFollowUpStore(storage)
+    await restarted.hydrate()
+    const [record] = restarted.list()
+    expect(record.clientRequestId).toBe('download:lost-reply')
+    expect(stepPausedHandoffFollowUp(record, {}, 140_000, 60_000).kind).toBe('keep-paused')
+    expect(stepPausedHandoffFollowUp(record, { id: 'durable', status: 'pending' }, 140_000, 60_000).kind).toBe('remove-download')
+    await restarted.drop('download:lost-reply')
+    expect(restarted.list()).toEqual([])
+  })
   it('rehydrates persisted follow-ups and skips malformed rows after a restart', async () => {
     const storage = new MemoryStorage()
     storage.values[PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY] = [
@@ -152,6 +165,21 @@ describe('paused handoff follow-up store', () => {
 })
 
 describe('paused handoff follow-up steps', () => {
+  it.each([
+    { id: 'failed-status', status: 'failed' },
+    { id: 'failed', status: 'failed', presentation_ok: false },
+    { id: 'failed-window', status: 'pending', presentation: 'failed' },
+    { id: 'unpresentable', status: 'pending', presentation_mode: 'none' },
+  ])('restores browser ownership when a recovered receipt could not be presented: %j', handoff => {
+    expect(stepPausedHandoffFollowUp(followUp({ handoffId: '', clientRequestId: 'lost-receipt' }), handoff, 20_000, 60_000))
+      .toEqual({ kind: 'resume-download' })
+  })
+
+  it.each(['pending', 'accepted', 'rejected', 'canceled'])('retains the desktop decision for a recovered %s receipt', status => {
+    expect(stepPausedHandoffFollowUp(followUp({ handoffId: '', clientRequestId: 'lost-receipt' }), { id: 'received', status }, 20_000, 60_000))
+      .toEqual({ kind: 'remove-download' })
+  })
+
   it('retains cleanup ownership across restart without waiting for task progress or resuming on cancel', async () => {
     const storage = new MemoryStorage()
     const store = new PausedHandoffFollowUpStore(storage, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY, () => 10_000)

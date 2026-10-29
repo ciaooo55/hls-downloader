@@ -1,0 +1,11 @@
+[
+  {
+    "name": "WindowsSandboxClient.exe",
+    "parent": 8204,
+    "pid": 16488
+  },
+  {
+    "pid": 8204,
+    "name": "WindowsSandbox"
+  }
+]

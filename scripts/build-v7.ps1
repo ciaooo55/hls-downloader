@@ -100,8 +100,10 @@ if ($isPackage) {
 # default, while HLS_V7_BUILD_CACHE intentionally relocates all three together.
 if ($env:HLS_V7_BUILD_CACHE -and -not [IO.Path]::IsPathRooted($env:HLS_V7_BUILD_CACHE)) { throw 'HLS_V7_BUILD_CACHE must be an absolute path.' }
 $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
-$env:CARGO_HOME=Join-Path $cacheRoot 'cargo'
-$env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target'
+# Respect explicitly selected Cargo caches so packaging can reuse an existing
+# offline toolchain instead of downloading and compiling the same inputs twice.
+if (-not $env:CARGO_HOME) { $env:CARGO_HOME=Join-Path $cacheRoot 'cargo' }
+if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target' }
 $env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
 # jlink reads its @args file in the system codepage. A temporary drive alias
 # gives it an ASCII path while generated files remain under the selected cache.

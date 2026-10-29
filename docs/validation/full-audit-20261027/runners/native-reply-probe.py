@@ -30,7 +30,7 @@ def core(message):
 
 
 def run(args):
-    result = {'passed': False, 'desktop_input_used': False, 'browser': args.browser,
+    result = {'passed': False, 'desktop_input_used': False, 'browser': args.browser, 'entry': args.entry,
               'background_sha256': hashlib.sha256((args.extension/'background.js').read_bytes()).hexdigest()}
     requests = []
     driver = None
@@ -150,8 +150,44 @@ def run(args):
                     'download_complete_popup_enabled': False, 'av_scan_enabled': False}})
                 before = {task['task_id'] for task in core({'type': 'snapshot'})['tasks']}
                 old_handoffs = {json.loads(row)['id'] for row in core({'type': 'load_handoffs'})['items']}
-                driver.switch_to.window(page)
-                driver.execute_script('location.assign(arguments[0])', f'http://127.0.0.1:{server.server_port}/recovery.bin')
+                resource = {'id': 'qa-direct-reload', 'url': f'http://127.0.0.1:{server.server_port}/recovery.bin',
+                            'pageUrl': page_url, 'kind': 'file', 'filename': 'recovery.bin', 'frameId': 0,
+                            'evidence': ['trusted_download_link'], 'confidence': .99}
+                if args.entry == 'protocol-reload':
+                    assert args.fault_count == 2, 'Reload scenario needs exhausted receipt retries'
+                    resource['tabId'] = extension('chrome.tabs.query({}).then(tabs=>done(tabs.find(t=>t.url===arguments[0]).id))', page_url)
+                    (args.state/'block-lookups').write_text('receipt outage')
+                    result['initial_reply'] = extension('chrome.runtime.sendMessage({type:"download-now",resource:arguments[0]}).then(done)', resource)
+                    assert result['initial_reply'].get('ownership_uncertain'), result['initial_reply']
+                    result['journal_before_reload'] = extension('chrome.storage.local.get("pending-direct-offers-v1").then(done)')
+                    records = result['journal_before_reload']['pending-direct-offers-v1']
+                    assert len(records) == 1 and records[0]['clientRequestId'] == result['initial_reply']['client_request_id'], records
+                    result['browser_state_before_reload'] = extension(
+                        'chrome.downloads.search({}).then(items=>done({items,events:createdDownloads}))')
+                    assert not result['browser_state_before_reload']['items'] and not result['browser_state_before_reload']['events']
+                    (args.state/'block-lookups').unlink()
+                    driver.execute_script('setTimeout(()=>chrome.runtime.reload(),50)')
+                    time.sleep(.25)
+                    driver.switch_to.window(page)
+                    driver.switch_to.new_window('tab')
+                    inspector = driver.current_window_handle
+
+                    def extension_reloaded():
+                        try:
+                            driver.get(popup)
+                            return _extension_call(driver, 'chrome.runtime.sendMessage({type:"ping"}).then(r=>done(r.ok))')
+                        except Exception as error:
+                            result['reload_last_error'] = str(error)
+                            return None
+
+                    wait(extension_reloaded, 'Extension did not reload', 15)
+                    # Reloading the extension page clears its event listener; record both periods.
+                    driver.execute_script('window.createdDownloads=[]; chrome.downloads.onCreated.addListener(d=>createdDownloads.push({id:d.id,url:d.url}));')
+                    result['reloaded_reply'] = extension('chrome.runtime.sendMessage({type:"download-now",resource:arguments[0]}).then(done)', resource)
+                    assert result['reloaded_reply'].get('handoff', {}).get('id'), result['reloaded_reply']
+                else:
+                    driver.switch_to.window(page)
+                    driver.execute_script('location.assign(arguments[0])', resource['url'])
 
                 def pending():
                     found = [json.loads(row) for row in core({'type': 'load_handoffs'})['items']
@@ -168,13 +204,18 @@ def run(args):
                 def recovered():
                     log = args.state/'offers.jsonl'
                     rows = [json.loads(row) for row in log.read_text().splitlines()] if log.exists() else []
-                    return rows if len(rows) >= 2 else None
+                    lookups = args.state/'lookups.jsonl'
+                    return rows if len(rows) >= 2 and (args.fault_count == 1 or lookups.exists()) else None
 
                 rows = wait(recovered, 'Native Bridge did not retry the acknowledged pipe error', 15)
-                assert len(rows) == 2 and [row['injected'] for row in rows] == [True, False], rows
+                assert len(rows) == 2 and [row['injected'] for row in rows] == ([True, False] if args.fault_count == 1 else [True, True]), rows
                 assert len({row['client_request_id'] for row in rows}) == 1, rows
                 assert len({row['request_sha256'] for row in rows}) == 1, rows
                 assert {row['handoff_id'] for row in rows} == {handoff['id']}, rows
+                if args.fault_count == 2:
+                    lookups = [json.loads(row) for row in (args.state/'lookups.jsonl').read_text().splitlines()]
+                    assert lookups == [{'ok': True, 'client_request_id': rows[0]['client_request_id'], 'handoff_id': handoff['id']}], lookups
+                    result['receipt_lookup'] = lookups
                 assert {task['task_id'] for task in core({'type': 'snapshot'})['tasks']} == before
                 core({'type': 'command', 'command': {'kind': 'accept_handoff', 'handoff_id': handoff['id'],
                     'filename': 'recovery.bin', 'download_dir': str(args.state/'output'), 'trusted_ui': True}})
@@ -198,8 +239,10 @@ def run(args):
                 state = wait(browser_settled, 'browser transfer not released', 15)
                 if args.browser == 'firefox':
                     assert not state['events'], state
-                else:
+                elif args.entry == 'response':
                     assert len(state['events']) == 1, state
+                else:
+                    assert not state['events'], state
                 result.update(passed=True, offers=rows, task_count=1, handoff_count=1,
                               output_sha256=digest, browser_state=state,
                               zero_download_item=not state['events'], server_requests=requests)
@@ -232,6 +275,8 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser', choices=['firefox', 'edge'], required=True)
+    parser.add_argument('--fault-count', type=int, choices=[1, 2], default=1)
+    parser.add_argument('--entry', choices=['response', 'protocol-reload'], default='response')
     for name in ['extension', 'binary', 'driver', 'proxy', 'state', 'report']:
         parser.add_argument('--'+name, type=Path, required=True)
     args = parser.parse_args()

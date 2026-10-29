@@ -122,6 +122,26 @@ impl Default for ResourceOffer {
     }
 }
 
+/// Durable browser offer metadata shared by admission and Native Messaging.
+#[cfg(feature = "full-core")]
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct BrowserHandoff {
+    pub id: String,
+    pub offer: ResourceOffer,
+    pub filename: String,
+    pub title: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub status: String,
+    pub presentation: String,
+    pub task_id: Option<String>,
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default)]
+    pub suppression: Option<Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSnapshot {
     pub task_id: String,

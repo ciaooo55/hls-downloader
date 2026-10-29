@@ -4,11 +4,11 @@
 //! One session therefore owns one durable Core connection plus its short-lived
 //! handoff offers. No HTTP request or Python process is required on this path.
 
+use crate::contract::BrowserHandoff as Handoff;
 use crate::{
     CoreCommand, CoreEvent, CoreIpcClient, CredentialVault, EventEnvelope, MediaPushRequest,
     ResourceKind, ResourceOffer, TaskSnapshot, TaskSpec, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,6 +39,28 @@ enum HostCore {
 }
 
 impl HostCore {
+    fn admit_handoff(&mut self, handoff_json: &str) -> Result<crate::CorePipeResponse, String> {
+        match self {
+            #[cfg(test)]
+            Self::Local(core) => Ok(match core.admit_handoff(handoff_json) {
+                Ok(encoded) => crate::CorePipeResponse::Handoffs {
+                    request_id: 1,
+                    items: vec![encoded],
+                    next: None,
+                },
+                Err(message) => crate::CorePipeResponse::Error {
+                    request_id: Some(1),
+                    code: "handoff_failed".into(),
+                    message,
+                },
+            }),
+            Self::Remote(client) => client.request(&crate::CorePipeRequest::AdmitHandoff {
+                request_id: 1,
+                handoff_json: handoff_json.into(),
+            }),
+        }
+    }
+
     fn handle(&mut self, command: CoreCommand) -> Result<Vec<crate::EventEnvelope>, String> {
         match self {
             #[cfg(test)]
@@ -115,6 +137,7 @@ impl HostCore {
         }
     }
 
+    #[cfg(test)]
     fn save_handoff(
         &mut self,
         handoff_id: &str,
@@ -162,24 +185,6 @@ impl HostCore {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct Handoff {
-    id: String,
-    offer: ResourceOffer,
-    filename: String,
-    title: String,
-    mime_type: String,
-    size: u64,
-    status: String,
-    presentation: String,
-    task_id: Option<String>,
-    created_at_ms: u64,
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    suppression: Option<Value>,
-}
-
 impl NativeHostSession {
     fn open_default() -> Result<Self, String> {
         Ok(Self::from_backend(HostCore::Remote(
@@ -211,6 +216,7 @@ impl NativeHostSession {
             "ping"
                 | "activate"
                 | "offer"
+                | "recover_offer"
                 | "offer_local_file"
                 | "download"
                 | "handoff_status"
@@ -265,6 +271,15 @@ impl NativeHostSession {
                 Ok(json!({"ok": true, "activated": true}))
             }
             "offer" => self.offer(message, false),
+            "recover_offer" => {
+                if field(resource_payload(message)?, "client_request_id")
+                    .trim()
+                    .is_empty()
+                {
+                    return Err("恢复交接缺少原始请求编号".into());
+                }
+                self.offer(message, false)
+            }
             "offer_local_file" => self.offer(message, true),
             "download" => self.download(message),
             "handoff_status" | "wait_handoff" => self.handoff_status(message),
@@ -341,33 +356,47 @@ impl NativeHostSession {
             request_id: request_id.to_string(),
             suppression: None,
         };
-        let persistence = self.persist_handoff(&handoff);
-        self.rollback_browser_credential_on_error(persistence, owned_credential_ref.as_deref())?;
-        if let Err(error) = self.core.handle(CoreCommand::OfferResource { offer }) {
-            let mut failed = handoff;
-            failed.status = "failed".into();
-            failed.presentation = "failed".into();
-            // Keep a non-pending tombstone so a restart cannot resurrect this
-            // offer, while clearing the request id prevents a failed attempt
-            // from poisoning a later retry with the same browser request id.
-            failed.request_id.clear();
-            let mut rollback_error = self.persist_handoff(&failed).err();
+        let encoded = serde_json::to_string(&handoff)
+            .map_err(|error| format!("encode browser handoff: {error}"))?;
+        // A transport failure may follow a successful commit. Keep its vaulted
+        // context until receipt recovery; deleting it would break the winner.
+        let admitted = match self.core.admit_handoff(&encoded) {
+            Ok(crate::CorePipeResponse::Handoffs {
+                items, next: None, ..
+            }) if items.len() == 1 => match serde_json::from_str::<Handoff>(&items[0]) {
+                Ok(admitted) => admitted,
+                Err(_) => {
+                    return Ok(
+                        json!({"ok": false, "transport_error": true, "error": "Core 交接接收回执无法解析"}),
+                    )
+                }
+            },
+            Ok(crate::CorePipeResponse::Error { code, message, .. })
+                if code == "handoff_failed" =>
+            {
+                return self.rollback_browser_credential_on_error(
+                    Err(message),
+                    owned_credential_ref.as_deref(),
+                );
+            }
+            Err(error) => return Ok(json!({"ok": false, "transport_error": true, "error": error})),
+            _ => {
+                return Ok(
+                    json!({"ok": false, "transport_error": true, "error": "Core 返回了无效的交接接收回执"}),
+                )
+            }
+        };
+        if admitted.offer.credential_ref != owned_credential_ref {
             if let Some(credential_ref) = owned_credential_ref.as_deref() {
-                if let Err(delete_error) = self.core.delete_credential(credential_ref) {
-                    rollback_error = Some(match rollback_error {
-                        Some(previous) => format!("{previous}; {delete_error}"),
-                        None => delete_error,
-                    });
+                if let Err(error) = self.core.delete_credential(credential_ref) {
+                    crate::record_runtime_log(
+                        "handoff_unused_context_cleanup_failed",
+                        json!({"handoff_id": admitted.id, "error": error}),
+                    );
                 }
             }
-            return match rollback_error {
-                None => Err(error),
-                Some(rollback_error) => Err(format!(
-                    "{error}; browser handoff rollback failed: {rollback_error}"
-                )),
-            };
         }
-        let response = handoff.public(None);
+        let response = admitted.public(None);
         Ok(json!({"ok": true, "handoff": response}))
     }
 
@@ -469,7 +498,27 @@ impl NativeHostSession {
             .get("handoff_id")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let handoff = self.handoff(id)?;
+        let handoff = if id.is_empty() {
+            let request_id = message
+                .get("client_request_id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "缺少交接ID或客户端请求ID".to_string())?;
+            let found = self
+                .core
+                .query_handoffs(None, Some(request_id), false)?
+                .into_iter()
+                .filter_map(|row| serde_json::from_str::<Handoff>(&row).ok())
+                .last();
+            match found {
+                Some(handoff) => handoff,
+                // Absence is an observation, not proof that an earlier timed-out
+                // request cannot still commit. Callers must retain uncertainty.
+                None => return Ok(json!({"ok": true, "handoff": null})),
+            }
+        } else {
+            self.handoff(id)?
+        };
         let task = match handoff.task_id.as_deref() {
             Some(task_id) => self
                 .core
@@ -522,6 +571,7 @@ impl NativeHostSession {
         self.handoff_status(&json!({"handoff_id": id}))
     }
 
+    #[cfg(test)]
     fn persist_handoff(&mut self, handoff: &Handoff) -> Result<(), String> {
         let encoded = serde_json::to_string(handoff)
             .map_err(|error| format!("encode v6 handoff {}: {error}", handoff.id))?;
@@ -1088,12 +1138,20 @@ fn matches_local_payload_url(url: &str) -> bool {
 
 fn next_handoff_id() -> String {
     let sequence = NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed);
-    format!("handoff-{:x}-{sequence:x}", unix_time_ms())
+    format!(
+        "handoff-{:x}-{:x}-{sequence:x}",
+        std::process::id(),
+        unix_time_ms()
+    )
 }
 
 fn next_credential_ref() -> String {
     let sequence = NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed);
-    format!("cred-{:x}-{sequence:x}", unix_time_ms())
+    format!(
+        "cred-{:x}-{:x}-{sequence:x}",
+        std::process::id(),
+        unix_time_ms()
+    )
 }
 
 fn unix_time_ms() -> u64 {
@@ -1476,6 +1534,20 @@ mod tests {
         });
         let second = session.dispatch(&retry).unwrap();
         assert_eq!(first["handoff"]["id"], second["handoff"]["id"]);
+        let recovered = session
+            .dispatch(&json!({
+                "op": "handoff_status", "client_request_id": "resource:1:abc"
+            }))
+            .unwrap();
+        assert_eq!(first["handoff"]["id"], recovered["handoff"]["id"]);
+        assert_eq!(recovered["handoff"]["status"], "pending");
+        let absent = session
+            .dispatch(&json!({
+                "op": "handoff_status", "client_request_id": "not-admitted"
+            }))
+            .unwrap();
+        assert_eq!(absent["ok"], true);
+        assert!(absent["handoff"].is_null());
         assert_eq!(persisted_after_first.len(), 1);
         assert_eq!(
             session.core.query_handoffs(None, None, false).unwrap(),
@@ -1488,6 +1560,33 @@ mod tests {
         let first = next_credential_ref();
         let second = next_credential_ref();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn handoff_admission_recovery_uses_original_id_and_requires_it() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let offer = json!({"op": "recover_offer", "resource": {
+            "url": "https://cdn.test/setup.exe", "filename": "setup.exe", "client_request_id": "journal-before-send"
+        }});
+        let first = session.dispatch(&offer).unwrap();
+        let mut delayed = offer.clone();
+        delayed["op"] = json!("offer");
+        let second = session.dispatch(&delayed).unwrap();
+        assert_eq!(first["handoff"]["id"], second["handoff"]["id"]);
+        assert_eq!(
+            session
+                .core
+                .query_handoffs(None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(session.core.local().tasks().is_empty());
+        assert!(session
+            .dispatch(
+                &json!({"op": "recover_offer", "resource": {"url": "https://cdn.test/setup.exe"}})
+            )
+            .is_err());
     }
 
     #[test]

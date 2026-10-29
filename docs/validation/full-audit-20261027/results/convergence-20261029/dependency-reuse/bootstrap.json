@@ -1,0 +1,17 @@
+﻿{
+    "passed":  true,
+    "finished":  true,
+    "phase":  "verified-r22-media-dependencies-extracted",
+    "host_install_performed":  false,
+    "presenter_source_msi_sha256":  "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+    "dependencies":  [
+                         {
+                             "sha256":  "f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea",
+                             "name":  "libmpv-2.dll"
+                         },
+                         {
+                             "sha256":  "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98",
+                             "name":  "ffmpeg.exe"
+                         }
+                     ]
+}

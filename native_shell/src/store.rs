@@ -170,7 +170,7 @@ impl CoreStore {
         events: &[EventEnvelope],
         spec: Option<&TaskSpec>,
     ) -> Result<(), String> {
-        self.apply_events_spec_and_settings(events, spec, None)
+        self.apply_events_spec_and_settings(events, spec, None, None)
     }
 
     pub fn apply_events_and_settings(
@@ -178,7 +178,15 @@ impl CoreStore {
         events: &[EventEnvelope],
         settings: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
-        self.apply_events_spec_and_settings(events, None, Some(settings))
+        self.apply_events_spec_and_settings(events, None, Some(settings), None)
+    }
+
+    pub(crate) fn apply_events_and_handoff(
+        &mut self,
+        events: &[EventEnvelope],
+        handoff: &crate::contract::BrowserHandoff,
+    ) -> Result<(), String> {
+        self.apply_events_spec_and_settings(events, None, None, Some(handoff))
     }
 
     fn apply_events_spec_and_settings(
@@ -186,14 +194,31 @@ impl CoreStore {
         events: &[EventEnvelope],
         spec: Option<&TaskSpec>,
         settings: Option<&BTreeMap<String, serde_json::Value>>,
+        handoff: Option<&crate::contract::BrowserHandoff>,
     ) -> Result<(), String> {
-        if events.is_empty() && spec.is_none() && settings.is_none_or(BTreeMap::is_empty) {
+        if events.is_empty()
+            && spec.is_none()
+            && settings.is_none_or(BTreeMap::is_empty)
+            && handoff.is_none()
+        {
             return Ok(());
         }
         let transaction = self
             .connection
             .transaction()
             .map_err(|error| format!("begin Core event transaction: {error}"))?;
+        if let Some(handoff) = handoff {
+            let encoded = serde_json::to_string(handoff)
+                .map_err(|error| format!("encode Core handoff: {error}"))?;
+            upsert_handoff_row(
+                &transaction,
+                &handoff.id,
+                &encoded,
+                &handoff.status,
+                handoff.task_id.as_deref(),
+                handoff.created_at_ms,
+            )?;
+        }
         for envelope in events {
             match &envelope.event {
                 CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {

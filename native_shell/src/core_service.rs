@@ -23,6 +23,49 @@ impl PersistentCore {
         Self::from_store(CoreStore::in_memory()?)
     }
 
+    pub(crate) fn admit_handoff(&mut self, encoded: &str) -> Result<String, String> {
+        let handoff: crate::contract::BrowserHandoff = serde_json::from_str(encoded)
+            .map_err(|error| format!("decode browser handoff: {error}"))?;
+        if handoff.id.trim().is_empty()
+            || handoff.offer.handoff_id != handoff.id
+            || handoff.status != "pending"
+            || handoff.presentation != "queued"
+            || handoff.task_id.is_some()
+        {
+            return Err("浏览器交接初始状态无效".into());
+        }
+        // The coordinator holds the single Core lock across lookup, runtime
+        // admission and commit. Retried Hosts cannot both admit the same offer.
+        if !handoff.request_id.is_empty() {
+            if let Some(existing) = self
+                .store
+                .query_handoffs(None, Some(&handoff.request_id), false)?
+                .pop()
+            {
+                return Ok(existing);
+            }
+        }
+        if !self
+            .store
+            .query_handoffs(Some(&handoff.id), None, false)?
+            .is_empty()
+        {
+            return Err("交接编号已属于另一请求".into());
+        }
+        let encoded = serde_json::to_string(&handoff)
+            .map_err(|error| format!("encode browser handoff: {error}"))?;
+        let before = self.runtime.clone();
+        let events = self.runtime.handle(CoreCommand::OfferResource {
+            offer: handoff.offer.clone(),
+        });
+        if let Err(error) = self.store.apply_events_and_handoff(&events, &handoff) {
+            self.runtime = before;
+            return Err(error);
+        }
+        self.notify_committed(&events);
+        Ok(encoded)
+    }
+
     pub fn handle(&mut self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
         if let CoreCommand::GetTaskLog { task_id } = &command {
             let mut lines = self.store.load_task_log(task_id, 500)?;
@@ -437,6 +480,161 @@ impl PersistentCore {
 mod tests {
     use super::*;
     use crate::{CoreCommand, ResourceKind, TaskSpec};
+
+    fn browser_admission(id: &str, request_id: &str) -> String {
+        serde_json::json!({
+            "id": id, "request_id": request_id,
+            "offer": crate::ResourceOffer {
+                handoff_id: id.into(), url: "https://cdn.test/setup.exe".into(),
+                filename: "setup.exe".into(), ..Default::default()
+            },
+            "filename": "setup.exe", "title": "", "mime_type": "", "size": 0,
+            "status": "pending", "presentation": "queued", "task_id": null,
+            "created_at_ms": 1
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn handoff_admission_retries_return_one_offer_without_reopening_rejection() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let first = core
+            .admit_handoff(&browser_admission("first", "same-request"))
+            .unwrap();
+        let sequence = core.latest_sequence();
+        assert_eq!(
+            core.admit_handoff(&browser_admission("second", "same-request"))
+                .unwrap(),
+            first
+        );
+        assert_eq!(core.latest_sequence(), sequence);
+        assert_eq!(core.store().load_handoffs().unwrap().len(), 1);
+        assert!(core
+            .admit_handoff(&browser_admission("first", "different-request"))
+            .is_err());
+        assert_eq!(core.store().load_handoffs().unwrap(), vec![first]);
+        core.handle(CoreCommand::RejectHandoff {
+            handoff_id: "first".into(),
+            suppress_site_kind: false,
+        })
+        .unwrap();
+        let sequence = core.latest_sequence();
+        let retry: serde_json::Value = serde_json::from_str(
+            &core
+                .admit_handoff(&browser_admission("third", "same-request"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(retry["id"], "first");
+        assert_eq!(retry["status"], "rejected");
+        assert_eq!(core.latest_sequence(), sequence);
+    }
+
+    #[test]
+    fn handoff_admission_write_failure_rolls_back_row_event_and_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-admission-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("core.db");
+        let mut core = PersistentCore::open(&path).unwrap();
+        let sequence = core.latest_sequence();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON event_checkpoints BEGIN SELECT RAISE(ABORT, 'injected admission failure'); END;").unwrap();
+        assert!(core
+            .admit_handoff(&browser_admission("first", "same-request"))
+            .is_err());
+        assert!(core.store().load_handoffs().unwrap().is_empty());
+        assert_eq!(core.latest_sequence(), sequence);
+        assert_eq!(*core.event_notify.0.lock().unwrap(), sequence);
+        connection
+            .execute_batch("DROP TRIGGER reject_checkpoint")
+            .unwrap();
+        let rejected = core
+            .handle(CoreCommand::RejectHandoff {
+                handoff_id: "first".into(),
+                suppress_site_kind: false,
+            })
+            .unwrap();
+        assert!(rejected.iter().any(|event| matches!(&event.event, crate::CoreEvent::Error { code, .. } if code == "handoff_not_found")));
+        core.admit_handoff(&browser_admission("second", "same-request"))
+            .unwrap();
+        core.handle(CoreCommand::RejectHandoff {
+            handoff_id: "second".into(),
+            suppress_site_kind: false,
+        })
+        .unwrap();
+        assert_eq!(core.store().load_handoffs().unwrap().len(), 1);
+        drop(connection);
+        drop(core);
+        // Pending admission restores from the same transaction after restart.
+        let mut core = PersistentCore::open(&path).unwrap();
+        core.admit_handoff(&browser_admission("pending", "restart-request"))
+            .unwrap();
+        drop(core);
+        let mut core = PersistentCore::open(&path).unwrap();
+        let recovered: serde_json::Value = serde_json::from_str(
+            &core
+                .admit_handoff(&browser_admission("duplicate", "restart-request"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(recovered["id"], "pending");
+        core.handle(CoreCommand::RejectHandoff {
+            handoff_id: "pending".into(),
+            suppress_site_kind: false,
+        })
+        .unwrap();
+        let row = core
+            .store()
+            .query_handoffs(Some("pending"), None, false)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&row).unwrap()["status"],
+            "rejected"
+        );
+        drop(core);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn handoff_admission_concurrent_hosts_share_one_committed_offer() {
+        let coordinator = crate::CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let workers: Vec<_> = ["host-a", "host-b"]
+            .into_iter()
+            .map(|id| {
+                let coordinator = coordinator.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let encoded = browser_admission(id, "same-request");
+                    barrier.wait();
+                    coordinator.admit_handoff(&encoded).unwrap()
+                })
+            })
+            .collect();
+        barrier.wait();
+        let receipts: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(receipts[0], receipts[1]);
+        let core = coordinator.lock().unwrap();
+        assert_eq!(core.store().load_handoffs().unwrap().len(), 1);
+        assert_eq!(
+            core.events_after(0, 100)
+                .iter()
+                .filter(|event| matches!(event.event, crate::CoreEvent::HandoffOffered { .. }))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn failed_commit_restores_snapshot_spec_sequence_and_notification() {

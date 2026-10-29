@@ -1,0 +1,83 @@
+{
+  "passed": false,
+  "finished": true,
+  "started_at": "2026-10-29T05:26:25.194Z",
+  "offline_only": true,
+  "scope": "Actual Edge + current extension/Core/Host; unchanged packaged presenter; protocol acceptance, no desktop input",
+  "checks": [],
+  "server_requests": [],
+  "browser_events": [],
+  "phase": "start-edge",
+  "background_sha256": "59a44df4bbee62bad0c22bf108f0b0e214abe97319121ecbf75836e2dec9a6cd",
+  "browser_version": {
+    "protocolVersion": "1.3",
+    "product": "Edg/156.0.4314.50",
+    "revision": "@af2ba23ae0ecf7084d900446fc59d5119dd5fd5e",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+    "jsVersion": "15.6.12.7"
+  },
+  "initial_targets": [
+    {
+      "targetId": "0049622C048C1B9ED647A569D2F27F32",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "EB724DEF0EADE629FF72DDF7AF48A424",
+      "pid": 0
+    },
+    {
+      "targetId": "6FA6D4C297312CF86CD098C2D47CFF56",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "EB724DEF0EADE629FF72DDF7AF48A424",
+      "pid": 0
+    },
+    {
+      "targetId": "159EC397CE498765D5EEACE4070B996A",
+      "type": "page",
+      "title": "about:blank",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "EB724DEF0EADE629FF72DDF7AF48A424",
+      "pid": 0
+    },
+    {
+      "targetId": "9B029F216DC699085F8D9C4DB1806D53",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "EB724DEF0EADE629FF72DDF7AF48A424",
+      "pid": 0
+    },
+    {
+      "targetId": "9ADFD5F7CE9C4D98F983666DBF2545A4",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "EB724DEF0EADE629FF72DDF7AF48A424",
+      "pid": 0
+    },
+    {
+      "targetId": "2276B95BEE315B76A8FD8EC2299B17D8",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "EB724DEF0EADE629FF72DDF7AF48A424",
+      "pid": 0
+    }
+  ],
+  "last_evaluation": "chrome.runtime.sendMessage({type:\"ping\"})",
+  "error": "Error: CDP timeout: Runtime.evaluate\n    at Timeout._onTimeout (file:///C:/QACurrentRunners/current-browser-guest.mjs:66:65)\n    at listOnTimeout (node:internal/timers:605:17)\n    at process.processTimers (node:internal/timers:541:7)"
+}

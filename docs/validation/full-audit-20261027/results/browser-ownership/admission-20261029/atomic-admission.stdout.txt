@@ -1,0 +1,10 @@
+
+running 5 tests
+test core_server::tests::handoff_admission_ipc_retry_returns_same_receipt_and_one_task ... ok
+test core_service::tests::handoff_admission_concurrent_hosts_share_one_committed_offer ... ok
+test core_service::tests::handoff_admission_retries_return_one_offer_without_reopening_rejection ... ok
+test core_service::tests::handoff_admission_write_failure_rolls_back_row_event_and_runtime ... ok
+test native_host::tests::handoff_admission_recovery_uses_original_id_and_requires_it ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 661 filtered out; finished in 1.01s
+

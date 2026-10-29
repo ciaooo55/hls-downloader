@@ -244,7 +244,7 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
-  it('preempts an active status request for an interactive offer', async () => {
+  it.each([{ op: 'offer' }, { op: 'ping', interactive: true }])('preempts an active status request for %j', async message => {
     const firstPort = new FakePort()
     const secondPort = new FakePort()
     const bridge = new NativeBridge(vi.fn()
@@ -252,10 +252,10 @@ describe('persistent native bridge', () => {
       .mockReturnValueOnce(secondPort))
     const active = bridge.request({ op: 'handoff_status' })
     const heartbeat = bridge.request({ op: 'ping' })
-    const offer = bridge.request({ op: 'offer' })
+    const offer = bridge.request(message)
 
     expect(firstPort.disconnect).toHaveBeenCalledOnce()
-    expect(secondPort.posted[0]).toMatchObject({ op: 'offer' })
+    expect(secondPort.posted[0]).toMatchObject(message)
     // A buffered response from the detached port must not complete the offer.
     firstPort.onMessage.emit({ ok: true, __request_id: firstPort.posted[0].__request_id })
     secondPort.onMessage.emit({ ok: true, __request_id: secondPort.posted[0].__request_id })
@@ -380,7 +380,7 @@ describe('persistent native bridge', () => {
       first.onMessage.emit({ ok: false, error: 'Core IPC read: closed', __request_id: first.posted[0].__request_id })
       expect(second.posted).toHaveLength(1)
       second.onMessage.emit({ ok: false, error: 'Core IPC read: closed', __request_id: second.posted[0].__request_id })
-      await expect(request).resolves.toMatchObject({ ok: false, error: 'Core IPC read: closed' })
+      await expect(request).resolves.toMatchObject({ ok: false, transport_error: true, error: 'Core IPC read: closed' })
       expect(connect).toHaveBeenCalledTimes(2)
     } finally { bridge.close(); await request.catch(() => undefined) }
   })

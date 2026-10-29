@@ -1,0 +1,42 @@
+[
+  {
+    "path": "README.md",
+    "sha256": "b089e0dd7e0020b2fbe85c8d702ba18048bd96cca497fd5f768e089092397752"
+  },
+  {
+    "path": "cleanup.json",
+    "sha256": "b9616b3c6941158161bed2bbadbdc166577e317bc13fa515a7a0819eddb1ac62"
+  },
+  {
+    "path": "local-import-command-results.json",
+    "sha256": "420b4438d161f64c54a8062f68e83c309f04872cb38a33a184fc799c0d9d401e"
+  },
+  {
+    "path": "local-import-fixture-failure.json",
+    "sha256": "8dd1eab6bf714889fc66f60ab782becf6fc23de1a8b0b9ffb13dc013c9cae58c"
+  },
+  {
+    "path": "local-import-summary.json",
+    "sha256": "97dfc8f5dc7d71481a252b5a8d7ddeec57eb204a9df8d56ae1905a53f563d113"
+  },
+  {
+    "path": "local-import-validation.json",
+    "sha256": "9c15628c40b578935987272b90064f860609b755738afb33adb26f9fd6f082bf"
+  },
+  {
+    "path": "ownership-race-summary.json",
+    "sha256": "09fa2c6c6bfaff479aec8dd5372ab74d4b462b5fa5ee10c109a74e4e1228f581"
+  },
+  {
+    "path": "ownership-race-validation.json",
+    "sha256": "5cf55086252a18a8dc5917367d04d6539ad44024fdee2849056010e548690bac"
+  },
+  {
+    "path": "summary.json",
+    "sha256": "b4958083d733e164a8ed4318a519245a5724e3ede00445d679f240322e2172aa"
+  },
+  {
+    "path": "validation.json",
+    "sha256": "90aca28619762b0fba403d1a72a7823e5cbb34f5d88483c3b8d8930dc87116b8"
+  }
+]

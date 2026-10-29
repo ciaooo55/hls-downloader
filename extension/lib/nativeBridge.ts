@@ -151,7 +151,8 @@ export class NativeBridge {
     // 只有已知只读请求能被抢占；本地文件交接等写操作不能因遗漏分类而断线重放。
     // 字幕使用独立连接，所有动作保持同优先级，PCM 不抢断正在进行的 poll。
     switch (String(message.op || '')) {
-      case 'ping': return 0
+      // 交接前的探测不能排在挂起的后台长轮询后；普通心跳仍保持最低优先级。
+      case 'ping': return message.interactive === true ? 30 : 0
       case 'wait_handoff': return 10
       case 'handoff_status':
       case 'media_push_status': return 20
@@ -252,7 +253,7 @@ export class NativeBridge {
           status: 'failed',
           message: String(response.error || '读取桌面端推送状态失败'),
         }
-      : response
+      : coreTransportFailed ? { ...response, transport_error: true } : response
     if (this.tryMediaPushAdmissionCheck(port, request, resolvedResponse)) return
     this.active = null
     this.queue.shift()

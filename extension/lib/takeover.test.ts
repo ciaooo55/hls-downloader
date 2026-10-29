@@ -44,6 +44,7 @@ describe('browser transfer parking before desktop takeover', () => {
     let release!: () => void
     const paused = new Promise<void>(resolve => { release = resolve })
     vi.mocked(browser.downloads.pause).mockImplementation(() => paused)
+    vi.mocked(browser.downloads.search).mockImplementation(() => Promise.resolve([item({ paused: true })]))
     let settled = false
     const parking = pauseBrowserDownload(item()).then(result => { settled = true; return result })
     await Promise.resolve()
@@ -200,6 +201,7 @@ describe('browser download takeover helpers', () => {
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'ui-fallback', presentation_ok: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_mode: 'desktop-pending', presentation_ok: true, presentation_queued: true } })).toBe(true)
     expect(desktopAcceptedHandoff({ ok: false, handoff: { id: 'one' } })).toBe(false)
+    expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', status: 'failed' } })).toBe(false)
     expect(desktopAcceptedHandoff({ ok: true })).toBe(false)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation_ok: false, presentation_mode: 'none' } })).toBe(false)
     expect(desktopAcceptedHandoff({ ok: true, handoff: { id: 'one', presentation: 'failed', presentation_mode: 'desktop' } })).toBe(false)

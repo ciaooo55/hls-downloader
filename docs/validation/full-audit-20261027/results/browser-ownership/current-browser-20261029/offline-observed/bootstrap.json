@@ -1,0 +1,23 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "phase":  "real-edge-current-source",
+    "host_install_performed":  false,
+    "presenter_not_used_for_absent_host_case":  true,
+    "components":  [
+                       {
+                           "sha256":  "aad89ea24b54d44a2657165a32574d927ce8485da3a8dfbe7f5a302ca0f263d4",
+                           "name":  "HLSDownloaderEngine.exe"
+                       },
+                       {
+                           "sha256":  "703b2f9320315346bc033320d4ab4afac231097dce1443b3831266a922d3735e",
+                           "name":  "HLSDownloaderNativeHost.exe"
+                       },
+                       {
+                           "sha256":  "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+                           "name":  "vcruntime140.dll"
+                       }
+                   ],
+    "error":  "Browser probe failed: 1",
+    "position":  "At C:\\QACurrentRunners\\current-browser-guest.ps1:54 char:34\r\n+ ... .ExitCode -ne 0) { throw \"Browser probe failed: $($probe.ExitCode)\" }\r\n+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}

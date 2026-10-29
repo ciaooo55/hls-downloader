@@ -1,0 +1,286 @@
+{
+  "passed": true,
+  "desktop_input_used": false,
+  "browser": "firefox",
+  "background_sha256": "bb03341b878e7f3c45b2324c58ea80243833b84f66e42e3af06e21dd264e066e",
+  "phase": "offer-persisted",
+  "browser_version": "158.0.1",
+  "ping": {
+    "__request_id": "mvs9bbso-3",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "persisted_handoff": {
+    "created_at_ms": 1793200561598,
+    "filename": "recovery.bin",
+    "id": "handoff-1a183151dbe-2",
+    "mime_type": "application/octet-stream",
+    "offer": {
+      "confidence": 0.99,
+      "credential_ref": "cred-1a183151db5-1",
+      "evidence": [
+        "response_headers",
+        "content_disposition",
+        "request_chain"
+      ],
+      "filename": "recovery.bin",
+      "handoff_id": "handoff-1a183151dbe-2",
+      "local_source_path": null,
+      "mime_type": "application/octet-stream",
+      "owner": "tab:1:frame:0:10",
+      "preferred_bandwidth": 0,
+      "preferred_height": 0,
+      "replay_context_ref": null,
+      "request_method": "GET",
+      "resource_kind": "file",
+      "size": 1048576,
+      "source_page_url": "http://127.0.0.1:61679/page",
+      "title": "",
+      "url": "http://127.0.0.1:61679/recovery.bin"
+    },
+    "presentation": "presenting",
+    "presentation_lease_until_ms": 1793200576630,
+    "presentation_owner": "presenter-7124-1793200544544",
+    "request_id": "download:f074fbff-1877-4634-9d3e-f5844013e8a5",
+    "size": 1048576,
+    "status": "pending",
+    "suppression": null,
+    "task_id": null,
+    "title": ""
+  },
+  "receipt_lookup": [
+    {
+      "client_request_id": "download:f074fbff-1877-4634-9d3e-f5844013e8a5",
+      "handoff_id": "handoff-1a183151dbe-2",
+      "ok": true
+    }
+  ],
+  "offers": [
+    {
+      "client_request_id": "download:f074fbff-1877-4634-9d3e-f5844013e8a5",
+      "request_sha256": "f824f0ea980a06f0f8308f0f2d5d0119bf08539459c09f077c2f50860fd7f6f0",
+      "handoff_id": "handoff-1a183151dbe-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    },
+    {
+      "client_request_id": "download:f074fbff-1877-4634-9d3e-f5844013e8a5",
+      "request_sha256": "f824f0ea980a06f0f8308f0f2d5d0119bf08539459c09f077c2f50860fd7f6f0",
+      "handoff_id": "handoff-1a183151dbe-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "task_count": 1,
+  "handoff_count": 1,
+  "output_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+  "browser_state": {
+    "events": [],
+    "items": []
+  },
+  "zero_download_item": true,
+  "server_requests": [
+    {
+      "path": "/page",
+      "range": null
+    },
+    {
+      "path": "/favicon.ico",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": null
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=0-0"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=0-262143"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=262144-524287"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=524288-786431"
+    },
+    {
+      "path": "/recovery.bin",
+      "range": "bytes=786432-1048575"
+    }
+  ],
+  "browser_state_at_close": {
+    "errors": {},
+    "events": [],
+    "items": []
+  },
+  "offers_observed": [
+    {
+      "client_request_id": "download:f074fbff-1877-4634-9d3e-f5844013e8a5",
+      "request_sha256": "f824f0ea980a06f0f8308f0f2d5d0119bf08539459c09f077c2f50860fd7f6f0",
+      "handoff_id": "handoff-1a183151dbe-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    },
+    {
+      "client_request_id": "download:f074fbff-1877-4634-9d3e-f5844013e8a5",
+      "request_sha256": "f824f0ea980a06f0f8308f0f2d5d0119bf08539459c09f077c2f50860fd7f6f0",
+      "handoff_id": "handoff-1a183151dbe-2",
+      "injected": true,
+      "ok": true,
+      "error": null
+    }
+  ],
+  "proxy_diagnostics": {
+    "injected-reply.json": "{\"ok\":false,\"error\":\"Core pipe read: injected after durable offer\",\"__request_id\":\"mvs9bcmd-4\"}"
+  },
+  "proxy_trace": {
+    "proxy-2344.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T15:16:00.4094246Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs9bbiw-1"
+        },
+        "utc": "2026-10-28T15:16:01.3056279Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs9bbiw-1"
+        },
+        "utc": "2026-10-28T15:16:01.3362865Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs9bbsa-2"
+        },
+        "utc": "2026-10-28T15:16:01.3388743Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs9bbsa-2"
+        },
+        "utc": "2026-10-28T15:16:01.3562583Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs9bbso-3"
+        },
+        "utc": "2026-10-28T15:16:01.3568394Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "ping",
+          "request_id": "mvs9bbso-3"
+        },
+        "utc": "2026-10-28T15:16:01.3878359Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs9bcmd-4"
+        },
+        "utc": "2026-10-28T15:16:01.5751260Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs9bcmd-4"
+        },
+        "utc": "2026-10-28T15:16:01.6292813Z"
+      }
+    ],
+    "proxy-4884.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T15:16:02.9293067Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "handoff_status",
+          "request_id": "mvs9bdj5-5"
+        },
+        "utc": "2026-10-28T15:16:03.7271125Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "handoff_status",
+          "request_id": "mvs9bdj5-5"
+        },
+        "utc": "2026-10-28T15:16:03.7399020Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "handoff_status",
+          "request_id": "mvs9bee3-6"
+        },
+        "utc": "2026-10-28T15:16:03.8673455Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "handoff_status",
+          "request_id": "mvs9bee3-6"
+        },
+        "utc": "2026-10-28T15:16:03.8845166Z"
+      }
+    ],
+    "proxy-5524.jsonl": [
+      {
+        "phase": "started",
+        "metadata": null,
+        "utc": "2026-10-28T15:16:01.8376735Z"
+      },
+      {
+        "phase": "forwarded",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs9bcmd-4"
+        },
+        "utc": "2026-10-28T15:16:02.7129218Z"
+      },
+      {
+        "phase": "returned",
+        "metadata": {
+          "op": "offer",
+          "request_id": "mvs9bcmd-4"
+        },
+        "utc": "2026-10-28T15:16:02.7334076Z"
+      }
+    ]
+  }
+}

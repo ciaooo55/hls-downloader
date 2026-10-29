@@ -1,0 +1,297 @@
+{
+  "passed": false,
+  "finished": true,
+  "started_at": "2026-10-29T05:30:32.116Z",
+  "offline_only": true,
+  "scope": "Actual Edge/current extension; registered Native Host absent; isolated actual Core observes no admissions; no desktop input",
+  "checks": [
+    {
+      "name": "initial-native-host-unavailable",
+      "actual": {
+        "ok": false,
+        "reconnecting": false,
+        "error": "Error: 下载器连接已断开"
+      }
+    }
+  ],
+  "server_requests": [
+    {
+      "method": "GET",
+      "url": "/page",
+      "range": null,
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "url": "/favicon.ico",
+      "range": null,
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "url": "/offline",
+      "range": null,
+      "bytes": 1048576
+    }
+  ],
+  "browser_events": [
+    {
+      "frameId": "699A4CC4FFD176A3AFDE95DD8862F164",
+      "guid": "0bcaeba4-5941-46da-be47-ed72090037aa",
+      "url": "http://127.0.0.1:49672/offline",
+      "suggestedFilename": "current.bin"
+    }
+  ],
+  "phase": "offline-navigate",
+  "background_sha256": "59a44df4bbee62bad0c22bf108f0b0e214abe97319121ecbf75836e2dec9a6cd",
+  "browser_version": {
+    "protocolVersion": "1.3",
+    "product": "Edg/156.0.4314.50",
+    "revision": "@af2ba23ae0ecf7084d900446fc59d5119dd5fd5e",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+    "jsVersion": "15.6.12.7"
+  },
+  "initial_targets": [
+    {
+      "targetId": "CFF9BC29F33F9229FC315359D3877C3C",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "url": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "BA61B8F6F932F7FBA962D1CE715C2F76",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "23A717FF7B6161CDE152E0D1E9F88C35",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "75D9A216488652D8F9460DF89C7AF8D0",
+      "type": "page",
+      "title": "",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "8BCC9DE9901288A9DFB0890037AAF465",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "F039668F9CF4425CB35D19B0CCAF81C5",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "B1E33BA3A55F5F39A2539B61644B8F63",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    }
+  ],
+  "last_evaluation": "chrome.downloads.search({})",
+  "ready_targets": [
+    {
+      "targetId": "0E25828C7D9EA50EA3F618D55CAFF907",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "CFF9BC29F33F9229FC315359D3877C3C",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "url": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "BA61B8F6F932F7FBA962D1CE715C2F76",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "23A717FF7B6161CDE152E0D1E9F88C35",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "75D9A216488652D8F9460DF89C7AF8D0",
+      "type": "page",
+      "title": "about:blank",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "8BCC9DE9901288A9DFB0890037AAF465",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "F039668F9CF4425CB35D19B0CCAF81C5",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "B1E33BA3A55F5F39A2539B61644B8F63",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "ADA876D92A247F54A9EDE45D39454001",
+      "type": "page",
+      "title": "HLS Downloader",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 6792
+    }
+  ],
+  "ping": {
+    "ok": false,
+    "reconnecting": false,
+    "error": "Error: 下载器连接已断开"
+  },
+  "offline_browser_items": [
+    {
+      "bytesReceived": 0,
+      "canResume": true,
+      "danger": "safe",
+      "exists": true,
+      "fileSize": 1048576,
+      "filename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+      "finalUrl": "http://127.0.0.1:49672/offline",
+      "id": 1,
+      "incognito": false,
+      "mime": "application/octet-stream",
+      "paused": true,
+      "referrer": "http://127.0.0.1:49672/page",
+      "startTime": "2026-10-29T05:30:34.833Z",
+      "state": "in_progress",
+      "totalBytes": 1048576,
+      "url": "http://127.0.0.1:49672/offline"
+    }
+  ],
+  "error": "Error: Timed out: Offline original browser response preserved\n    at waitFor (file:///C:/QACurrentRunners/current-browser-guest.mjs:30:9)\n    at async file:///C:/QACurrentRunners/current-browser-guest.mjs:268:23",
+  "failure_targets": [
+    {
+      "targetId": "0E25828C7D9EA50EA3F618D55CAFF907",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "699A4CC4FFD176A3AFDE95DD8862F164",
+      "type": "page",
+      "title": "Current source takeover fixture",
+      "url": "http://127.0.0.1:49672/page",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 6568
+    },
+    {
+      "targetId": "75D9A216488652D8F9460DF89C7AF8D0",
+      "type": "page",
+      "title": "about:blank",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    },
+    {
+      "targetId": "ADA876D92A247F54A9EDE45D39454001",
+      "type": "page",
+      "title": "HLS Downloader",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 6792
+    },
+    {
+      "targetId": "A5F858C86C17D8A813637C6A0047836F",
+      "type": "page",
+      "title": "下载",
+      "url": "edge://downloads-hub/",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "343D05C30946C4FE624ECAC3ECD0F161",
+      "pid": 0
+    }
+  ]
+}

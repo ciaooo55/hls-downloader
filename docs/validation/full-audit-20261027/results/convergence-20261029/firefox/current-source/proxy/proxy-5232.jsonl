@@ -1,0 +1,17 @@
+{"phase":"started","metadata":null,"utc":"2026-10-29T06:51:44.7546933Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6qot5-2"},"utc":"2026-10-29T06:51:46.0790978Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6qot5-2"},"utc":"2026-10-29T06:51:46.0991870Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6qoss-1"},"utc":"2026-10-29T06:51:46.0991870Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6qoss-1"},"utc":"2026-10-29T06:51:46.1499895Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6qpj8-3"},"utc":"2026-10-29T06:51:46.1546285Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6qpj8-3"},"utc":"2026-10-29T06:51:46.1993794Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6qpjm-4"},"utc":"2026-10-29T06:51:46.2084938Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6qpjm-4"},"utc":"2026-10-29T06:51:46.2504116Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6qqsk-5"},"utc":"2026-10-29T06:51:47.1100620Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6qqsk-5"},"utc":"2026-10-29T06:51:47.1357334Z"}
+{"phase":"forwarded","metadata":{"op":"offer_local_file","request_id":"mvt6qsig-6"},"utc":"2026-10-29T06:51:49.3370054Z"}
+{"phase":"returned","metadata":{"op":"offer_local_file","request_id":"mvt6qsig-6"},"utc":"2026-10-29T06:51:49.3779894Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6qsjx-7"},"utc":"2026-10-29T06:51:49.3876536Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6qsjx-7"},"utc":"2026-10-29T06:51:49.3979826Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6qsn9-8"},"utc":"2026-10-29T06:51:49.7176465Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6qsn9-8"},"utc":"2026-10-29T06:51:49.7279853Z"}

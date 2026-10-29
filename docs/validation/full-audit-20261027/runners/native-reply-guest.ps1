@@ -1,8 +1,9 @@
-param([ValidateSet('edge','firefox')][string[]]$Browsers=@('edge','firefox'))
+param([ValidateSet('edge','firefox')][string[]]$Browsers=@('edge','firefox'), [ValidateRange(1,2)][int]$FaultCount=1, [switch]$RunNativeHostTests, [ValidateSet('response','protocol-reload')][string]$Entry='response')
 $ErrorActionPreference='Stop'
 if ($env:USERNAME -ne 'WDAGUtilityAccount') { throw 'Windows Sandbox only' }
 $env:HLS_VM_ACCEPTANCE='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
+$env:HLS_REPLY_FAILURE_COUNT=[string]$FaultCount
 $env:TEMP='C:\QAWork\tmp'
 $env:TMP=$env:TEMP
 New-Item -ItemType Directory -Force C:\QAWork,$env:TEMP | Out-Null
@@ -34,6 +35,7 @@ try {
     $manifest=Get-Content C:\QACandidate\components.json -Raw | ConvertFrom-Json
     $meta=Get-Content C:\QACandidate\installer.json -Raw | ConvertFrom-Json
     $result.component_reference_msi_sha256=$meta.sha256
+    $result.component_scope=$meta.component_scope
     $result.installer_validation_performed=$false
     $result.components=@()
     New-Item -ItemType Directory -Force C:\QAProduct\app\resources | Out-Null
@@ -53,6 +55,12 @@ try {
     Copy-Item -LiteralPath $crt -Destination C:\QAProduct\app\resources\vcruntime140.dll
     $result.components+=@{name='vcruntime140.dll';sha256=$crtHash}
     $env:HLS_REPLY_REAL_HOST='C:\QAProduct\app\resources\HLSDownloaderNativeHost.exe'
+    if ($RunNativeHostTests) {
+        $test=Get-ChildItem C:\QABinaries\deps\hls_native_shell-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if(-not $test){throw 'Native Host test executable missing'}
+        Copy-Item -LiteralPath $test.FullName -Destination C:\QAProduct\app\resources\CoreTests.exe
+        Run C:\QAProduct\app\resources\CoreTests.exe @('native_host::tests::','--test-threads=1') 'native-host-regression'
+    }
     Add-Type -Path C:\QARunners\NativeReplyProxy.cs -ReferencedAssemblies System.Web.Extensions,System.Core -OutputAssembly C:\QAWork\NativeReplyProxy.exe -OutputType ConsoleApplication
     if($Browsers -contains 'firefox') {
         Copy-Item C:\QAInput\firefox-setup.exe C:\QAWork\firefox-setup.exe
@@ -70,7 +78,7 @@ try {
         $binary=if($family -eq 'firefox'){'C:\QAFirefox\firefox.exe'}else{$edge}
         $browserDriver=if($family -eq 'firefox'){'C:\QAInput\gecko\geckodriver.exe'}else{$driver}
         $extension=if($family -eq 'firefox'){'C:\QAExtensions\firefox-mv3'}else{'C:\QAExtensions\chrome-mv3'}
-        Run C:\QAWork\python\python.exe @('C:\QARunners\native-reply-probe.py','--browser',$family,'--extension',$extension,'--binary',$binary,'--driver',$browserDriver,'--proxy','C:\QAWork\NativeReplyProxy.exe','--state',$state,'--report',"C:\QAReports\$family.json") "$family-reply-recovery"
+        Run C:\QAWork\python\python.exe @('C:\QARunners\native-reply-probe.py','--browser',$family,'--fault-count',[string]$FaultCount,'--entry',$Entry,'--extension',$extension,'--binary',$binary,'--driver',$browserDriver,'--proxy','C:\QAWork\NativeReplyProxy.exe','--state',$state,'--report',"C:\QAReports\$family.json") "$family-reply-recovery"
     }
     $result.passed=$true
 } catch {$result.error=$_.Exception.Message;$result.position=$_.InvocationInfo.PositionMessage}

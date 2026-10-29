@@ -1,4 +1,4 @@
-import { desktopTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload } from './takeover'
+import { desktopAcceptedHandoff, desktopTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload } from './takeover'
 
 export const PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY = 'paused-handoff-followups-v1'
 
@@ -14,6 +14,8 @@ export type PausedHandoffFollowUpPhase = 'resolution' | 'readiness' | 'cleanup'
 export interface PausedHandoffFollowUp {
   downloadId: number
   handoffId: string
+  /** Durable offer key when every receipt was lost; no credentials or URL. */
+  clientRequestId?: string
   phase: PausedHandoffFollowUpPhase
   /** Epoch ms when the decision window (resolution) or next re-check (readiness) is due. */
   deadline: number
@@ -29,8 +31,9 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
   const handoffId = String(item.handoffId || '')
+  const clientRequestId = String(item.clientRequestId || '')
   const downloadId = Number(item.downloadId)
-  if (!handoffId || !Number.isInteger(downloadId) || downloadId < 0) return null
+  if ((!handoffId && !clientRequestId) || !Number.isInteger(downloadId) || downloadId < 0) return null
   const phase: PausedHandoffFollowUpPhase = item.phase === 'cleanup' ? 'cleanup'
     : item.phase === 'readiness' ? 'readiness' : 'resolution'
   const deadline = Number(item.deadline)
@@ -39,6 +42,7 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
   return {
     downloadId,
     handoffId,
+    ...(clientRequestId ? { clientRequestId } : {}),
     phase,
     // Persisted deadlines use wall-clock time. If the OS clock moved backward
     // between worker/browser sessions, an old record can otherwise appear to
@@ -55,8 +59,10 @@ export function normalizePausedHandoffFollowUps(value: unknown, now: number): Pa
   return (Array.isArray(value) ? value : [])
     .map(item => normalizePausedHandoffFollowUp(item, now))
     .filter((item): item is PausedHandoffFollowUp => {
-      if (!item || seen.has(item.handoffId)) return false
-      seen.add(item.handoffId)
+      if (!item) return false
+      const key = item.clientRequestId || item.handoffId
+      if (seen.has(key)) return false
+      seen.add(key)
       return true
     })
     .sort((left, right) => left.deadline - right.deadline || left.createdAt - right.createdAt)
@@ -80,6 +86,13 @@ export function stepPausedHandoffFollowUp(
   now: number,
   recheckMs: number,
 ): PausedFollowUpStep {
+  if (followUp.clientRequestId) {
+    // Only an actual durable receipt transfers ownership. Neither an empty
+    // lookup nor a connection error authorizes replaying the browser request.
+    if (!handoff.id) return { kind: 'keep-paused', followUp: { ...followUp, deadline: now + recheckMs } }
+    return desktopAcceptedHandoff({ ok: true, handoff })
+      ? { kind: 'remove-download' } : { kind: 'resume-download' }
+  }
   // 已收到桌面持久接收回执，浏览器只负责清掉自己的副本，不再等待用户确认或传输字节。
   if (followUp.phase === 'cleanup') return { kind: 'remove-download' }
   if (followUp.phase === 'resolution') {
@@ -155,7 +168,8 @@ export class PausedHandoffFollowUpStore {
   async remember(input: Omit<PausedHandoffFollowUp, 'createdAt'> & { createdAt?: number }): Promise<PausedHandoffFollowUp> {
     await this.hydrate()
     const record: PausedHandoffFollowUp = { ...input, createdAt: input.createdAt || this.now() }
-    this.followUps = [record, ...this.followUps.filter(item => item.handoffId !== record.handoffId)]
+    const key = record.clientRequestId || record.handoffId
+    this.followUps = [record, ...this.followUps.filter(item => (item.clientRequestId || item.handoffId) !== key)]
       .sort((left, right) => right.createdAt - left.createdAt)
     if (this.hydrated) await this.persist()
     return record
@@ -163,8 +177,8 @@ export class PausedHandoffFollowUpStore {
 
   async drop(handoffId: string): Promise<void> {
     await this.hydrate()
-    if (!this.followUps.some(item => item.handoffId === handoffId)) return
-    this.followUps = this.followUps.filter(item => item.handoffId !== handoffId)
+    if (!this.followUps.some(item => (item.clientRequestId || item.handoffId) === handoffId)) return
+    this.followUps = this.followUps.filter(item => (item.clientRequestId || item.handoffId) !== handoffId)
     if (this.hydrated) await this.persist()
   }
 

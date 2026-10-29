@@ -1,0 +1,695 @@
+{
+  "passed": false,
+  "finished": true,
+  "started_at": "2026-10-29T06:45:48.001Z",
+  "offline_only": false,
+  "scope": "Actual Edge + current extension/Core/Host; unchanged packaged presenter; protocol acceptance, no desktop input",
+  "checks": [
+    {
+      "name": "actual-native-host-ping",
+      "actual": {
+        "__request_id": "mvt6j9cl-3",
+        "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+        "minimum_extension_version": "2.0.11",
+        "ok": true,
+        "protocol": "hls-downloader-v7-core",
+        "protocol_version": 1,
+        "recommended_extension_version": "7.0.3",
+        "takeover_enabled": true,
+        "takeover_minimum_bytes": 0,
+        "version": "7.0.3"
+      }
+    },
+    {
+      "name": "one-use-get-single-owner-accepted-output-hash",
+      "actual": {
+        "tasks": 1,
+        "handoffs": 1,
+        "requests": 1,
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "zero_download_item": false
+      }
+    },
+    {
+      "name": "lost-native-reply-same-request-single-admission",
+      "actual": [
+        {
+          "client_request_id": "local-file:c3e717a0-8bea-45c3-8fa8-86e673162774",
+          "request_sha256": "df8ba74001f49a6714d68c00002b780efdc8d0c814b7ff47904e0c5fa60e3c5c",
+          "handoff_id": "handoff-1900-1a186688f75-1",
+          "injected": true,
+          "ok": true,
+          "error": null
+        },
+        {
+          "client_request_id": "local-file:c3e717a0-8bea-45c3-8fa8-86e673162774",
+          "request_sha256": "df8ba74001f49a6714d68c00002b780efdc8d0c814b7ff47904e0c5fa60e3c5c",
+          "handoff_id": "handoff-1900-1a186688f75-1",
+          "injected": false,
+          "ok": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "name": "response-rejection-retains-original-no-task-no-second-request",
+      "actual": {
+        "handoff_id": "handoff-1b20-1a186689cd4-1",
+        "server_requests": 1,
+        "source_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "one-time-post-original-bytes-imported-once",
+      "actual": {
+        "task": {
+          "task_id": "task-2",
+          "resource_kind": "file",
+          "status": "completed",
+          "stage": "finished",
+          "title": "post.bin",
+          "filename": "post.bin",
+          "downloaded_bytes": 1048576,
+          "total_bytes": 1048576,
+          "speed_bytes_per_sec": 0,
+          "peer_count": 0,
+          "seed_count": 0,
+          "uploaded_bytes": 0,
+          "upload_speed_bytes_per_sec": 0,
+          "eta_seconds": null,
+          "active_workers": 0,
+          "completed_ranges": 1,
+          "total_ranges": 1,
+          "playback_ready": true,
+          "is_live": false,
+          "available_actions": [
+            "open",
+            "open_folder",
+            "retry",
+            "delete"
+          ],
+          "url": "data:application/octet-stream,",
+          "error_code": null,
+          "error_message": null,
+          "error_stage": "",
+          "error_url": "",
+          "error_hint": "",
+          "http_status": null,
+          "error_attempt": 0,
+          "queue_index": 2,
+          "queue_id": "default",
+          "output_missing": false,
+          "output_path": "C:\\QACurrentWork\\output\\post.bin",
+          "connection_hint": "0B-1.0MB 已完成",
+          "connection_parts": [
+            {
+              "start": 0,
+              "end": 1048575,
+              "done": 1048576,
+              "state": "done"
+            }
+          ],
+          "log_tail": [
+            "downloading transfer 1048576/1048576",
+            "checking checking 1048576/1048576",
+            "completed finished 1048576/1048576"
+          ],
+          "speed_history": [],
+          "mirror_status": [],
+          "request_method": "GET",
+          "download_dir": "C:\\QACurrentWork\\output",
+          "speed_limit_kib": 0,
+          "expected_checksum": "",
+          "checksum_algorithm": "",
+          "checksum_actual": "",
+          "checksum_verified": null,
+          "av_scan": null,
+          "max_workers": 12,
+          "mirrors": [],
+          "scheduled_start_at": "",
+          "scheduled_stop_at": ""
+        },
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    },
+    {
+      "name": "blob-original-bytes-imported-without-network",
+      "actual": {
+        "task": {
+          "task_id": "task-3",
+          "resource_kind": "file",
+          "status": "completed",
+          "stage": "finished",
+          "title": "blob.bin",
+          "filename": "blob.bin",
+          "downloaded_bytes": 1048576,
+          "total_bytes": 1048576,
+          "speed_bytes_per_sec": 0,
+          "peer_count": 0,
+          "seed_count": 0,
+          "uploaded_bytes": 0,
+          "upload_speed_bytes_per_sec": 0,
+          "eta_seconds": null,
+          "active_workers": 0,
+          "completed_ranges": 1,
+          "total_ranges": 1,
+          "playback_ready": true,
+          "is_live": false,
+          "available_actions": [
+            "open",
+            "open_folder",
+            "retry",
+            "delete"
+          ],
+          "url": "blob:http://127.0.0.1:49672/14ed854f-2a30-4dd0-90cb-1c219259cb95",
+          "error_code": null,
+          "error_message": null,
+          "error_stage": "",
+          "error_url": "",
+          "error_hint": "",
+          "http_status": null,
+          "error_attempt": 0,
+          "queue_index": 3,
+          "queue_id": "default",
+          "output_missing": false,
+          "output_path": "C:\\QACurrentWork\\output\\blob.bin",
+          "connection_hint": "0B-1.0MB 已完成",
+          "connection_parts": [
+            {
+              "start": 0,
+              "end": 1048575,
+              "done": 1048576,
+              "state": "done"
+            }
+          ],
+          "log_tail": [
+            "downloading transfer 1048576/1048576",
+            "checking checking 1048576/1048576",
+            "completed finished 1048576/1048576"
+          ],
+          "speed_history": [],
+          "mirror_status": [],
+          "request_method": "GET",
+          "download_dir": "C:\\QACurrentWork\\output",
+          "speed_limit_kib": 0,
+          "expected_checksum": "",
+          "checksum_algorithm": "",
+          "checksum_actual": "",
+          "checksum_verified": null,
+          "av_scan": null,
+          "max_workers": 12,
+          "mirrors": [],
+          "scheduled_start_at": "",
+          "scheduled_stop_at": ""
+        },
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+      }
+    }
+  ],
+  "server_requests": [
+    {
+      "method": "GET",
+      "url": "/page",
+      "range": null,
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "url": "/favicon.ico",
+      "range": null,
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "url": "/opaque",
+      "range": null,
+      "bytes": 1048576
+    },
+    {
+      "method": "GET",
+      "url": "/reject",
+      "range": null,
+      "bytes": 1048576
+    },
+    {
+      "method": "POST",
+      "url": "/once-post",
+      "range": null,
+      "bytes": 1048576,
+      "request_body_sha256": "16f556ef883e6c5e700082a69b0c4304c7c0850da374d198750aacdf94dbbb6c"
+    },
+    {
+      "method": "GET",
+      "url": "/reload",
+      "range": null,
+      "bytes": 1048576
+    }
+  ],
+  "browser_events": [
+    {
+      "frameId": "3100FEE42218AD0803F70F36656077B7",
+      "guid": "b708a626-37eb-4129-bcfd-11bfe4e3b16f",
+      "url": "http://127.0.0.1:49672/opaque",
+      "suggestedFilename": "current.bin"
+    },
+    {
+      "frameId": "3100FEE42218AD0803F70F36656077B7",
+      "guid": "aca6b8a1-f7d1-4387-816b-7920fc24d6a5",
+      "url": "http://127.0.0.1:49672/reject",
+      "suggestedFilename": "current.bin"
+    },
+    {
+      "frameId": "3100FEE42218AD0803F70F36656077B7",
+      "guid": "a947643f-5179-4b27-b715-3bfc30f95f5f",
+      "url": "http://127.0.0.1:49672/once-post",
+      "suggestedFilename": "post.bin"
+    },
+    {
+      "frameId": "3100FEE42218AD0803F70F36656077B7",
+      "guid": "846c4dcf-4825-41e9-aad1-8e294a3e7155",
+      "url": "blob:http://127.0.0.1:49672/14ed854f-2a30-4dd0-90cb-1c219259cb95",
+      "suggestedFilename": "blob.bin"
+    },
+    {
+      "frameId": "3100FEE42218AD0803F70F36656077B7",
+      "guid": "5f273078-058a-4d0b-9bb0-55dbe6d48302",
+      "url": "http://127.0.0.1:49672/reload",
+      "suggestedFilename": "current.bin"
+    }
+  ],
+  "phase": "pending-local-import-extension-reload",
+  "background_sha256": "83d662875c386b2443cbeb672da28beafb314a6fea225b06e8550517e85eaedd",
+  "browser_version": {
+    "protocolVersion": "1.3",
+    "product": "Edg/156.0.4314.50",
+    "revision": "@af2ba23ae0ecf7084d900446fc59d5119dd5fd5e",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+    "jsVersion": "15.6.12.7"
+  },
+  "initial_targets": [
+    {
+      "targetId": "679CFDA8351C687651DDEF776B8C8C92",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "BCE89E80F2CFBE97CB906903F58F27D1",
+      "type": "page",
+      "title": "",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "98485CA7CC19D428717770754F658E2F",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "2EA4E4F22D579FC4AD2BFB6C8E4F6643",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "7768424FB1B7A2E52608A7DEC6EC9DD7",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "35AB35D029772E140494AD45D44CCC36",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    }
+  ],
+  "last_evaluation": "chrome.runtime.sendMessage({type:\"ping\"})",
+  "ready_targets": [
+    {
+      "targetId": "F55AFC28E81186E24DDC9159888FD6F4",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "url": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "47A3ED6D055003D05907142775D45D43",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "B6524FD926F1E08E69B8FFDEF299EFDA",
+      "type": "page",
+      "title": "HLS Downloader",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 1376
+    },
+    {
+      "targetId": "679CFDA8351C687651DDEF776B8C8C92",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "BCE89E80F2CFBE97CB906903F58F27D1",
+      "type": "page",
+      "title": "about:blank",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "98485CA7CC19D428717770754F658E2F",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "2EA4E4F22D579FC4AD2BFB6C8E4F6643",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "7768424FB1B7A2E52608A7DEC6EC9DD7",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "35AB35D029772E140494AD45D44CCC36",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    }
+  ],
+  "ping": {
+    "__request_id": "mvt6j9cl-3",
+    "extension_release_url": "https://github.com/ciaooo55/hls-downloader/releases",
+    "minimum_extension_version": "2.0.11",
+    "ok": true,
+    "protocol": "hls-downloader-v7-core",
+    "protocol_version": 1,
+    "recommended_extension_version": "7.0.3",
+    "takeover_enabled": true,
+    "takeover_minimum_bytes": 0,
+    "version": "7.0.3"
+  },
+  "persisted_handoff": {
+    "id": "handoff-1900-1a186688f75-1",
+    "offer": {
+      "url": "data:application/octet-stream,",
+      "resource_kind": "file",
+      "local_source_path": "\\\\?\\C:\\QACurrentWork\\browser-downloads\\current.bin",
+      "owner": "",
+      "evidence": [
+        "browser_completed_local_file"
+      ],
+      "confidence": 0,
+      "source_page_url": "http://127.0.0.1:49672/page",
+      "credential_ref": null,
+      "replay_context_ref": null,
+      "request_method": "GET",
+      "handoff_id": "handoff-1900-1a186688f75-1",
+      "filename": "current.bin",
+      "title": "",
+      "mime_type": "application/octet-stream",
+      "size": 1048576,
+      "preferred_bandwidth": 0,
+      "preferred_height": 0
+    },
+    "filename": "current.bin",
+    "title": "",
+    "mime_type": "application/octet-stream",
+    "size": 1048576,
+    "status": "pending",
+    "presentation": "queued",
+    "task_id": null,
+    "created_at_ms": 1793256361845,
+    "request_id": "local-file:c3e717a0-8bea-45c3-8fa8-86e673162774",
+    "suppression": null
+  },
+  "task": {
+    "task_id": "task-1",
+    "resource_kind": "file",
+    "status": "completed",
+    "stage": "finished",
+    "title": "current.bin",
+    "filename": "current.bin",
+    "downloaded_bytes": 1048576,
+    "total_bytes": 1048576,
+    "speed_bytes_per_sec": 0,
+    "peer_count": 0,
+    "seed_count": 0,
+    "uploaded_bytes": 0,
+    "upload_speed_bytes_per_sec": 0,
+    "eta_seconds": null,
+    "active_workers": 0,
+    "completed_ranges": 1,
+    "total_ranges": 1,
+    "playback_ready": true,
+    "is_live": false,
+    "available_actions": [
+      "open",
+      "open_folder",
+      "retry",
+      "delete"
+    ],
+    "url": "data:application/octet-stream,",
+    "error_code": null,
+    "error_message": null,
+    "error_stage": "",
+    "error_url": "",
+    "error_hint": "",
+    "http_status": null,
+    "error_attempt": 0,
+    "queue_index": 1,
+    "queue_id": "default",
+    "output_missing": false,
+    "output_path": "C:\\QACurrentWork\\output\\current.bin",
+    "connection_hint": "0B-1.0MB 已完成",
+    "connection_parts": [
+      {
+        "start": 0,
+        "end": 1048575,
+        "done": 1048576,
+        "state": "done"
+      }
+    ],
+    "log_tail": [
+      "downloading transfer 1048576/1048576",
+      "checking checking 1048576/1048576",
+      "completed finished 1048576/1048576"
+    ],
+    "speed_history": [],
+    "mirror_status": [],
+    "request_method": "GET",
+    "download_dir": "C:\\QACurrentWork\\output",
+    "speed_limit_kib": 0,
+    "expected_checksum": "",
+    "checksum_algorithm": "",
+    "checksum_actual": "",
+    "checksum_verified": null,
+    "av_scan": null,
+    "max_workers": 12,
+    "mirrors": [],
+    "scheduled_start_at": "",
+    "scheduled_stop_at": ""
+  },
+  "output_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+  "browser_items": [],
+  "extension_download_events": [
+    {
+      "id": 1,
+      "url": "http://127.0.0.1:49672/opaque"
+    }
+  ],
+  "zero_download_item": false,
+  "reload_before": {
+    "items": [
+      {
+        "bytesReceived": 1048576,
+        "canResume": false,
+        "danger": "safe",
+        "endTime": "2026-10-29T06:46:10.421Z",
+        "exists": true,
+        "fileSize": 1048576,
+        "filename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+        "finalUrl": "http://127.0.0.1:49672/reload",
+        "id": 5,
+        "incognito": false,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "referrer": "http://127.0.0.1:49672/page",
+        "startTime": "2026-10-29T06:46:08.341Z",
+        "state": "complete",
+        "totalBytes": 1048576,
+        "url": "http://127.0.0.1:49672/reload"
+      },
+      {
+        "bytesReceived": 1048576,
+        "canResume": false,
+        "danger": "safe",
+        "endTime": "2026-10-29T06:46:05.241Z",
+        "exists": true,
+        "fileSize": 1048576,
+        "filename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+        "finalUrl": "http://127.0.0.1:49672/reject",
+        "id": 2,
+        "incognito": false,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "referrer": "http://127.0.0.1:49672/page",
+        "startTime": "2026-10-29T06:46:03.150Z",
+        "state": "complete",
+        "totalBytes": 1048576,
+        "url": "http://127.0.0.1:49672/reject"
+      }
+    ],
+    "records": {
+      "local-browser-download-handoffs": [
+        {
+          "downloadId": 5,
+          "handoffId": "handoff-1b20-1a18668b119-4",
+          "importUrl": "data:application/octet-stream,",
+          "pageUrl": "http://127.0.0.1:49672/page",
+          "requestId": "local-file:99bfe2be-aa80-4dc7-8b41-2769d201e1b2",
+          "sourceFilename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+          "sourceKey": "https://local-download.invalid/28f29dc93e286b35b0ee843e39ee6b71def282d419384bdb8d8f7d2b562b8d7a",
+          "sourceStartedAt": "2026-10-29T06:46:08.341Z"
+        }
+      ]
+    }
+  },
+  "error": "Error: {\"exceptionId\":1,\"text\":\"Uncaught\",\"lineNumber\":0,\"columnNumber\":15,\"scriptId\":\"3\",\"exception\":{\"type\":\"object\",\"subtype\":\"error\",\"className\":\"TypeError\",\"description\":\"TypeError: Cannot read properties of undefined (reading 'sendMessage')\\n    at <anonymous>:1:16\",\"objectId\":\"3483182907374383089.1.2\"}}\n    at evaluate (file:///C:/QACurrentRunners/current-browser-guest.mjs:78:37)\n    at async waitFor (file:///C:/QACurrentRunners/current-browser-guest.mjs:28:19)\n    at async file:///C:/QACurrentRunners/current-browser-guest.mjs:304:3",
+  "failure_targets": [
+    {
+      "targetId": "F55AFC28E81186E24DDC9159888FD6F4",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "url": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "E1F05AE06F15F1288293E57600DF4C04",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "3100FEE42218AD0803F70F36656077B7",
+      "type": "page",
+      "title": "Current source takeover fixture",
+      "url": "http://127.0.0.1:49672/page",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 4988
+    },
+    {
+      "targetId": "8D9453E1793DD67F8B913CBCE6115FC5",
+      "type": "page",
+      "title": "",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 6220
+    },
+    {
+      "targetId": "679CFDA8351C687651DDEF776B8C8C92",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "BCE89E80F2CFBE97CB906903F58F27D1",
+      "type": "page",
+      "title": "about:blank",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    },
+    {
+      "targetId": "D0C4B9D6E91F345432CE85E6759ED309",
+      "type": "page",
+      "title": "下载",
+      "url": "edge://downloads-hub/",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "359A0CA4B90E2BDF618FBD52ECA1AEEB",
+      "pid": 0
+    }
+  ]
+}

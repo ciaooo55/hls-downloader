@@ -1,0 +1,13 @@
+{
+  "target": "A:\\Ubuntu\\测试\\hls-downloader\\artifacts\\browser-ownership-20261028",
+  "deleted": false,
+  "reason": "Automatic approval rejected the exact recursive removal: blocked by policy; no specific reason supplied.",
+  "command_started": false,
+  "retry_performed": false,
+  "files": 34,
+  "directories": 4,
+  "bytes": 90397,
+  "previously_rejected_targets_retried": false,
+  "task_sandbox_stopped": true,
+  "older_residue": "Previously rejected .tool-cache/build output/old artifacts remain; no complete-host cleanup claim."
+}

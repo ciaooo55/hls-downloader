@@ -63,8 +63,12 @@ pub fn paint_from_progress(
     total: u64,
     downloading: bool,
 ) -> Vec<ConnectionPart> {
-    let ranges = load_completed_ranges(progress_path).unwrap_or_default();
+    // 成品发布后检查点会清理，完整字节计数仍能证明所有区间已完成。
+    if !downloading && total > 0 && downloaded >= total {
+        return paint_file_map(downloaded, &[(0, downloaded)], &[]);
+    }
     let total = total.max(downloaded);
+    let ranges = load_completed_ranges(progress_path).unwrap_or_default();
     let mut active = if downloading {
         load_active_ranges(progress_path).unwrap_or_default()
     } else {
@@ -277,6 +281,22 @@ mod tests {
         assert_eq!(parts[0].end, 2);
         assert_eq!(parts[1].state, "active");
         assert_eq!(parts[2].state, "queued");
+    }
+
+    #[test]
+    fn completed_file_remains_done_after_range_checkpoint_cleanup() {
+        // 成品发布会移除分段检查点；连接图仍须反映已完成字节，而非排队。
+        let parts = paint_from_progress(Path::new("absent-task/progress.json"), 1024, 1024, false);
+        let (workers, completed, total, hint) = summarize(&parts);
+        assert_eq!((workers, completed, total), (0, 1, 1));
+        assert_eq!(parts[0].done, 1024);
+        assert_eq!(parts[0].state, "done");
+        assert!(!hint.contains("排队"));
+
+        let partial = paint_from_progress(Path::new("absent-task/progress.json"), 512, 1024, false);
+        assert_ne!(partial[0].state, "done");
+        let unknown = paint_from_progress(Path::new("absent-task/progress.json"), 512, 0, false);
+        assert_ne!(unknown[0].state, "done");
     }
 
     #[test]

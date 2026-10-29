@@ -1213,6 +1213,10 @@ impl CoreCoordinator {
         Ok(())
     }
 
+    pub(crate) fn admit_handoff(&self, handoff_json: &str) -> Result<String, String> {
+        self.lock()?.admit_handoff(handoff_json)
+    }
+
     pub fn save_handoff(
         &self,
         handoff_id: &str,

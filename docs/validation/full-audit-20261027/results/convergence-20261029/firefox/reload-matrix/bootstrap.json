@@ -1,0 +1,45 @@
+﻿{
+    "passed":  false,
+    "finished":  true,
+    "phase":  "real-browser-current-source",
+    "host_install_performed":  false,
+    "presenter_source_msi_sha256":  "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+    "components":  [
+                       {
+                           "sha256":  "99622b24503bd94abd571cbd731b1b59785e4e7c178f97d7144d6950da52c29d",
+                           "name":  "HLSDownloaderEngine.exe"
+                       },
+                       {
+                           "sha256":  "254dae78f0cacd584b4dc50e10e7c9877fbe0fd1077c5fc0120f5a67be7868eb",
+                           "name":  "HLSDownloaderNativeHost.exe"
+                       },
+                       {
+                           "sha256":  "2763617883fc9ca1f4c8b5c26a8c8aefaa9bb05027adde89cb5f2e5834c213db",
+                           "name":  "HLSDownloaderPresenter.exe"
+                       },
+                       {
+                           "sha256":  "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+                           "name":  "vcruntime140.dll"
+                       }
+                   ],
+    "runners":  [
+                    {
+                        "sha256":  "45f205bcbcb596fcd798e45fb50b57df470fdac4ac5bc671e3a24fa007169cf4",
+                        "name":  "current-browser-guest.ps1"
+                    },
+                    {
+                        "sha256":  "fb096d6ac217f156235c534873d37314324e7ba37c9f1dce56e64c5289915a89",
+                        "name":  "current-browser-guest.mjs"
+                    },
+                    {
+                        "sha256":  "76a7a3c4ca7d604aecfe7d4390a5973691cd2784cb2d0ad014822ae577948ec4",
+                        "name":  "firefox-marionette.mjs"
+                    },
+                    {
+                        "sha256":  "dcbff7f80a4abed63a36c9c90b16214dd44cb44551d759691e3fda3d766ebd4e",
+                        "name":  "NativeReplyProxy.cs"
+                    }
+                ],
+    "error":  "Browser probe failed: 1",
+    "position":  "At C:\\QACurrentRunners\\current-browser-guest.ps1:57 char:34\r\n+ ... .ExitCode -ne 0) { throw \"Browser probe failed: $($probe.ExitCode)\" }\r\n+                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+}

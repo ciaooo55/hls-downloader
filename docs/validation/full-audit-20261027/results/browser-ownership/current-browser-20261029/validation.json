@@ -1,0 +1,195 @@
+{
+  "date": "2026-10-29",
+  "source_base": "fa233537f11c5255297850c7dc5248f06cb1552a",
+  "uncommitted": true,
+  "stage_2_passed": false,
+  "release_ready": false,
+  "production_files": [
+    {
+      "path": "extension/entrypoints/background.ts",
+      "sha256": "95d06f77ca226584f84413755cc4ab39c07cfd34dcca1d6618c1c9209160c826"
+    },
+    {
+      "path": "extension/lib/nativeBridge.ts",
+      "sha256": "35a6504f42137900c820c08d198bb3bb49fa17db9991c9f16a918bff1d9ab31d"
+    },
+    {
+      "path": "extension/lib/pausedHandoffFollowups.ts",
+      "sha256": "413d1ee4fe55d27f8cd96ef6396d1fe4d291eb2ca5720cbd702588e7c1349dab"
+    },
+    {
+      "path": "extension/lib/takeover.ts",
+      "sha256": "c8f2aca26c6c42ab37061da4c91a747a71a05f3167ab038d4089161e3e081a57"
+    },
+    {
+      "path": "native_shell/src/contract.rs",
+      "sha256": "e9df0577c497b128b6917589179a42706d54d7847f5fd6fbcfba7052411eec9f"
+    },
+    {
+      "path": "native_shell/src/core_ipc.rs",
+      "sha256": "8ff9831ff264bf4c735234fb3e552e44155d9a0bc40f5aa9af3a70ced07d199f"
+    },
+    {
+      "path": "native_shell/src/core_server.rs",
+      "sha256": "08d9a10d095f37ac8941be1e02da403b4acb4961011046dcbff4a1c12f6ed8e5"
+    },
+    {
+      "path": "native_shell/src/core_service.rs",
+      "sha256": "074b2ce7271598a4aa97b9b2426fc1b10fb419be8db64ab78c9899080b459f6a"
+    },
+    {
+      "path": "native_shell/src/download_worker.rs",
+      "sha256": "4cdbed5f58c21dce7ed8103d135e4e75c76b0d1b6603e40cdd93f67761de456a"
+    },
+    {
+      "path": "native_shell/src/native_host.rs",
+      "sha256": "fb4b40566f43d66c2eb968fc2e749953630492597af8129298e714fa20cf6e43"
+    },
+    {
+      "path": "native_shell/src/store.rs",
+      "sha256": "6604006c0e0f31118229b6492743a339faa6c896ffe1034f247f1e8fe7d7f6fd"
+    }
+  ],
+  "commands": [
+    {
+      "command": "cargo build --offline --manifest-path native_shell/Cargo.toml --bin hls-downloader-engine --bin HLSDownloaderNativeHost -j 4",
+      "environment": {
+        "CARGO_TARGET_DIR": ".tool-cache/handoff-admission-20261029/cargo-target",
+        "CARGO_PROFILE_DEV_DEBUG": "0"
+      },
+      "exit_code": 0,
+      "scope": "Current Core/Host correctness runtime; not release performance binaries"
+    },
+    {
+      "command": "pnpm exec vitest run lib/downloadOwnership.test.ts -t \"offline before any offer\"",
+      "phase": "before-fix",
+      "exit_code": 1,
+      "failed": 2,
+      "report": "offline-regression-red.json"
+    },
+    {
+      "command": "pnpm exec vitest run lib/downloadOwnership.test.ts lib/nativeBridge.test.ts",
+      "phase": "after-fix",
+      "exit_code": 0,
+      "passed": 63,
+      "report": "offline-regression-green.json"
+    },
+    {
+      "command": "pnpm exec vitest run lib/downloadOwnership.test.ts -t \"offline before any offer\"",
+      "phase": "additional-no-pause-assertion",
+      "exit_code": 0,
+      "passed": 2,
+      "report": "offline-no-pause-regression.json",
+      "scope": "Subset of preceding 63 cases; not added to the count"
+    },
+    {
+      "command": "pnpm exec tsc --noEmit",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm run build",
+      "exit_code": 0,
+      "targets": [
+        "chrome-mv3",
+        "firefox-mv3"
+      ]
+    },
+    {
+      "command": "Node --check and PowerShell parser for changed Sandbox runners",
+      "exit_code": 0
+    }
+  ],
+  "built_backgrounds": [
+    {
+      "family": "chrome-mv3",
+      "sha256": "7156f7cc90488274bd348e6632ebc4d6e1719456dd45eb2a17a43a98f223591d"
+    },
+    {
+      "family": "firefox-mv3",
+      "sha256": "647f9d60ddc01f214369473e54bdf890b75fb0f7db96002523258de2997b5abc"
+    }
+  ],
+  "runtime": [
+    {
+      "sha256": "aad89ea24b54d44a2657165a32574d927ce8485da3a8dfbe7f5a302ca0f263d4",
+      "name": "HLSDownloaderEngine.exe"
+    },
+    {
+      "sha256": "703b2f9320315346bc033320d4ab4afac231097dce1443b3831266a922d3735e",
+      "name": "HLSDownloaderNativeHost.exe"
+    },
+    {
+      "sha256": "2763617883fc9ca1f4c8b5c26a8c8aefaa9bb05027adde89cb5f2e5834c213db",
+      "name": "HLSDownloaderPresenter.exe"
+    },
+    {
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "name": "vcruntime140.dll"
+    }
+  ],
+  "edge_version": {
+    "protocolVersion": "1.3",
+    "product": "Edg/156.0.4314.50",
+    "revision": "@af2ba23ae0ecf7084d900446fc59d5119dd5fd5e",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+    "jsVersion": "15.6.12.7"
+  },
+  "real_chain": {
+    "report": "offline-fix/edge.json",
+    "passed": true,
+    "check_names": [
+      "actual-native-host-ping",
+      "single-owner-accepted-output-hash",
+      "lost-native-reply-same-request-single-admission",
+      "response-rejection-no-task-no-second-request",
+      "one-time-post-original-bytes-imported-once",
+      "blob-original-bytes-imported-without-network"
+    ],
+    "strict_zero_item_passed": false
+  },
+  "initial_offline": {
+    "report": "offline-fix/initial-offline/edge.json",
+    "passed": true,
+    "actual": {
+      "file": {
+        "bytesReceived": 1048576,
+        "canResume": false,
+        "danger": "safe",
+        "endTime": "2026-10-29T05:38:02.433Z",
+        "exists": true,
+        "fileSize": 1048576,
+        "filename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+        "finalUrl": "http://127.0.0.1:61531/offline",
+        "id": 1,
+        "incognito": false,
+        "mime": "application/octet-stream",
+        "paused": false,
+        "referrer": "http://127.0.0.1:61531/page",
+        "startTime": "2026-10-29T05:38:00.362Z",
+        "state": "complete",
+        "totalBytes": 1048576,
+        "url": "http://127.0.0.1:61531/offline"
+      },
+      "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+      "server_requests": 1,
+      "no_new_core_handoff": true,
+      "no_new_core_task": true,
+      "baseline_tasks": 3,
+      "ping": {
+        "ok": false,
+        "reconnecting": false,
+        "error": "Error: 下载器连接已断开"
+      }
+    }
+  },
+  "physical_input_used": false,
+  "host_product_install_or_registry_changes": false,
+  "unresolved": [
+    "Chromium strict zero DownloadItem on opaque attachments and POST/Blob",
+    "Current Firefox real-browser acceptance after this fix",
+    "Full entry/reload/restart/real-site matrix",
+    "Firefox once-only response preservation after unknown admission",
+    "Completed task snapshot retains queued connection details: observed, not fixed"
+  ],
+  "cleanup": "cleanup.json"
+}

@@ -1,0 +1,11 @@
+{"phase":"started","metadata":null,"utc":"2026-10-29T06:48:54.7885069Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6n1nx-3"},"utc":"2026-10-29T06:48:55.7645741Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6n1nx-3"},"utc":"2026-10-29T06:48:55.7805165Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6n1np-1"},"utc":"2026-10-29T06:48:55.7831654Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6n1np-1"},"utc":"2026-10-29T06:48:55.8148037Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6n1ns-2"},"utc":"2026-10-29T06:48:55.8148037Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6n1ns-2"},"utc":"2026-10-29T06:48:55.8515253Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6n1oh-4"},"utc":"2026-10-29T06:48:55.8535949Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6n1oh-4"},"utc":"2026-10-29T06:48:55.8933216Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6n3dk-5"},"utc":"2026-10-29T06:48:56.7927396Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6n3dk-5"},"utc":"2026-10-29T06:48:56.8119961Z"}

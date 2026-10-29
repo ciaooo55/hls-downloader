@@ -15,6 +15,19 @@
     "blocked": "缺少真实实现或发布级验证"
   },
   "release_ready": false,
+  "browser_takeover_acceptance": {
+    "decision_date": "2026-10-29",
+    "authority": "用户确认：可靠性交接为必过门槛，零创建按入口记录",
+    "required": [
+      "原始响应与已下载文件不丢失",
+      "同一交接不创建重复任务或并行重复下载",
+      "回执丢失、扩展及浏览器重启后按原身份恢复",
+      "拒绝、取消、离线与导入失败不误删浏览器源文件",
+      "成品长度和哈希正确，组件版本可追溯"
+    ],
+    "download_item_creation": "按入口记录原始创建事件，不再要求所有入口严格零创建；清除历史不算从未创建",
+    "response_preservation": "已发出的普通文件及音视频文件请求由浏览器保全原响应，完成后导入；点击前接管的明确链接仍由 Core 下载"
+  },
   "release_exclusions": [
     {
       "feature_ids": [
@@ -36,7 +49,8 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "v7_0_3_r22_current_evidence_incomplete",
+  "audit_state": "20261029_targeted_reliable_browser_handoff_passed_candidate_pending",
+  "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {
       "id": "architecture.single_core",
@@ -246,7 +260,7 @@
       "core_command": "present_handoff/accept_handoff/reject_handoff",
       "state_event": "handoff_offered/handoff_resolved/browser_status",
       "verification": "Rust Core IPC handoff tests; extension 48 test files/344 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation",
-      "gap": "Chromium普通MV3全入口零DownloadItem未实现；历史接管、暂停及回退证据不等同浏览器从未创建下载项。r21历史/待确认队列修复已验证，插件生产代码在r22未变。"
+      "gap": "按用户确认的可靠性交接门槛，当前源码双浏览器GET/POST/Blob、回执故障、重载、重启和首次离线定向矩阵通过（convergence-20261029/validation.json）。尚待同SHA候选包与原生交互验证；DownloadItem按入口记录，真实站点全覆盖及签名扩展升级未完成。"
     },
     {
       "id": "browser.media_push_device_selection",

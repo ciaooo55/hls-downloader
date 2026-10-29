@@ -74,7 +74,7 @@ public static class NativeReplyProxy {
                         throw new EndOfStreamException("Real Host closed; exit=" + (child.HasExited ? child.ExitCode.ToString() : "running"));
                     }
                     var response = json.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(reply));
-                    if (request.ContainsKey("op") && (string)request["op"] == "offer") {
+                    if (request.ContainsKey("op") && ((string)request["op"] == "offer" || (string)request["op"] == "offer_local_file")) {
                         var resource = (Dictionary<string, object>)request["resource"];
                         string key = (string)resource["client_request_id"];
                         string digest;
@@ -82,8 +82,12 @@ public static class NativeReplyProxy {
                         string state = Environment.GetEnvironmentVariable("HLS_REPLY_PROXY_STATE");
                         string marker = Path.Combine(state, "fault-injected");
                         bool accepted = response.ContainsKey("ok") && (bool)response["ok"];
-                        bool inject = accepted && !File.Exists(marker);
-                        if (inject) File.WriteAllText(marker, key);
+                        int limit;
+                        if (!int.TryParse(Environment.GetEnvironmentVariable("HLS_REPLY_FAILURE_COUNT"), out limit)) limit = 1;
+                        if (limit < 1 || limit > 2) throw new InvalidOperationException("Invalid fault count");
+                        int count = File.Exists(marker) ? int.Parse(File.ReadAllText(marker)) : 0;
+                        bool inject = accepted && count < limit;
+                        if (inject) File.WriteAllText(marker, (count + 1).ToString());
                         var handoff = response.ContainsKey("handoff") ? (Dictionary<string, object>)response["handoff"] : null;
                         var record = new Dictionary<string, object> {
                             {"client_request_id", key}, {"request_sha256", digest},
@@ -98,6 +102,20 @@ public static class NativeReplyProxy {
                             }));
                             File.WriteAllBytes(Path.Combine(state, "injected-reply.json"), reply);
                         }
+                    }
+                    if ((string)request["op"] == "handoff_status" && request.ContainsKey("client_request_id")) {
+                        var handoff = response.ContainsKey("handoff") ? response["handoff"] as Dictionary<string, object> : null;
+                        string state = Environment.GetEnvironmentVariable("HLS_REPLY_PROXY_STATE");
+                        bool blocked = File.Exists(Path.Combine(state, "block-lookups"));
+                        File.AppendAllText(Path.Combine(state, blocked ? "blocked-lookups.jsonl" : "lookups.jsonl"),
+                            json.Serialize(new Dictionary<string, object> {
+                                {"client_request_id", request["client_request_id"]},
+                                {"handoff_id", handoff == null ? null : handoff["id"]}, {"ok", response["ok"]}
+                            }) + "\n");
+                        if (blocked) reply = Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> {
+                            {"ok", false}, {"error", "Core pipe read: injected receipt lookup outage"},
+                            {"__request_id", request["__request_id"]}
+                        }));
                     }
                     WriteFrame(output, reply);
                     Trace("returned", new Dictionary<string, object> {

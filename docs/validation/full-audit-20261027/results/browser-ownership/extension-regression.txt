@@ -1,0 +1,62 @@
+
+ RUN  v5.0.0 A:/Ubuntu/测试/hls-downloader/extension
+
+···············································stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a completed GET without replay, early response=false
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a completed GET without replay, early response=true
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > retains the completed source when desktop import fails
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > imports a file that completes while the pause operation is settling
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > pauses an unfinished GET before offering its URL
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > does not offer a download removed during pause
+HLS Downloader observed a browser download candidate
+
+stderr | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > does not offer a download removed during pause
+HLS Downloader browser handoff failed Error: 浏览器下载已取消，不再创建桌面任务
+    at importCompletedBrowserDownload (A:/Ubuntu/测试/hls-downloader/extension/entrypoints/background.ts:103:11)
+    at A:/Ubuntu/测试/hls-downloader/extension/entrypoints/background.ts:1800:16
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > does not offer a download canceled during pause
+HLS Downloader observed a browser download candidate
+
+stderr | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > does not offer a download canceled during pause
+HLS Downloader browser handoff failed Error: 浏览器下载已取消，不再创建桌面任务
+    at importCompletedBrowserDownload (A:/Ubuntu/测试/hls-downloader/extension/entrypoints/background.ts:103:11)
+    at A:/Ubuntu/测试/hls-downloader/extension/entrypoints/background.ts:1800:16
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > restores a resumable NETWORK_FAILED transfer when desktop admission fails
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > restores a resumable USER_CANCELED transfer when desktop admission fails
+HLS Downloader observed a browser download candidate
+
+·········stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > still imports POST responses without replaying the export request
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > recovers the durable receipt after offer transport retries are exhausted
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > keeps unknown ownership paused and reconciles it without sending another offer
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > preserves browser ownership for {"enabled":false}
+HLS Downloader observed a browser download candidate
+
+stdout | lib/downloadOwnership.test.ts > browser download ownership through registered event listeners > preserves browser ownership for {"excludedHosts":["site.test"]}
+HLS Downloader observed a browser download candidate
+
+·······
+
+ Test Files  3 passed (3)
+      Tests  63 passed (63)
+   Start at  23:25:08
+   Duration  1.14s (tests 48%, transform 38%, import 11%, worker 2%)
+

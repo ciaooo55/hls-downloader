@@ -1,0 +1,9 @@
+{"phase":"started","metadata":null,"utc":"2026-10-29T06:33:46.0826191Z"}
+{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt63kj8-2"},"utc":"2026-10-29T06:33:47.2549010Z"}
+{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt63kj8-2"},"utc":"2026-10-29T06:33:47.2782046Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt63kiy-1"},"utc":"2026-10-29T06:33:47.2817307Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt63kiy-1"},"utc":"2026-10-29T06:33:47.3131336Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt63lbn-3"},"utc":"2026-10-29T06:33:47.3157131Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt63lbn-3"},"utc":"2026-10-29T06:33:47.3466426Z"}
+{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt63lbn-4"},"utc":"2026-10-29T06:33:47.3507258Z"}
+{"phase":"returned","metadata":{"op":"ping","request_id":"mvt63lbn-4"},"utc":"2026-10-29T06:33:47.3813022Z"}

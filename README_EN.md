@@ -85,7 +85,9 @@ Online subtitles can be enabled from the video player button or the extension po
 
 ## 🌐 How browser handoff works
 
-The extension does not perform the transfer itself. It discovers resources, gathers the request information needed to reproduce the task, and sends the handoff to the local Core through Native Messaging; POST forms and Blob/data-generated files are completed by the browser first and then imported into desktop tasks (deleting the browser copy on success, or keeping the browser result on failure or rejection), while holding `Alt`, disabling takeover, or matching an exclusion rule keeps the download in the browser.
+In the current source, explicit links intercepted before a browser request are sent to the Core through Native Messaging. File and audio/video responses already requested by the browser, POST forms, and Blob/data-generated files finish in the browser and are then imported. The source file is removed only after a successful import; rejection or failure preserves it. Holding `Alt`, disabling takeover, or matching an exclusion rule keeps the download in the browser.
+
+Preserving the original response avoids replaying one-use URLs. These transfers remain browser-owned until completion, so closing the browser can interrupt them and the desktop confirmation appears after completion. HLS/DASH manifests still use the Core media engine. Current-source validation remains incomplete; browser download creation is recorded per entry point and is not treated as a universal zero-event guarantee.
 
 That keeps the browser as an entry point rather than the owner of the download lifecycle. Once a task has entered the Core, its persistent state is managed independently of the browser connection.
 

@@ -122,6 +122,10 @@ pub enum CorePipeRequest {
         request_id: u64,
         credential_ref: String,
     },
+    AdmitHandoff {
+        request_id: u64,
+        handoff_json: String,
+    },
     SaveHandoff {
         request_id: u64,
         handoff_id: String,

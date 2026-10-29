@@ -83,6 +83,7 @@ export function desktopAcceptedHandoff(response: unknown): boolean {
   if (!response || typeof response !== 'object') return false
   const value = response as { ok?: boolean; handoff?: BrowserHandoffPayload }
   if (value.ok !== true || !value.handoff?.id) return false
+  if (value.handoff.status === 'failed') return false
   if (value.handoff.presentation_ok === false) return false
   if (value.handoff.presentation === 'failed') return false
   const mode = value.handoff.presentation_mode

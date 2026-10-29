@@ -58,8 +58,11 @@ interface LocalDownloadHandoff {
   importUrl?: string
   handoffId?: string
   intent?: DownloadClickIntent
+  retryAt?: number
+  sourceStartedAt?: string
+  sourceFilename?: string
 }
-const localDownloadHandoffs = new Map<number, LocalDownloadHandoff>()
+const localDownloadHandoffs = new Map<string, LocalDownloadHandoff>()
 let localDownloadsHydration: Promise<void> | undefined
 let localDownloadsPass = false
 let localDownloadsTimer: ReturnType<typeof setTimeout> | undefined
@@ -70,9 +73,13 @@ async function hydrateLocalDownloads(): Promise<void> {
     const stored = data[LOCAL_DOWNLOADS_KEY]
     for (const record of Array.isArray(stored) ? stored as LocalDownloadHandoff[] : []) {
       if (Number.isInteger(record.downloadId) && typeof record.requestId === 'string') {
-        localDownloadHandoffs.set(record.downloadId, record)
+        if (record.retryAt) record.retryAt = Math.min(record.retryAt, Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS)
+        localDownloadHandoffs.set(record.requestId, record)
       }
     }
+  }).catch(error => {
+    localDownloadsHydration = undefined
+    throw error
   })
   await localDownloadsHydration
 }
@@ -86,12 +93,43 @@ async function persistLocalDownloads(): Promise<void> {
 
 async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<void> {
   await hydrateLocalDownloads()
-  localDownloadHandoffs.set(record.downloadId, record)
+  const [item] = await browser.downloads.search({ id: record.downloadId })
+  record.sourceStartedAt = item?.startTime
+  record.sourceFilename = item?.filename
+  const existing = [...localDownloadHandoffs.values()].find(candidate => candidate.downloadId === record.downloadId
+      && (!candidate.sourceStartedAt || !record.sourceStartedAt || candidate.sourceStartedAt === record.sourceStartedAt)
+    || candidate.sourceStartedAt && candidate.sourceStartedAt === record.sourceStartedAt
+      && candidate.sourceFilename === record.sourceFilename && candidate.sourceKey === record.sourceKey)
+  // 重复的浏览器事件必须继续同一份导入，不能丢失已经提交的交接回执。
+  if (existing && existing.sourceKey !== record.sourceKey) {
+    throw new Error('浏览器下载身份已变化，保留原文件并停止自动导入')
+  }
+  if (!existing) localDownloadHandoffs.set(record.requestId, record)
   await persistLocalDownloads()
   void continueLocalDownloadHandoffs().catch(error => console.warn('HLS Downloader local file handoff failed', error))
 }
 
-async function importCompletedBrowserDownload(
+async function findLocalBrowserDownload(record: LocalDownloadHandoff): Promise<Browser.downloads.DownloadItem | undefined> {
+  const [item] = await browser.downloads.search({ id: record.downloadId })
+  const matches = async (candidate: Browser.downloads.DownloadItem) =>
+    (!record.sourceStartedAt || candidate.startTime === record.sourceStartedAt)
+    && (!record.sourceFilename || candidate.filename === record.sourceFilename)
+    && await localDownloadIntentUrl(candidate.url) === record.sourceKey
+  if (item && await matches(item)) return item
+  // Firefox 的数字下载 ID 不跨浏览器会话持久；仅按稳定属性唯一匹配后重新绑定。
+  if (!record.sourceStartedAt || !record.sourceFilename) return undefined
+  const candidates = []
+  for (const candidate of await browser.downloads.search({})) {
+    if (await matches(candidate)) candidates.push(candidate)
+  }
+  if (candidates.length > 1) throw new Error('无法唯一恢复浏览器下载，保留原文件与交接记录')
+  if (!candidates.length) return undefined
+  record.downloadId = candidates[0].id
+  await persistLocalDownloads()
+  return candidates[0]
+}
+
+async function preserveBrowserDownload(
   item: Browser.downloads.DownloadItem,
   resource: MediaResource,
   intent?: DownloadClickIntent,
@@ -102,8 +140,8 @@ async function importCompletedBrowserDownload(
   if (!current || current.state === 'interrupted' && current.error === 'USER_CANCELED' && !current.canResume) {
     throw new Error('浏览器下载已取消，不再创建桌面任务')
   }
-  if (current.state !== 'complete') return false
-  // 已完成的响应可能来自一次性链接。复制唯一的成功文件，不能重新请求后删源。
+  // 原请求已经消耗过一次性地址。让浏览器保全响应，完成后复制成功文件；
+  // 只有点击前交给 Core 的明确链接才重新由 Core 发起网络传输。
   await queueLocalBrowserDownload({
     downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
     sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
@@ -115,76 +153,113 @@ async function importCompletedBrowserDownload(
 async function continueLocalDownloadHandoffs(): Promise<void> {
   if (localDownloadsPass) return
   localDownloadsPass = true
+  if (localDownloadsTimer) clearTimeout(localDownloadsTimer)
+  localDownloadsTimer = undefined
   try {
     await hydrateLocalDownloads()
     for (const record of localDownloadHandoffs.values()) {
+      if (record.retryAt && record.retryAt > Date.now()) continue
       try {
-        const [item] = await browser.downloads.search({ id: record.downloadId })
-        if (!item || (item.state === 'interrupted' && item.error === 'USER_CANCELED')) {
-          localDownloadHandoffs.delete(record.downloadId)
+        const item = await findLocalBrowserDownload(record)
+        if (!item) {
+          // 浏览器重启可能不恢复下载历史；已持久交接仍可按原身份查询，不能重发导入。
+          const response = await native({ op: 'handoff_status', ...(record.handoffId
+            ? { handoff_id: record.handoffId } : { client_request_id: record.requestId }) }, 2_500)
+          if (!response?.ok) throw new Error('无法确认原文件交接状态')
+          if (response.handoff?.id) {
+            record.handoffId = String(response.handoff.id)
+            if (localFileTaskReadiness(response.handoff) === 'waiting') {
+              record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+              await persistLocalDownloads()
+              continue
+            }
+          } else if (record.handoffId) throw new Error('原文件交接回执暂不可用')
+          // 没有浏览器项可证明当前路径仍归其所有，保留源文件，仅结束已确认的跟踪。
+          localDownloadHandoffs.delete(record.requestId)
+          await persistLocalDownloads()
+          continue
+        }
+        if (item.state === 'interrupted' && item.error === 'USER_CANCELED') {
+          localDownloadHandoffs.delete(record.requestId)
           await persistLocalDownloads()
           continue
         }
         if (item.state !== 'complete' || !item.filename) continue
-        if (await localDownloadIntentUrl(item.url) !== record.sourceKey) {
-          localDownloadHandoffs.delete(record.downloadId)
-          await persistLocalDownloads()
-          continue
-        }
         if (!record.handoffId) {
           const config = await settings()
           const size = Math.max(0, item.fileSize >= 0 ? item.fileSize : item.bytesReceived)
           if (!shouldTakeover({ url: item.url, sourcePageUrl: record.pageUrl, size,
             ...config, ...record.intent, strongEvidence: true, localBrowserDownload: true })
             || (!record.intent?.ctrlForce && isHandoffSuppressed(config.suppressions, record.pageUrl, 'file'))) {
-            localDownloadHandoffs.delete(record.downloadId)
+            localDownloadHandoffs.delete(record.requestId)
             await persistLocalDownloads()
             continue
           }
           // data URL 内容可能远超 Native Messaging 限制；文件字节只从已完成的本地文件复制。
           const url = record.importUrl || (item.url.startsWith('data:') ? 'data:application/octet-stream,' : item.url)
+          // 登记写盘失败后记录仍可能留在内存；恢复轮询不能绕过持久身份再提交。
+          await persistLocalDownloads()
           const response = await native({ op: 'offer_local_file', resource: {
             url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
             mime_type: item.mime, size, resource_kind: 'file', source_page_url: record.pageUrl,
             client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
           } })
+          // A transport failure or empty success envelope is not a rejection:
+          // Core may already own the import. Retain the original request ID
+          // and source file, and retry at the recovery cadence rather than
+          // repeatedly submitting the same import every second.
+          if (response?.transport_error || response?.ok === true && !response.handoff?.id) {
+            record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+            await persistLocalDownloads()
+            continue
+          }
           if (!desktopAcceptedHandoff(response)) {
-            localDownloadHandoffs.delete(record.downloadId)
+            localDownloadHandoffs.delete(record.requestId)
             await persistLocalDownloads()
             continue
           }
           record.handoffId = String(response.handoff.id)
+          delete record.retryAt
           await persistLocalDownloads()
           await trackHandoff(record.handoffId)
         }
         const response = await native({ op: 'handoff_status', handoff_id: record.handoffId }, 2_500)
-        const handoff = (response?.handoff || response || {}) as BrowserHandoffPayload
+        if (!response?.ok || !response.handoff?.id) {
+          record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+          await persistLocalDownloads()
+          continue
+        }
+        const handoff = response.handoff as BrowserHandoffPayload
         const readiness = localFileTaskReadiness(handoff)
         if (readiness === 'waiting') continue
         await rememberHandoffSuppression((handoff as any).suppression)
         if (readiness === 'safe-to-remove' && !await removeBrowserDownload(item)) continue
-        localDownloadHandoffs.delete(record.downloadId)
+        localDownloadHandoffs.delete(record.requestId)
         await persistLocalDownloads()
       } catch (error) {
         // 状态不明时保留源文件，并以持久 request ID 恢复查询，不能重复创建任务或删源。
+        record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+        await persistLocalDownloads().catch(() => undefined)
         console.warn('HLS Downloader local file handoff awaits desktop', error)
       }
     }
   } finally {
     localDownloadsPass = false
-    if (localDownloadHandoffs.size && !localDownloadsTimer) {
+    if (localDownloadHandoffs.size) {
+      const now = Date.now()
+      const delay = Math.min(...[...localDownloadHandoffs.values()].map(record => Math.max(1_000, (record.retryAt || now) - now)))
       localDownloadsTimer = setTimeout(() => {
         localDownloadsTimer = undefined
         void continueLocalDownloadHandoffs()
-      }, 1_000)
+      }, delay)
     }
   }
 }
 /**
  * Chromium delivers a browser DownloadItem after the response has already
  * been accepted. Prepare request identity and policy at response time, but
- * only offer it after onCreated has paused the browser transfer. Opening the
- * desktop prompt earlier permits acceptance while the browser is still downloading.
+ * resolve ownership in onCreated: preserve ordinary response bytes for local
+ * import, or pause an adaptive manifest before offering it to the media engine.
  */
 export interface EarlyBrowserTakeover {
   requestId: string
@@ -196,6 +271,8 @@ export interface EarlyBrowserTakeover {
 }
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const activeDownloadOffers = new Map<string, Promise<any>>()
+const DIRECT_OFFERS_STORAGE_KEY = 'pending-direct-offers-v1'
+const directOfferStore = new SessionListStore<{ key: string, tabId?: number, clientRequestId: string }>(browser.storage.local)
 
 /**
  * Locate an early takeover when the request chain is no longer available.
@@ -483,25 +560,32 @@ async function pollTrackedHandoffs(): Promise<void> {
   if (handoffTrackerPolling) return
   await hydrateHandoffTracker()
   const next = [...trackedHandoffs.values()]
-    .filter(item => !handoffTerminalStatus(item.status))
+    .filter(item => !handoffTerminalStatus(item.status)
+      && (!item.failures || Date.now() - item.checkedAt >= PAUSED_FOLLOW_UP_RECHECK_MS))
     .sort((left, right) => left.checkedAt - right.checkedAt)[0]
   if (!next) return
   handoffTrackerPolling = true
   try {
     const response = await native({ op: 'handoff_status', handoff_id: next.id }, 2_500)
-    const handoff = response?.handoff || response
+    if (!response?.ok || !response.handoff?.id) throw new Error(response?.error || '无法读取下载确认状态')
+    const handoff = response.handoff
     const status = String(handoff?.status || 'pending')
     updateTrackedHandoff(next, handoff || {})
     if (handoffTerminalStatus(status)) await rememberHandoffSuppression(handoff?.suppression)
   } catch {
     next.checkedAt = Date.now()
     next.failures += 1
-    if (next.failures >= 3) next.status = 'connection_lost'
+    next.status = 'connection_lost'
   } finally {
     handoffTrackerPolling = false
     pruneTrackedHandoffs()
     await persistHandoffTracker()
-    if ([...trackedHandoffs.values()].some(item => !handoffTerminalStatus(item.status))) scheduleHandoffPoll(900)
+    const pending = [...trackedHandoffs.values()].filter(item => !handoffTerminalStatus(item.status))
+    if (pending.length) {
+      const now = Date.now()
+      scheduleHandoffPoll(Math.min(...pending.map(item => item.failures
+        ? Math.max(0, item.checkedAt + PAUSED_FOLLOW_UP_RECHECK_MS - now) : 900)))
+    }
   }
 }
 
@@ -588,12 +672,14 @@ async function continuePausedHandoffFollowups(): Promise<void> {
   try {
     await pausedFollowUpStore.hydrate()
     for (const record of pausedFollowUpStore.list()) {
-      if (pausedFollowUpsInFlight.has(record.handoffId)) continue
-      pausedFollowUpsInFlight.add(record.handoffId)
+      if (record.deadline > Date.now()) continue
+      const followUpKey = record.clientRequestId || record.handoffId
+      if (pausedFollowUpsInFlight.has(followUpKey)) continue
+      pausedFollowUpsInFlight.add(followUpKey)
       try {
         if (record.phase === 'cleanup') {
           const removed = await removeFollowUpDownload(record.downloadId)
-          if (removed) await pausedFollowUpStore.drop(record.handoffId)
+          if (removed) await pausedFollowUpStore.drop(followUpKey)
           else await retryPausedFollowUp(record)
           continue
         }
@@ -609,13 +695,14 @@ async function continuePausedHandoffFollowups(): Promise<void> {
         }
         const [browserItem] = browserItems
         if (!browserItem || (browserItem.paused !== true && browserItem.state !== 'complete')) {
-          await pausedFollowUpStore.drop(record.handoffId)
+          await pausedFollowUpStore.drop(followUpKey)
           continue
         }
         let handoff: BrowserHandoffPayload = {}
         try {
-          const response = await native({ op: 'handoff_status', handoff_id: record.handoffId }, 2_500)
-          handoff = (response?.handoff || response || {}) as BrowserHandoffPayload
+          const response = await native({ op: 'handoff_status', ...(record.clientRequestId
+            ? { client_request_id: record.clientRequestId } : { handoff_id: record.handoffId }) }, 2_500)
+          if (response?.ok) handoff = (response.handoff || {}) as BrowserHandoffPayload
         } catch {
           // An unreachable desktop must not resume or remove anything.
         }
@@ -626,24 +713,23 @@ async function continuePausedHandoffFollowups(): Promise<void> {
         }
         if (step.kind === 'resume-download') {
           const resumed = await resumeFollowUpDownload(record.downloadId)
-          if (resumed) await pausedFollowUpStore.drop(record.handoffId)
+          if (resumed) await pausedFollowUpStore.drop(followUpKey)
           else await retryPausedFollowUp(record)
           continue
         }
-        const removed = await removeFollowUpDownload(record.downloadId)
-        if (removed) await pausedFollowUpStore.drop(record.handoffId)
+        const removed = await removeBrowserDownload(browserItem, true)
+        if (removed) await pausedFollowUpStore.drop(followUpKey)
         else await retryPausedFollowUp(record)
       } finally {
-        pausedFollowUpsInFlight.delete(record.handoffId)
+        pausedFollowUpsInFlight.delete(followUpKey)
       }
     }
   } finally {
     pausedFollowUpPass = false
   }
-  // Readiness records parked for a later re-check are pulled forward by the
-  // accelerator when the worker stays alive; the alarm covers suspension.
-  const parked = pausedFollowUpStore.list()
-    .find(record => record.phase === 'readiness' && record.deadline > Date.now())
+  // Every phase uses its earliest persisted deadline while the worker stays
+  // alive; the alarm covers suspension.
+  const parked = pausedFollowUpStore.list()[0]
   if (parked) schedulePausedFollowUpAccelerator(parked.deadline - Date.now())
 }
 
@@ -822,7 +908,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
   const identity = extensionIdentity()
   const operation = String(message.op || '')
   const retryCount = new Set([
-    'ping', 'offer', 'offer_local_file', 'handoff_status', 'media_push_status',
+    'ping', 'offer', 'recover_offer', 'offer_local_file', 'handoff_status', 'media_push_status',
   ]).has(operation) ? 1 : 0
   const payload = {
     ...message,
@@ -1096,6 +1182,10 @@ async function requestDownload(
   const active = activeDownloadOffers.get(key)
   if (active) {
     const previous = await active
+    if (previous?.ownership_uncertain) {
+      if (activeDownloadOffers.get(key) === active) activeDownloadOffers.delete(key)
+      return requestDownload(resource, chain, options)
+    }
     if (!desktopAcceptedHandoff(previous)) return previous
     const status = await native({ op: 'handoff_status', handoff_id: previous.handoff.id })
     if (!status?.ok) throw new Error(status?.error || '无法读取下载确认状态')
@@ -1103,11 +1193,55 @@ async function requestDownload(
     if (activeDownloadOffers.get(key) === active) activeDownloadOffers.delete(key)
     else return requestDownload(resource, chain, options)
   }
-  const request = offer(resource, chain, options)
+  const request = (async () => {
+    // Persist only a digest and the receipt key, before sending. Worker reloads
+    // must query that same offer rather than generate a second download.
+    const digest = await localDownloadIntentUrl(key)
+    let created = false
+    const records = await directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY, current => {
+      if (current.some(item => item.key === digest)) return current
+      created = true
+      return [...current, { key: digest, tabId: resource.tabId, clientRequestId: `download:${crypto.randomUUID()}` }]
+    })
+    const requestId = records.find(item => item.key === digest)!.clientRequestId
+    let response: any
+    if (created) {
+      if (!await desktopReadyForNewHandoff()) {
+        return { ok: false, client_request_id: requestId, error: '主程序未连接，保留浏览器下载' }
+      }
+      try {
+        response = await offer(resource, chain, options, requestId)
+      } catch (error) {
+        // offer catches transport errors itself; a throw here precedes send.
+        await directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY, current => current.filter(item => item.clientRequestId !== requestId))
+        throw error
+      }
+    } else {
+      try {
+        response = await native({ op: 'handoff_status', client_request_id: requestId }, 2_500)
+      } catch {}
+      if (!response?.ok) return uncertainOffer(requestId)
+      if (!response.handoff?.id) {
+        // A read cannot exclude a delayed original offer. Only Core's atomic
+        // admission can safely recover the same ID after journal-before-send.
+        response = await offer(resource, chain, options, requestId, true)
+      } else void trackHandoff(String(response.handoff.id), resource.id, resource.tabId, selectionKey).catch(() => undefined)
+    }
+    return { ...response, client_request_id: requestId }
+  })()
     .then(response => {
-      if (!response?.ok) activeDownloadOffers.delete(key)
-      else void waitForHandoffResolution(String(response.handoff.id)).then(resolved => {
-        if (handoffTerminalStatus(resolved.status) && activeDownloadOffers.get(key) === request) activeDownloadOffers.delete(key)
+      if (!response?.ok) {
+        if (!response?.ownership_uncertain) {
+          activeDownloadOffers.delete(key)
+          void directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY,
+            current => current.filter(item => item.clientRequestId !== response.client_request_id)).catch(() => undefined)
+        }
+      } else void waitForHandoffResolution(String(response.handoff.id)).then(resolved => {
+        if (handoffTerminalStatus(resolved.status)) {
+          if (activeDownloadOffers.get(key) === request) activeDownloadOffers.delete(key)
+          return directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY,
+            current => current.filter(item => item.clientRequestId !== response.client_request_id))
+        }
       }).catch(() => undefined)
       return response
     }, error => {
@@ -1130,7 +1264,20 @@ async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: st
   return { ok: true, id }
 }
 
-async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}) {
+function uncertainOffer(requestId: string) {
+  return {
+    ok: false, ownership_uncertain: true, client_request_id: requestId,
+    error: '无法确认下载交接，已停止自动回退；请检查主程序状态，勿重复下载',
+  }
+}
+
+async function desktopReadyForNewHandoff(): Promise<boolean> {
+  // 只供尚未发送的新交接使用，且必须在暂停原响应前检查；未知旧交接继续按原 ID 恢复。
+  try { return (await native({ op: 'ping', interactive: true }, 1_500))?.ok === true }
+  catch { return false }
+}
+
+async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}, clientRequestId?: string, recovering = false) {
   // 只改写传输负载；原选择身份继续用于去重和弹窗恢复，避免同码率的不同线路串状态。
   const downloadResource = resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')
     ? { ...resource, url: resource.manifestUrl } : resource
@@ -1138,10 +1285,27 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
     ...await resourcePayload(downloadResource, chain, options),
     // 每次下载拥有独立请求；同一 URL 的后续下载不能复用之前已接受或已拒绝的交接。
     // NativeBridge 重试复用同一负载，仍保留协议的幂等性。
-    client_request_id: `download:${crypto.randomUUID()}`,
+    client_request_id: clientRequestId || `download:${crypto.randomUUID()}`,
   }
-  const response = await native({ op: 'offer', resource: payload })
+  let response: any
+  try {
+    // Older Hosts do not support recover_offer; their refusal must keep the
+    // original ownership unresolved instead of replaying through old admission.
+    response = await native({ op: recovering ? 'recover_offer' : 'offer', resource: payload })
+  } catch (error) {
+    response = { ok: false, transport_error: true, error: String(error) }
+  }
+  if (response?.transport_error || (recovering && !response?.ok)) {
+    // Read the durable outcome; do not issue another offer or regenerate its
+    // idempotency key after the transport retry budget has been exhausted.
+    try {
+      const recovered = await native({ op: 'handoff_status', client_request_id: payload.client_request_id }, 2_500)
+      if (recovered?.ok && recovered.handoff?.id) response = recovered
+    } catch {}
+    if (!response?.ok) return uncertainOffer(payload.client_request_id)
+  }
   const handoff = response?.handoff
+  if (response?.ok && !handoff?.id) return uncertainOffer(payload.client_request_id)
   if (!response?.ok || !handoff?.id) return response
   if (handoff.presentation === 'failed' || handoff.presentation_ok === false) {
     return { ok: false, error: handoff.presentation_error || '桌面端未能打开下载确认窗口', handoff }
@@ -1152,6 +1316,15 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: { a
   void trackHandoff(String(handoff.id), resource.id, resource.tabId, downloadSelectionKey(resource))
     .catch(error => console.warn('HLS Downloader handoff tracking unavailable', error))
   return response
+}
+
+async function retainUncertainBrowserDownload(item: Browser.downloads.DownloadItem, response: any, tabId?: number): Promise<void> {
+  await pausedFollowUpStore.remember({
+    downloadId: item.id, handoffId: '', clientRequestId: response.client_request_id,
+    phase: 'resolution', deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
+  })
+  schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
+  await reportDownloadError(tabId ?? downloadIdentity(item).tabId, response.error)
 }
 
 async function reportDownloadError(tabId: number | undefined, reason: unknown): Promise<void> {
@@ -1181,7 +1354,7 @@ export async function refreshedDownload(downloadId: number, original: Browser.do
   return { ...original, ...(current || {}), ...(determined || {}) }
 }
 
-async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Promise<boolean> {
+async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyIfStillParked = false): Promise<boolean> {
   let current: Browser.downloads.DownloadItem | undefined
   try {
     const [found] = await browser.downloads.search({ id: item.id })
@@ -1190,6 +1363,9 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem): Prom
     return false
   }
   if (!current) return true
+  // Receipt lookup can outlive a browser-side resume/cancel. Recheck at the
+  // cleanup boundary so an old paused snapshot cannot override that choice.
+  if (onlyIfStillParked && current.paused !== true && current.state !== 'complete') return true
   try {
     if (browserCleanupAction(current.state) === 'remove-file') {
       await browser.downloads.removeFile(item.id)
@@ -1254,7 +1430,9 @@ export async function pauseBrowserDownload(item: Browser.downloads.DownloadItem)
       }
     }
     await browser.downloads.pause(item.id)
-    return true
+    const [current] = await browser.downloads.search({ id: item.id })
+    if (!current || current.state === 'interrupted' && !current.canResume) return null
+    return current.state !== 'complete'
   } catch {
     // 下载项事件是快照；策略读取期间小文件可能已完成，此时 pause 会拒绝。
     // 只有实际完成的文件可以继续交接，其他暂停失败仍不能启动第二份传输。
@@ -1499,8 +1677,20 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
   if (!early) return undefined
   const prepared = await early.promise
   if (!prepared || prepared.bypass) return undefined
+  // 取消一个已经成功的 GET 后，无法保证 Core 还能重放一次性响应。
+  // 文件响应继续到 onCreated，复用持久本地导入和失败保留原文件的路径。
+  if (prepared.resource.kind === 'file' || prepared.resource.kind === 'media') return undefined
+  if (!await desktopReadyForNewHandoff()) {
+    early.promise = Promise.resolve({ resource: prepared.resource, bypass: true })
+    return undefined
+  }
   try {
     const response = await offer(prepared.resource, chain)
+    if (response?.ownership_uncertain) {
+      earlyBrowserTakeovers.delete(early.requestId)
+      await reportDownloadError(prepared.resource.tabId, response.error)
+      return { cancel: true }
+    }
     // 阻塞原响应直到桌面确认接收，随后在 Firefox 建立 DownloadItem 之前取消。
     // 用户在桌面取消就是取消本次下载，不再启动一个浏览器副本。
     if (desktopAcceptedHandoff(response)) {
@@ -1535,6 +1725,8 @@ export default defineBackground(() => {
     void refreshTabBadge(activeInfo.tabId).catch(error => console.warn('HLS Downloader badge refresh failed', error))
   })
   browser.tabs.onRemoved.addListener(tabId => {
+    void directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY,
+      current => current.filter(item => item.tabId !== tabId)).catch(() => undefined)
     void browser.storage.session.remove(`download-error:${tabId}`).catch(() => undefined)
     requestChains.clearTab(tabId)
     blobSources.clearTab(tabId)
@@ -1641,7 +1833,7 @@ export default defineBackground(() => {
     if (import.meta.env.FIREFOX && isEarlyDirectDownloadResponse(details, observed, true)) {
       return interceptFirefoxDownload(details, chain, observed)
     }
-    // Chromium MV3 没有异步阻塞权限，仍须在 onCreated 暂停后交接。
+    // Chromium MV3 没有异步阻塞权限，在 onCreated 确认文件保全或媒体暂停路径。
     if (import.meta.env.CHROME) {
       rememberEarlyBrowserTakeover(details, chain, observed)
     }
@@ -1711,13 +1903,19 @@ export default defineBackground(() => {
         if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
         if (earlyResult?.bypass) return
         if (earlyResult || restored) {
+          if (!restored && earlyResult
+            && await preserveBrowserDownload(item, earlyResult.resource, earlyResult.intent)) return
+          if (!restored && !await desktopReadyForNewHandoff()) return
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
-          if (!restored && earlyResult
-            && await importCompletedBrowserDownload(item, earlyResult.resource, earlyResult.intent)) return
           const response = earlyResult
             ? await offer(earlyResult.resource, provisionalChain) : undefined
+          if (response?.ownership_uncertain) {
+            browserOwnedByHandoff = true
+            await retainUncertainBrowserDownload(item, response, earlyResult?.resource.tabId)
+            return
+          }
           if (!restored && !desktopAcceptedHandoff(response)) return
           const handoffId = String(response?.handoff?.id || restored?.id || '')
           // 持久回执即为交接边界；后续取消/重试属于桌面，不再启动浏览器副本。
@@ -1807,6 +2005,7 @@ export default defineBackground(() => {
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         return
       }
+      if (await preserveBrowserDownload(actualBrowser, resource, intent)) return
       // DownloadItem 可能先于请求链到达。使用与 offer 相同的解析流程确认方法后
       // 才暂停，且把同一条链传入 offer，避免晚到的 POST 被当成 GET 路径重放。
       chain = (await resourceRequest(resource, chain)).chain
@@ -1820,12 +2019,17 @@ export default defineBackground(() => {
         })
         return
       }
+      if (!await desktopReadyForNewHandoff()) return
       const pauseResult = await pauseBrowserDownload(actualBrowser)
       if (pauseResult === null) return
       paused = pauseResult
-      if (await importCompletedBrowserDownload(actualBrowser, resource, intent)) return
       console.debug('HLS Downloader offering a verified browser download')
       const response = await offer(resource, chain)
+      if (response?.ownership_uncertain) {
+        browserOwnedByHandoff = true
+        await retainUncertainBrowserDownload(actualBrowser, response, resource.tabId)
+        return
+      }
       if (!desktopAcceptedHandoff(response)) throw new Error(response?.error || 'desktop rejected')
       const handoffId = String(response.handoff.id)
       browserOwnedByHandoff = true
@@ -1924,22 +2128,16 @@ export default defineBackground(() => {
           return { ok: false, browserFallback: true }
         }
         await clickIntentStore.consume({ url: href, referrer: pageUrl, tabId })
-        // 此阶段尚未发 offer；桌面离线可安全恢复原始浏览器导航。
-        try {
-          const ping = await native({ op: 'ping' })
-          if (!ping?.ok) return { ok: false, browserFallback: true }
-        } catch {
-          return { ok: false, browserFallback: true }
+        const resource: MediaResource = {
+          id: resourceId(href), url: href, kind: 'file', pageUrl, tabId,
+          frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
+          method: 'GET', seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
+          replayContext: { method: 'GET', page_url: pageUrl },
         }
         try {
-          const response = await requestDownload({
-            id: resourceId(href), url: href, kind: 'file', pageUrl, tabId,
-            frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
-            method: 'GET',
-            seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
-            replayContext: { method: 'GET', page_url: pageUrl },
-          }, undefined, { allowUnverified: true })
-          return { ...response, browserFallback: !desktopAcceptedHandoff(response) }
+          const response = await requestDownload(resource, undefined, { allowUnverified: true })
+          if (response?.ownership_uncertain) await reportDownloadError(tabId, response.error)
+          return { ...response, browserFallback: !desktopAcceptedHandoff(response) && !response?.ownership_uncertain }
         } catch (error) {
           // offer 发送后失联可能已持久接收，不能自动重新导航产生第二份下载。
           await reportDownloadError(tabId, '无法确认下载交接，请检查主程序后重试')

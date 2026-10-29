@@ -1,0 +1,1689 @@
+{
+  "source_baseline": "fa233537f11c5255297850c7dc5248f06cb1552a",
+  "status_contract": {
+    "confirmed": "只确认明确限定的行为和版本，不代表整项全部正常",
+    "reproduced_defect": "有可区分原因的实际失败或不符合标准的观测",
+    "missing_evidence": "实现或历史结果存在，当前完整行为证据不足",
+    "external_limited": "依用户约束或外部环境，部分关键验收不执行"
+  },
+  "packaged_baseline": {
+    "release": "v7.0.3-r22",
+    "source_commit": "745939370638cf13e21bcb549f75847c27cb2871",
+    "msi_sha256": "8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8",
+    "release_ready": false,
+    "current_source_not_packaged": [
+      "extension/entrypoints/background.ts",
+      "extension/lib/nativeBridge.ts",
+      "extension/lib/pausedHandoffFollowups.ts",
+      "extension/lib/takeover.ts",
+      "native_shell/src/connection_parts.rs",
+      "native_shell/src/contract.rs",
+      "native_shell/src/core_ipc.rs",
+      "native_shell/src/core_server.rs",
+      "native_shell/src/core_service.rs",
+      "native_shell/src/download_worker.rs",
+      "native_shell/src/native_host.rs",
+      "native_shell/src/store.rs"
+    ]
+  },
+  "stage_1_scope": "复用29项清单的证据索引与差距分类；不将静态入口映射称为功能实测。每项完整证据不足时保留missing_evidence，限定范围的通过记录附在current_evidence中。",
+  "stage_2_gate": "2026-10-29用户确认可靠性交接为必过门槛；当前源码双浏览器定向矩阵（一次性GET/POST、Blob、拒绝、丢回执、扩展重载、浏览器重启、首次Host离线）已通过，按入口记录DownloadItem。允许继续候选交付验证；不等于全入口、全部真实站点、签名扩展升级或同SHA安装包已通过。",
+  "source_comparison_to_r22": [
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+      "r22_sha256": "2f03fa83d3e9c909a563ccb129b5a09cb88b92fd2530b6095ecab6571fd0a4a7",
+      "current_sha256": "2f03fa83d3e9c909a563ccb129b5a09cb88b92fd2530b6095ecab6571fd0a4a7",
+      "equal": true,
+      "lf_sha256": "2f03fa83d3e9c909a563ccb129b5a09cb88b92fd2530b6095ecab6571fd0a4a7",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+      "r22_sha256": "65d28cc6a02d871d7473ba0a3f3540e67b4fb9b1915a1f72ec05d9fb77ea9381",
+      "current_sha256": "65d28cc6a02d871d7473ba0a3f3540e67b4fb9b1915a1f72ec05d9fb77ea9381",
+      "equal": true,
+      "lf_sha256": "65d28cc6a02d871d7473ba0a3f3540e67b4fb9b1915a1f72ec05d9fb77ea9381",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt",
+      "r22_sha256": "7139ed7833948eb1c823d3c26450fb1975ec244e30187e18b598a84387acc60c",
+      "current_sha256": "7139ed7833948eb1c823d3c26450fb1975ec244e30187e18b598a84387acc60c",
+      "equal": true,
+      "lf_sha256": "7139ed7833948eb1c823d3c26450fb1975ec244e30187e18b598a84387acc60c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/TaskExportFile.kt",
+      "r22_sha256": "633ed7d84f98a2d8fd9096ed03a3b605d0279306fdf307952c8dee38f7610fb8",
+      "current_sha256": "633ed7d84f98a2d8fd9096ed03a3b605d0279306fdf307952c8dee38f7610fb8",
+      "equal": true,
+      "lf_sha256": "633ed7d84f98a2d8fd9096ed03a3b605d0279306fdf307952c8dee38f7610fb8",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/UiDiagnostics.kt",
+      "r22_sha256": "b7a33b22a69b1c5f912d33a65eacbeb3fee2d362b936f0aa9982fdd960a22cb3",
+      "current_sha256": "b7a33b22a69b1c5f912d33a65eacbeb3fee2d362b936f0aa9982fdd960a22cb3",
+      "equal": true,
+      "lf_sha256": "b7a33b22a69b1c5f912d33a65eacbeb3fee2d362b936f0aa9982fdd960a22cb3",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/background.ts",
+      "r22_sha256": "6d6b9c4bf9bcea93fdea155b69041ff3e4393f0fc0a66183e222ad994b6019ee",
+      "current_sha256": "2e64a850ab951322534afe1f1c49d2f55e48b44364f4f2ee80ddfa31ccdef429",
+      "equal": false,
+      "lf_sha256": "2e64a850ab951322534afe1f1c49d2f55e48b44364f4f2ee80ddfa31ccdef429",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "extension/entrypoints/content.ts",
+      "r22_sha256": "6061dd4558ccc9413e0cba7a4d47887a8200bd98ada55e472342e47df346b509",
+      "current_sha256": "6061dd4558ccc9413e0cba7a4d47887a8200bd98ada55e472342e47df346b509",
+      "equal": true,
+      "lf_sha256": "6061dd4558ccc9413e0cba7a4d47887a8200bd98ada55e472342e47df346b509",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/hooks.content.ts",
+      "r22_sha256": "3d488151c7f8db8d4fc4a3f057277a61609ea6476c62e38eb50f84c908edc506",
+      "current_sha256": "1dc8129bd64742fb91d7e2845e401fe7b4c5e86bd9008822524defef44d68eb1",
+      "equal": false,
+      "lf_sha256": "3d488151c7f8db8d4fc4a3f057277a61609ea6476c62e38eb50f84c908edc506",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/popup/index.html",
+      "r22_sha256": "7eddb7ad59aa84183610c6df8a13e9c8f1ae5ad4cb7000f7171f7fad40e6e392",
+      "current_sha256": "7eddb7ad59aa84183610c6df8a13e9c8f1ae5ad4cb7000f7171f7fad40e6e392",
+      "equal": true,
+      "lf_sha256": "7eddb7ad59aa84183610c6df8a13e9c8f1ae5ad4cb7000f7171f7fad40e6e392",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/popup/main.ts",
+      "r22_sha256": "504ca93049e275e677b0dcfb1a910575258f4fe1f51965e08e20f863859b73a4",
+      "current_sha256": "504ca93049e275e677b0dcfb1a910575258f4fe1f51965e08e20f863859b73a4",
+      "equal": true,
+      "lf_sha256": "504ca93049e275e677b0dcfb1a910575258f4fe1f51965e08e20f863859b73a4",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/popup/style.css",
+      "r22_sha256": "7da3bd62e5b45ded3ef0015217df11eb982e597967d925c4706e260c40ed4467",
+      "current_sha256": "d8b976fbb2c00efc8b0bb3d727fbcd32107e0a837389b73091afa848b4b7fd92",
+      "equal": false,
+      "lf_sha256": "7da3bd62e5b45ded3ef0015217df11eb982e597967d925c4706e260c40ed4467",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/subtitle-offscreen/index.html",
+      "r22_sha256": "b6401c738fb456e9ce6fc23f12f800d92093e9eeb87a6d349d5f86a006e6ee78",
+      "current_sha256": "b6401c738fb456e9ce6fc23f12f800d92093e9eeb87a6d349d5f86a006e6ee78",
+      "equal": true,
+      "lf_sha256": "b6401c738fb456e9ce6fc23f12f800d92093e9eeb87a6d349d5f86a006e6ee78",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/subtitle-offscreen/main.ts",
+      "r22_sha256": "285de3244739e935a284afe23457d9bd7c4743dccb3319b75de40d5b7da697ba",
+      "current_sha256": "285de3244739e935a284afe23457d9bd7c4743dccb3319b75de40d5b7da697ba",
+      "equal": true,
+      "lf_sha256": "285de3244739e935a284afe23457d9bd7c4743dccb3319b75de40d5b7da697ba",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/subtitle-pcm.ts",
+      "r22_sha256": "39cee575e24e01e21ff8bdfb637e2c4fc825a719d9f18622aadee352ee5b8658",
+      "current_sha256": "39cee575e24e01e21ff8bdfb637e2c4fc825a719d9f18622aadee352ee5b8658",
+      "equal": true,
+      "lf_sha256": "39cee575e24e01e21ff8bdfb637e2c4fc825a719d9f18622aadee352ee5b8658",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/entrypoints/takeover.content.ts",
+      "r22_sha256": "a4bb4cee4fa376f10a4b4acb9e1c75b791b2cf8a5788922bf68788d343c7ec18",
+      "current_sha256": "a4bb4cee4fa376f10a4b4acb9e1c75b791b2cf8a5788922bf68788d343c7ec18",
+      "equal": true,
+      "lf_sha256": "a4bb4cee4fa376f10a4b4acb9e1c75b791b2cf8a5788922bf68788d343c7ec18",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/asyncDeadline.ts",
+      "r22_sha256": "91f60fc5276a01f87876d86e5420390f4da12d7eb4788f1252724e7217987942",
+      "current_sha256": "91f60fc5276a01f87876d86e5420390f4da12d7eb4788f1252724e7217987942",
+      "equal": true,
+      "lf_sha256": "91f60fc5276a01f87876d86e5420390f4da12d7eb4788f1252724e7217987942",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/blobOwnership.ts",
+      "r22_sha256": "dc1143d0bf2aa2e79c520b94d0e6bc144edf7b377c8992a707358ce7b7121b3d",
+      "current_sha256": "dc1143d0bf2aa2e79c520b94d0e6bc144edf7b377c8992a707358ce7b7121b3d",
+      "equal": true,
+      "lf_sha256": "dc1143d0bf2aa2e79c520b94d0e6bc144edf7b377c8992a707358ce7b7121b3d",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/blobSourceStore.ts",
+      "r22_sha256": "ae870c99dafa51a0b235142d318addd3f155c8f469f879c747371e77f8e1d78c",
+      "current_sha256": "ae870c99dafa51a0b235142d318addd3f155c8f469f879c747371e77f8e1d78c",
+      "equal": true,
+      "lf_sha256": "ae870c99dafa51a0b235142d318addd3f155c8f469f879c747371e77f8e1d78c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/boundedResponse.ts",
+      "r22_sha256": "f784d2e965d2e3edde20cec5da036d4d9e415006a3406cb436b51de1f282b07c",
+      "current_sha256": "f784d2e965d2e3edde20cec5da036d4d9e415006a3406cb436b51de1f282b07c",
+      "equal": true,
+      "lf_sha256": "f784d2e965d2e3edde20cec5da036d4d9e415006a3406cb436b51de1f282b07c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/browserCapabilities.ts",
+      "r22_sha256": "153c1ea87eef6ab31bda11f825767a36c3c16d7305496b4979aee25cb35da6bf",
+      "current_sha256": "153c1ea87eef6ab31bda11f825767a36c3c16d7305496b4979aee25cb35da6bf",
+      "equal": true,
+      "lf_sha256": "153c1ea87eef6ab31bda11f825767a36c3c16d7305496b4979aee25cb35da6bf",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/browserClient.ts",
+      "r22_sha256": "1f9f2f408199b9a82b13ee23efce7f1b10fd4668c53027fa7eb53873cb66e1e9",
+      "current_sha256": "1f9f2f408199b9a82b13ee23efce7f1b10fd4668c53027fa7eb53873cb66e1e9",
+      "equal": true,
+      "lf_sha256": "1f9f2f408199b9a82b13ee23efce7f1b10fd4668c53027fa7eb53873cb66e1e9",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/clickIntent.ts",
+      "r22_sha256": "3fe16aa3ad9d02864c2f6321a4fb3db0557cd848a60ddaaa49162de1e96e77f3",
+      "current_sha256": "3fe16aa3ad9d02864c2f6321a4fb3db0557cd848a60ddaaa49162de1e96e77f3",
+      "equal": true,
+      "lf_sha256": "3fe16aa3ad9d02864c2f6321a4fb3db0557cd848a60ddaaa49162de1e96e77f3",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/clickIntentStore.ts",
+      "r22_sha256": "cf61c6bec04b7d7d01dff5faf18f7f676588408027605a8152f2102cc5dce969",
+      "current_sha256": "cf61c6bec04b7d7d01dff5faf18f7f676588408027605a8152f2102cc5dce969",
+      "equal": true,
+      "lf_sha256": "cf61c6bec04b7d7d01dff5faf18f7f676588408027605a8152f2102cc5dce969",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/contentDisposition.ts",
+      "r22_sha256": "887e7307e918f1c2d17eaead309ab46b33b22278835f152ea1bdd090db66df4f",
+      "current_sha256": "887e7307e918f1c2d17eaead309ab46b33b22278835f152ea1bdd090db66df4f",
+      "equal": true,
+      "lf_sha256": "887e7307e918f1c2d17eaead309ab46b33b22278835f152ea1bdd090db66df4f",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/contextMenuActions.ts",
+      "r22_sha256": "ee83b2d9ef3ddc74562bc12a0ddf0590b40648045fba6d4411b47c9995991f6e",
+      "current_sha256": "ee83b2d9ef3ddc74562bc12a0ddf0590b40648045fba6d4411b47c9995991f6e",
+      "equal": true,
+      "lf_sha256": "ee83b2d9ef3ddc74562bc12a0ddf0590b40648045fba6d4411b47c9995991f6e",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/dashInspection.ts",
+      "r22_sha256": "bdf16e61ac048ba321a901eeb9530b96b31c515e5e866ebbc01c4b7a005a7ad8",
+      "current_sha256": "bdf16e61ac048ba321a901eeb9530b96b31c515e5e866ebbc01c4b7a005a7ad8",
+      "equal": true,
+      "lf_sha256": "bdf16e61ac048ba321a901eeb9530b96b31c515e5e866ebbc01c4b7a005a7ad8",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/directLink.ts",
+      "r22_sha256": "efa2f0086e522992b9820a53ca53cc0e237b4b59aa1654c9192a12ccec3d2182",
+      "current_sha256": "efa2f0086e522992b9820a53ca53cc0e237b4b59aa1654c9192a12ccec3d2182",
+      "equal": true,
+      "lf_sha256": "efa2f0086e522992b9820a53ca53cc0e237b4b59aa1654c9192a12ccec3d2182",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/directResponse.ts",
+      "r22_sha256": "d171746a5aa3414c49d98bc0f26926646e0f6cdf7b23f064fba927c853f420e1",
+      "current_sha256": "d171746a5aa3414c49d98bc0f26926646e0f6cdf7b23f064fba927c853f420e1",
+      "equal": true,
+      "lf_sha256": "d171746a5aa3414c49d98bc0f26926646e0f6cdf7b23f064fba927c853f420e1",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/downloadConfirmation.ts",
+      "r22_sha256": "9cd23aeb57789c0c41a7f1f7287162b3c0c747e9ae850a20114d254a0b0c9ea9",
+      "current_sha256": "9cd23aeb57789c0c41a7f1f7287162b3c0c747e9ae850a20114d254a0b0c9ea9",
+      "equal": true,
+      "lf_sha256": "9cd23aeb57789c0c41a7f1f7287162b3c0c747e9ae850a20114d254a0b0c9ea9",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/fileTakeover.ts",
+      "r22_sha256": "b627ef124f2c4d9f48be4b8ab1c45cccf8b5b50c9b134219e763af9625ead804",
+      "current_sha256": "b627ef124f2c4d9f48be4b8ab1c45cccf8b5b50c9b134219e763af9625ead804",
+      "equal": true,
+      "lf_sha256": "b627ef124f2c4d9f48be4b8ab1c45cccf8b5b50c9b134219e763af9625ead804",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/format.ts",
+      "r22_sha256": "edde9b4d97d5defa84c24fbe80044dcf8c6fcbb88b40933cc757a96dbe6d3162",
+      "current_sha256": "edde9b4d97d5defa84c24fbe80044dcf8c6fcbb88b40933cc757a96dbe6d3162",
+      "equal": true,
+      "lf_sha256": "edde9b4d97d5defa84c24fbe80044dcf8c6fcbb88b40933cc757a96dbe6d3162",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/handoffSuppression.ts",
+      "r22_sha256": "23d8cdee530a7ffa6a4385eec4fec02b67320b1f9f070d611c11f7c631424a31",
+      "current_sha256": "23d8cdee530a7ffa6a4385eec4fec02b67320b1f9f070d611c11f7c631424a31",
+      "equal": true,
+      "lf_sha256": "23d8cdee530a7ffa6a4385eec4fec02b67320b1f9f070d611c11f7c631424a31",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/hlsInspection.ts",
+      "r22_sha256": "e2d50a03d8a2542033a1aaa0efe6817ac581cc283d59354eb9b411a2dc3847f9",
+      "current_sha256": "e2d50a03d8a2542033a1aaa0efe6817ac581cc283d59354eb9b411a2dc3847f9",
+      "equal": true,
+      "lf_sha256": "e2d50a03d8a2542033a1aaa0efe6817ac581cc283d59354eb9b411a2dc3847f9",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/hlsManifest.ts",
+      "r22_sha256": "07a53f8f49207a6caaba03bd8818d92251125e653b3e6b04a0f9b85d76027b2a",
+      "current_sha256": "07a53f8f49207a6caaba03bd8818d92251125e653b3e6b04a0f9b85d76027b2a",
+      "equal": true,
+      "lf_sha256": "07a53f8f49207a6caaba03bd8818d92251125e653b3e6b04a0f9b85d76027b2a",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/hlsWorkerOwnership.ts",
+      "r22_sha256": "6a81af8c3870d7d3fb7e13a4e2ec8b84c439ab76ad1571f6e1d2bc59ff9b11f9",
+      "current_sha256": "6a81af8c3870d7d3fb7e13a4e2ec8b84c439ab76ad1571f6e1d2bc59ff9b11f9",
+      "equal": true,
+      "lf_sha256": "6a81af8c3870d7d3fb7e13a4e2ec8b84c439ab76ad1571f6e1d2bc59ff9b11f9",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/inspectionCache.ts",
+      "r22_sha256": "11fede701dcc3469f9f17280f71d263dd4967f15a74bbcedce6f05bf5eb06ce8",
+      "current_sha256": "11fede701dcc3469f9f17280f71d263dd4967f15a74bbcedce6f05bf5eb06ce8",
+      "equal": true,
+      "lf_sha256": "11fede701dcc3469f9f17280f71d263dd4967f15a74bbcedce6f05bf5eb06ce8",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/manifestSniff.ts",
+      "r22_sha256": "afebd95529ab97cb72aa6fcbc924e89a1361c8a7ddbdf547ac1dd6f84765c773",
+      "current_sha256": "afebd95529ab97cb72aa6fcbc924e89a1361c8a7ddbdf547ac1dd6f84765c773",
+      "equal": true,
+      "lf_sha256": "afebd95529ab97cb72aa6fcbc924e89a1361c8a7ddbdf547ac1dd6f84765c773",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/mediaOverlay.ts",
+      "r22_sha256": "470db30eda89bb10d3072733e2be84b0d66de67cec118cbb3c2c383c2b76b083",
+      "current_sha256": "470db30eda89bb10d3072733e2be84b0d66de67cec118cbb3c2c383c2b76b083",
+      "equal": true,
+      "lf_sha256": "470db30eda89bb10d3072733e2be84b0d66de67cec118cbb3c2c383c2b76b083",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/mediaPush.ts",
+      "r22_sha256": "d4a504ed488134aac0a9cadc50d63ea88e0723e5c21a7ee94ed71605aff02984",
+      "current_sha256": "d4a504ed488134aac0a9cadc50d63ea88e0723e5c21a7ee94ed71605aff02984",
+      "equal": true,
+      "lf_sha256": "d4a504ed488134aac0a9cadc50d63ea88e0723e5c21a7ee94ed71605aff02984",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/nativeBridge.ts",
+      "r22_sha256": "ec574baf3f5cf486968d2c85dc4abbd0238f63193e2771fe198e0302d4c83c2b",
+      "current_sha256": "35a6504f42137900c820c08d198bb3bb49fa17db9991c9f16a918bff1d9ab31d",
+      "equal": false,
+      "lf_sha256": "35a6504f42137900c820c08d198bb3bb49fa17db9991c9f16a918bff1d9ab31d",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "extension/lib/pausedHandoffFollowups.ts",
+      "r22_sha256": "3522ffd33e47c5e9bba3139f5a3c97a8bf5a8c441c0f64bf78bb75af90b49cd6",
+      "current_sha256": "413d1ee4fe55d27f8cd96ef6396d1fe4d291eb2ca5720cbd702588e7c1349dab",
+      "equal": false,
+      "lf_sha256": "413d1ee4fe55d27f8cd96ef6396d1fe4d291eb2ca5720cbd702588e7c1349dab",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "extension/lib/productCopy.ts",
+      "r22_sha256": "634129244354d4c14991f93b8b6b07dea23e849e3b381cac02c7721008a6a669",
+      "current_sha256": "634129244354d4c14991f93b8b6b07dea23e849e3b381cac02c7721008a6a669",
+      "equal": true,
+      "lf_sha256": "634129244354d4c14991f93b8b6b07dea23e849e3b381cac02c7721008a6a669",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/requestChain.ts",
+      "r22_sha256": "c029da1e2ef85172da783a50f69c8fe3984070550f84e37dc73bcefb0ae98206",
+      "current_sha256": "c029da1e2ef85172da783a50f69c8fe3984070550f84e37dc73bcefb0ae98206",
+      "equal": true,
+      "lf_sha256": "c029da1e2ef85172da783a50f69c8fe3984070550f84e37dc73bcefb0ae98206",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/resources.ts",
+      "r22_sha256": "7bf24451277493cf2f09d01fcf3f2d5027fea8316a69010e3636c36e5e0fee0e",
+      "current_sha256": "df3d5647dc71c633b7ace7876a4f55db475e4cf5dbfda14af064d3789cd93d7c",
+      "equal": false,
+      "lf_sha256": "7bf24451277493cf2f09d01fcf3f2d5027fea8316a69010e3636c36e5e0fee0e",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/selectionLinks.ts",
+      "r22_sha256": "fe078be86ad8aa3e5729274b07d41b6e02b83d71797d76ad97a1d3c9ab0728d9",
+      "current_sha256": "fe078be86ad8aa3e5729274b07d41b6e02b83d71797d76ad97a1d3c9ab0728d9",
+      "equal": true,
+      "lf_sha256": "fe078be86ad8aa3e5729274b07d41b6e02b83d71797d76ad97a1d3c9ab0728d9",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/sessionListStore.ts",
+      "r22_sha256": "8a2ef0112a9d245aa2cb9c413faae7d3f4506b55e4e7b9c9844f0a0eb3688769",
+      "current_sha256": "8a2ef0112a9d245aa2cb9c413faae7d3f4506b55e4e7b9c9844f0a0eb3688769",
+      "equal": true,
+      "lf_sha256": "8a2ef0112a9d245aa2cb9c413faae7d3f4506b55e4e7b9c9844f0a0eb3688769",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/sniffCommand.ts",
+      "r22_sha256": "7e3357a3a4b438bc3e0105dc55eb13217b53b18335126202bcadb742f6652eb5",
+      "current_sha256": "7e3357a3a4b438bc3e0105dc55eb13217b53b18335126202bcadb742f6652eb5",
+      "equal": true,
+      "lf_sha256": "7e3357a3a4b438bc3e0105dc55eb13217b53b18335126202bcadb742f6652eb5",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/storeIdentity.ts",
+      "r22_sha256": "9bbcc5ac90fe2ff3519a9b9aaa677045fd7b4ba3e354f8ce4dc9e032b37cb13c",
+      "current_sha256": "9bbcc5ac90fe2ff3519a9b9aaa677045fd7b4ba3e354f8ce4dc9e032b37cb13c",
+      "equal": true,
+      "lf_sha256": "9bbcc5ac90fe2ff3519a9b9aaa677045fd7b4ba3e354f8ce4dc9e032b37cb13c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitleAudio.ts",
+      "r22_sha256": "9d72815c0d6f78df4b6a9513f829796e238ab64f7cc848a29e19a3746a8b1a06",
+      "current_sha256": "9d72815c0d6f78df4b6a9513f829796e238ab64f7cc848a29e19a3746a8b1a06",
+      "equal": true,
+      "lf_sha256": "9d72815c0d6f78df4b6a9513f829796e238ab64f7cc848a29e19a3746a8b1a06",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitleBackground.ts",
+      "r22_sha256": "1fdb8c529ae8d8ac26f29aa1825cda4b3d30925a79c96a3acbb43528cbc2ad84",
+      "current_sha256": "1fdb8c529ae8d8ac26f29aa1825cda4b3d30925a79c96a3acbb43528cbc2ad84",
+      "equal": true,
+      "lf_sha256": "1fdb8c529ae8d8ac26f29aa1825cda4b3d30925a79c96a3acbb43528cbc2ad84",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitleContent.ts",
+      "r22_sha256": "4c63e8bf1dc384b5f1488df3c05c4fda2f7044c8918c5da6b0b380455baaa245",
+      "current_sha256": "4c63e8bf1dc384b5f1488df3c05c4fda2f7044c8918c5da6b0b380455baaa245",
+      "equal": true,
+      "lf_sha256": "4c63e8bf1dc384b5f1488df3c05c4fda2f7044c8918c5da6b0b380455baaa245",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitlePcm.ts",
+      "r22_sha256": "24f094003407019cd87726a3a94008057aeb256e456d068453532b2fa26c7d52",
+      "current_sha256": "24f094003407019cd87726a3a94008057aeb256e456d068453532b2fa26c7d52",
+      "equal": true,
+      "lf_sha256": "24f094003407019cd87726a3a94008057aeb256e456d068453532b2fa26c7d52",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitlePopup.ts",
+      "r22_sha256": "58dfdc62c9b88b2d914711ec265782b03600339541651958670fff4e5d0487da",
+      "current_sha256": "58dfdc62c9b88b2d914711ec265782b03600339541651958670fff4e5d0487da",
+      "equal": true,
+      "lf_sha256": "58dfdc62c9b88b2d914711ec265782b03600339541651958670fff4e5d0487da",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitlePrefetch.ts",
+      "r22_sha256": "86203069528f5b975c02bd46518d288abea201e4531c45b69e728a5987ec185c",
+      "current_sha256": "86203069528f5b975c02bd46518d288abea201e4531c45b69e728a5987ec185c",
+      "equal": true,
+      "lf_sha256": "86203069528f5b975c02bd46518d288abea201e4531c45b69e728a5987ec185c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/subtitleSettings.ts",
+      "r22_sha256": "0f1ec81fbd489bde537d8e908b34aae0e01aeb3e7b11674cfa5225e72ccf3487",
+      "current_sha256": "0f1ec81fbd489bde537d8e908b34aae0e01aeb3e7b11674cfa5225e72ccf3487",
+      "equal": true,
+      "lf_sha256": "0f1ec81fbd489bde537d8e908b34aae0e01aeb3e7b11674cfa5225e72ccf3487",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/takeover.ts",
+      "r22_sha256": "0463708bb39826f7622c3b4981be7dae4a5cd8deb22c1caa3a5b825be6982eef",
+      "current_sha256": "c8f2aca26c6c42ab37061da4c91a747a71a05f3167ab038d4089161e3e081a57",
+      "equal": false,
+      "lf_sha256": "c8f2aca26c6c42ab37061da4c91a747a71a05f3167ab038d4089161e3e081a57",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "extension/lib/takeoverSettingsSync.ts",
+      "r22_sha256": "99dd789037f519a23d1f3693a92bb835f8fee7cb0e0786a7462b3e03972d3009",
+      "current_sha256": "99dd789037f519a23d1f3693a92bb835f8fee7cb0e0786a7462b3e03972d3009",
+      "equal": true,
+      "lf_sha256": "99dd789037f519a23d1f3693a92bb835f8fee7cb0e0786a7462b3e03972d3009",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/theme.ts",
+      "r22_sha256": "4dba738f7ae6a8f16ec78497a9257f652da585ee6246c1b5edb84883b9b2d64c",
+      "current_sha256": "4dba738f7ae6a8f16ec78497a9257f652da585ee6246c1b5edb84883b9b2d64c",
+      "equal": true,
+      "lf_sha256": "4dba738f7ae6a8f16ec78497a9257f652da585ee6246c1b5edb84883b9b2d64c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/urlQuery.ts",
+      "r22_sha256": "80c122130dba27d4c8e2068a52639305089b66a3b436a31dd708a3a81899f91d",
+      "current_sha256": "80c122130dba27d4c8e2068a52639305089b66a3b436a31dd708a3a81899f91d",
+      "equal": true,
+      "lf_sha256": "80c122130dba27d4c8e2068a52639305089b66a3b436a31dd708a3a81899f91d",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "extension/lib/version.ts",
+      "r22_sha256": "6ec4bf701fb6ceb9b9086461c7621340b5ec95434e3f27939b65aec113803952",
+      "current_sha256": "6ec4bf701fb6ceb9b9086461c7621340b5ec95434e3f27939b65aec113803952",
+      "equal": true,
+      "lf_sha256": "6ec4bf701fb6ceb9b9086461c7621340b5ec95434e3f27939b65aec113803952",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/bin/hls_downloader_engine.rs",
+      "r22_sha256": "576908e73a77f5cdb0669853e4f77629c262bf3be83885c380b6139dd772dddd",
+      "current_sha256": "576908e73a77f5cdb0669853e4f77629c262bf3be83885c380b6139dd772dddd",
+      "equal": true,
+      "lf_sha256": "576908e73a77f5cdb0669853e4f77629c262bf3be83885c380b6139dd772dddd",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/core_ipc.rs",
+      "r22_sha256": "f93cdad372d05fd5f084c4d038dee2c6dfc55dea34b3c6c99487c693054ea2d2",
+      "current_sha256": "8ff9831ff264bf4c735234fb3e552e44155d9a0bc40f5aa9af3a70ced07d199f",
+      "equal": false,
+      "lf_sha256": "8ff9831ff264bf4c735234fb3e552e44155d9a0bc40f5aa9af3a70ced07d199f",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "native_shell/src/core_runtime.rs",
+      "r22_sha256": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+      "current_sha256": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+      "equal": true,
+      "lf_sha256": "4aa1422b2031be0a3fe18dc42ada333f0457e95d640e766970f3f197fe1390a0",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/core_server.rs",
+      "r22_sha256": "f5a97d4139fe7c734065ba43f7817c970b32c8cb6af244ae564d760e1f8d7a51",
+      "current_sha256": "08d9a10d095f37ac8941be1e02da403b4acb4961011046dcbff4a1c12f6ed8e5",
+      "equal": false,
+      "lf_sha256": "08d9a10d095f37ac8941be1e02da403b4acb4961011046dcbff4a1c12f6ed8e5",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "native_shell/src/core_service.rs",
+      "r22_sha256": "2375de7aad1044efd41bb6422be34465a6920bdd7eb17b8a5c8d50e730209b43",
+      "current_sha256": "074b2ce7271598a4aa97b9b2426fc1b10fb419be8db64ab78c9899080b459f6a",
+      "equal": false,
+      "lf_sha256": "074b2ce7271598a4aa97b9b2426fc1b10fb419be8db64ab78c9899080b459f6a",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "native_shell/src/download_worker.rs",
+      "r22_sha256": "22d10321ef1a1b28f5b3583ad36edd11418366cdf5276e78678a0b8ff4db2299",
+      "current_sha256": "4cdbed5f58c21dce7ed8103d135e4e75c76b0d1b6603e40cdd93f67761de456a",
+      "equal": false,
+      "lf_sha256": "4cdbed5f58c21dce7ed8103d135e4e75c76b0d1b6603e40cdd93f67761de456a",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "native_shell/src/http_engine.rs",
+      "r22_sha256": "d51ec46b7c453a3351b5ad06aaad081a6b5c7bcfde4ece04694665fb938c0323",
+      "current_sha256": "d51ec46b7c453a3351b5ad06aaad081a6b5c7bcfde4ece04694665fb938c0323",
+      "equal": true,
+      "lf_sha256": "d51ec46b7c453a3351b5ad06aaad081a6b5c7bcfde4ece04694665fb938c0323",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/link_file.rs",
+      "r22_sha256": "cac81545ef8fe6750d4095e27d44f2561d0ba79d0d717850392971a4da4eb769",
+      "current_sha256": "cac81545ef8fe6750d4095e27d44f2561d0ba79d0d717850392971a4da4eb769",
+      "equal": true,
+      "lf_sha256": "cac81545ef8fe6750d4095e27d44f2561d0ba79d0d717850392971a4da4eb769",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/media/dash.rs",
+      "r22_sha256": "fb6a389131a44bbcd804ee1dfe69d7f3b5c11ea849d34bec0c47acf5b1b2d0e5",
+      "current_sha256": "fb6a389131a44bbcd804ee1dfe69d7f3b5c11ea849d34bec0c47acf5b1b2d0e5",
+      "equal": true,
+      "lf_sha256": "fb6a389131a44bbcd804ee1dfe69d7f3b5c11ea849d34bec0c47acf5b1b2d0e5",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/media/hls.rs",
+      "r22_sha256": "e924a98dd56f1f0ebcbcfe19a69239dad30d17d83c5af2f94949445bd7daec81",
+      "current_sha256": "e924a98dd56f1f0ebcbcfe19a69239dad30d17d83c5af2f94949445bd7daec81",
+      "equal": true,
+      "lf_sha256": "e924a98dd56f1f0ebcbcfe19a69239dad30d17d83c5af2f94949445bd7daec81",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/media/merge.rs",
+      "r22_sha256": "e5ae6ba6cd806ee6302e7875d5af23ed885ae700ca10bbc882c7a57122715783",
+      "current_sha256": "e5ae6ba6cd806ee6302e7875d5af23ed885ae700ca10bbc882c7a57122715783",
+      "equal": true,
+      "lf_sha256": "e5ae6ba6cd806ee6302e7875d5af23ed885ae700ca10bbc882c7a57122715783",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/native_host.rs",
+      "r22_sha256": "cd557dca2f68086b8d3195fb0160188aafc71cddec115c10e89a6a32d03690ab",
+      "current_sha256": "fb4b40566f43d66c2eb968fc2e749953630492597af8129298e714fa20cf6e43",
+      "equal": false,
+      "lf_sha256": "fb4b40566f43d66c2eb968fc2e749953630492597af8129298e714fa20cf6e43",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "native_shell/src/net_policy.rs",
+      "r22_sha256": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998",
+      "current_sha256": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998",
+      "equal": true,
+      "lf_sha256": "093eb179b4e1b437ecb9fe91dde628b498e67c72b380f4c3e2639ce3bccc9998",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/player.rs",
+      "r22_sha256": "f31289718ca55d0c8504d3c0726d5699893eba8c5693c0f8cf4af0673e81e18c",
+      "current_sha256": "f31289718ca55d0c8504d3c0726d5699893eba8c5693c0f8cf4af0673e81e18c",
+      "equal": true,
+      "lf_sha256": "f31289718ca55d0c8504d3c0726d5699893eba8c5693c0f8cf4af0673e81e18c",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/runtime_log.rs",
+      "r22_sha256": "6832a48ef9fbfb1c9bcf3734053cd62ed158bfc660a8b62d5d4b90a6fe9b039b",
+      "current_sha256": "6832a48ef9fbfb1c9bcf3734053cd62ed158bfc660a8b62d5d4b90a6fe9b039b",
+      "equal": true,
+      "lf_sha256": "6832a48ef9fbfb1c9bcf3734053cd62ed158bfc660a8b62d5d4b90a6fe9b039b",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/store.rs",
+      "r22_sha256": "c9e2809966f96ca82d4ee050411aa4241ac7661181b4356a10aa41f1bda834af",
+      "current_sha256": "6604006c0e0f31118229b6492743a339faa6c896ffe1034f247f1e8fe7d7f6fd",
+      "equal": false,
+      "lf_sha256": "6604006c0e0f31118229b6492743a339faa6c896ffe1034f247f1e8fe7d7f6fd",
+      "equal_after_lf_normalization": false
+    },
+    {
+      "path": "native_shell/src/task_export.rs",
+      "r22_sha256": "43b6f8616fae82311d8f685d8e0f21e532b1b1c1793bdf2b3fd9f63a4f08f19e",
+      "current_sha256": "43b6f8616fae82311d8f685d8e0f21e532b1b1c1793bdf2b3fd9f63a4f08f19e",
+      "equal": true,
+      "lf_sha256": "43b6f8616fae82311d8f685d8e0f21e532b1b1c1793bdf2b3fd9f63a4f08f19e",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/torrent_engine.rs",
+      "r22_sha256": "54484534ce44bfdef398ffc9d17231faa6b60fe8b1737a557e90fa71ee4433a3",
+      "current_sha256": "54484534ce44bfdef398ffc9d17231faa6b60fe8b1737a557e90fa71ee4433a3",
+      "equal": true,
+      "lf_sha256": "54484534ce44bfdef398ffc9d17231faa6b60fe8b1737a557e90fa71ee4433a3",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "native_shell/src/updater.rs",
+      "r22_sha256": "9e8152a5b0bf78477111c27f177bc7a233d1020ed5b1c55c3cd0cf77a7e58399",
+      "current_sha256": "9e8152a5b0bf78477111c27f177bc7a233d1020ed5b1c55c3cd0cf77a7e58399",
+      "equal": true,
+      "lf_sha256": "9e8152a5b0bf78477111c27f177bc7a233d1020ed5b1c55c3cd0cf77a7e58399",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "presenter_ui/src/hot_main.rs",
+      "r22_sha256": "6e7ecea3306d53334978a6f0626cdbc953b77eebf6fc3147beb24211d7f839e3",
+      "current_sha256": "6e7ecea3306d53334978a6f0626cdbc953b77eebf6fc3147beb24211d7f839e3",
+      "equal": true,
+      "lf_sha256": "6e7ecea3306d53334978a6f0626cdbc953b77eebf6fc3147beb24211d7f839e3",
+      "equal_after_lf_normalization": true
+    },
+    {
+      "path": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/TaskTableLayout.kt",
+      "r22_sha256": "1892619017e15676e0e238d2e836e63db6102fbf444cd7818563986a3805f186",
+      "current_sha256": "1892619017e15676e0e238d2e836e63db6102fbf444cd7818563986a3805f186",
+      "equal": true,
+      "lf_sha256": "1892619017e15676e0e238d2e836e63db6102fbf444cd7818563986a3805f186",
+      "equal_after_lf_normalization": true
+    }
+  ],
+  "features": [
+    {
+      "id": "architecture.single_core",
+      "assessment": "missing_evidence",
+      "entry": "EnginePipeClient snapshot/events",
+      "state_event": "ready/task_created/task_updated/task_progress",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/0",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "当前Core/Host已重建并通过双浏览器定向交接；完整安装生命周期与并发启动须关联最终候选SHA。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "hello/list_tasks/wait_events",
+      "protocol": {
+        "pipe_request_type": [
+          "hello",
+          "snapshot",
+          "wait_events"
+        ],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "workbench.geometry",
+      "assessment": "missing_evidence",
+      "entry": "AppShell/DesktopToolbar/Sidebar/TaskTable/ConnectionStatus",
+      "state_event": "task snapshots",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/1",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/manual-capture-review.json"
+      ],
+      "remaining": "r22浅色100%和深色150%实屏及窗口边界已证实；小窗口、所有菜单及完整焦点遍历缺少当前证据。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "list_tasks",
+      "protocol": {
+        "pipe_request_type": [
+          "snapshot"
+        ],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "workbench.foundation_component_architecture",
+      "assessment": "missing_evidence",
+      "entry": "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
+      "state_event": "all UI states",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+        "mechanism": "本项不是独立Core命令；渲染、焦点或安装失败另验，不套用下载错误反馈。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/2",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "现有控件源码和依赖声明可静态确认；旧主题截图不能覆盖当前所有控件状态。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "none (rendering architecture)",
+      "protocol": {
+        "pipe_request_type": [],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "tasks.selection_keyboard_queue",
+      "assessment": "missing_evidence",
+      "entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
+      "state_event": "task_updated",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/3",
+      "historical_status_not_current_verdict": "partial",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "当前候选未执行完整原生选择、键盘和拖动矩阵；完成项Enter/双击的新分派有定向回归，未进行物理输入验收。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "task_action/reorder_queue/place_queue",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "task_action",
+          "reorder_queue",
+          "place_queue"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "tasks.named_queue_profiles",
+      "assessment": "missing_evidence",
+      "entry": "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
+      "state_event": "task_updated/structured command result/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/4",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "assign_queue/get_settings/set_settings_atomic",
+      "protocol": {
+        "pipe_request_type": [
+          "load_settings",
+          "store_settings",
+          "command"
+        ],
+        "core_command_kind": [
+          "assign_queue"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "tasks.details_logs_speed_connections",
+      "assessment": "missing_evidence",
+      "entry": "TaskDetailsDialog live task lookup",
+      "state_event": "task_progress/task_log/toast",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/5",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "get_task_log/task_action speed/refresh_task_request",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "get_task_log",
+          "task_action",
+          "refresh_task_request"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "tasks.refresh_signed_url",
+      "assessment": "missing_evidence",
+      "entry": "TaskDetailsDialog 更新并继续",
+      "state_event": "toast/task_updated/task_progress",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/6",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "refresh_task_request",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "refresh_task_request"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "create.protocols_and_recognition",
+      "assessment": "missing_evidence",
+      "entry": "NewTaskDialog/ProbeResultDialog/BatchAddDialog/HarvestDialog",
+      "state_event": "probe_result/harvest_result/task_created/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/7",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "probe_url/create_task/harvest_page/import_paths",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "probe_url",
+          "create_task",
+          "harvest_page",
+          "import_paths"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "import.file_picker_and_drop",
+      "assessment": "missing_evidence",
+      "entry": "ContentHeader import + native desktop drop target",
+      "state_event": "task_created/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/8",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "import_paths",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "import_paths"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "export.normalized_task_list",
+      "assessment": "missing_evidence",
+      "entry": "ContentHeader export",
+      "state_event": "task_export",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/9",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "export_tasks",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "export_tasks"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "import.exported_task_json",
+      "assessment": "missing_evidence",
+      "entry": "ContentHeader import / desktop drop target with .json filter",
+      "state_event": "task_created/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/10",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "import_paths/create_task",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "import_paths",
+          "create_task"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "workbench.automatic_responsive_layout",
+      "assessment": "missing_evidence",
+      "entry": "responsive task columns with persisted drag/keyboard resize; selected-task toolbar; sortable headers",
+      "state_event": "task snapshots",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/11",
+      "historical_status_not_current_verdict": "partial",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/workbench-probe.json"
+      ],
+      "remaining": "真实列宽拖动、键盘焦点遍历与完整按钮矩阵未执行；后台选择钩子和实屏捕获不代替物理输入验收。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "store_settings(task_column_layout); existing task_action",
+      "protocol": {
+        "pipe_request_type": [
+          "store_settings",
+          "command"
+        ],
+        "core_command_kind": [
+          "task_action"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "media.hls_transfer_parity",
+      "assessment": "missing_evidence",
+      "entry": "NewTaskDialog and browser media handoff",
+      "state_event": "task_progress/task_updated/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/12",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "受控HLS/DASH与缓存结果存在；用户原HLS卡死和直播403未在当前有效请求下复现，不能标为已解决。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "create_task/task_action/refresh_task_request",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "create_task",
+          "task_action",
+          "refresh_task_request"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "media.local_player_controls",
+      "assessment": "missing_evidence",
+      "entry": "LocalVideoPlayer in the main-window overlay; optional picture-in-picture reuses the same libmpv session",
+      "state_event": "player_session",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/13",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "受控播放及边下边播有历史证据；用户偶发超时与完整关闭释放链路缺少当前现场证据。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "play_task/player_control",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "play_task",
+          "player_control"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "media.cast_dlna_chromecast",
+      "assessment": "external_limited",
+      "entry": "MediaSourcePickerDialog/DevicePickerDialog/CastSessionHud",
+      "state_event": "cast_devices/cast_session/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/14",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "真实接收设备验收按用户要求排除；本地协议能力与设备兼容性分开。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "discover_cast_devices/cast_to_device/share_media/control_cast",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "discover_cast_devices",
+          "cast_to_device",
+          "share_media",
+          "control_cast"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "media.lan_share",
+      "assessment": "missing_evidence",
+      "entry": "局域网播放 + 地址复制",
+      "state_event": "cast_session.media_url",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/15",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "cast_task/share_media/control_cast stop",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "cast_task",
+          "share_media",
+          "control_cast"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "media.tvbox_push",
+      "assessment": "external_limited",
+      "entry": "TVBox media source, dedicated device picker and Settings > 投屏与推送 > TVBox 推送",
+      "state_event": "cast_devices/cast_session/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/16",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "真实接收设备验收按用户要求排除；本地协议能力与设备兼容性分开。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "discover_cast_devices/cast_to_device/share_media",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "discover_cast_devices",
+          "cast_to_device",
+          "share_media"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "media.cast_and_player_concurrency",
+      "assessment": "external_limited",
+      "entry": "LocalVideoPlayer overlay and independent CastSessionHud; local player and cast controls keep separate sessions",
+      "state_event": "player_session/cast_session",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/17",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "真实接收设备验收按用户要求排除；本地协议能力与设备兼容性分开。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "player_control/control_cast",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "player_control",
+          "control_cast"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "torrent.multi_file_selection",
+      "assessment": "missing_evidence",
+      "entry": "TorrentSelectionDialog with tree-safe file selection",
+      "state_event": "torrent_probe_result/torrent_selection_result",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/18",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "probe_torrent/select_torrent_files/create_task",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "probe_torrent",
+          "select_torrent_files",
+          "create_task",
+          "get_task_torrent_files",
+          "set_task_torrent_files"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "settings.full_migration",
+      "assessment": "missing_evidence",
+      "entry": "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
+      "state_event": "structured command result/error",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/19",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "get_settings/set_settings_atomic",
+      "protocol": {
+        "pipe_request_type": [
+          "load_settings",
+          "store_settings"
+        ],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "updates.confirmed_download",
+      "assessment": "missing_evidence",
+      "entry": "UpdateDialog/UpdatePreparedDialog",
+      "state_event": "update_available/update_current/update_ready/update_install_started/update_install_result/error:update_failed",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/20",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "check_update/download_update/install_update",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "check_update",
+          "download_update",
+          "install_update"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "browser.request_context_replay",
+      "assessment": "missing_evidence",
+      "entry": "Settings > 网络 explains automatic browser identity and manual-only fallback headers",
+      "state_event": "handoff_offered/task_created/error",
+      "error_feedback": {
+        "source": "extension/entrypoints/background.ts",
+        "mechanism": "原生回执ok/error、reportDownloadError与download-error会话项；响应阻断及onCreated的失败路径仍需专门核对。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/21",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "offer_resource/create_task",
+      "protocol": {
+        "pipe_request_type": [
+          "store_credential",
+          "admit_handoff",
+          "command"
+        ],
+        "core_command_kind": [
+          "offer_resource",
+          "create_task"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "browser.takeover_and_recovery",
+      "assessment": "confirmed",
+      "entry": "ExtensionDialog/HandoffDialog",
+      "state_event": "handoff_offered/handoff_resolved/browser_status",
+      "error_feedback": {
+        "source": "extension/entrypoints/background.ts",
+        "mechanism": "原生回执ok/error、reportDownloadError与download-error会话项；响应阻断及onCreated的失败路径仍需专门核对。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/22",
+      "historical_status_not_current_verdict": "partial",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/native-reply/registered-reports/edge.json",
+        "docs/validation/full-audit-20261027/results/native-reply/firefox-registered-reports/firefox.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/README.md",
+        "docs/validation/full-audit-20261027/results/browser-ownership/exhausted-receipts/summary.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/exhausted-receipts/edge.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/exhausted-receipts/firefox.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/persistent-reload/summary.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/persistent-reload/edge.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/persistent-reload/firefox.json",
+        "docs/validation/full-audit-20261027/results/browser-ownership/extension-regression.txt",
+        "docs/validation/full-audit-20261027/results/browser-ownership/direct-reload-regression.txt",
+        "docs/validation/full-audit-20261027/results/browser-ownership/admission-20261029/README.md",
+        "docs/validation/full-audit-20261027/results/browser-ownership/followup-20261029/README.md",
+        "docs/validation/full-audit-20261027/results/browser-ownership/current-browser-20261029/README.md",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/validation.json"
+      ],
+      "remaining": "已确认仅限validation.json列明的当前双浏览器定向矩阵；同SHA安装包、签名扩展升级、完整真实站点入口与原生按钮仍待验证。响应后识别的普通文件由浏览器传输完后导入；关闭浏览器可能中止传输。DownloadItem创建按入口记录，非全入口零创建。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "present_handoff/accept_handoff/reject_handoff",
+      "protocol": {
+        "pipe_request_type": [
+          "save_handoff",
+          "load_handoffs",
+          "command",
+          "admit_handoff"
+        ],
+        "core_command_kind": [
+          "offer_resource",
+          "present_handoff",
+          "accept_handoff",
+          "reject_handoff"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ],
+        "native_host_ops": [
+          "offer",
+          "handoff_status (handoff_id or client_request_id)",
+          "recover_offer (original client_request_id only)"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "browser.media_push_device_selection",
+      "assessment": "external_limited",
+      "entry": "MediaPushRequested event -> DevicePickerDialog -> CastSessionHud",
+      "state_event": "media_push_requested/media_push_resolved/cast_devices/cast_session/error",
+      "error_feedback": {
+        "source": "extension/entrypoints/background.ts",
+        "mechanism": "原生回执ok/error、reportDownloadError与download-error会话项；响应阻断及onCreated的失败路径仍需专门核对。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/23",
+      "historical_status_not_current_verdict": "partial",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "真实投屏/TVBox 和局域网设备验收按用户要求排除；不将其计为本轮通过。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "request_media_push/resolve_media_push/discover_cast_devices/share_media",
+      "protocol": {
+        "pipe_request_type": [
+          "command"
+        ],
+        "core_command_kind": [
+          "request_media_push",
+          "resolve_media_push",
+          "discover_cast_devices",
+          "share_media"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "browser.hot_confirmation_process",
+      "assessment": "missing_evidence",
+      "entry": "Compose HandoffDialog fallback",
+      "state_event": "handoff_offered",
+      "error_feedback": {
+        "source": "extension/entrypoints/background.ts",
+        "mechanism": "原生回执ok/error、reportDownloadError与download-error会话项；响应阻断及onCreated的失败路径仍需专门核对。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/24",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "present_handoff",
+      "protocol": {
+        "pipe_request_type": [
+          "load_handoffs",
+          "command"
+        ],
+        "core_command_kind": [
+          "present_handoff"
+        ],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "browser.online_subtitle_translation",
+      "assessment": "external_limited",
+      "entry": "主程序 SettingsV7 字幕配置；插件仅提供当前播放器字幕开关/状态",
+      "state_event": "CorePipeResponse::Subtitle / subtitle-state",
+      "error_feedback": {
+        "source": "extension/entrypoints/background.ts",
+        "mechanism": "原生回执ok/error、reportDownloadError与download-error会话项；响应阻断及onCreated的失败路径仍需专门核对。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/25",
+      "historical_status_not_current_verdict": "partial",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "字幕凭据配置在主程序；收费云端质量排除，本地取消、预取及跨播放器当前验收仍需单列。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "subtitle configuration/configure/start/audio/reset/poll/stop",
+      "protocol": {
+        "pipe_request_type": [
+          "subtitle"
+        ],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "accessibility.automation",
+      "assessment": "missing_evidence",
+      "entry": "keyboard and tooltip support",
+      "state_event": "none",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
+        "mechanism": "本项不是独立Core命令；渲染、焦点或安装失败另验，不套用下载错误反馈。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/26",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "none",
+      "protocol": {
+        "pipe_request_type": [],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "performance.release_thresholds",
+      "assessment": "missing_evidence",
+      "entry": "virtualized LazyColumn and coalesced events",
+      "state_event": "all",
+      "error_feedback": {
+        "source": "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt",
+        "mechanism": "PipeConnection.request / requireNoCoreError解析结构化错误；具体入口呈现仍须逐项验收。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/27",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [],
+      "remaining": "r20新任务库首次响应约1952–1956ms，1500ms门槛失败；r22没有对应当前冷启动复测，活动慢尾异常未解释，三产品对照未完成。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "all",
+      "protocol": {
+        "pipe_request_type": [
+          "hello",
+          "snapshot",
+          "wait_events"
+        ],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    },
+    {
+      "id": "package.install_upgrade_rollback",
+      "assessment": "missing_evidence",
+      "entry": "build-v7 preview packaging",
+      "state_event": "ready/browser_status",
+      "error_feedback": {
+        "source": "scripts/build-v7.ps1",
+        "mechanism": "本项不是独立Core命令；渲染、焦点或安装失败另验，不套用下载错误反馈。"
+      },
+      "historical_record": "config/release/feature-parity.json#/features/28",
+      "historical_status_not_current_verdict": "verified",
+      "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/installed-workbench.json"
+      ],
+      "remaining": "r22同SHA安装、运行中覆盖、组件哈希、任务恢复、卸载有证据；当前插件源码已变化，且回滚证据属于旧候选，尚无统一新候选包。",
+      "native_physical_input": "not_performed",
+      "legacy_command_mapping": "engine/native host startup",
+      "protocol": {
+        "pipe_request_type": [],
+        "core_command_kind": [],
+        "sources": [
+          "native_shell/src/core_ipc.rs",
+          "native_shell/src/contract.rs",
+          "desktop_ui/src/main/kotlin/com/hlsdownloader/desktop/Protocol.kt"
+        ]
+      },
+      "state_event_scope": "沿用既有功能清单的状态/事件索引，不代表全部已实测；实际协议定义以所列源码为准。"
+    }
+  ],
+  "source_comparison_scope": "81份来源记录内可核查的生产文件；原始字节和LF规范化哈希分开。working_source另记录相对r22来源提交全部变更的生产文件，不包括测试和文档。",
+  "working_source": {
+    "base_commit": "fa233537f11c5255297850c7dc5248f06cb1552a",
+    "committed": false,
+    "production_files": [
+      {
+        "path": "extension/entrypoints/background.ts",
+        "sha256": "2e64a850ab951322534afe1f1c49d2f55e48b44364f4f2ee80ddfa31ccdef429"
+      },
+      {
+        "path": "extension/lib/nativeBridge.ts",
+        "sha256": "35a6504f42137900c820c08d198bb3bb49fa17db9991c9f16a918bff1d9ab31d"
+      },
+      {
+        "path": "extension/lib/pausedHandoffFollowups.ts",
+        "sha256": "413d1ee4fe55d27f8cd96ef6396d1fe4d291eb2ca5720cbd702588e7c1349dab"
+      },
+      {
+        "path": "extension/lib/takeover.ts",
+        "sha256": "c8f2aca26c6c42ab37061da4c91a747a71a05f3167ab038d4089161e3e081a57"
+      },
+      {
+        "path": "native_shell/src/connection_parts.rs",
+        "sha256": "2b53cb47e15bc215d058fa68925a93fc844687968f30f527f709b039435bbeec"
+      },
+      {
+        "path": "native_shell/src/contract.rs",
+        "sha256": "e9df0577c497b128b6917589179a42706d54d7847f5fd6fbcfba7052411eec9f"
+      },
+      {
+        "path": "native_shell/src/core_ipc.rs",
+        "sha256": "8ff9831ff264bf4c735234fb3e552e44155d9a0bc40f5aa9af3a70ced07d199f"
+      },
+      {
+        "path": "native_shell/src/core_server.rs",
+        "sha256": "08d9a10d095f37ac8941be1e02da403b4acb4961011046dcbff4a1c12f6ed8e5"
+      },
+      {
+        "path": "native_shell/src/core_service.rs",
+        "sha256": "074b2ce7271598a4aa97b9b2426fc1b10fb419be8db64ab78c9899080b459f6a"
+      },
+      {
+        "path": "native_shell/src/download_worker.rs",
+        "sha256": "4cdbed5f58c21dce7ed8103d135e4e75c76b0d1b6603e40cdd93f67761de456a"
+      },
+      {
+        "path": "native_shell/src/native_host.rs",
+        "sha256": "fb4b40566f43d66c2eb968fc2e749953630492597af8129298e714fa20cf6e43"
+      },
+      {
+        "path": "native_shell/src/store.rs",
+        "sha256": "6604006c0e0f31118229b6492743a339faa6c896ffe1034f247f1e8fe7d7f6fd"
+      }
+    ],
+    "scope": "Current production bytes reviewed for an authorized task commit; installer provenance will record the actual commit and tree. This is not whole-project certification."
+  }
+}

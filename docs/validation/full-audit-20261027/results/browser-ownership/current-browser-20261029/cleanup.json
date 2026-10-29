@@ -1,0 +1,48 @@
+{
+  "task_processes_stopped": true,
+  "sandbox_running": false,
+  "evidence": "sandbox-state.json",
+  "deletion_completed": false,
+  "deletion_attempts_this_turn": 0,
+  "earlier_denials_not_retried": true,
+  "remaining_generated": [
+    {
+      "path": ".tool-cache/handoff-admission-20261029",
+      "files": 4086,
+      "bytes": 2021232096,
+      "links_not_followed": 0
+    },
+    {
+      "path": ".tool-cache/paused-followup-20261029",
+      "files": 11,
+      "bytes": 96263777,
+      "links_not_followed": 0
+    },
+    {
+      "path": "extension/.output",
+      "files": 34,
+      "bytes": 1556634,
+      "links_not_followed": 0
+    },
+    {
+      "path": "extension/.wxt",
+      "files": 8,
+      "bytes": 11215,
+      "links_not_followed": 0
+    },
+    {
+      "path": "extension/node_modules",
+      "files": 10629,
+      "bytes": 171727444,
+      "links_not_followed": 1003
+    }
+  ],
+  "new_task_material": "Current Core/Host build outputs in existing Cargo target; three WSB configurations and CRT in existing followup cache",
+  "preserved": [
+    "source and pre-existing uncommitted work",
+    "successful and failed validation evidence",
+    "Desktop deliverables",
+    "user downloads and private backups"
+  ],
+  "host_product_install_or_registry_changes": false
+}
