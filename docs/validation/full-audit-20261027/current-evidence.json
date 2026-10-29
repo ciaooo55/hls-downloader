@@ -691,8 +691,10 @@
       "historical_record": "config/release/feature-parity.json#/features/0",
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
-      "current_evidence": [],
-      "remaining": "当前Core/Host已重建并通过双浏览器定向交接；完整安装生命周期与并发启动须关联最终候选SHA。",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/README.md"
+      ],
+      "remaining": "同SHA候选升级/回滚/恢复及组件哈希已通过，安装组件双浏览器定向交接通过；本轮未补完整冷启动并发矩阵。",
       "native_physical_input": "not_performed",
       "legacy_command_mapping": "hello/list_tasks/wait_events",
       "protocol": {
@@ -723,10 +725,12 @@
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
       "current_evidence": [
-        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/manual-capture-review.json"
+        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/manual-capture-review.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-window-normal.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/36-settings-normal-viewport.png"
       ],
-      "remaining": "r22浅色100%和深色150%实屏及窗口边界已证实；小窗口、所有菜单及完整焦点遍历缺少当前证据。",
-      "native_physical_input": "not_performed",
+      "remaining": "同SHA候选正常窗口可显示设置保存按钮；固定audit宽高/动态缩放裁剪记录保留，根因未确证。主题保存、小窗口、全部菜单与焦点遍历未完成。",
+      "native_physical_input": "targeted_settings_navigation_passed",
       "legacy_command_mapping": "list_tasks",
       "protocol": {
         "pipe_request_type": [
@@ -780,9 +784,11 @@
       "historical_record": "config/release/feature-parity.json#/features/3",
       "historical_status_not_current_verdict": "partial",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
-      "current_evidence": [],
-      "remaining": "当前候选未执行完整原生选择、键盘和拖动矩阵；完成项Enter/双击的新分派有定向回归，未进行物理输入验收。",
-      "native_physical_input": "not_performed",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/actions.json"
+      ],
+      "remaining": "同SHA候选实际完成单选、Ctrl+A、Escape、Shift+↓、↓、Enter、双击和右键目标核对；拖动排序、完整键盘矩阵尚未完成。",
+      "native_physical_input": "targeted_selection_keyboard_passed",
       "legacy_command_mapping": "task_action/reorder_queue/place_queue",
       "protocol": {
         "pipe_request_type": [
@@ -846,9 +852,12 @@
       "historical_record": "config/release/feature-parity.json#/features/5",
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
-      "current_evidence": [],
-      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
-      "native_physical_input": "not_performed",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/actions.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-final-core.json"
+      ],
+      "remaining": "同SHA候选实际打开详情/日志、完成连接图显示100%；速度历史、运行中全部状态和完整详情控件矩阵未完成。",
+      "native_physical_input": "targeted_details_logs_connections_passed",
       "legacy_command_mapping": "get_task_log/task_action speed/refresh_task_request",
       "protocol": {
         "pipe_request_type": [
@@ -1304,9 +1313,11 @@
       "historical_record": "config/release/feature-parity.json#/features/19",
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
-      "current_evidence": [],
-      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
-      "native_physical_input": "not_performed",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/actions.json"
+      ],
+      "remaining": "同SHA候选11个设置页实际导航通过；保存主题被外层夹具超时阻断，迁移和各页完整配置往返未完成；安全页仅查看。",
+      "native_physical_input": "targeted_page_navigation_passed",
       "legacy_command_mapping": "get_settings/set_settings_atomic",
       "protocol": {
         "pipe_request_type": [
@@ -1416,10 +1427,11 @@
         "docs/validation/full-audit-20261027/results/browser-ownership/admission-20261029/README.md",
         "docs/validation/full-audit-20261027/results/browser-ownership/followup-20261029/README.md",
         "docs/validation/full-audit-20261027/results/browser-ownership/current-browser-20261029/README.md",
-        "docs/validation/full-audit-20261027/results/convergence-20261029/validation.json"
+        "docs/validation/full-audit-20261027/results/convergence-20261029/validation.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-final-core.json"
       ],
-      "remaining": "已确认仅限validation.json列明的当前双浏览器定向矩阵；同SHA安装包、签名扩展升级、完整真实站点入口与原生按钮仍待验证。响应后识别的普通文件由浏览器传输完后导入；关闭浏览器可能中止传输。DownloadItem创建按入口记录，非全入口零创建。",
-      "native_physical_input": "not_performed",
+      "remaining": "源码及同SHA安装组件双浏览器定向矩阵通过，原生接受/拒绝确认通过；签名扩展升级、完整真实站点入口仍待验证。响应后识别的普通文件由浏览器传输完后导入；关闭浏览器可能中止传输。DownloadItem创建按入口记录，非全入口零创建。",
+      "native_physical_input": "targeted_accept_reject_passed",
       "legacy_command_mapping": "present_handoff/accept_handoff/reject_handoff",
       "protocol": {
         "pipe_request_type": [
@@ -1493,9 +1505,12 @@
       "historical_record": "config/release/feature-parity.json#/features/24",
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
-      "current_evidence": [],
-      "remaining": "缺少覆盖本项完整行为、对应当前源码或同SHA成品的证据；第2阶段通过后再按实际实现补验。",
-      "native_physical_input": "not_performed",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-input/actions.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/native-final-core.json"
+      ],
+      "remaining": "同SHA候选接受/拒绝按钮与持久状态对应，接受仅新增一个任务、拒绝不建任务；确认进程冷/热启动性能和全部控制仍未完整验收。",
+      "native_physical_input": "targeted_accept_reject_passed",
       "legacy_command_mapping": "present_handoff",
       "protocol": {
         "pipe_request_type": [
@@ -1581,8 +1596,12 @@
       "historical_record": "config/release/feature-parity.json#/features/27",
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
-      "current_evidence": [],
-      "remaining": "r20新任务库首次响应约1952–1956ms，1500ms门槛失败；r22没有对应当前冷启动复测，活动慢尾异常未解释，三产品对照未完成。",
+      "current_evidence": [
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-remaining/candidate-transfer-1.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-remaining/candidate-transfer-12.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-native-resume/transfer-12-profile.json"
+      ],
+      "remaining": "同SHA候选1连接34.19MiB/s；12连接12.19未过、49.28MiB/s通过，稳定收益及主要瓶颈未确证。历史1500ms冷启动门槛失败保留，三产品完整对照未完成。",
       "native_physical_input": "not_performed",
       "legacy_command_mapping": "all",
       "protocol": {
@@ -1613,9 +1632,12 @@
       "historical_status_not_current_verdict": "verified",
       "historical_verification_scope": "历史verification字段仅作证据索引，未逐条重新执行；测试源码存在不等于当前成品通过。",
       "current_evidence": [
-        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/installed-workbench.json"
+        "docs/validation/full-audit-20261027/results/workbench-interaction/reports/installed-workbench.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/README.md",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-installed/candidate.json",
+        "docs/validation/full-audit-20261027/results/convergence-20261029/candidate/candidate-independent/candidate.json"
       ],
-      "remaining": "r22同SHA安装、运行中覆盖、组件哈希、任务恢复、卸载有证据；当前插件源码已变化，且回滚证据属于旧候选，尚无统一新候选包。",
+      "remaining": "统一新候选MSI已生成，强制回滚、运行中升级、组件哈希、暂停恢复、新装和上批卸载保留输出通过；本批失败收尾卸载返回0，未重复断言卸载后输出。仍未签名、未发布。",
       "native_physical_input": "not_performed",
       "legacy_command_mapping": "engine/native host startup",
       "protocol": {
@@ -1704,7 +1726,15 @@
       "twelve_connection_passed": false,
       "output_hashes_correct": true,
       "post_publish_extra_network_bytes": 0,
-      "scope": "Single local sandbox samples; no stable gain or competitive superiority claimed."
+      "scope": "Single local sandbox samples; no stable gain or competitive superiority claimed.",
+      "additional_profile_sample": {
+        "connections": 12,
+        "throughput_mib_s": 49.28,
+        "passed": true,
+        "report": "candidate-native-resume/transfer-12-profile.json",
+        "checkpoint_timing_log": "candidate-native-resume/transfer-12-profile.engine.log",
+        "scope": "Independent instrumented local sample. Earlier 12.19 MiB/s failure remains valid; stable throughput gain and root cause not established; defaults unchanged."
+      }
     },
     "browser": {
       "edge": {
@@ -1727,9 +1757,29 @@
     },
     "native_ui": {
       "passed": false,
-      "status": "stopped_by_user_physical_escape",
-      "actual_native_actions_completed": 0,
-      "scope": "No native button/keyboard acceptance claimed; do not resume automatically."
+      "status": "targeted_actions_passed_theme_incomplete_runner_timeout",
+      "report": "candidate-native-resume/candidate.json",
+      "actions": "candidate-native-resume/native-input/actions.json",
+      "recorded_action_steps": 45,
+      "targeted_actions_passed": true,
+      "selection_counts": {
+        "single": 1,
+        "control_a": 5,
+        "escape": 0,
+        "shift_down": 2,
+        "down": 1
+      },
+      "handoff_accept_task_count": 1,
+      "handoff_reject_task_count": 0,
+      "source_preserved_before_uninstall": true,
+      "completed_connection_graph": "100% completed",
+      "settings_pages_navigated": 11,
+      "saved_theme_roundtrip": "not_completed",
+      "scope": "Native selection, confirmation, details/logs and page navigation only. No full controls, text input, search, drag/reorder, cloud or device certification.",
+      "retained_failure": "Outer native-final-observe process timeout was 180 seconds while observer allowed 1200 seconds; parent killed observer and uninstalled product before saved theme verification. candidate.json remains passed=false.",
+      "prior_batch": "candidate-independent: physical Escape stopped input; resumed only after user instruction to continue.",
+      "cleanup": "Failure-cleanup MSI uninstall returned 0; task Sandbox closed. This batch did not verify output preservation after uninstall; prior batch did.",
+      "followup": "Automatic approval review rejected combined theme-only sandbox preparation/start command with blocked by policy; no theme retry was executed."
     },
     "fresh_uninstall_preserves_output": true
   }

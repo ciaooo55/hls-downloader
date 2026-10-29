@@ -531,6 +531,391 @@
       "sha256": "39127262bf023b5488c86177d1a10d1e76a8647c9a560e35b015f553ee680332"
     },
     {
+      "path": "candidate-native-resume/candidate.json",
+      "bytes": 3024,
+      "sha256": "62edcb898f55aff7f66d45eb39475bcdb5eba3d663896376fa33179cc5f69799"
+    },
+    {
+      "path": "candidate-native-resume/checkpoint-create-pause.json",
+      "bytes": 377,
+      "sha256": "e0c53a854ebe61caf0d0c59ba01c719cdb1c3781375a445fced62a30066f43a2"
+    },
+    {
+      "path": "candidate-native-resume/checkpoint-create-pause.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/checkpoint-create-pause.stdout.txt",
+      "bytes": 322,
+      "sha256": "e2581cbd151d359418fc511f483a47f6119f7f01fd13ebf86e21fe8beb020ed3"
+    },
+    {
+      "path": "candidate-native-resume/checkpoint-verify-resume.json",
+      "bytes": 506,
+      "sha256": "cd72340709661648db834de5ac95b361de2340808e81bff67ea3d79b96f4def9"
+    },
+    {
+      "path": "candidate-native-resume/checkpoint-verify-resume.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/checkpoint-verify-resume.stdout.txt",
+      "bytes": 451,
+      "sha256": "194af002b389c020af8cb549b30f0c9a64c5804d53ddb9a4229a2a1e16dcbc2c"
+    },
+    {
+      "path": "candidate-native-resume/failure-cleanup-uninstall.log.gz",
+      "bytes": 56009,
+      "sha256": "b9440904586d2a700db34526295e81f73cc386598d6b10c58fe546ebf50c063c"
+    },
+    {
+      "path": "candidate-native-resume/fresh-install.log.gz",
+      "bytes": 67038,
+      "sha256": "7a664e82b9fd7ac3494f476834d91c535d881c76d9d370f60740e0cbc1dff4ec"
+    },
+    {
+      "path": "candidate-native-resume/native-final-core.json",
+      "bytes": 17566,
+      "sha256": "11fe7ecaf836f94fecbb80003d61265a724ca189973c27c24def5d0e6e9b87ba"
+    },
+    {
+      "path": "candidate-native-resume/native-final-observe.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/native-final-observe.stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/native-input/01-accept-confirmation-visible.png",
+      "bytes": 68148,
+      "sha256": "6a9d6f94cff68b847222a24cc7bebf3a409973b6841ec6e5b769a931595655b1"
+    },
+    {
+      "path": "candidate-native-resume/native-input/02-click-accept.png",
+      "bytes": 69185,
+      "sha256": "170e2daa08a2c997c9ea58881836fe6bd1eb0920d6c4ef4cb80f253d921bb539"
+    },
+    {
+      "path": "candidate-native-resume/native-input/03-click-reject.png",
+      "bytes": 56556,
+      "sha256": "51f368fc3342a2270ffff11fe1d7f80e48fb1e23a0da1e4a2a6266617cdd4091"
+    },
+    {
+      "path": "candidate-native-resume/native-input/04-select-one-queued-row.png",
+      "bytes": 57767,
+      "sha256": "d68941db904b5f182667edd816aedfffb2e4e7f8b6db5abd1d50dc8a19f7448f"
+    },
+    {
+      "path": "candidate-native-resume/native-input/04-state.json",
+      "bytes": 11361,
+      "sha256": "d69fd1430a01c2a92ef3635cbc669a07473666be8695d9728833fc35cb0a3e1b"
+    },
+    {
+      "path": "candidate-native-resume/native-input/05-control-a-all-rows.png",
+      "bytes": 63682,
+      "sha256": "13c6f36b4022dd30246ee7bd2b87bec10a9e0af9e68ff848dd6f6598aed67899"
+    },
+    {
+      "path": "candidate-native-resume/native-input/05-control-a-settled.png",
+      "bytes": 72554,
+      "sha256": "4d6d46624ad22934a71e214fdd7359fe28e64ad1e616cdc60155e193d9306d7c"
+    },
+    {
+      "path": "candidate-native-resume/native-input/05-state.json",
+      "bytes": 11517,
+      "sha256": "90b90ac62a4c8257012ae182aeb44e8c7e287414c8d414349e29a2139d46428b"
+    },
+    {
+      "path": "candidate-native-resume/native-input/06-escape-clear-selection.png",
+      "bytes": 72554,
+      "sha256": "4d6d46624ad22934a71e214fdd7359fe28e64ad1e616cdc60155e193d9306d7c"
+    },
+    {
+      "path": "candidate-native-resume/native-input/06-escape-settled.png",
+      "bytes": 59793,
+      "sha256": "5ab10e0e148e340b790bf14af69c042894ccce6596a5acff54000442e4ac38f1"
+    },
+    {
+      "path": "candidate-native-resume/native-input/06-state.json",
+      "bytes": 10373,
+      "sha256": "5d97362033aa6fa91c0f60f60f35e9e2f6ef5ce2773446f5b68aa4c12b60ef25"
+    },
+    {
+      "path": "candidate-native-resume/native-input/07-range-anchor.png",
+      "bytes": 59693,
+      "sha256": "fc5175e17fe3dfbdc591ad7fcdd7b7f7a126dddb838cad76483270b990a5b9b9"
+    },
+    {
+      "path": "candidate-native-resume/native-input/08-shift-down-range.png",
+      "bytes": 65667,
+      "sha256": "aa409b4fcf7a9e5cdc91644487a69c5b70a133671a567b2f294c3cda403208a1"
+    },
+    {
+      "path": "candidate-native-resume/native-input/08-state.json",
+      "bytes": 11400,
+      "sha256": "4208d760c55b017de7c052887ca452f9c53c4236ed2123dc5b0e1653347d711e"
+    },
+    {
+      "path": "candidate-native-resume/native-input/09-down-single-navigation.png",
+      "bytes": 65369,
+      "sha256": "1c1977c8c3959b800384679031e3bffa1fcb0e9698eccbf2f0fc673123ebae2d"
+    },
+    {
+      "path": "candidate-native-resume/native-input/09-state.json",
+      "bytes": 11361,
+      "sha256": "34858ac0facf56d0db376b5c1932a410526a9f7db9e980f288d9886fb5579c36"
+    },
+    {
+      "path": "candidate-native-resume/native-input/10-enter-details-settled.png",
+      "bytes": 64496,
+      "sha256": "e8877fa75a4aa194776e4b6850639e1dac4009cfc15c0b42d8bfc9ec554a0c4a"
+    },
+    {
+      "path": "candidate-native-resume/native-input/10-enter-queued-task-details.png",
+      "bytes": 65080,
+      "sha256": "f3a5487a62e8e2ee8ffcd129ca019894ddffc0cbf8dd6348adbb88d1aaa5da5d"
+    },
+    {
+      "path": "candidate-native-resume/native-input/11-task-log-tab.png",
+      "bytes": 58649,
+      "sha256": "140b5913ecac1e98f71e8716257f39717d7be44aaedb98b0e7a23198aacd1772"
+    },
+    {
+      "path": "candidate-native-resume/native-input/12-close-details-with-escape.png",
+      "bytes": 63882,
+      "sha256": "dd58b78a3cc5f13bb93db33657cb163ee08a5fc41147ea8bb9d75fd9ef7c6450"
+    },
+    {
+      "path": "candidate-native-resume/native-input/13-completed-context-menu.png",
+      "bytes": 65220,
+      "sha256": "57e619ba0a5ecebd7fe6a42eaaf4619ee80058ecb67237e0a332e2b4d898e932"
+    },
+    {
+      "path": "candidate-native-resume/native-input/13-state.json",
+      "bytes": 11688,
+      "sha256": "289fd13cfa1e4573e62703aae8a06796402e20f69321b09dc456f4f5ab28b9bb"
+    },
+    {
+      "path": "candidate-native-resume/native-input/14-completed-details-from-menu.png",
+      "bytes": 63399,
+      "sha256": "91cc3aefbbf1089c49ef8b4195a8b435f291096ec842e7c621cae0180d32c0ce"
+    },
+    {
+      "path": "candidate-native-resume/native-input/14-completed-details-settled.png",
+      "bytes": 66968,
+      "sha256": "994a755041b34c4cdd4a1709a01e8fec86e8c82818026e0b88ff6dbbce5fd62f"
+    },
+    {
+      "path": "candidate-native-resume/native-input/15-completed-connection-settled.png",
+      "bytes": 67506,
+      "sha256": "2acc359eda918952f6cb242a9b0c62848e7d73ed3569f6dec429567591452e2c"
+    },
+    {
+      "path": "candidate-native-resume/native-input/15-completed-connection-tab.png",
+      "bytes": 67252,
+      "sha256": "0b9fb0db77cc8eeb7bfa4323f1f8e0444652c8ce031f9863077fead2c4df410b"
+    },
+    {
+      "path": "candidate-native-resume/native-input/16-completed-log-settled.png",
+      "bytes": 85831,
+      "sha256": "d7abf7826a22e1595c0f5d57fdde6ae8b744524ead4ca8282fc70cf415b8d7b3"
+    },
+    {
+      "path": "candidate-native-resume/native-input/16-completed-log-tab.png",
+      "bytes": 67407,
+      "sha256": "bf5c196bb8debdd16433c9c49bb57a4bc5512bd5f4b9e22ea905c0e2aab0d81b"
+    },
+    {
+      "path": "candidate-native-resume/native-input/17-close-completed-details.png",
+      "bytes": 85831,
+      "sha256": "d7abf7826a22e1595c0f5d57fdde6ae8b744524ead4ca8282fc70cf415b8d7b3"
+    },
+    {
+      "path": "candidate-native-resume/native-input/18-double-click-details-settled.png",
+      "bytes": 64036,
+      "sha256": "67af8168da0938e979c4edcf9deaf0eb4813a2182e154d29a9de130da35ba15c"
+    },
+    {
+      "path": "candidate-native-resume/native-input/18-double-click-queued-details.png",
+      "bytes": 60314,
+      "sha256": "9e6431769a7e6a1f54a15414882b95c4ccd675171907e2fa6e5832388aea8e88"
+    },
+    {
+      "path": "candidate-native-resume/native-input/19-close-double-click-details.png",
+      "bytes": 60901,
+      "sha256": "8051933b2360c1abb297f0ae4478bcb1cf6c6da95dfa757cb92be8dcec2a9212"
+    },
+    {
+      "path": "candidate-native-resume/native-input/20-open-settings.png",
+      "bytes": 58654,
+      "sha256": "bb775f04e4b9854aa0baad027de61235c2c9c89ead9c7e84fdd9d7d1b88b978f"
+    },
+    {
+      "path": "candidate-native-resume/native-input/20-settings-settled.png",
+      "bytes": 72585,
+      "sha256": "8dee85e94432c6b6ba919ea5284045c9596bfcacc4f4c68dcf44dd4166a18a1d"
+    },
+    {
+      "path": "candidate-native-resume/native-input/21-settings-download.png",
+      "bytes": 73964,
+      "sha256": "2e7cd31306928ab1485aa1fa193342e1dac8a7f2d2453b125d6f5451ca01c4f4"
+    },
+    {
+      "path": "candidate-native-resume/native-input/22-settings-schedule.png",
+      "bytes": 70531,
+      "sha256": "7d5a586c87529d6e73ab9e9fe118fd250001395ace7325fc2c9484b6bec65dc6"
+    },
+    {
+      "path": "candidate-native-resume/native-input/23-settings-network.png",
+      "bytes": 73986,
+      "sha256": "7fb0cf531119bb68664c9d6f9095c5d0e35e8ee80aa23228a3afdfcaa93940ac"
+    },
+    {
+      "path": "candidate-native-resume/native-input/24-settings-media.png",
+      "bytes": 60404,
+      "sha256": "2d761daeb34527e1b1845ddcecd6f73ffc4db8a9fe22f5c3f61c8a8810d736ce"
+    },
+    {
+      "path": "candidate-native-resume/native-input/25-settings-bt.png",
+      "bytes": 64887,
+      "sha256": "97b31b08c9f43c55557f37455ff20da2bf69160466a09932fa21dd4b5bb559d9"
+    },
+    {
+      "path": "candidate-native-resume/native-input/26-settings-subtitle.png",
+      "bytes": 70122,
+      "sha256": "5755f7e44d7554fdab0247e6edfb5fed6b52b3d739e4cb4c6f57177019003a3f"
+    },
+    {
+      "path": "candidate-native-resume/native-input/27-settings-cast.png",
+      "bytes": 61645,
+      "sha256": "7774a68a965ef6d84af4d6ca82788c94470ccf0d6a74f35daa91c9cb17c87e5c"
+    },
+    {
+      "path": "candidate-native-resume/native-input/28-settings-security-read-only.png",
+      "bytes": 59503,
+      "sha256": "c5c011c61d9002fce58650ab4a920fea94a2af3561fc725ab847c865b782938a"
+    },
+    {
+      "path": "candidate-native-resume/native-input/29-settings-browser.png",
+      "bytes": 59326,
+      "sha256": "fce353997ef3e4deda2972536cf2b31420075e5e184079431cca7a2014cb8c96"
+    },
+    {
+      "path": "candidate-native-resume/native-input/30-settings-appearance-light.png",
+      "bytes": 56458,
+      "sha256": "4156214de2ca01a6e786c4d0ad8c7e345fc06b4f9b7b9f282e7ce3a3ff05dd64"
+    },
+    {
+      "path": "candidate-native-resume/native-input/31-dark-mode-result.png",
+      "bytes": 56650,
+      "sha256": "624f192dc05146c6bd25b0c6775f3d0dc0d71d95250561e4f0dcf463d896d415"
+    },
+    {
+      "path": "candidate-native-resume/native-input/32-settings-full-viewport.png",
+      "bytes": 68011,
+      "sha256": "75edc166f3260c2edaf06ca910e83a637902b887f78b09f9dfa18ecaca00a067"
+    },
+    {
+      "path": "candidate-native-resume/native-input/33-close-settings-draft.png",
+      "bytes": 61616,
+      "sha256": "845f628e3dccac000560245ebe32b39eb74c1c4418d1710c69ae54e861ca71f4"
+    },
+    {
+      "path": "candidate-native-resume/native-input/34-maximize-guest-workbench.png",
+      "bytes": 61529,
+      "sha256": "a1082025ff24689f89fda3311fab2a00dcf8e11d4e7c85f3d515163ffd7de191"
+    },
+    {
+      "path": "candidate-native-resume/native-input/34-maximize-settled.png",
+      "bytes": 61579,
+      "sha256": "694ba9812c0060381d01f26c4cb4fef45e8e44e5bdd5090d70c5862eb8168fec"
+    },
+    {
+      "path": "candidate-native-resume/native-input/35-normal-geometry-workbench.png",
+      "bytes": 81434,
+      "sha256": "05a8bd1f4d113ea241a056ef3b402cb3802d7345518f6b660e04fc83c4225614"
+    },
+    {
+      "path": "candidate-native-resume/native-input/36-settings-normal-viewport.png",
+      "bytes": 100056,
+      "sha256": "2af7be5757b5f16421af8ecbab68ed7af542b78d1a773cb5083a8b7aacf9d982"
+    },
+    {
+      "path": "candidate-native-resume/native-input/actions.json",
+      "bytes": 10480,
+      "sha256": "6604e9d659a1213337fc28df7c9f5d02a70cdd9a957b03f7a3e9f44590a8b0f3"
+    },
+    {
+      "path": "candidate-native-resume/native-input-finished.json",
+      "bytes": 395,
+      "sha256": "6d2249662da5154b57ded79a9e9f74eda99eaa1fcb14492bfc570b4b5d53af61"
+    },
+    {
+      "path": "candidate-native-resume/native-normal-geometry-ready.json",
+      "bytes": 109,
+      "sha256": "382bacea0134fce04da1f72b7ac54ca079f163c97b4d65ad6c5146ee59eadf76"
+    },
+    {
+      "path": "candidate-native-resume/native-seed.json",
+      "bytes": 10964,
+      "sha256": "f6762baa25bc5b5ab2dc37426b7ad63d203a96238b48e4474083bf26ead4058a"
+    },
+    {
+      "path": "candidate-native-resume/native-seed.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/native-seed.stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/native-state-latest.json",
+      "bytes": 3233,
+      "sha256": "794dc4dc9b34909094296f2f8bb74560f2118e9424a80466d6e8627805bfb4cb"
+    },
+    {
+      "path": "candidate-native-resume/native-window-normal.json",
+      "bytes": 286,
+      "sha256": "7c9c1c5444701eec5ddefb8c426ba4556778c747ec133ffff2a01f96d511654e"
+    },
+    {
+      "path": "candidate-native-resume/native-window-pinned.json",
+      "bytes": 283,
+      "sha256": "376b9601b7f19f2810dc0bc7dabce9c0437de2202357df38f69ee9f79acff701"
+    },
+    {
+      "path": "candidate-native-resume/transfer-12-profile.engine.log",
+      "bytes": 1585,
+      "sha256": "51b53b10ea7a6812d68dcc0eb6304340ca0f6d21a4daa87b4ed6038e7659c124"
+    },
+    {
+      "path": "candidate-native-resume/transfer-12-profile.json",
+      "bytes": 809,
+      "sha256": "55acdba0a26ba61b3559636760acdb765be640c0b0c209e68f476ccdadf0a9f8"
+    },
+    {
+      "path": "candidate-native-resume/transfer-12-profile.stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "candidate-native-resume/transfer-12-profile.stdout.txt",
+      "bytes": 728,
+      "sha256": "32b97d8367d50c1d3270105382c209afec9f3d9e9d5937031b5ae3a52705a646"
+    },
+    {
+      "path": "candidate-native-resume.wsb",
+      "bytes": 1752,
+      "sha256": "076cd6f930795a787879a342322567dd832f52cd40b8ec76bc0ac81183cc57a3"
+    },
+    {
       "path": "candidate-remaining/candidate-transfer-1.json",
       "bytes": 807,
       "sha256": "2f591fe6aec00ad6a177f502739638e597167a64153a6bc68fa7aafac8fb3c5b"
@@ -646,6 +1031,31 @@
       "sha256": "e1a49d3b2462694a1085c5f9f21e3d1057345f5220e407d1187b8e2aca83ebab"
     },
     {
+      "path": "candidate-resume-runners/acceptance-input.json",
+      "bytes": 8287,
+      "sha256": "431b4107201cc8594a763902dd6429b527b47b01a3eb0a53ca0b0a1ab711b644"
+    },
+    {
+      "path": "candidate-resume-runners/candidate-native-guest.ps1",
+      "bytes": 6316,
+      "sha256": "6d88d437cb1ab3f8c2f9d808f73b33c8c14b2967f2c8f3766db012f45b33e668"
+    },
+    {
+      "path": "candidate-resume-runners/candidate-transfer-probe.py",
+      "bytes": 16478,
+      "sha256": "1d6245b2091e627afe716ab7d156d5a3152828065b43324afa476e17d01fdbe4"
+    },
+    {
+      "path": "candidate-resume-runners/native-observe.py",
+      "bytes": 2486,
+      "sha256": "4483a3f7615e5c6433bad9ce16c6e91b77bd217de3c0a66d23575888ec2c77ad"
+    },
+    {
+      "path": "candidate-resume-runners/native-seed.py",
+      "bytes": 2030,
+      "sha256": "f93a57472ca52726e961c1cbd3631a3973a07c24d3127f7923b2488eeecc369c"
+    },
+    {
       "path": "candidate-runners/acceptance-input.json",
       "bytes": 8287,
       "sha256": "431b4107201cc8594a763902dd6429b527b47b01a3eb0a53ca0b0a1ab711b644"
@@ -697,8 +1107,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 4302,
-      "sha256": "05152d553abbab1b08eac5361b624aa640b163c8afb97c898467e14f6c0f735d"
+      "bytes": 6494,
+      "sha256": "aaa59b1f4bc9d74fb1d1ce5f7f937beecd5a89b32f736e54d760e65e1d3deab3"
     }
   ]
 }

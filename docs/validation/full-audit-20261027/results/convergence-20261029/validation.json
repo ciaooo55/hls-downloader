@@ -150,7 +150,15 @@
       "twelve_connection_passed": false,
       "output_hashes_correct": true,
       "post_publish_extra_network_bytes": 0,
-      "scope": "Single local sandbox samples; no stable gain or competitive superiority claimed."
+      "scope": "Single local sandbox samples; no stable gain or competitive superiority claimed.",
+      "additional_profile_sample": {
+        "connections": 12,
+        "throughput_mib_s": 49.28,
+        "passed": true,
+        "report": "candidate-native-resume/transfer-12-profile.json",
+        "checkpoint_timing_log": "candidate-native-resume/transfer-12-profile.engine.log",
+        "scope": "Independent instrumented local sample. Earlier 12.19 MiB/s failure remains valid; stable throughput gain and root cause not established; defaults unchanged."
+      }
     },
     "browser": {
       "edge": {
@@ -173,9 +181,29 @@
     },
     "native_ui": {
       "passed": false,
-      "status": "stopped_by_user_physical_escape",
-      "actual_native_actions_completed": 0,
-      "scope": "No native button/keyboard acceptance claimed; do not resume automatically."
+      "status": "targeted_actions_passed_theme_incomplete_runner_timeout",
+      "report": "candidate-native-resume/candidate.json",
+      "actions": "candidate-native-resume/native-input/actions.json",
+      "recorded_action_steps": 45,
+      "targeted_actions_passed": true,
+      "selection_counts": {
+        "single": 1,
+        "control_a": 5,
+        "escape": 0,
+        "shift_down": 2,
+        "down": 1
+      },
+      "handoff_accept_task_count": 1,
+      "handoff_reject_task_count": 0,
+      "source_preserved_before_uninstall": true,
+      "completed_connection_graph": "100% completed",
+      "settings_pages_navigated": 11,
+      "saved_theme_roundtrip": "not_completed",
+      "scope": "Native selection, confirmation, details/logs and page navigation only. No full controls, text input, search, drag/reorder, cloud or device certification.",
+      "retained_failure": "Outer native-final-observe process timeout was 180 seconds while observer allowed 1200 seconds; parent killed observer and uninstalled product before saved theme verification. candidate.json remains passed=false.",
+      "prior_batch": "candidate-independent: physical Escape stopped input; resumed only after user instruction to continue.",
+      "cleanup": "Failure-cleanup MSI uninstall returned 0; task Sandbox closed. This batch did not verify output preservation after uninstall; prior batch did.",
+      "followup": "Automatic approval review rejected combined theme-only sandbox preparation/start command with blocked by policy; no theme retry was executed."
     },
     "fresh_uninstall_preserves_output": true
   }
