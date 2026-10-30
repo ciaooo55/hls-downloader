@@ -1,0 +1,10 @@
+{
+  "finished": false,
+  "passed": false,
+  "source_commit": "f4b0f53b2da18ee704fde8763b0f169168f94004",
+  "last_completed_suite": "lifecycle_native_guest",
+  "last_started_suite": "portable_guest",
+  "portable_terminal_report_present": false,
+  "host_observation": "Sandbox processes absent after Computer Use reported physical Escape cancellation. The interruption cause inside the guest is not established. No main candidate suites or native input results were written.",
+  "original_evidence": ".tool-cache/free-parity-20261030/candidate-results-r12"
+}

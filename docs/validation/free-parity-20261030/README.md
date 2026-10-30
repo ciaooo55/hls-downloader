@@ -6,13 +6,13 @@
 
 | 阶段 | 当前状态 |
 | --- | --- |
-| P0 安装器与证据 | 69849b51 候选 r11 同版本运行中升级、故障回滚、64 组件、续传、空闲/运行中卸载及数据保留通过。历史 1603 原样保留；含 Enter 修复的新候选尚待重建。 |
-| P1 UI 与原生操作 | 同 JAR 的旧 r2/r5 有批量、导入导出、队列、键盘及工具的限定证据；r11 复核普通创建、Esc、错误详情滚动及主题。Enter 修复已编译，尚待打包复核。完整 OS DPI、最小窗口、主题/长文本组合矩阵未完成。 |
-| P2 浏览器交接 | 旧候选 Edge r5、Firefox r4 各 11 项通过；69849b51 r11 两浏览器补测前 9 项通过，重载后 ping 仍超时。初始离线保全通过。DownloadItem 按入口记录，完整当前矩阵未通过。 |
-| P3 分段与恢复 | r11 HTTP 13 项及两路径拆分暂停恢复通过；新三轮 18 样本在限速和慢尾段均有回退，不能沿用旧收益作结论。活动拆分默认关闭；全产品性能对照待完成。 |
-| P4 CLI | 已进入安装与便携包。r11 单 Core、中文路径、重启续传及导入导出通过；补测的队列夹具 URL 冲突已修，修后整套待复测。历史 r2 有队列启停、退出码和删文件的限定证据。 |
-| P5 抓站与同步 | r11 首次检查的循环去重、预览确认、恢复、静态改写、跨域边界、ETag/失败保旧及原子替换通过，但套件随后崩溃。补测的独立队列时间窗、请求上下文、60 秒周期通过；默认队列被前置夹具失败关闭，修后整套待复测。 |
-| P6 ZIP 预览 | r11 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。旧同 JAR r2 有原生中文路径 121 项、滚动/关闭证据；当前完整 UI 矩阵未完成。 |
+| P0 安装器与证据 | f4b0f53b 候选 r12 同版本运行中升级、故障回滚、64 组件、续传和空闲卸载通过；r13 运行中卸载返回 0，成品哈希保留。r11 历史限定通过及 1603 原样保留。 |
+| P1 UI 与原生操作 | 旧 r2/r5 有批量、导入导出、队列、键盘及工具的限定证据；r11 复核普通创建、Esc、错误详情滚动及主题。Enter 修复已进入 f4b0f53b 新候选，真实输入待复核。完整 OS DPI、最小窗口、主题/长文本组合矩阵未完成。 |
+| P2 浏览器交接 | f4b0f53b 的 r13 Edge 11 项及两浏览器初始离线通过。Firefox 前 9 项和重载 ping 通过，但清理等待 20 秒超时；记录显示短连接超时后进入 60 秒持久重查，下一次补测观察完整周期。DownloadItem 按入口记录。 |
+| P3 分段与恢复 | r13 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧通过；同 Core r11 两路径活动拆分恢复通过。三轮活动拆分性能不稳定，默认关闭；全产品性能对照未完成。 |
+| P4 CLI | 已进入安装与便携包。f4b0f53b 的 r13 免费整套 11 组通过，含单 Core、中文路径、生命周期、重启续传、队列启停、导入导出、退出码及显式删文件。 |
+| P5 抓站与同步 | r13 修后整套通过：循环去重、预览确认、恢复、静态改写、跨域边界、页面/深度限制、ETag/失败保旧/原子替换、关闭队列时间窗零请求、请求上下文及 60 秒自动周期。原生 UI 矩阵未完成。 |
+| P6 ZIP 预览 | r13 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。旧 JAR r2 有中文路径 121 项、滚动/关闭证据；当前完整 UI 矩阵未完成。 |
 
 ## P0 首轮诊断边界
 
@@ -22,9 +22,36 @@
 
 后续同包通过和新增失败见下节。旧候选的 1603 失败保留，不能用多次成功覆盖新的失败。
 
-## 新候选 69849b51 与本轮验收
+## 当前候选 f4b0f53b
 
-源码提交 `69849b516ec0eef6f6d426e46ef6f27454bfc353`，tree `8ad97ad9febb2d01ddbbfc209861da336f2ddee7`，打包前工作区干净。构建已成功完成。原始 [构建快照](results/candidate-69849b51/BUILD-PROVENANCE.json)、[交付哈希](results/candidate-69849b51/ARTIFACT-MANIFEST.json) 与 [64 组件清单](results/candidate-69849b51/expected-components.json) 保持不变。包位于 `artifacts/v7-productization/candidate/`，未签名、未发布。
+源码 `f4b0f53b2da18ee704fde8763b0f169168f94004`，打包前工作区干净。完整候选构建已成功，包含普通 URL 框 Enter 修复。当前安装包及便携包位于 `artifacts/v7-productization/candidate/`。原始[构建来源](results/candidate-f4b0f53b/BUILD-PROVENANCE.json)、[交付哈希](results/candidate-f4b0f53b/ARTIFACT-MANIFEST.json)和[64 组件清单](results/candidate-f4b0f53b/expected-components.json)保留。
+
+| 文件 | SHA-256 |
+| --- | --- |
+| EXE | `ec0020b959706f4ea556bf360656bcf48d10b1c57b45e551ab4464b61bfc24db` |
+| MSI | `35cf261fa70fccd3a2b0eecf9338e85c722ffe7f7ba5e3bec8b6f3efad3d2b5b` |
+| 便携 ZIP | `3209b358753a06a9ed71f83a6ae9da3284a039d4ec353e5c16f2f1c8ce982219` |
+
+工作台 JAR SHA-256 `6c6e2ef831973b0ffcdad4a9e545d5ac1e671e8b9fa5341090a2c703e2689b49`。Core、CLI、Host 和 Presenter 与 69849b51 的哈希一致；重建的扩展 ZIP 已单独记录新哈希。
+
+[r12 生命周期](results/candidate-r12/lifecycle/lifecycle.json)通过同版本运行中升级、注入 1603 回滚、64 组件核验、32 MiB 续传及空闲卸载，数据和成品保持哈希。随后沙盒在便携检查阶段中断，未写出便携终态和主套件结果；[中断记录](results/candidate-r12/interruption.json)保留，不能将未结束项目改判通过。r13 已完成同包定向回归，具体通过与失败见下节；完整 UI、浏览器重载连接及性能门槛仍未关闭。
+
+另发现便携升级脚本强制停止 Core，已改为复用安装器原生停机助手，检查点或文件锁检查失败就拒绝目录替换。该修复尚未进入 f4b0f53b 候选；脚本定向验证和下一次候选包验证分别记录。
+
+## f4b0f53b 的 r13 定向回归
+
+[主验收](results/candidate-r13/acceptance.json)正常结束，总结果仍为 `passed:false`；运行中卸载返回 0，[成品哈希](results/candidate-r13/output-hashes.json)保持一致。Firefox 清理和完整原生矩阵仍未关闭。
+
+- [免费功能](results/candidate-r13/free-features.json)整套 11 组正常结束并通过，包括已修正独立 URL 和队列恢复的 CLI 检查、ZIP、抓站限制、队列时间窗/请求上下文/自动周期组合及 Rust 定向测试。
+- [HTTP 边界](results/candidate-r13/http-boundaries.json)和[非录制媒体](results/candidate-r13/media.json)通过，成品及解码帧哈希正确；[安装组件](results/candidate-r13/installed-critical-components.json)与本候选 64 项清单一致。
+- [Edge](results/candidate-r13/edge/edge.json)11 项通过，包括扩展重载、浏览器重启及原身份导入；[Edge 离线](results/candidate-r13/edge/initial-offline/edge.json)和[Firefox 离线](results/candidate-r13/firefox/initial-offline/firefox.json)通过。
+- [Firefox](results/candidate-r13/firefox/firefox.json)前 9 项及重载 ping 通过，随后 `Browser transfer released` 20 秒超时。重载后持久记录包含 `handoffId` 和 60 秒后的 `retryAt`；Native Host 轨迹显示启动期间 2.5 秒状态查询触发重试。成品哈希校验已通过，自动清理仍需覆盖完整重查周期后确认。原失败保留。
+- [便携脚本补测](results/candidate-r13/portable-shutdown-followup.json)检查锁失败拒绝目录替换、运行中 Core 的升级/回滚及成品哈希，通过。使用真实候选 Core、最小应用目录和新脚本，不是修后完整便携包验收；此轮夹具未锁定响应未完成状态，不能据此宣称已验证活动下载检查点。后续夹具用事件保持响应未完成，并记录暂停字节。
+- [原生阶段](results/candidate-r13/native-finished.json)未完成：工具窗口绑定为沙盒，连续截图却返回宿主浏览器，未向产品发送鼠标或键盘输入；请求前台协调后继续后台工作。不能据原生测试 API 的状态快照认定 Enter 或完整 UI 通过。
+
+## 历史候选 69849b51 与 r11 验收
+
+源码提交 `69849b516ec0eef6f6d426e46ef6f27454bfc353`，tree `8ad97ad9febb2d01ddbbfc209861da336f2ddee7`，打包前工作区干净。原始 [构建快照](results/candidate-69849b51/BUILD-PROVENANCE.json)、[交付哈希](results/candidate-69849b51/ARTIFACT-MANIFEST.json) 与 [64 组件清单](results/candidate-69849b51/expected-components.json) 保持不变。当前包目录已经由 f4b0f53b 替换，历史结果与来源不变。未签名、未发布。
 
 | 文件 | SHA-256 |
 | --- | --- |

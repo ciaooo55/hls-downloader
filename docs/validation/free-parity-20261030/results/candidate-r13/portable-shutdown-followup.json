@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "finished": true,
+  "checks": [
+    {
+      "name": "lock-refuses-swap",
+      "exit_code": 1
+    },
+    {
+      "name": "running-upgrade",
+      "exit_code": 0
+    },
+    {
+      "name": "running-rollback",
+      "exit_code": 0
+    }
+  ],
+  "scope": "Current portable scripts/native preflight with actual candidate Core in minimal app images; not a packaged-image acceptance",
+  "phase": "running-rollback",
+  "task_id": "task-1",
+  "output_sha256": "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0",
+  "helper_sha256": "95ac2633027ffc3e18e69c32ea8436a506e359206dbcb4bad03b650e870f464a"
+}

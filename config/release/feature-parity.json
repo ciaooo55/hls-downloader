@@ -317,7 +317,7 @@
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
       "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks.",
-      "gap": "69849b51 候选 r11 已通过旧包同版本升级、注入失败回滚、64 组件哈希、32 MiB 续传、空闲及运行中卸载返回 0、成品/数据库保留；下一含 Enter 修复候选尚需重建和同包验证。原 c2a9bb6a 的 r6/r7 1603 原始失败保留。见 docs/validation/free-parity-20261030/README.md。"
+      "gap": "f4b0f53b 候选 r12 通过同版本运行中升级、故障回滚、64 组件核验、32 MiB 续传和空闲卸载；r13 运行中卸载返回 0 且成品哈希保留。425ab01 修复便携升级强杀 Core，原生助手脚本补测的锁失败拒绝替换、运行中升级/回滚及成品哈希通过，尚待新包验证。历史 1603 保留。见 docs/validation/free-parity-20261030/README.md。"
     },
     {
       "id": "free.cli",
@@ -326,7 +326,7 @@
       "compose_entry": "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
       "core_command": "CoreIpcClient versioned Named Pipe; create_task_paused capability",
       "state_event": "TaskCreated/TaskUpdated/TaskExport",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包无工作台、单 Core、中文空格路径、生命周期、队列启停、导入导出、退出码、默认留成品及显式删除通过；当前完整发布门槛仍未关闭。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r13/free-features.json：f4b0f53b 同包整套 11 组通过，含无工作台单 Core、中文空格路径、生命周期、重启续传、队列启停、导入导出、退出码、默认留成品、显式删除、标准输入上下文和默认脱敏。完整发布门槛仍未关闭。"
     },
     {
       "id": "free.crawl_sync",
@@ -335,7 +335,7 @@
       "compose_entry": "工具 / 抓站与同步项目; CLI crawl",
       "core_command": "crawl capability and request; ordinary CreateTask",
       "state_event": "CrawlProject/CrawlResource; SQLite schema 6 to 7",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包循环去重、确认前无任务、暂停重启恢复、离线引用改写、跨域跳转零请求、ETag 无重复 GET、失败保旧及原子替换通过。限额、周期及请求上下文组合仍待验收。 r11/followup/free-features.json 的队列关闭时间窗零请求、页面/HEAD/文件上下文与 60 秒自动同步组合检查通过；该套件其余检查因队列夹具复用 URL 及未恢复队列而失败，修正后整套待复测。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r13/free-features.json：f4b0f53b 同包整套 11 组通过，含循环去重、确认前无任务、暂停重启恢复、静态引用改写、跨域跳转零请求、页面/深度边界、ETag 无重复 GET、失败保旧和原子替换、队列时间窗零请求、页面/HEAD/文件上下文和 60 秒自动同步。r11 失败和修正原因保留在实施记录；当前完整原生 UI 验收仍未完成。"
     },
     {
       "id": "free.zip_preview",
@@ -344,7 +344,7 @@
       "compose_entry": "工具 / ZIP 内容预览; CLI zip",
       "core_command": "preview_zip capability and request",
       "state_event": "ZipPreview with metadata_bytes_read",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、无 Range 拒绝及有界读取通过；docs/validation/free-parity-20261030/results/candidate-r2/native-finished.json 原生中文 121 条预览、滚动和关闭通过。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r13/free-features.json：f4b0f53b 同包本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、无 Range 拒绝、有界读取和 2200 项目录通过；docs/validation/free-parity-20261030/results/candidate-r2/native-finished.json 为旧 JAR 原生中文 121 项、滚动和关闭证据，当前完整 UI 矩阵仍未完成。"
     },
     {
       "id": "http.active_tail_split",

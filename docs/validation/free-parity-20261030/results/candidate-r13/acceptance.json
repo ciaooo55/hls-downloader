@@ -1,0 +1,70 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Same candidate installation, free features, HTTP recovery, browser protocols and native input",
+  "host_product_install_performed": false,
+  "suites": [
+    {
+      "name": "portable-shutdown-followup",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "free-features",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "http-boundaries",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "media",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "firefox-matrix",
+      "exit_code": 1,
+      "passed": false
+    },
+    {
+      "name": "firefox-offline",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "edge-matrix",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "edge-offline",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "msi_sha256": "35cf261fa70fccd3a2b0eecf9338e85c722ffe7f7ba5e3bec8b6f3efad3d2b5b",
+  "phase": "uninstall",
+  "source_commit": "f4b0f53b2da18ee704fde8763b0f169168f94004",
+  "native": {
+    "passed": false,
+    "finished": true,
+    "scope": "No native keyboard or mouse acceptance completed in r13",
+    "reason": "Computer Use selected the unique current Sandbox window, but two captures returned host browser pixels. No product UI input was sent. Foreground coordination was requested; no reply arrived before this stage ended.",
+    "enter_fix_verified": false,
+    "os_dpi_matrix_verified": false,
+    "minimum_window_verified": false
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}
