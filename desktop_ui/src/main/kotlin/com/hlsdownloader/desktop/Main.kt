@@ -3969,7 +3969,14 @@ private fun NewTaskDialog(
                 OutlinedTextField(
                     url,
                     { url = it },
-                    Modifier.fillMaxWidth().reportControlBounds("newtask.url"),
+                    Modifier.fillMaxWidth().reportControlBounds("newtask.url").onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Enter &&
+                            !curlMode && !probing && !creating && validInput && parsedHeaders.isSuccess
+                        ) {
+                            onCreate(buildDraft())
+                            true
+                        } else false
+                    },
                     focusRequester = urlFocus,
                     placeholder = { Text("粘贴链接、磁力链接或浏览器“复制为 cURL”") },
                     singleLine = !curlMode,
