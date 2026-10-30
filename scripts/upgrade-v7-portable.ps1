@@ -12,10 +12,25 @@ $preserved = @('data','downloads')
 
 function Full([string]$Path) { [IO.Path]::GetFullPath($Path).TrimEnd('\','/') }
 function Stop-V7Processes([string]$Root) {
-    $prefix = (Full $Root) + [IO.Path]::DirectorySeparatorChar
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $helper = Join-Path $PSScriptRoot 'HLSDownloaderPreflight.exe'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+        throw 'Portable shutdown helper is missing; the original image and user data were not moved.'
+    }
+    # Share the MSI boundary: checkpoint Core, stop only owned clients, and
+    # refuse the directory swap when shutdown or exclusive file checks fail.
+    $process = Start-Process -FilePath $helper -ArgumentList ('"' + (Full $Root) + '\."') -WindowStyle Hidden -PassThru
+    try {
+        if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw 'Portable shutdown timed out; the original image and user data were not moved.'
+        }
+        if ($process.ExitCode -ne 0) {
+            throw 'Portable shutdown failed; inspect HLSInstaller-*.log in TEMP. The original image and user data were not moved.'
+        }
+    } finally {
+        $process.Dispose()
+    }
 }
 function Assert-AppImage([string]$Root) {
     $identities = @{}
