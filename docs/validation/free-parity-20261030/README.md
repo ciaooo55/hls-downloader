@@ -47,6 +47,7 @@
 - [免费功能补测](results/candidate-r11/followup/free-features.json)已正常结束，仍为失败。队列夹具的 URL 与前一检查导入任务相同，复用了已接收字节的任务；断言失败后队列未恢复，后续默认队列检查也因此失败。独立命名队列的关闭时间窗、页面/HEAD/文件请求上下文、60 秒自动周期同步及 Rust 定向测试通过。已修夹具 URL 和 `finally` 恢复，但尚未复测修后整套。
 - [Firefox 补测](results/candidate-r11/followup/firefox/firefox.json)及 [Edge 补测](results/candidate-r11/followup/edge/edge.json)各完成前 9 项后，在重载后 ping 的 15 秒自动化脚本等待超时；[Firefox 初始离线](results/candidate-r11/followup/firefox/initial-offline/firefox.json)通过。重载 ping 已改为发送与状态轮询分开观察，允许覆盖 NativeBridge 的有界重试时间，待验证，不能据此认定产品已恢复连接。
 - 普通 URL 框 Enter 修复提交 `d50d425`，`gradlew compileKotlin --offline` 实际编译通过（2m 1s）；保留多行 cURL 换行和忙碌/无效输入限制。候选 69849b51 不含此修复；新候选及真实输入回归尚待完成。
+- [性能准备记录](results/candidate-r11/performance/performance.json)：竞品安装及首次启动执行，但默认连接设置未完成原生保存，等待标记到期退出；未产生性能样本，不作为性能通过证据。清理卸载返回 0。r11 任务沙盒已关闭，原始失败及日志留在项目工作目录。
 
 ## 旧候选 c2a9bb6a 的限定验收
 
