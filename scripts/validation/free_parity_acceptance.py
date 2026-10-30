@@ -6,7 +6,6 @@ the installer, browser or native workbench matrices passed for these binaries.
 from __future__ import annotations
 
 import argparse
-import faulthandler
 from collections import Counter
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -55,7 +54,6 @@ def main():
     parser.add_argument('--unit-tests', type=Path)
     args = parser.parse_args()
     assert os.environ.get('USERNAME') == 'WDAGUtilityAccount', 'Windows Sandbox only'
-    faulthandler.dump_traceback_later(30, repeat=True)
     sys.path.insert(0, r'C:\QADeps')
     import psutil
     args.work.mkdir(parents=True, exist_ok=True)
@@ -239,10 +237,13 @@ def main():
 
         def cli_queue():
             assert invoke('queue','stop','default')['enabled'] is False
-            item=invoke('add',base+'/fixture.bin','--name','queue-control.bin')['tasks'][0]
-            current=task(item['task_id'])
-            assert current['downloaded_bytes']==0 and current['active_workers']==0,current
-            assert invoke('queue','start','default')['enabled'] is True
+            try:
+                # Same-URL admission intentionally reuses the previous imported task.
+                item=invoke('add',base+'/fixture.bin?queue-control','--name','queue-control.bin')['tasks'][0]
+                current=task(item['task_id'])
+                assert current['downloaded_bytes']==0 and current['active_workers']==0,current
+            finally:
+                assert invoke('queue','start','default')['enabled'] is True
             done=until(lambda:task(item['task_id']),lambda t:t['status'] in ['completed','failed'])
             assert done['status']=='completed',done
             output=Path(done['output_path']);assert hashlib.sha256(output.read_bytes()).digest()==hashlib.sha256(payload).digest()
@@ -416,7 +417,6 @@ def main():
     except Exception as e:
         result['error']=repr(e); result['traceback']=traceback.format_exc()
     finally:
-        faulthandler.cancel_dump_traceback_later()
         stop_core()
         for origin in origins: origin.shutdown(); origin.server_close()
         result['requests']=requests; result['finished']=True; save()

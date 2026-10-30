@@ -70,6 +70,11 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
                     body = PAYLOAD[offset:min(offset + 65536, end + 1)]
                     self.wfile.write(body)
                     request['sent'] += len(body)
+                    if slow and pause_on_help and offset == start:
+                        self.wfile.flush()
+                        request['held_initial_tail_until_helper'] = True
+                        if not helper_seen.wait(20):
+                            return
                     remaining = request['sent'] / rate - (time.perf_counter() - began)
                     if remaining > 0 and end - start > 65536:
                         time.sleep(remaining)
@@ -93,7 +98,11 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
 
             resumed = None
             if pause_on_help:
-                wait(helper_seen.is_set, 20)
+                try:
+                    wait(helper_seen.is_set, 25)
+                except TimeoutError as error:
+                    raise AssertionError({'reason': 'no active tail helper',
+                                          'snapshot': core.snapshot(), 'requests': requests}) from error
                 core.command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
 
                 def paused():
