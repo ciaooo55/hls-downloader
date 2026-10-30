@@ -322,7 +322,31 @@ pub struct HarvestCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ZipEntryPreview {
+    pub path: String,
+    pub compressed_bytes: u64,
+    pub uncompressed_bytes: u64,
+    pub method: u16,
+    pub encrypted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ZipPreview {
+    pub entries: Vec<ZipEntryPreview>,
+    pub archive_bytes: u64,
+    pub metadata_bytes_read: u64,
+    pub zip64: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSpec {
+    #[serde(default)]
+    pub origin_boundary: String,
+    #[serde(default)]
+    pub crawl_resource_key: String,
+    /// Create without scheduling a worker; resume is a separate explicit action.
+    #[serde(default)]
+    pub start_paused: bool,
     pub url: String,
     pub resource_kind: ResourceKind,
     #[serde(default)]
@@ -390,6 +414,9 @@ pub struct TaskSpec {
 impl Default for TaskSpec {
     fn default() -> Self {
         Self {
+            start_paused: false,
+            crawl_resource_key: String::new(),
+            origin_boundary: String::new(),
             url: String::new(),
             resource_kind: ResourceKind::File,
             local_source_path: None,

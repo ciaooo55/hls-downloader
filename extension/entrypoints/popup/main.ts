@@ -233,7 +233,10 @@ async function main() {
   scanBtn.title = '\u91cd\u65b0\u626b\u63cf\u5f53\u524d\u9875\u9762\u7684\u5a92\u4f53\u548c\u4e0b\u8f7d\u8d44\u6e90'
   sectionHeader.append(title, scanBtn)
   const list = el('div', 'list')
-  section.append(sectionHeader, list)
+  const browserTransfers = el('div', 'browser-transfers')
+  browserTransfers.hidden = true
+  browserTransfers.setAttribute('aria-live', 'polite')
+  section.append(sectionHeader, browserTransfers, list)
   const footer = el('footer')
   const restorePromptsBtn = el('button', 'restore-site-prompts', '\u6062\u590d\u672c\u7ad9\u81ea\u52a8\u63d0\u793a') as HTMLButtonElement
   restorePromptsBtn.type = 'button'
@@ -883,6 +886,33 @@ async function main() {
   refreshButtons()
   renderList()
   document.documentElement.dataset.popupReady = 'ready'
+  let transfersPolling = false
+  async function refreshBrowserTransfers() {
+    if (transfersPolling || document.hidden) return
+    transfersPolling = true
+    try {
+      const transfers = await browser.runtime.sendMessage({ type: 'local-download-progress', tabId: tab?.id })
+      browserTransfers.replaceChildren()
+      browserTransfers.hidden = !Array.isArray(transfers) || !transfers.length
+      if (!Array.isArray(transfers)) return
+      for (const transfer of transfers) {
+        const labels: Record<string, string> = {
+          receiving: '正在由浏览器接收，完成后导入', paused: '浏览器已暂停，恢复后继续接收',
+          interrupted: '浏览器接收中断，源文件保留，请在浏览器恢复',
+          importing: '浏览器接收完成，正在等待桌面确认或导入', recovering: '正在恢复交接，源文件保留',
+        }
+        const row = el('div', 'browser-transfer')
+        row.append(el('strong', '', String(transfer.filename || '浏览器下载')),
+          el('span', '', labels[String(transfer.state)] || '正在恢复交接'),
+          el('span', '', `${formatBytes(Number(transfer.bytesReceived) || 0)}${Number(transfer.totalBytes) > 0 ? ` / ${formatBytes(Number(transfer.totalBytes))}` : ''}`))
+        browserTransfers.append(row)
+      }
+    } catch { /* A worker restart is retried by the next visible-popup poll. */ }
+    finally { transfersPolling = false }
+  }
+  void refreshBrowserTransfers()
+  const transfersTimer = window.setInterval(() => void refreshBrowserTransfers(), 1000)
+  window.addEventListener('pagehide', () => clearInterval(transfersTimer), { once: true })
   void browser.runtime.sendMessage({ type: 'pending-downloads', tabId: tab?.id }).then(pending => {
     if (!Array.isArray(pending)) return
     for (const handoff of pending) {

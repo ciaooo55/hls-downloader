@@ -55,16 +55,20 @@ fn prepare_install() -> Result<(), String> {
             PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
         );
         // MSI 的窗口型助手没有可见控制台，失败时保留停机脚本的真实原因。
-        let log = std::fs::OpenOptions::new()
+        let mut log = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&diagnostic)
             .map_err(|error| error.to_string())?;
+        writeln!(log, "helper stage=spawn script={} install_dir={}", script.display(), root.display())
+            .map_err(|error| error.to_string())?;
+        log.flush().map_err(|error| error.to_string())?;
         command
+            .stdin(Stdio::null())
             .stdout(Stdio::from(
                 log.try_clone().map_err(|error| error.to_string())?,
             ))
-            .stderr(Stdio::from(log));
+            .stderr(Stdio::from(log.try_clone().map_err(|error| error.to_string())?));
         command
             .args([
                 "-NoProfile",
@@ -89,6 +93,7 @@ fn prepare_install() -> Result<(), String> {
                 Some(status) if status.success() => return Ok(()),
                 Some(_) => return Err("旧程序未能安全退出，安装已停止，未移除旧版本".into()),
                 None if Instant::now() >= deadline => {
+                    let _ = writeln!(log, "helper stage=timeout child_pid={}", child.id());
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err("等待旧程序退出超时，安装已停止".into());

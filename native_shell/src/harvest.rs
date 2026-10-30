@@ -125,7 +125,7 @@ fn find_abs(text: &str) -> Option<usize> {
     .min()
 }
 
-fn resolve(base: &str, reference: &str) -> Option<String> {
+pub(crate) fn resolve(base: &str, reference: &str) -> Option<String> {
     let decoded = html_unescape(reference.trim());
     let value = decoded.trim_start_matches('\u{feff}');
     if value.is_empty() || value.starts_with('#') || value.chars().any(|ch| ch.is_control()) {
@@ -178,7 +178,7 @@ fn split_reference_suffix(value: &str) -> (&str, &str) {
         .unwrap_or((value, ""))
 }
 
-fn normalize_url_path(path: &str) -> String {
+pub(crate) fn normalize_url_path(path: &str) -> String {
     let absolute = path.starts_with('/');
     let preserve_trailing_slash =
         path.ends_with('/') || path.ends_with("/.") || path.ends_with("/..");

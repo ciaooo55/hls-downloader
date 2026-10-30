@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "finished": true,
+  "steps": [
+    {
+      "name": "install",
+      "exit_code": 0,
+      "elapsed_seconds": 12.375
+    },
+    {
+      "name": "baseline-uninstall",
+      "exit_code": 1603,
+      "elapsed_seconds": 10.421999999999997
+    },
+    {
+      "name": "diagnostic-helper",
+      "exit_code": 0,
+      "elapsed_seconds": 3.9380000000000024
+    },
+    {
+      "name": "retry-uninstall",
+      "exit_code": 0,
+      "elapsed_seconds": 10.235
+    }
+  ],
+  "phase": "retry-uninstall",
+  "core_running_before": true
+}

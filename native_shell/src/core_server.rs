@@ -59,6 +59,7 @@ impl CoreServer {
         spawn_torrent_watch(coordinator.clone(), Arc::clone(&stop));
         spawn_clipboard_watch(coordinator.clone(), Arc::clone(&stop));
         spawn_queue_scheduler(coordinator.clone(), Arc::clone(&stop));
+        crate::crawl::spawn(coordinator.clone(), Arc::clone(&stop));
         Ok(Self {
             coordinator,
             notify,
@@ -225,6 +226,21 @@ fn dispatch(
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
+        CorePipeRequest::Crawl { request_id, request } => match crate::crawl::dispatch(coordinator, request) {
+            Ok(projects) => CorePipeResponse::Crawl { request_id, projects },
+            Err(message) => CorePipeResponse::Error { request_id: Some(request_id), code: "crawl_failed".into(), message },
+        },
+        CorePipeRequest::PreviewZip { request_id, source } => {
+            let result = if crate::http_engine::http_fetch_url_allowed(&source) {
+                coordinator.metadata_spec(&source)
+                    .and_then(|spec|crate::download_worker::hydrate_replay_headers(&coordinator.core(),spec))
+                    .and_then(|(spec,replay)|crate::with_replay_json(&replay,||crate::zip_preview::preview(&source,Some(spec))))
+            } else { crate::zip_preview::preview(&source, None) };
+            match result {
+                Ok(preview) => CorePipeResponse::ZipPreview { request_id, preview },
+                Err(message) => CorePipeResponse::Error { request_id: Some(request_id), code: "zip_preview_failed".into(), message },
+            }
+        }
         CorePipeRequest::PlayerThumbnail {
             request_id,
             task_id,
@@ -335,6 +351,9 @@ fn dispatch(
             product_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: V7_PROTOCOL_VERSION,
             commands: vec![
+                "preview_zip",
+                "crawl_projects",
+                "create_task_paused",
                 "create_task",
                 "import_curl",
                 "task_action",

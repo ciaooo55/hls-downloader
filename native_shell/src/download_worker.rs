@@ -489,11 +489,12 @@ pub fn build_job(
         mirrors: spec.mirrors.clone(),
         replay_json: String::new(),
         curl_body_limit: None,
+        origin_boundary: spec.origin_boundary.clone(),
     };
     Ok((job, paths))
 }
 
-fn hydrate_replay_headers(
+pub(crate) fn hydrate_replay_headers(
     core: &Arc<Mutex<PersistentCore>>,
     mut spec: TaskSpec,
 ) -> Result<(TaskSpec, String), String> {
@@ -2204,6 +2205,15 @@ impl CoreCoordinator {
         }
     }
 
+    pub(crate) fn metadata_spec(&self, url: &str) -> Result<TaskSpec, String> {
+        self.apply_defaults_to_spec(TaskSpec { url: url.into(), ..TaskSpec::default() })
+    }
+
+    pub(crate) fn read_metadata(&self, spec: TaskSpec, range: Option<&str>, limit: u64, origin: Option<&str>) -> Result<crate::http_engine::MetadataResponse, String> {
+        let (spec,replay)=hydrate_replay_headers(&self.core(),spec)?;
+        with_replay_json(&replay,||crate::http_engine::read_metadata(&spec,range,limit,origin))
+    }
+
     fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
         let client_dir = spec.download_dir.trim().to_string();
         if spec.local_source_path.is_none() {
@@ -2936,7 +2946,7 @@ fn load_queue_profiles(store: &crate::CoreStore) -> Result<Vec<QueueProfile>, St
     }])
 }
 
-fn queue_profile_allowed(profile: &QueueProfile) -> bool {
+pub(crate) fn queue_profile_allowed(profile: &QueueProfile) -> bool {
     profile.enabled
         && crate::net_policy::weekday_allowed(&profile.active_days)
         && (!profile.schedule_enabled
@@ -4567,7 +4577,7 @@ fn apply_site_rules_to_spec(
     Ok(spec)
 }
 
-fn task_throttle_context(
+pub(crate) fn task_throttle_context(
     core: &Arc<Mutex<PersistentCore>>,
     task_id: &str,
     spec: &TaskSpec,
@@ -5450,6 +5460,7 @@ fn harvest_page(
                     mirrors: Vec::new(),
                     replay_json: String::new(),
                     curl_body_limit: None,
+                    origin_boundary: String::new(),
                 };
                 let size = crate::http_engine::probe_resource(&job)
                     .ok()

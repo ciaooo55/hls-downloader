@@ -1,0 +1,1 @@
+{"finished_by_runner": false, "aborted": true, "reason": "CLI exited but spawned Core retained script capture pipe handles; parent communicate blocked. Process evidence and r4 Python trace retained."}

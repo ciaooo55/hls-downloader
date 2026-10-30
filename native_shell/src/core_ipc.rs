@@ -63,6 +63,8 @@ pub fn tcp_loopback_enabled() -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeRequest {
+    Crawl { request_id: u64, request: crate::CrawlRequest },
+    PreviewZip { request_id: u64, source: String },
     Hello {
         protocol: String,
         version: u32,
@@ -162,6 +164,8 @@ pub enum CorePipeRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeResponse {
+    Crawl { request_id: u64, projects: Vec<crate::CrawlProject> },
+    ZipPreview { request_id: u64, preview: crate::ZipPreview },
     Hello {
         protocol: String,
         version: u32,

@@ -220,6 +220,10 @@ $canonicalFeatureIds = @(
     'accessibility.automation',
     'performance.release_thresholds',
     'package.install_upgrade_rollback'
+    'free.cli'
+    'free.crawl_sync'
+    'free.zip_preview'
+    'http.active_tail_split'
 )
 $actualFeatureIds = @($features | ForEach-Object { [string]$_.id } | Sort-Object)
 if (($actualFeatureIds -join "`n") -ne (($canonicalFeatureIds | Sort-Object) -join "`n")) {
@@ -229,13 +233,11 @@ if (($actualFeatureIds -join "`n") -ne (($canonicalFeatureIds | Sort-Object) -jo
 $verified = @($features | Where-Object status -eq 'verified')
 $partial = @($features | Where-Object status -eq 'partial')
 $blocked = @($features | Where-Object status -eq 'blocked')
-$verifiedPercent = if ($features.Count -eq 0) { 0.0 } else { [Math]::Round(100.0 * $verified.Count / $features.Count, 1) }
 if (
     [int]$json.summary.total -ne $features.Count -or
     [int]$json.summary.verified -ne $verified.Count -or
     [int]$json.summary.partial -ne $partial.Count -or
-    [int]$json.summary.blocked -ne $blocked.Count -or
-    [double]$json.summary.verified_percent -ne $verifiedPercent
+    [int]$json.summary.blocked -ne $blocked.Count
 ) {
     $errors.Add('Feature parity summary does not match the feature records.')
 }
@@ -527,4 +529,4 @@ if (-not [String]::IsNullOrWhiteSpace($ProvenancePath)) {
     [IO.File]::WriteAllText($outputPath, ($provenance | ConvertTo-Json -Depth 8), $utf8NoBom)
 }
 
-Write-Output "FEATURE_PARITY=$verifiedPercent% ($($verified.Count)/$($features.Count) verified, $($partial.Count) partial, $($blocked.Count) blocked); CITED_ARTIFACTS=$resolvedArtifactCount/$citedArtifactCount resolved; COMMIT=$commit; TREE=$tree; SHA256=$featureHash"
+Write-Output "FEATURE_RECORDS=$($features.Count) ($($verified.Count) with scoped evidence, $($partial.Count) partial, $($blocked.Count) blocked); NOT_AN_OVERALL_PARITY_RATE=true; CITED_ARTIFACTS=$resolvedArtifactCount/$citedArtifactCount resolved; COMMIT=$commit; TREE=$tree; SHA256=$featureHash"

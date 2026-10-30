@@ -49,7 +49,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "20261029_targeted_reliable_browser_handoff_passed_candidate_pending",
+  "audit_state": "20261030_free_features_implemented_targeted_sandbox_passed_current_candidate_pending",
   "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {
@@ -311,19 +311,67 @@
     },
     {
       "id": "package.install_upgrade_rollback",
-      "status": "verified",
+      "status": "partial",
       "v3_entry": "shipping installer",
       "compose_entry": "build-v7 preview packaging",
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
-      "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks."
+      "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks.",
+      "gap": "2026-10-30 诊断包三轮定向卸载通过，但旧间歇 1603 的根因未证实；新免费功能候选尚待同包安装、运行中卸载、覆盖升级和失败回滚。历史证据不等于当前包通过。"
+    },
+    {
+      "id": "free.cli",
+      "status": "partial",
+      "v3_entry": "IDM / AB free-edition parity plan",
+      "compose_entry": "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
+      "core_command": "CoreIpcClient versioned Named Pipe; create_task_paused capability",
+      "state_event": "TaskCreated/TaskUpdated/TaskExport",
+      "verification": "docs/validation/free-parity-20261030/README.md; CLI无工作台启动、单实例、中文路径、暂停重启续传、导入导出、错误码、删除保留在 component-results-r6 通过；新候选待验收"
+    },
+    {
+      "id": "free.crawl_sync",
+      "status": "partial",
+      "v3_entry": "IDM / AB free-edition parity plan",
+      "compose_entry": "工具 / 抓站与同步项目; CLI crawl",
+      "core_command": "crawl capability and request; ordinary CreateTask",
+      "state_event": "CrawlProject/CrawlResource; SQLite schema 6 to 7",
+      "verification": "docs/validation/free-parity-20261030/README.md; component-results-r6: 循环去重、确认前不下载、暂停重启、离线改写、跨域对端零请求、ETag不重复、失败保旧与重试原子替换通过；完整边界与新候选仍待验收"
+    },
+    {
+      "id": "free.zip_preview",
+      "status": "partial",
+      "v3_entry": "IDM / AB free-edition parity plan",
+      "compose_entry": "工具 / ZIP 内容预览; CLI zip",
+      "core_command": "preview_zip capability and request",
+      "state_event": "ZipPreview with metadata_bytes_read",
+      "verification": "docs/validation/free-parity-20261030/README.md; component-results-r6: 本地中文、空包、ZIP64、坏包、远程尾部与2200项中央目录、资源变化、非Range拒绝通过；新候选待验收"
+    },
+    {
+      "id": "http.active_tail_split",
+      "status": "partial",
+      "v3_entry": "IDM / AB free-edition parity plan",
+      "compose_entry": "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
+      "core_command": "existing RangeScheduler pending first, reserved read region",
+      "state_event": "existing durable range checkpoints",
+      "verification": "docs/validation/free-parity-20261030/README.md; 活动安全区拆分定向Rust测试在Sandbox通过；重复正确性和收益对照待完成，尚不进入默认行为"
     }
   ],
   "summary": {
-    "verified": 24,
-    "partial": 5,
+    "verified": 23,
+    "partial": 10,
     "blocked": 0,
-    "total": 29,
-    "verified_percent": 82.8
+    "total": 33
+  },
+  "free_edition_scope": {
+    "platform": "Windows x64",
+    "product_account_required": false,
+    "activation_required": false,
+    "excluded": [
+      "recording",
+      "multi_platform",
+      "driver_takeover",
+      "enterprise_auth"
+    ],
+    "current_implementation_report": "docs/validation/free-parity-20261030/README.md"
   }
 }

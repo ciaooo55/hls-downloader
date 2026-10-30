@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "finished": true,
+  "scope": "Settings navigation and workbench visual acceptance",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "2bfbee26ca9b62949cd5b27328b8f7493cc959b76803e84c2ae02ee1f80a960b",
+  "phase": "uninstall",
+  "native": {
+    "scope": "Native URL typing and create-button submission only, 100% light theme",
+    "observed": [
+      "URL typed through native input",
+      "Create button submitted",
+      "32 MiB native.bin shown completed"
+    ],
+    "passed": true,
+    "not_validated": [
+      "remaining keyboard workflows",
+      "import/export",
+      "theme and DPI matrix"
+    ]
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}

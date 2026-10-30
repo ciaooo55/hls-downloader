@@ -329,7 +329,7 @@ impl CoreRuntime {
         let snapshot = TaskSnapshot {
             task_id: task_id.clone(),
             resource_kind: spec.resource_kind,
-            status: "queued".into(),
+            status: if spec.start_paused { "paused" } else { "queued" }.into(),
             stage: "waiting".into(),
             title,
             filename: spec.filename.clone(),
@@ -1097,6 +1097,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn create_paused_does_not_enter_the_schedulable_queue() {
+        let mut runtime=CoreRuntime::new();
+        let mut spec=task();spec.start_paused=true;
+        let events=runtime.handle(CoreCommand::CreateTask {spec});
+        assert!(events.iter().any(|e|matches!(&e.event,CoreEvent::TaskCreated {snapshot} if snapshot.status=="paused")));
+        assert!(runtime.list_tasks().iter().all(|t|t.status!="queued"));
+    }
 
     fn task() -> TaskSpec {
         TaskSpec {

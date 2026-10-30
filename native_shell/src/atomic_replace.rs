@@ -16,6 +16,24 @@ use std::io;
 use std::thread;
 use std::time::Duration;
 
+/// Rename within one filesystem, replacing the destination only on success.
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+        replace_with_retry(|| {
+            if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) } == 0 {
+                Err(io::Error::last_os_error())
+            } else { Ok(()) }
+        })
+    }
+    #[cfg(not(windows))]
+    std::fs::rename(source, destination)
+}
+
 /// 退避重试的总次数。20 次 × 10ms 约 200ms，足够杀软的一次扫描让出句柄。
 const MAX_ATTEMPTS: u32 = 20;
 /// 每次重试间隔。

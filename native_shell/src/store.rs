@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 6;
+pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 pub struct CoreStore {
     connection: Connection,
@@ -56,7 +56,7 @@ impl CoreStore {
         let existing: u32 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| format!("read Core database {}: {error}", path.display()))?;
-        if existing != 0 && existing != CURRENT_SCHEMA_VERSION {
+        if existing != 0 && existing != 6 && existing != CURRENT_SCHEMA_VERSION {
             return Err(format!(
                 "Core database {} has unsupported schema version {existing}, expected {CURRENT_SCHEMA_VERSION}",
                 path.display()
@@ -85,6 +85,30 @@ impl CoreStore {
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    pub(crate) fn crawl_states(&self) -> Result<Vec<crate::crawl::CrawlState>, String> {
+        let mut query = self.connection.prepare("SELECT state_json FROM crawl_projects ORDER BY project_id").map_err(|e| e.to_string())?;
+        let rows = query.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        rows.map(|row| serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())).collect()
+    }
+
+    pub(crate) fn crawl_ids(&self) -> Result<Vec<String>, String> {
+        let mut query = self.connection.prepare("SELECT project_id FROM crawl_projects ORDER BY project_id").map_err(|e| e.to_string())?;
+        let rows = query.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+        rows.map(|r| r.map_err(|e| e.to_string())).collect()
+    }
+
+    pub(crate) fn crawl_state(&self, id: &str) -> Result<crate::crawl::CrawlState, String> {
+        let json: String = self.connection.query_row("SELECT state_json FROM crawl_projects WHERE project_id=?1",params![id],|row|row.get(0)).map_err(|_| "抓站项目不存在")?;
+        serde_json::from_str(&json).map_err(|e|e.to_string())
+    }
+
+    pub(crate) fn save_crawl(&self, state: &crate::crawl::CrawlState) -> Result<(), String> {
+        let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
+        if json.len() > 3 * 1024 * 1024 { return Err("抓站项目状态超过 3 MiB 上限".into()); }
+        self.connection.execute("INSERT INTO crawl_projects(project_id,state_json) VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET state_json=excluded.state_json", params![state.project.id, json]).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn schema_version(&self) -> Result<u32, String> {
@@ -668,7 +692,10 @@ impl CoreStore {
             .map_err(|error| format!("begin Core schema initialization: {error}"))?;
         transaction
             .execute_batch(
-                "CREATE TABLE IF NOT EXISTS tasks (\
+                "CREATE TABLE IF NOT EXISTS crawl_projects (\
+                   project_id TEXT PRIMARY KEY, state_json TEXT NOT NULL\
+                 );\
+                 CREATE TABLE IF NOT EXISTS tasks (\
                    task_id TEXT PRIMARY KEY,\
                    snapshot_json TEXT NOT NULL,\
                    created_at_ms INTEGER NOT NULL,\
@@ -911,6 +938,20 @@ mod tests {
             last_modified: String::new(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn schema_six_migration_preserves_tasks_and_settings() {
+        let mut store=CoreStore::in_memory().unwrap();
+        let mut runtime=CoreRuntime::new();
+        store.apply_events(&runtime.handle(CoreCommand::CreateTask {spec:spec()})).unwrap();
+        store.set_setting("minimum_bytes",42u64).unwrap();
+        store.connection.execute_batch("DROP TABLE crawl_projects; PRAGMA user_version=6;").unwrap();
+        store.initialize(6).unwrap();
+        assert_eq!(store.schema_version().unwrap(),CURRENT_SCHEMA_VERSION);
+        assert_eq!(store.load_tasks().unwrap().len(),1);
+        assert_eq!(store.setting_u64("minimum_bytes",0).unwrap(),42);
+        assert!(store.crawl_ids().unwrap().is_empty());
     }
 
     #[test]

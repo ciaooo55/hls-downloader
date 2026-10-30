@@ -7,6 +7,14 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 $script:processPathCache = @{}
+$script:shutdownStarted = [DateTime]::UtcNow
+
+function Write-ShutdownStage {
+    param([string]$Stage)
+    Write-Output ("shutdown stage={0} elapsed_ms={1}" -f $Stage, [int]([DateTime]::UtcNow - $script:shutdownStarted).TotalMilliseconds)
+}
+
+Write-ShutdownStage "entry user=$env:USERNAME pid=$PID"
 
 function Get-ProcessExecutablePath {
     param([System.Diagnostics.Process]$Process)
@@ -71,6 +79,7 @@ function Get-TargetProcesses {
 $targetProcessNames = @("HLSDownloader", "HLSDownloaderEngine", "hls-downloader-engine", "HLSDownloaderPresenter", "HLSDownloaderCore", "HLSNativeShell", "hls-native-shell", "HLSNativeEngine", "hls-native-engine")
 if ($IncludeNativeHost) { $targetProcessNames += "HLSDownloaderNativeHost*" }
 $targetRunningAtStart = @(Get-TargetProcesses $targetProcessNames)
+Write-ShutdownStage "processes count=$($targetRunningAtStart.Count)"
 $overallDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
 $shutdownEngine = ""
 $runningEngine = $targetRunningAtStart |
@@ -79,6 +88,7 @@ $runningEngine = $targetRunningAtStart |
 $gracefulCoreExit = "not-running"
 # 先关闭会重新连接 Core 的工作台及桥接进程，防止停机期间再次启动引擎。
 if ($RequireCheckpoint) {
+    Write-ShutdownStage 'close-clients'
     if (-not $InstallDir) { Write-Error '升级停机必须指定安装目录'; exit 1 }
     foreach ($desktop in @(Get-TargetProcesses @('HLSDownloader'))) {
         $desktop.CloseMainWindow() | Out-Null
@@ -97,6 +107,7 @@ if ($runningEngine) {
     }
 }
 if ($shutdownEngine -and (Test-Path -LiteralPath $shutdownEngine -PathType Leaf)) {
+    Write-ShutdownStage 'checkpoint-start'
     # v7 has no HTTP supervisor. Ask the resident Core to checkpoint and stop
     # through its versioned named-pipe contract before the bounded kill fallback.
     # Engine 是窗口型 EXE；显式等待，避免把尚未返回的空 LASTEXITCODE 当成失败。
@@ -107,6 +118,7 @@ if ($shutdownEngine -and (Test-Path -LiteralPath $shutdownEngine -PathType Leaf)
         $shutdownRequest | Stop-Process -Force
         $gracefulCoreExit = 'timeout'
     }
+    Write-ShutdownStage "checkpoint-finished code=$gracefulCoreExit"
     if ($RequireCheckpoint -and $gracefulCoreExit -ne '0' -and
         @(Get-TargetProcesses @('HLSDownloaderEngine', 'hls-downloader-engine')).Count -gt 0) {
         Write-Output '任务状态未能安全保存，已停止升级；旧版本仍保留。'
@@ -162,7 +174,7 @@ function Test-ApplicationFilesWritable {
 
 do {
     $running = Get-TargetProcesses $targetProcessNames
-    if (-not $running -and (Test-ApplicationFilesWritable)) { exit 0 }
+    if (-not $running -and (Test-ApplicationFilesWritable)) { Write-ShutdownStage 'finished'; exit 0 }
     if ($running) {
         $running | Stop-Process -Force
     }

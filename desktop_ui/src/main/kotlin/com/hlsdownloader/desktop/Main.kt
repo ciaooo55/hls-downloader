@@ -745,6 +745,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
     var batchDialog by remember { mutableStateOf(visualFixture == "batch") }
     var batchCreateBusy by remember { mutableStateOf(false) }
     var harvestDialog by remember { mutableStateOf(visualFixture == "harvest") }
+    var parityTool by remember { mutableStateOf("") }
     var settingsDialog by remember { mutableStateOf(auditSettingsTab(visualFixture) != null) }
     var settingsDeviceScanActive by remember { mutableStateOf(visualFixture == "settings_devices") }
     var queueManagerDialog by remember { mutableStateOf(visualFixture == "queues") }
@@ -1435,7 +1436,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             }
         }
     }
-    val modalVisible = newTaskDialog || batchDialog || harvestDialog || settingsDialog || queueManagerDialog ||
+    val modalVisible = newTaskDialog || batchDialog || harvestDialog || parityTool.isNotEmpty() || settingsDialog || queueManagerDialog ||
         queueAssignTaskIds.isNotEmpty() || detailTaskId != null || extensionDialog || activeHandoff != null ||
         probeResult != null || torrentDraft != null || torrentProbe != null || harvestResult != null || mediaSourceDialog.isNotEmpty() ||
         (!settingsDeviceScanActive && deviceResult != null) || duplicateResult != null || updateResult != null ||
@@ -1475,7 +1476,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             onDeleteSelected = {
                 val ids = selectedTaskActionTargets(toolbarTargets.map { it.source }, "delete").mapTo(mutableSetOf()) { it.first }
                 if (ids.isNotEmpty()) destructiveRequest = DestructiveRequest("delete", ids)
-            }, onSearchFocus = { searchFocused = it })
+            }, onSearchFocus = { searchFocused = it }, onZip = { parityTool = "zip" }, onCrawl = { parityTool = "crawl" })
         Row(Modifier.weight(1f).fillMaxWidth()) {
                 // 侧栏宽度断点。Row 会把自身的最大宽度原样传给非 weight 子项，所以这里量到的
                 // maxWidth 就是"窗口内容区宽度"，正是断点需要比较的量。
@@ -1659,6 +1660,8 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             batchCreateBusy = false
         }
     }
+    if (parityTool == "zip") ZipPreviewDialog { parityTool = "" }
+    if (parityTool == "crawl") CrawlProjectsDialog(settings.downloadDirectory) { parityTool = "" }
     if (harvestDialog) HarvestDialog({ harvestDialog = false }, settings.defaultReferer) { url, referer ->
         val effectiveReferer = referer.ifBlank { url }
         harvestReferer = effectiveReferer
@@ -2516,7 +2519,7 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
     }
 }
 
-@Composable private fun DesktopToolbar(query: String, onQuery: (String) -> Unit, onNew: () -> Unit, onPaste: () -> Unit, onBatch: () -> Unit, onHarvest: () -> Unit, onStart: () -> Unit, onPause: () -> Unit, onCastMedia: () -> Unit, onPushMedia: () -> Unit, onExtension: () -> Unit, onSettings: () -> Unit, dark: Boolean, onTheme: () -> Unit, canStart: Boolean, canPause: Boolean, selectedCount: Int, canDeleteSelected: Boolean, onDeleteSelected: () -> Unit, onSearchFocus: (Boolean) -> Unit) {
+@Composable private fun DesktopToolbar(query: String, onQuery: (String) -> Unit, onNew: () -> Unit, onPaste: () -> Unit, onBatch: () -> Unit, onHarvest: () -> Unit, onStart: () -> Unit, onPause: () -> Unit, onCastMedia: () -> Unit, onPushMedia: () -> Unit, onExtension: () -> Unit, onSettings: () -> Unit, dark: Boolean, onTheme: () -> Unit, canStart: Boolean, canPause: Boolean, selectedCount: Int, canDeleteSelected: Boolean, onDeleteSelected: () -> Unit, onSearchFocus: (Boolean) -> Unit, onZip: () -> Unit, onCrawl: () -> Unit) {
     var toolsOpen by remember { mutableStateOf(false) }
     BoxWithConstraints(Modifier.height(52.dp).fillMaxWidth().background(rail)) {
         val compact = maxWidth < 1050.dp
@@ -2558,6 +2561,8 @@ internal fun loadDesktopIcon(): ImageBitmap? = runCatching {
                     listOf(
                         Triple(Icons.AutoMirrored.Outlined.PlaylistAdd, "批量添加", onBatch),
                         Triple(Icons.Outlined.TravelExplore, "页面抓取", onHarvest),
+                        Triple(Icons.Outlined.TravelExplore, "抓站与同步项目", onCrawl),
+                        Triple(Icons.Outlined.FolderOpen, "ZIP 内容预览", onZip),
                         Triple(Icons.Outlined.Cast, "投屏到电视", onCastMedia),
                         Triple(Icons.Outlined.Tv, "TVBox 推送", onPushMedia),
                         Triple(Icons.Outlined.Extension, "浏览器插件", onExtension),

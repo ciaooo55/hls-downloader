@@ -51,6 +51,7 @@ const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
 const LOCAL_DOWNLOADS_KEY = 'local-browser-download-handoffs'
 interface LocalDownloadHandoff {
+  tabId?: number
   downloadId: number
   requestId: string
   sourceKey: string
@@ -145,6 +146,7 @@ async function preserveBrowserDownload(
   await queueLocalBrowserDownload({
     downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
     sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
+    tabId: [resource.tabId, intent?.tabId, downloadIdentity(item).tabId].find(id => id != null && id >= 0),
     importUrl: 'data:application/octet-stream,',
   })
   return true
@@ -2217,6 +2219,29 @@ export default defineBackground(() => {
       void hydrateHandoffTracker().then(() => {
         sendResponse([...trackedHandoffs.values()].filter(item => item.tabId === tabId && item.status === 'pending'))
       }).catch(() => sendResponse([]))
+      return true
+    }
+    if (message?.type === 'local-download-progress') {
+      // Only the extension popup may query this page-scoped, non-secret projection.
+      if (sender.tab || sender.url && !sender.url.startsWith(browser.runtime.getURL(''))) return false
+      const tabId = Number(message.tabId ?? -1)
+      void (async () => {
+        await hydrateLocalDownloads()
+        const tab = tabId >= 0 ? await browser.tabs.get(tabId).catch(() => undefined) : undefined
+        const records = [...localDownloadHandoffs.values()].filter(record => record.tabId === tabId
+          || (record.tabId == null || record.tabId < 0) && record.pageUrl && record.pageUrl === tab?.url)
+        return Promise.all(records.map(async record => {
+          const item = await findLocalBrowserDownload(record).catch(() => undefined)
+          return {
+            id: record.requestId,
+            filename: item?.filename?.split(/[\\/]/).pop() || '浏览器下载',
+            bytesReceived: Math.max(0, item?.bytesReceived ?? 0),
+            totalBytes: Math.max(0, item?.totalBytes ?? 0),
+            state: !item ? 'recovering' : item.state === 'interrupted' ? 'interrupted'
+              : item.state === 'complete' ? 'importing' : item.paused ? 'paused' : 'receiving',
+          }
+        }))
+      })().then(sendResponse).catch(() => sendResponse([]))
       return true
     }
     if (message?.type === 'list') {

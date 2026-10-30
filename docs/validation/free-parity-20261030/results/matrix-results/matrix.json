@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "finished": true,
+  "steps": [
+    {
+      "name": "baseline-install",
+      "exit_code": 0,
+      "elapsed_seconds": 10.671999999999997
+    },
+    {
+      "name": "baseline-uninstall",
+      "exit_code": 0,
+      "elapsed_seconds": 10.704
+    },
+    {
+      "name": "diagnostic-install",
+      "exit_code": 0,
+      "elapsed_seconds": 44.28099999999999
+    },
+    {
+      "name": "diagnostic-uninstall",
+      "exit_code": 0,
+      "elapsed_seconds": 9.811999999999998
+    }
+  ],
+  "pipe": "production default",
+  "phase": "diagnostic-uninstall",
+  "baseline_core_running": true,
+  "diagnostic_core_running": true
+}

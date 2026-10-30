@@ -330,6 +330,8 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderUpdater
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderCli
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $engine = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-engine.exe"
@@ -338,6 +340,8 @@ $nativeHost = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderNative
 if (!(Test-Path -LiteralPath $nativeHost)) { throw "Native Messaging host was not produced: $nativeHost" }
 $updater = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderUpdater.exe"
 if (!(Test-Path -LiteralPath $updater)) { throw "Update helper was not produced: $updater" }
+$cli = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderCli.exe"
+if (!(Test-Path -LiteralPath $cli)) { throw "CLI was not produced: $cli" }
 $presenter = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-presenter.exe"
 if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced: $presenter" }
 Push-Location "$repo\desktop_ui"
@@ -352,6 +356,8 @@ if ($isPackage) {
     # The dedicated bridge has no Compose/Slint dependency and never opens SQLite.
     Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
     Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
+    Copy-Item -LiteralPath $cli -Destination (Join-Path $resources 'HLSDownloaderCli.exe') -Force
+    Copy-Item -LiteralPath (Join-Path $repo 'docs\free-edition.md') -Destination (Join-Path $resources 'FREE-EDITION.md') -Force
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
     Copy-Item -LiteralPath (Join-Path $repo 'presenter_ui\fonts\OFL.txt') -Destination (Join-Path $resources 'NotoSansCJK-OFL.txt') -Force
     # 原生 EXE 与 JRE 不在同一目录；干净 Windows 不会从 runtime/bin 查找 MSVC 运行库。
@@ -466,10 +472,24 @@ $env:HLS_ENGINE_PATH = $engine
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\create-v7-portable.ps1" -OutZip $portablePath
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $extensionEvidence = [ordered]@{}
+        $componentEvidence = [ordered]@{}
         $portableCheck = Join-Path $artifactRoot ('.portable-verify-' + [guid]::NewGuid().ToString('n'))
         try {
             Expand-Archive -LiteralPath $portablePath -DestinationPath $portableCheck -Force
             $portableRoot = Join-Path $portableCheck 'HLSDownloader'
+            foreach ($component in @(
+                @{ Name = 'HLSDownloaderEngine.exe'; Source = $engine },
+                @{ Name = 'HLSDownloaderNativeHost.exe'; Source = $nativeHost },
+                @{ Name = 'HLSDownloaderUpdater.exe'; Source = $updater },
+                @{ Name = 'HLSDownloaderPresenter.exe'; Source = $presenter },
+                @{ Name = 'HLSDownloaderCli.exe'; Source = $cli }
+            )) {
+                $relativeComponent = 'app/resources/' + $component.Name
+                $packagedComponent = Join-Path $portableRoot $relativeComponent
+                $expectedComponentHash = (Get-FileHash -LiteralPath $component.Source -Algorithm SHA256).Hash.ToLowerInvariant()
+                Assert-FileSha256 $packagedComponent $expectedComponentHash $component.Name
+                $componentEvidence[$relativeComponent] = $expectedComponentHash
+            }
             $provenanceInPackage = Join-Path $portableRoot 'app\resources\BUILD-PROVENANCE.json'
             if (-not (Test-Path -LiteralPath $provenanceInPackage -PathType Leaf)) {
                 throw 'Portable package is missing app/resources/BUILD-PROVENANCE.json.'
@@ -548,6 +568,7 @@ $env:HLS_ENGINE_PATH = $engine
                 portable = [ordered]@{ path = [IO.Path]::GetFileName($portablePath); sha256 = (Get-FileHash -LiteralPath $portablePath -Algorithm SHA256).Hash.ToLowerInvariant() }
             }
             extensions = $extensionEvidence
+            components = $componentEvidence
             generated_at_utc = [DateTime]::UtcNow.ToString('o')
         }
         $artifactManifestPath = Join-Path $artifactRoot 'ARTIFACT-MANIFEST.json'

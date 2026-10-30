@@ -15,6 +15,9 @@ mod clipboard;
 #[cfg(feature = "full-core")]
 mod connection_parts;
 mod contract;
+mod crawl_contract;
+#[cfg(feature = "full-core")]
+mod crawl;
 mod core_ipc;
 #[cfg(feature = "full-core")]
 mod core_runtime;
@@ -107,6 +110,8 @@ mod v6_migrate;
 #[cfg(feature = "full-core")]
 mod win_reg;
 mod window_util;
+#[cfg(feature = "full-core")]
+mod zip_preview;
 
 #[cfg(not(feature = "full-core"))]
 pub use client_event::EventEnvelope;
@@ -125,7 +130,9 @@ pub use contract::{
     MediaPushRequest, MirrorStatus, PlayerTrack, QueueProfile, ResourceKind, ResourceOffer,
     StreamVariant, TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry, TorrentFileSelection,
     DEFAULT_QUEUE_ID, LEGAL_TERMS_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
+    ZipEntryPreview, ZipPreview,
 };
+pub use crawl_contract::{CrawlSpec, CrawlResource, CrawlProject, CrawlRequest};
 pub use core_ipc::{
     default_core_bind, hello_request, serve_tcp_listener, tcp_loopback_enabled, v7_pipe_name,
     CoreIpcClient, CorePipeRequest, CorePipeResponse, V7_PIPE_NAME, V7_TCP_PORT,

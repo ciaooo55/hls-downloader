@@ -383,6 +383,17 @@ data class EngineSettingsDto(
 )
 
 object EnginePipeClient {
+    internal fun parityRequest(type: String, capability: String, body: JsonObject): JsonObject = session { connection ->
+        val capabilities = connection.request(request("capabilities"))
+        capabilities.requireType("capabilities", "无法读取引擎能力")
+        check(capabilities.arrayOrNull("commands").orEmpty().any { it.jsonPrimitive.content == capability }) { "当前引擎不支持此功能，请升级并重启引擎" }
+        val response = connection.request(buildJsonObject {
+            put("type", type); put("request_id", nextRequestId())
+            body.forEach { (key, value) -> put(key, value) }
+        })
+        response.requireType(if (type == "preview_zip") "zip_preview" else "crawl", "操作失败")
+        response
+    }
     private val pipePath: String = System.getProperty("hls.engine.pipe") ?: CORE_PIPE
     fun snapshotState(): EngineSnapshot = session { connection ->
         val response = connection.request(request("snapshot"))

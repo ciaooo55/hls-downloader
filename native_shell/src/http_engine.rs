@@ -142,6 +142,8 @@ pub struct Job {
     /// 普通文件留空，保留服务器不支持 Range 时的整包回退。
     #[serde(default)]
     pub curl_body_limit: Option<u64>,
+    #[serde(default)]
+    pub origin_boundary: String,
 }
 
 fn default_connections() -> usize {
@@ -854,6 +856,7 @@ fn fetch_bytes_with_transport(
         mirrors: Vec::new(),
         replay_json: String::new(),
         curl_body_limit: None,
+        origin_boundary: String::new(),
     };
     let result = (|| {
         let fetched = if browser_first {
@@ -946,6 +949,7 @@ fn fetch_bytes_range_with_transport(
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: Some(length),
+            origin_boundary: String::new(),
         };
         let range = format!("bytes={start}-{end}");
         let fetched = if browser_first {
@@ -1145,10 +1149,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         return download_sequential(job);
     }
     let workers = job.connections.clamp(1, 64);
-    // Keep several unrequested ranges available per worker. Splitting an HTTP
-    // request after it has been sent only shortens the file write; the origin
-    // still transmits the old tail, wasting bandwidth. Queue-level balancing
-    // lets idle workers help without overlapping any network request.
+    // Pending ranges remain the first choice; active splitting is gated until
+    // repeated transport/performance validation establishes a default benefit.
     let balanced_chunk = total.div_ceil((workers * 4) as u64).max(256 * 1024);
     let chunk = job.chunk_bytes.max(64 * 1024).min(balanced_chunk);
     let mut ranges = Vec::new();
@@ -1205,7 +1207,12 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     // 失效检查点的残留文件不会复用，也属于从零开始；文件存在本身不代表有效断点。
     let fresh_start = loaded.is_empty() && job.resume_from == 0;
     let workers = workers.min(pending.len());
-    let scheduler = Arc::new(RangeScheduler::new(pending, workers));
+    let mut scheduler = RangeScheduler::new(pending, workers);
+    scheduler.split_minimum = (std::env::var("HLS_HTTP_ACTIVE_SPLIT").as_deref() == Ok("1")
+        && ((!job.etag.trim().is_empty() && !job.etag.starts_with("W/"))
+            || !job.last_modified.trim().is_empty()))
+        .then_some(256 * 1024);
+    let scheduler = Arc::new(scheduler);
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(RangeCheckpoints::new(loaded));
     let failed = Arc::new(Mutex::new(None::<EngineErrorCode>));
@@ -1352,6 +1359,9 @@ struct WorkRange {
 struct ActiveProgress {
     cursor: u64,
     stop: u64,
+    // Exclusive end of bytes reserved by the reader, including a pending write.
+    reserved_until: u64,
+    splittable: bool,
 }
 
 struct ActiveRange {
@@ -1429,6 +1439,7 @@ struct RangeScheduler {
     connections: AdaptiveConnectionController,
     wake_lock: Mutex<()>,
     wake: Condvar,
+    split_minimum: Option<u64>,
 }
 
 impl RangeScheduler {
@@ -1448,6 +1459,7 @@ impl RangeScheduler {
             connections: AdaptiveConnectionController::new(maximum_connections),
             wake_lock: Mutex::new(()),
             wake: Condvar::new(),
+            split_minimum: None,
         }
     }
 
@@ -1467,9 +1479,28 @@ impl RangeScheduler {
                 .iter()
                 .position(|item| item.start <= priority && priority <= item.end)
         };
+        let mut active_ranges = self.active.lock().unwrap_or_else(|err| err.into_inner());
         let mut range = match priority_index {
             Some(index) => pending.remove(index),
-            None => pending.pop()?,
+            None => match pending.pop() {
+                Some(range) => range,
+                None => {
+                    let minimum = self.split_minimum?;
+                    let candidate = active_ranges.iter().filter_map(|item| {
+                        let p = item.progress.lock().unwrap_or_else(|err| err.into_inner());
+                        let remaining = p.stop.saturating_add(1).saturating_sub(p.reserved_until.max(p.cursor));
+                        (p.splittable && remaining >= minimum * 2).then_some((remaining, item))
+                    }).max_by_key(|(remaining, _)| *remaining).map(|(_, item)| item)?;
+                    let mut p = candidate.progress.lock().unwrap_or_else(|err| err.into_inner());
+                    let safe_start = p.reserved_until.max(p.cursor);
+                    let remaining = p.stop.saturating_add(1).saturating_sub(safe_start);
+                    if !p.splittable || remaining < minimum * 2 { return None; }
+                    let split = safe_start + remaining / 2;
+                    let range = WorkRange { start: split, end: p.stop };
+                    p.stop = split - 1;
+                    range
+                }
+            },
         };
         if priority_index.is_some() && priority > range.start {
             let head = WorkRange {
@@ -1486,18 +1517,16 @@ impl RangeScheduler {
             pending.insert(index, head);
             range.start = priority;
         }
-        drop(pending);
         let active = ActiveRange {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
             progress: Arc::new(Mutex::new(ActiveProgress {
                 cursor: range.start,
                 stop: range.end,
+                reserved_until: range.start,
+                splittable: false,
             })),
         };
-        self.active
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .push(ActiveRange {
+        active_ranges.push(ActiveRange {
                 id: active.id,
                 progress: Arc::clone(&active.progress),
             });
@@ -1853,6 +1882,10 @@ fn fetch_range(
                 other => EngineErrorCode::Failed(other.to_string()),
             });
         }
+        // curl's file-backed response has already consumed the original tail.
+        // Splitting that transport cannot improve network completion time.
+        progress.lock().unwrap_or_else(|err| err.into_inner()).splittable =
+            !matches!(&fetched.body, Body::File { .. });
         let mut reader = fetched.body;
         if file.seek(SeekFrom::Start(cursor)).is_err() {
             return Err(EngineErrorCode::Failed("seek failed".into()));
@@ -1876,7 +1909,14 @@ fn fetch_range(
                     Control::Run => {}
                 }
             }
-            let count = match reader.read(&mut buffer) {
+            let read_limit = {
+                let mut state = progress.lock().unwrap_or_else(|err| err.into_inner());
+                let limit = state.stop.saturating_add(1).saturating_sub(cursor).min(buffer.len() as u64) as usize;
+                state.reserved_until = cursor + limit as u64;
+                limit
+            };
+            if read_limit == 0 { break; }
+            let count = match reader.read(&mut buffer[..read_limit]) {
                 Ok(count) => count,
                 Err(err) => {
                     read_error = Some(err.to_string());
@@ -1905,10 +1945,11 @@ fn fetch_range(
             }
             cursor += take as u64;
             // 限速等待和磁盘写入不能占用进度锁，否则 active_ranges 会阻塞整个进度发布线程。
-            progress
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .cursor = cursor;
+            {
+                let mut state = progress.lock().unwrap_or_else(|err| err.into_inner());
+                state.cursor = cursor;
+                state.reserved_until = cursor;
+            }
             downloaded.fetch_add(take as u64, Ordering::SeqCst);
             if cursor.saturating_sub(durable_cursor) >= DURABLE_CHECKPOINT_BYTES {
                 scheduler.note_storage_latency(persist_range_progress(
@@ -2220,6 +2261,9 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
     let mut hop = job.clone();
     apply_browser_profile(&mut headers);
     for _ in 0..16 {
+        if !job.origin_boundary.is_empty() && http_origin(&url).as_deref() != Some(job.origin_boundary.as_str()) {
+            return Some(Err(EngineError::Failed("redirect left project origin".into())));
+        }
         hop.url = url.clone();
         hop.headers = headers.clone();
         let parsed = match parse_http_url(&url) {
@@ -2262,11 +2306,19 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
 }
 
 fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
+    fetch_follow_restricted(job, range, None).map(|(response, _)| response)
+}
+
+fn fetch_follow_restricted(job: &Job, range: Option<&str>, origin: Option<&str>) -> Result<(FetchResult, String), EngineError> {
     let mut url = job.url.clone();
     let replay = job_replay_json(job);
     let mut headers = headers_for_request(job, &url);
     let mut hop = job.clone();
     for _ in 0..16 {
+        if origin.filter(|v| !v.is_empty()).or_else(|| (!job.origin_boundary.is_empty()).then_some(job.origin_boundary.as_str()))
+            .is_some_and(|origin| http_origin(&url).as_deref() != Some(origin)) {
+            return Err(EngineError::Failed("redirect left project origin".into()));
+        }
         let parsed = parse_http_url(&url)?;
         hop.url = url.clone();
         let request = |headers: &HashMap<String, String>| {
@@ -2328,9 +2380,77 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
             url = next;
             continue;
         }
-        return Ok(fetched);
+        return Ok((fetched, url));
     }
     Err(EngineError::Failed("too many redirects".into()))
+}
+
+pub(crate) fn http_origin(url: &str) -> Option<String> {
+    let parsed = parse_http_url(url).ok()?;
+    Some(format!("{}://{}:{}", if parsed.https { "https" } else { "http" }, parsed.host.to_ascii_lowercase(), parsed.port))
+}
+
+pub(crate) struct MetadataResponse {
+    pub status: u16,
+    pub final_url: String,
+    pub body: Vec<u8>,
+    pub range: Option<(u64, u64, Option<u64>)>,
+    pub etag: String,
+    pub last_modified: String,
+    pub content_length: Option<u64>,
+}
+
+/// Bounded metadata transfer using the normal streaming transports. No curl
+/// fallback: that transport may buffer a whole response before returning headers.
+pub(crate) fn read_metadata(spec: &crate::TaskSpec, range: Option<&str>, limit: u64, origin: Option<&str>) -> Result<MetadataResponse, String> {
+    let root = if spec.work_dir.is_empty() { std::env::temp_dir() } else { PathBuf::from(&spec.work_dir) };
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let dir = root.join(format!("metadata-{}-{stamp}", std::process::id()));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let control = crate::net_policy::current_throttle_context().map(|c| c.control)
+            .filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| dir.join("control"));
+        if !control.exists() { fs::write(&control, "run").map_err(|e| e.to_string())?; }
+        let mut job = Job {
+            url: spec.url.clone(), headers: spec.headers.clone().into_iter().collect(),
+            output: dir.join("body"), connections: 1, chunk_bytes: 64 * 1024, total: 0,
+            sequential: true, resume_from: 0, proxy: spec.proxy.clone(), resource_key: spec.url.clone(),
+            etag: spec.etag.clone(), last_modified: spec.last_modified.clone(), control,
+            progress: dir.join("progress"), method: if spec.request_method == "HEAD" { "HEAD" } else { "GET" }.into(), body_path: PathBuf::new(),
+            mirrors: Vec::new(), replay_json: String::new(), curl_body_limit: Some(limit),
+            origin_boundary: spec.origin_boundary.clone(),
+        };
+        apply_browser_profile(&mut job.headers);
+        let (fetched, final_url) = fetch_follow_restricted(&job, range, origin).map_err(|e| e.to_string())?;
+        if range.is_some() && fetched.status != 206 {
+            return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
+        }
+        require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
+        if job.method != "HEAD" && fetched.content_length.is_some_and(|n| n > limit) { return Err("元数据超过读取上限".into()); }
+        let parsed_range = fetched.content_range.as_deref().and_then(parse_content_range);
+        let mut body = Vec::new();
+        let status = fetched.status;
+        let content_length = fetched.content_length;
+        let expected = if job.method == "HEAD" || fetched.status == 304 { None } else { content_length };
+        let etag = fetched.etag.clone();
+        let last_modified = fetched.last_modified.clone();
+        let mut reader = fetched.body;
+        let mut buffer = [0; 16 * 1024];
+        while job.method != "HEAD" && status != 304 {
+            check_control(&job.control).map_err(|e| e.to_string())?;
+            let want = (limit.saturating_add(1).saturating_sub(body.len() as u64)).min(buffer.len() as u64) as usize;
+            if want == 0 { return Err("元数据超过读取上限".into()); }
+            let n = reader.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
+            if n == 0 { break; }
+            crate::net_policy::consume(n, || check_control(&job.control)).map_err(|e| e.to_string())?;
+            body.extend_from_slice(&buffer[..n]);
+            if body.len() as u64 > limit { return Err("元数据超过读取上限".into()); }
+        }
+        if expected.is_some_and(|n| n != body.len() as u64) { return Err("元数据响应不完整".into()); }
+        Ok(MetadataResponse { status, final_url, body, range: parsed_range, etag, last_modified, content_length })
+    })();
+    let _ = fs::remove_dir_all(dir);
+    result
 }
 
 fn apply_redirect_method(
@@ -3685,6 +3805,7 @@ mod tests {
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: None,
+            origin_boundary: String::new(),
         }
     }
 
@@ -3880,6 +4001,28 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("byte range"), "{error}");
         }
+    }
+
+    #[test]
+    fn active_split_preserves_reserved_read_and_never_overlaps_tail() {
+        let mut scheduler=RangeScheduler::new(vec![WorkRange {start:0,end:999}],2);
+        scheduler.split_minimum=Some(100);
+        let original=scheduler.claim(0).unwrap();
+        assert!(scheduler.claim(1).is_none(), "a response is not splittable before identity and transport validation");
+        {
+            let mut progress=original.progress.lock().unwrap();
+            progress.splittable=true;
+            progress.cursor=100;
+            progress.reserved_until=400;
+        }
+        let tail=scheduler.claim(1).unwrap();
+        let first=original.progress.lock().unwrap();
+        let second=tail.progress.lock().unwrap();
+        assert_eq!((first.cursor,first.stop),(100,699));
+        assert_eq!((second.cursor,second.stop),(700,999));
+        assert!(first.stop>=first.reserved_until);
+        assert_eq!(first.stop+1,second.cursor);
+        assert_eq!(second.stop-first.cursor+1,(first.stop-first.cursor+1)+(second.stop-second.cursor+1));
     }
 
     #[test]
@@ -4090,6 +4233,7 @@ mod tests {
                 mirrors: Vec::new(),
                 replay_json: String::new(),
                 curl_body_limit: None,
+                origin_boundary: String::new(),
             },
             dir,
         )
@@ -5244,6 +5388,7 @@ mod tests {
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: None,
+            origin_boundary: String::new(),
         };
         assert_eq!(request_method(&job), "GET");
         job.method = "POST".into();

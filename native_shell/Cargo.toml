@@ -65,6 +65,10 @@ path = "src/bin/hls_downloader_engine.rs"
 required-features = ["full-core"]
 
 [[bin]]
+name = "HLSDownloaderCli"
+path = "src/bin/hls_downloader_cli.rs"
+
+[[bin]]
 name = "HLSDownloaderNativeHost"
 path = "src/bin/hls_downloader_native_host.rs"
 required-features = ["full-core"]
