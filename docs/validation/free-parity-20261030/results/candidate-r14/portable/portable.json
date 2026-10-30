@@ -1,0 +1,31 @@
+{
+  "passed": true,
+  "finished": true,
+  "steps": [
+    {
+      "name": "pause",
+      "exit_code": 0
+    },
+    {
+      "name": "upgrade",
+      "exit_code": 0
+    },
+    {
+      "name": "rollback",
+      "exit_code": 0
+    }
+  ],
+  "culture": "en-US",
+  "retained_files": {
+    "data\\data.db": "da63a52bdf62b3fc863995d79f497584be3ba97c1de4c55d1d301afbafab6cfc",
+    "data\\data.db-shm": "44816337de30d10bba2f7abca065eafd097231fc875cc4fa388793cb5ad5dea1",
+    "data\\data.db-wal": "47451826361c643f9eabb51bff3325a1ad5b93001bfffdc3ea155f84cbc3d721",
+    "data\\instance.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data\\logs\\core.jsonl": "fa26d3ba870b53f0e672f4a2b0b2ff61f9367949e4a3927effc233226362a7c2",
+    "downloads\\.hls-tasks\\task-1\\control": "6210c0bf05396716df932f0729df69de0533933e5ad9871fd07b61811c4c28df",
+    "downloads\\.hls-tasks\\task-1\\native-engine.active.json": "8434ac2827c6c14704c4b655136dc5d1576e1380692b468819cd418b8b8e199d",
+    "downloads\\.hls-tasks\\task-1\\payload.downloading": "91617747d4cbe9ca5e77b529bddf8edd035bc4be0b11e9ae02aa6ceca4eb970f",
+    "downloads\\.hls-tasks\\task-1\\progress.json": "8ad2326f2429a35cbb419f4239fdbc7ceb52c9dfda47ebf88a8de1242dba07d9",
+    "downloads\\.hls-tasks\\task-1\\progress.response.json": "1e8c2ed940cccb57cfb6842d19b7c6da34cd27eee6fe6fb1e9b2ade4d3bc1353"
+  }
+}

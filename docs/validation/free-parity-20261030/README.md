@@ -6,13 +6,13 @@
 
 | 阶段 | 当前状态 |
 | --- | --- |
-| P0 安装器与证据 | f4b0f53b 候选 r12 同版本运行中升级、故障回滚、64 组件、续传和空闲卸载通过；r13 运行中卸载返回 0，成品哈希保留。r11 历史限定通过及 1603 原样保留。 |
-| P1 UI 与原生操作 | 旧 r2/r5 有批量、导入导出、队列、键盘及工具的限定证据；r11 复核普通创建、Esc、错误详情滚动及主题。Enter 修复已进入 f4b0f53b 新候选，真实输入待复核。完整 OS DPI、最小窗口、主题/长文本组合矩阵未完成。 |
-| P2 浏览器交接 | f4b0f53b 的 r13 Edge 11 项及两浏览器初始离线通过。Firefox 前 9 项和重载 ping 通过，但清理等待 20 秒超时；记录显示短连接超时后进入 60 秒持久重查，下一次补测观察完整周期。DownloadItem 按入口记录。 |
-| P3 分段与恢复 | r13 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧通过；同 Core r11 两路径活动拆分恢复通过。三轮活动拆分性能不稳定，默认关闭；全产品性能对照未完成。 |
-| P4 CLI | 已进入安装与便携包。f4b0f53b 的 r13 免费整套 11 组通过，含单 Core、中文路径、生命周期、重启续传、队列启停、导入导出、退出码及显式删文件。 |
-| P5 抓站与同步 | r13 修后整套通过：循环去重、预览确认、恢复、静态改写、跨域边界、页面/深度限制、ETag/失败保旧/原子替换、关闭队列时间窗零请求、请求上下文及 60 秒自动周期。原生 UI 矩阵未完成。 |
-| P6 ZIP 预览 | r13 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。旧 JAR r2 有中文路径 121 项、滚动/关闭证据；当前完整 UI 矩阵未完成。 |
+| P0 安装器与证据 | f53019e 候选 r14 同版本运行中升级、故障回滚、64 组件、续传、空闲及运行中卸载通过；完整便携包升级/回滚和活动检查点通过。5 个原生成品卸载后保持哈希。历史 1603 原样保留。 |
+| P1 UI 与原生操作 | r14 真实输入复核普通 URL Enter、空输入禁用、多行 cURL 换行、Esc、批量、导出/独立 URL 文件导入、Ctrl+A/Esc、并发设置保存/Core 读回/工作台重启、浅深主题及 ZIP 滚动。完整 OS DPI、有效最小窗口、拖动及主题/控件组合矩阵未完成。 |
+| P2 浏览器交接 | r14 Edge、Firefox 各 11 项及两浏览器初始离线通过。Firefox 重载及重启的清理分别约 748/14 ms；r13 超时保留，不能由一次成功认定延迟彻底消除。DownloadItem 按入口记录。 |
+| P3 分段与恢复 | r14 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧、直连/系统代理活动拆分恢复通过。三轮活动拆分性能不稳定，默认关闭；全产品性能对照未完成。 |
+| P4 CLI | 已进入安装与便携包。f53019e 的 r14 免费整套 11 组通过，含单 Core、中文路径、生命周期、重启续传、队列启停、导入导出、退出码及显式删文件。 |
+| P5 抓站与同步 | r14 整套通过：循环去重、预览确认、恢复、静态改写、跨域边界、页面/深度限制、ETag/失败保旧/原子替换、关闭队列时间窗零请求、请求上下文及 60 秒自动周期。完整原生 UI 矩阵未完成。 |
+| P6 ZIP 预览 | r14 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。同包原生中文路径 121 项、滚动/关闭通过；完整主题/缩放组合未完成。 |
 
 ## P0 首轮诊断边界
 
@@ -22,7 +22,32 @@
 
 后续同包通过和新增失败见下节。旧候选的 1603 失败保留，不能用多次成功覆盖新的失败。
 
-## 当前候选 f4b0f53b
+## 当前候选 f53019e
+
+源码 `f53019e0968c2d919d4c1ace2aa099f18679c678`，打包前工作区干净，包含便携升级检查点修复 `425ab01`。新包位于 `artifacts/v7-productization/candidate/`；原始[构建来源](results/candidate-f53019e/BUILD-PROVENANCE.json)、[交付清单](results/candidate-f53019e/ARTIFACT-MANIFEST.json)与[64 组件及便携助手清单](results/candidate-f53019e/expected-components.json)已保存。
+
+| 文件 | SHA-256 |
+| --- | --- |
+| EXE | `fba69d349d85991476009069754dc6232948c4daa60c33c6901d08595bc23ec9` |
+| MSI | `c46b241618a1b05bb412f367ffb05b31e7c0d1ce4c2dc41d9880db4da5947734` |
+| 便携 ZIP | `da1e067d959faca049674c69f19ef8e331c1f74ac7cb97d446657807dda604c9` |
+
+固定 pnpm 11.7.0、现有 JDK 21、Cargo 和 FFmpeg 缓存完成构建，Gradle `BUILD SUCCESSFUL in 8m 2s`，安装器后处理、EXE 内嵌 MSI 哈希及便携内容核验通过；完整构建命令最终退出 0。最初 PATH 指向 pnpm 11.25.0 被构建门禁拒绝；随后因遗漏原 Cargo 缓存配置触发依赖获取，停止该次构建后使用既有缓存重建，原始日志保留。构建后的 Gradle 停止命令超时，仅清理本任务确认的 Gradle/Kotlin 进程后，构建会话退出 0。
+
+r14 同包回归已正常结束，限定套件全部通过。包内 Core、CLI、Host 哈希与前候选不同，本节使用新包实际结果。完整 UI 和性能门槛仍未关闭，总结果为 `passed:false`，`release_ready:false`。未推送、发布或签名。
+
+### f53019e 的 r14 同包结果
+
+- [主验收](results/candidate-r14/acceptance.json)：运行中卸载返回 0，5 个 32 MiB 成品的[哈希](results/candidate-r14/output-hashes.json)均为 `e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0`，与端点预期一致，卸载后保留。总结果未通过的原因是完整原生矩阵未完成，不能改判整体通过。
+- [安装生命周期](results/candidate-r14/lifecycle/lifecycle.json)：从 f4b0f53b 同版本运行中升级、故障注入 1603 回滚、64 组件核验、32 MiB 续传及空闲卸载通过。原始失败保留。
+- [完整便携包](results/candidate-r14/portable/portable.json)：真实数据库、未完成检查点及成品在升级/回滚后保持哈希，限定 `en-US`。另从新包提取助手和脚本做[活动下载补测](results/candidate-r14/portable-shutdown-followup.json)：文件锁失败拒绝交换并保存 1 MiB 检查点，运行中升级保存 2 MiB 检查点，重启续传 32 MiB 哈希正确，运行中回滚保留成品。补测使用最小应用目录，不冒充第二套完整便携 UI 验收。
+- [免费功能](results/candidate-r14/free-features.json)整套 11 组、[HTTP 边界](results/candidate-r14/http-boundaries.json)13 项、[拆分恢复](results/candidate-r14/split-recovery.json)和[非录制媒体](results/candidate-r14/media.json)通过；后者含普通文件/HLS/DASH 成品与解码帧核对。实验拆分默认仍关闭。
+- [Edge](results/candidate-r14/edge/edge.json)、[Firefox](results/candidate-r14/firefox/firefox.json)各 11 项及 [Edge 初始离线](results/candidate-r14/edge/initial-offline/edge.json)、[Firefox 初始离线](results/candidate-r14/firefox/initial-offline/firefox.json)通过。只在扩展重载/浏览器重启场景观察最长 90 秒持久恢复，普通清理仍观察 20 秒；每秒记录项目和持久交接状态。Firefox 本轮重载/重启清理实测 748/14 ms，未触及 90 秒上限，但不能覆盖 r13 的 20 秒超时或保证每次即时清理。未放松源文件保留检查。
+- [原生输入](results/candidate-r14/native-finished.json)：普通 URL Return 创建并完成下载，空输入 Return 不创建，多行 cURL Return 只换行；真实批量两项完成；导出[8 项 JSON](results/candidate-r14/hls-downloader-tasks.json)，重导保持 8 项并提示重复。原有失败夹具按既有规则触发重试并报错，该步只作为去重证据；另选独立 URL 文本文件成功导入并完成任务 9。Ctrl+A 选中 9 项、Esc 清为 0；[并发值快照](results/candidate-r14/native-settings-persisted.json)为 2，重开设置及仅重启工作台后仍显示 2。这不等于本轮重启 Core。
+- 原生 ZIP 中文路径显示 121 项、读取元数据 15,735 字节，列表滚动时固定底部按钮保持可达，Esc 关闭；浅色设置及深色列表/菜单未见所观察窗口中的圆角遮挡。拖动没有建立有效主窗口缩放结果，最小窗口不计通过。原生抓站完整流程、队列编辑/拖动、完整主题控件组合及 Windows OS DPI 仍未完成。
+- [证据清单](results/candidate-r14/evidence-manifest.json)关联同包 MSI 和归档 JSON 的哈希。完整日志留在 `.tool-cache/free-parity-20261030/candidate-results-r14/`；r14 沙盒已关闭。
+
+## 历史候选 f4b0f53b
 
 源码 `f4b0f53b2da18ee704fde8763b0f169168f94004`，打包前工作区干净。完整候选构建已成功，包含普通 URL 框 Enter 修复。当前安装包及便携包位于 `artifacts/v7-productization/candidate/`。原始[构建来源](results/candidate-f4b0f53b/BUILD-PROVENANCE.json)、[交付哈希](results/candidate-f4b0f53b/ARTIFACT-MANIFEST.json)和[64 组件清单](results/candidate-f4b0f53b/expected-components.json)保留。
 
@@ -149,5 +174,7 @@
 - 第五轮同步发布因 Windows 只读句柄无法 `FlushFileBuffers` 而失败；改用可写句柄后第六轮通过。抓站夹具当时误写 5 个资源，实际应为 4，原失败保留。
 
 ## 当前交付边界
+
+2026-10-31 02:25，r15 同包性能初始化被 Windows 计划关机提示遮挡；重新激活沙盒后提示仍在，已停止原生输入并请用户处理。[中断记录](results/candidate-r15/interruption.json) 保留实际进度：候选安装和 64 组件核验完成，IDM 安装返回 0，AB 配置文件已生成，但 IDM 默认连接设置尚未落盘。未创建开始采样标记，未产生本轮性能样本，默认配置与相同连接上限的三轮对照仍未完成。原始材料保留于项目内 `.tool-cache/free-parity-20261030/candidate-results-r15/performance/`。
 
 功能清单保留逐项状态和限定证据，移除了整体“完成率”百分比；`release_ready` 继续为 `false`。新功能均暂列 `partial`，直到当前候选的必要验证完成。没有产品账号、激活或收费服务新增。使用说明见 [免费版指南](../../free-edition.md)。未推送、发布或签名。
