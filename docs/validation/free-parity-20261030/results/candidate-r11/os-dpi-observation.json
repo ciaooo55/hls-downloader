@@ -1,0 +1,7 @@
+{
+  "scope": "Windows Sandbox native settings observation",
+  "observed": "Desktop Display settings opened System page without Display or Scale control. Search text injection was not received. No OS scale was changed.",
+  "passed": false,
+  "os_dpi_matrix_complete": false,
+  "jvm_scale_is_os_dpi": false
+}

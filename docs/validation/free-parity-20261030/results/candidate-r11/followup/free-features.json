@@ -1,0 +1,437 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "development component acceptance",
+  "checks": [
+    {
+      "name": "cli-starts-one-core-without-workbench",
+      "passed": true,
+      "seconds": 10.485,
+      "evidence": {
+        "core_count": 1,
+        "workbench_started": false
+      }
+    },
+    {
+      "name": "cli-lifecycle-recovery-export-import",
+      "passed": true,
+      "seconds": 15.718,
+      "evidence": {
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+        "unicode_path": "C:\\QAPerformance\\free-followup\\downloads\\中文 空格\\中文 文件.bin",
+        "preserved_on_remove": true,
+        "restart_restored_paused": true
+      }
+    },
+    {
+      "name": "cli-queue-controls-and-explicit-file-deletion",
+      "passed": false,
+      "error": "AssertionError({'task_id': 'task-2', 'resource_kind': 'file', 'status': 'queued', 'stage': 'waiting', 'title': '中文 文件.bin', 'filename': '中文 文件.bin', 'downloaded_bytes': 1835008, 'total_bytes': 8388608, 'speed_bytes_per_sec': 0, 'peer_count': 0, 'seed_count': 0, 'uploaded_bytes': 0, 'upload_speed_bytes_per_sec': 0, 'eta_seconds': None, 'active_workers': 0, 'completed_ranges': 2, 'total_ranges': 4, 'playback_ready': False, 'is_live': False, 'available_actions': ['start', 'delete', 'queue_up', 'queue_top', 'queue_down', 'queue_bottom'], 'url': 'http://127.0.0.1:18672/fixture.bin', 'error_code': None, 'error_message': None, 'error_stage': '', 'error_url': '', 'error_hint': '', 'http_status': None, 'error_attempt': 0, 'queue_index': 2, 'queue_id': 'default', 'output_missing': False, 'output_path': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\中文 空格\\\\中文 文件.bin', 'connection_hint': '0B-2.2MB 已完成 · 2.2MB-3.0MB 排队 · 3.0MB-3.2MB 已完成 · 3.2MB-8.0MB 排队', 'connection_parts': [{'start': 0, 'end': 2359295, 'done': 2359296, 'state': 'done'}, {'start': 2359296, 'end': 3145727, 'done': 0, 'state': 'queued'}, {'start': 3145728, 'end': 3407871, 'done': 262144, 'state': 'done'}, {'start': 3407872, 'end': 8388607, 'done': 0, 'state': 'queued'}], 'log_tail': ['downloading transfer 0/8388608', 'downloading transfer 1310720/8388608', 'paused waiting 1835008/8388608', 'queued waiting 1835008/8388608'], 'speed_history': [1776125], 'mirror_status': [], 'request_method': 'GET', 'download_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\中文 空格', 'speed_limit_kib': 0, 'expected_checksum': '', 'checksum_algorithm': '', 'checksum_actual': '', 'checksum_verified': None, 'av_scan': None, 'max_workers': 2, 'mirrors': [], 'scheduled_start_at': '', 'scheduled_stop_at': ''})",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 160, in check\n    evidence = fn()\n               ^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 242, in cli_queue\n    assert current['downloaded_bytes']==0 and current['active_workers']==0,current\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'task_id': 'task-2', 'resource_kind': 'file', 'status': 'queued', 'stage': 'waiting', 'title': '中文 文件.bin', 'filename': '中文 文件.bin', 'downloaded_bytes': 1835008, 'total_bytes': 8388608, 'speed_bytes_per_sec': 0, 'peer_count': 0, 'seed_count': 0, 'uploaded_bytes': 0, 'upload_speed_bytes_per_sec': 0, 'eta_seconds': None, 'active_workers': 0, 'completed_ranges': 2, 'total_ranges': 4, 'playback_ready': False, 'is_live': False, 'available_actions': ['start', 'delete', 'queue_up', 'queue_top', 'queue_down', 'queue_bottom'], 'url': 'http://127.0.0.1:18672/fixture.bin', 'error_code': None, 'error_message': None, 'error_stage': '', 'error_url': '', 'error_hint': '', 'http_status': None, 'error_attempt': 0, 'queue_index': 2, 'queue_id': 'default', 'output_missing': False, 'output_path': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\中文 空格\\\\中文 文件.bin', 'connection_hint': '0B-2.2MB 已完成 · 2.2MB-3.0MB 排队 · 3.0MB-3.2MB 已完成 · 3.2MB-8.0MB 排队', 'connection_parts': [{'start': 0, 'end': 2359295, 'done': 2359296, 'state': 'done'}, {'start': 2359296, 'end': 3145727, 'done': 0, 'state': 'queued'}, {'start': 3145728, 'end': 3407871, 'done': 262144, 'state': 'done'}, {'start': 3407872, 'end': 8388607, 'done': 0, 'state': 'queued'}], 'log_tail': ['downloading transfer 0/8388608', 'downloading transfer 1310720/8388608', 'paused waiting 1835008/8388608', 'queued waiting 1835008/8388608'], 'speed_history': [1776125], 'mirror_status': [], 'request_method': 'GET', 'download_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\中文 空格', 'speed_limit_kib': 0, 'expected_checksum': '', 'checksum_algorithm': '', 'checksum_actual': '', 'checksum_verified': None, 'av_scan': None, 'max_workers': 2, 'mirrors': [], 'scheduled_start_at': '', 'scheduled_stop_at': ''}\n"
+    },
+    {
+      "name": "cli-stdin-context-and-default-redaction",
+      "passed": false,
+      "error": "AssertionError({'task_id': 'task-3', 'resource_kind': 'file', 'status': 'queued', 'stage': 'waiting', 'title': 'context.bin', 'filename': 'context.bin', 'downloaded_bytes': 0, 'total_bytes': None, 'speed_bytes_per_sec': 0, 'peer_count': 0, 'seed_count': 0, 'uploaded_bytes': 0, 'upload_speed_bytes_per_sec': 0, 'eta_seconds': None, 'active_workers': 0, 'completed_ranges': 0, 'total_ranges': 0, 'playback_ready': False, 'is_live': False, 'available_actions': ['start', 'delete', 'queue_up', 'queue_top', 'queue_down', 'queue_bottom'], 'url': 'http://127.0.0.1:18672/context.bin', 'error_code': None, 'error_message': None, 'error_stage': '', 'error_url': '', 'error_hint': '', 'http_status': None, 'error_attempt': 0, 'queue_index': 3, 'queue_id': 'default', 'output_missing': False, 'output_path': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\context.bin', 'connection_hint': '', 'connection_parts': [], 'log_tail': [], 'speed_history': [], 'mirror_status': [], 'request_method': 'GET', 'download_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads', 'speed_limit_kib': 0, 'expected_checksum': '', 'checksum_algorithm': '', 'checksum_actual': '', 'checksum_verified': None, 'av_scan': None, 'max_workers': 2, 'mirrors': [], 'scheduled_start_at': '', 'scheduled_stop_at': ''})",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 160, in check\n    evidence = fn()\n               ^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 261, in cli_context\n    done = until(lambda:task(item['task_id']),lambda t:t['status'] in ['completed','failed'])\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 178, in until\n    if time.monotonic() >= deadline: raise AssertionError(value)\n                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'task_id': 'task-3', 'resource_kind': 'file', 'status': 'queued', 'stage': 'waiting', 'title': 'context.bin', 'filename': 'context.bin', 'downloaded_bytes': 0, 'total_bytes': None, 'speed_bytes_per_sec': 0, 'peer_count': 0, 'seed_count': 0, 'uploaded_bytes': 0, 'upload_speed_bytes_per_sec': 0, 'eta_seconds': None, 'active_workers': 0, 'completed_ranges': 0, 'total_ranges': 0, 'playback_ready': False, 'is_live': False, 'available_actions': ['start', 'delete', 'queue_up', 'queue_top', 'queue_down', 'queue_bottom'], 'url': 'http://127.0.0.1:18672/context.bin', 'error_code': None, 'error_message': None, 'error_stage': '', 'error_url': '', 'error_hint': '', 'http_status': None, 'error_attempt': 0, 'queue_index': 3, 'queue_id': 'default', 'output_missing': False, 'output_path': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\context.bin', 'connection_hint': '', 'connection_parts': [], 'log_tail': [], 'speed_history': [], 'mirror_status': [], 'request_method': 'GET', 'download_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads', 'speed_limit_kib': 0, 'expected_checksum': '', 'checksum_algorithm': '', 'checksum_actual': '', 'checksum_verified': None, 'av_scan': None, 'max_workers': 2, 'mirrors': [], 'scheduled_start_at': '', 'scheduled_stop_at': ''}\n"
+    },
+    {
+      "name": "zip-local-remote-bounded-and-resource-change",
+      "passed": true,
+      "seconds": 8.766,
+      "evidence": {
+        "archive_bytes": 8388843,
+        "metadata_bytes": 65577,
+        "remote_requests": [
+          {
+            "path": "/large.zip",
+            "method": "GET",
+            "range": "bytes=-65577",
+            "if_none_match": null,
+            "bytes": 65577,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+            "referer": null,
+            "cookie": null,
+            "crawl_header": null
+          }
+        ],
+        "central_directory_entries": 2200
+      }
+    },
+    {
+      "name": "crawl-loop-boundaries-preview-recovery-offline",
+      "passed": false,
+      "error": "AssertionError({'id': 'crawl-1793371532271816300', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/site/index.html', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 10, 'offline': True, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371532271816300', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0})",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 160, in check\n    evidence = fn()\n               ^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 291, in discovery_offline\n    p=until(lambda:project(p['id']),lambda p:p['status'] in ['ready','paused'])\n      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 178, in until\n    if time.monotonic() >= deadline: raise AssertionError(value)\n                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'id': 'crawl-1793371532271816300', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/site/index.html', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 10, 'offline': True, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371532271816300', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0}\n"
+    },
+    {
+      "name": "crawl-redirect-blocked-before-cross-origin-request",
+      "passed": false,
+      "error": "AssertionError({'id': 'crawl-1793371572694681400', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/cross', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 500, 'offline': False, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371572694681400', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0})",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 160, in check\n    evidence = fn()\n               ^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 311, in cross_origin\n    p=until(lambda:project(p['id']),lambda p:p['status']=='paused')\n      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 178, in until\n    if time.monotonic() >= deadline: raise AssertionError(value)\n                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'id': 'crawl-1793371572694681400', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/cross', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 500, 'offline': False, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371572694681400', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0}\n"
+    },
+    {
+      "name": "sync-etag-no-repeat-failure-preserves-atomic-update",
+      "passed": false,
+      "error": "AssertionError({'id': 'crawl-1793371613854400000', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/sync/index.html', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 500, 'offline': False, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371613854400000', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0})",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 160, in check\n    evidence = fn()\n               ^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 319, in sync\n    state.update(version=1,broken=False)\n      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 178, in until\n    if time.monotonic() >= deadline: raise AssertionError(value)\n                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'id': 'crawl-1793371613854400000', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/sync/index.html', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 500, 'offline': False, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371613854400000', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0}\n"
+    },
+    {
+      "name": "crawl-page-and-depth-limits",
+      "passed": false,
+      "error": "AssertionError({'id': 'crawl-1793371654120245100', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/site/index.html', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 1, 'offline': False, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371654120245100', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0})",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 160, in check\n    evidence = fn()\n               ^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 342, in crawl_limits\n    def crawl_limits():\n            ^^^^^^^^^^^^\n  File \"C:\\QAScripts\\free_parity_acceptance.py\", line 178, in until\n    if time.monotonic() >= deadline: raise AssertionError(value)\n                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: {'id': 'crawl-1793371654120245100', 'reason': '', 'resources': [], 'spec': {'entry_url': 'http://127.0.0.1:18672/site/index.html', 'exclude_paths': [], 'extensions': [], 'include_paths': [], 'max_depth': 2, 'max_pages': 1, 'offline': False, 'output_dir': 'C:\\\\QAPerformance\\\\free-followup\\\\downloads\\\\crawl-1793371654120245100', 'page_concurrency': 2, 'queue_id': 'default', 'same_origin': True, 'sync_interval_secs': 0}, 'status': 'discovering', 'visited_pages': 0}\n"
+    },
+    {
+      "name": "crawl-queue-window-context-and-periodic-sync",
+      "passed": true,
+      "seconds": 71.016,
+      "evidence": {
+        "closed_window_zero_requests": true,
+        "request_context_on_page_head_and_file": true,
+        "queue_assignment": "crawl-gated",
+        "configured_global_queue_kib": [
+          128,
+          64
+        ],
+        "periodic_without_manual_sync": true,
+        "sha256": "7f37c181f9ba193407e94b3eab4f30492d5b0295e61cc86aeb2fba18d6042da3"
+      }
+    },
+    {
+      "name": "targeted-rust-tests-in-sandbox",
+      "passed": true,
+      "seconds": 3.312,
+      "evidence": [
+        {
+          "filter": "crawl::tests::",
+          "exit_code": 0,
+          "stdout": "\nrunning 2 tests\ntest crawl::tests::canonical_removes_loops_without_decoding_path_separators ... ok\ntest crawl::tests::static_references_respect_base_and_skip_script_comments ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 671 filtered out; finished in 0.87s\n\n",
+          "stderr": ""
+        },
+        {
+          "filter": "zip_preview::tests::",
+          "exit_code": 0,
+          "stdout": "\nrunning 1 test\ntest zip_preview::tests::directory_preserves_utf8_encryption_and_zip64_sizes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 672 filtered out; finished in 0.07s\n\n",
+          "stderr": ""
+        },
+        {
+          "filter": "store::tests::schema_six_migration_preserves_tasks_and_settings",
+          "exit_code": 0,
+          "stdout": "\nrunning 1 test\ntest store::tests::schema_six_migration_preserves_tasks_and_settings ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 672 filtered out; finished in 0.41s\n\n",
+          "stderr": ""
+        },
+        {
+          "filter": "http_engine::tests::active_split_preserves_reserved_read_and_never_overlaps_tail",
+          "exit_code": 0,
+          "stdout": "\nrunning 1 test\ntest http_engine::tests::active_split_preserves_reserved_read_and_never_overlaps_tail ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 672 filtered out; finished in 0.06s\n\n",
+          "stderr": ""
+        }
+      ]
+    }
+  ],
+  "components": {
+    "HLSDownloaderCli.exe": "9399d40d03ffb9e6b6b776ed7c4483ae0a36152be1a6e7cdc16d96180a52c04d",
+    "HLSDownloaderEngine.exe": "162a9883bc7e3f87a280b59085b8062bb86b6c2f108bd31b88b139739ec3bb40"
+  },
+  "phase": "targeted-rust-tests-in-sandbox",
+  "requests": [
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=0-0",
+      "if_none_match": null,
+      "bytes": 1,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=1048576-2097151",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=0-1048575",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=2097152-3145727",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=3145728-4194303",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=4194304-5242879",
+      "if_none_match": null,
+      "bytes": 393216,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=0-0",
+      "if_none_match": null,
+      "bytes": 1,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=4194304-5242879",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=5242880-6291455",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=6291456-7340031",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=7340032-8388607",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=0-0",
+      "if_none_match": null,
+      "bytes": 1,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=0-1048575",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=1048576-2097151",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=2097152-3145727",
+      "if_none_match": null,
+      "bytes": 458752,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/fixture.bin",
+      "method": "GET",
+      "range": "bytes=3145728-4194303",
+      "if_none_match": null,
+      "bytes": 1048576,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/large.zip",
+      "method": "GET",
+      "range": "bytes=-65577",
+      "if_none_match": null,
+      "bytes": 65577,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/central.zip",
+      "method": "GET",
+      "range": "bytes=-65577",
+      "if_none_match": null,
+      "bytes": 65577,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/central.zip",
+      "method": "GET",
+      "range": "bytes=99000-233199",
+      "if_none_match": null,
+      "bytes": 134200,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/changing.zip",
+      "method": "GET",
+      "range": "bytes=-65577",
+      "if_none_match": null,
+      "bytes": 65577,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/changing.zip",
+      "method": "GET",
+      "range": "bytes=99000-233199",
+      "if_none_match": null,
+      "bytes": 134200,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/norange.zip",
+      "method": "GET",
+      "range": "bytes=-65577",
+      "if_none_match": null,
+      "bytes": 2260992,
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+      "referer": null,
+      "cookie": null,
+      "crawl_header": null
+    },
+    {
+      "path": "/gated/index.html",
+      "method": "GET",
+      "range": null,
+      "if_none_match": null,
+      "bytes": 29,
+      "user_agent": "CrawlAcceptance/1",
+      "referer": "http://127.0.0.1:18672/reference",
+      "cookie": "fixture=local-only",
+      "crawl_header": "local-only"
+    },
+    {
+      "path": "/gated/asset.bin",
+      "method": "HEAD",
+      "range": null,
+      "if_none_match": null,
+      "bytes": 0,
+      "user_agent": "CrawlAcceptance/1",
+      "referer": "http://127.0.0.1:18672/reference",
+      "cookie": "fixture=local-only",
+      "crawl_header": "local-only"
+    },
+    {
+      "path": "/gated/asset.bin",
+      "method": "GET",
+      "range": "bytes=0-65535",
+      "if_none_match": null,
+      "bytes": 65536,
+      "user_agent": "CrawlAcceptance/1",
+      "referer": "http://127.0.0.1:18672/reference",
+      "cookie": "fixture=local-only",
+      "crawl_header": "local-only"
+    },
+    {
+      "path": "/gated/asset.bin",
+      "method": "HEAD",
+      "range": null,
+      "if_none_match": "\"fixture-1\"",
+      "bytes": 0,
+      "user_agent": "CrawlAcceptance/1",
+      "referer": "http://127.0.0.1:18672/reference",
+      "cookie": "fixture=local-only",
+      "crawl_header": "local-only"
+    },
+    {
+      "path": "/gated/asset.bin",
+      "method": "GET",
+      "range": "bytes=0-65535",
+      "if_none_match": null,
+      "bytes": 65536,
+      "user_agent": "CrawlAcceptance/1",
+      "referer": "http://127.0.0.1:18672/reference",
+      "cookie": "fixture=local-only",
+      "crawl_header": "local-only"
+    }
+  ]
+}

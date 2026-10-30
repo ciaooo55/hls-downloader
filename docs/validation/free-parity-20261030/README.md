@@ -6,13 +6,13 @@
 
 | 阶段 | 当前状态 |
 | --- | --- |
-| P0 安装器与证据 | 当前候选安装、运行中升级、故障回滚、暂停任务恢复及空闲/运行中卸载有通过证据；r6、r7 清理中再次卸载 1603。r7 已定位到 PowerShell 子进程创建后未进入脚本。直接 Win32 助手在 r10 诊断 MSI 完成冷安装/卸载、真实检查点恢复、运行中卸载与数据保留；尚未进入正式新候选，完整交付门槛未关闭。 |
-| P1 UI 与原生操作 | 当前候选真实输入完成普通、批量、导入下载，导出、多选、Esc、详情、队列编辑、Tab、拖动及重启持久化；新 ZIP/抓站对话框原生操作通过。完整 OS DPI、最小窗口、长文本及错误状态矩阵未完成。 |
-| P2 浏览器交接 | 同包 Edge r5、Firefox r4 各 11 项通过，Host 初始离线保全另有 r2 证据；DownloadItem 创建按入口记录，严格零创建未通过且不作为可靠性交接的替代条件。 |
-| P3 分段与恢复 | HTTP 13 项边界、拆分暂停恢复通过；三轮 18 样本 Core 对照显示慢尾段收益，普通/限速场景没有收益。实验开关 `HLS_HTTP_ACTIVE_SPLIT=1` 默认关闭；全产品竞品对照仍待完成。 |
-| P4 CLI | 当前候选无工作台单 Core、中文空格路径、生命周期、重启续传、导入导出、队列启停、退出码、默认留文件及显式删文件通过。CLI 已进入安装与便携包。 |
-| P5 抓站与同步 | 当前候选循环去重、确认前无任务、暂停重启恢复、静态离线改写、跨域跳转对端零请求、ETag 无重复 GET、更新失败保旧及重试原子替换通过；限额/定时组合完整矩阵未完成。 |
-| P6 ZIP 预览 | 当前候选本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝及有界中央目录读取通过；原生中文路径预览 121 项及滚动/关闭通过。 |
+| P0 安装器与证据 | 69849b51 候选 r11 同版本运行中升级、故障回滚、64 组件、续传、空闲/运行中卸载及数据保留通过。历史 1603 原样保留；含 Enter 修复的新候选尚待重建。 |
+| P1 UI 与原生操作 | 同 JAR 的旧 r2/r5 有批量、导入导出、队列、键盘及工具的限定证据；r11 复核普通创建、Esc、错误详情滚动及主题。Enter 修复已编译，尚待打包复核。完整 OS DPI、最小窗口、主题/长文本组合矩阵未完成。 |
+| P2 浏览器交接 | 旧候选 Edge r5、Firefox r4 各 11 项通过；69849b51 r11 两浏览器补测前 9 项通过，重载后 ping 仍超时。初始离线保全通过。DownloadItem 按入口记录，完整当前矩阵未通过。 |
+| P3 分段与恢复 | r11 HTTP 13 项及两路径拆分暂停恢复通过；新三轮 18 样本在限速和慢尾段均有回退，不能沿用旧收益作结论。活动拆分默认关闭；全产品性能对照待完成。 |
+| P4 CLI | 已进入安装与便携包。r11 单 Core、中文路径、重启续传及导入导出通过；补测的队列夹具 URL 冲突已修，修后整套待复测。历史 r2 有队列启停、退出码和删文件的限定证据。 |
+| P5 抓站与同步 | r11 首次检查的循环去重、预览确认、恢复、静态改写、跨域边界、ETag/失败保旧及原子替换通过，但套件随后崩溃。补测的独立队列时间窗、请求上下文、60 秒周期通过；默认队列被前置夹具失败关闭，修后整套待复测。 |
+| P6 ZIP 预览 | r11 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。旧同 JAR r2 有原生中文路径 121 项、滚动/关闭证据；当前完整 UI 矩阵未完成。 |
 
 ## P0 首轮诊断边界
 
@@ -22,9 +22,35 @@
 
 后续同包通过和新增失败见下节。旧候选的 1603 失败保留，不能用多次成功覆盖新的失败。
 
-## 当前候选来源与同包验收
+## 新候选 69849b51 与本轮验收
 
-产品源码提交 `c2a9bb6a7b58939bd457fdef57ed05acd9d8748e`，tree `95c258fae9b698dc66a084ba28d5c3770e96a0af`。后续验证脚本和报告提交不会改变此候选的源码来源。原始构建快照见 [BUILD-PROVENANCE](results/candidate-provenance/BUILD-PROVENANCE.json) 和 [ARTIFACT-MANIFEST](results/candidate-provenance/ARTIFACT-MANIFEST.json)。包位于 `artifacts/v7-productization/candidate/`，均未签名或发布。
+源码提交 `69849b516ec0eef6f6d426e46ef6f27454bfc353`，tree `8ad97ad9febb2d01ddbbfc209861da336f2ddee7`，打包前工作区干净。构建已成功完成。原始 [构建快照](results/candidate-69849b51/BUILD-PROVENANCE.json)、[交付哈希](results/candidate-69849b51/ARTIFACT-MANIFEST.json) 与 [64 组件清单](results/candidate-69849b51/expected-components.json) 保持不变。包位于 `artifacts/v7-productization/candidate/`，未签名、未发布。
+
+| 文件 | SHA-256 |
+| --- | --- |
+| EXE | `6096486967d0c85b006d823018ac13410b786429b903bd491d66d6d88951433c` |
+| MSI | `06efd23a16eb10c577edec48f5046a153e812b33777e7183a6bd1b22f4c905da` |
+| 便携 ZIP | `9446dc91850dcff9964b60207d19a79d96b81f061b5c30d6e2fc4ea39695b090` |
+
+- [r11 安装生命周期](results/candidate-r11/lifecycle/lifecycle.json)：从 c2a9bb6a 同版本升级、故障注入回滚、旧任务保留、64 组件核验、32 MiB 续传及空闲卸载通过，数据库和成品保持哈希。
+- [r11 便携生命周期](results/candidate-r11/portable/portable.json)：真实数据库及未完成检查点在升级/回滚后保持哈希，限定 `en-US` 运行环境。
+- [r11 主验收](results/candidate-r11/acceptance.json)：运行中卸载返回 0，[成品哈希](results/candidate-r11/output-hashes.json) 保留。总结果仍为 `passed:false`，不能据安装生命周期的通过结果宣称全计划完成。
+- [HTTP 边界](results/candidate-r11/http-boundaries.json) 13 项和[非录制媒体](results/candidate-r11/media.json)通过；[原生输入](results/candidate-r11/native-finished.json)确认普通创建按钮、Esc、长错误 URL 的详情滚动及深色主题，完整 P1 矩阵未通过。普通 URL 框 Enter 不提交已复现，源码修复尚未进入此候选。
+- [免费功能](results/candidate-r11/free-features.json)在前 9 组检查通过后，Python 进程在定时 faulthandler 诊断输出中以 `3221225477` 退出；根因未证实，整套不能计为通过。已移除重复线程栈计时器，保留父进程及命令超时。独立补测中又发现队列夹具复用导入任务 URL，按既有去重规则复用了已有任务；改为独立 URL，并在失败时恢复队列，待复核。
+- [Edge](results/candidate-r11/edge/edge.json)在扩展重载后的文档等待超时；[Firefox](results/candidate-r11/firefox/firefox.json)在 NewSession 超时，均未达到整套通过。补测分别等待扩展 worker 就绪、延长首次建会话并保留浏览器日志。原始失败不覆盖。
+- [活动拆分三轮 18 样本](results/candidate-r11/active-split.json)中普通、限速、慢尾段 off/on 中位秒数为 2.907/1.140、2.203/3.359、2.828/3.906。结果未证明稳定收益，实验继续默认关闭。[拆分恢复](results/candidate-r11/split-recovery.json)未等到助手连接；夹具改为事件同步并增加失败快照，待定向补测。
+- [系统 DPI 限制观察](results/candidate-r11/os-dpi-observation.json)：沙盒“显示设置”打开系统首页但没有显示/缩放入口，尚未切换 Windows DPI；JVM 缩放不算 OS DPI。
+
+### r11 定向补测与待打包修复
+
+- [拆分恢复补测](results/candidate-r11/followup/split-recovery.json)通过，Engine SHA 与本候选一致：直连及系统代理路径均在活动拆分后暂停、保留持久检查点、恢复及校验完整输出。测试初始慢尾段现在用事件保持到助手出现，避免受负载影响提前完成。
+- [免费功能补测](results/candidate-r11/followup/free-features.json)已正常结束，仍为失败。队列夹具的 URL 与前一检查导入任务相同，复用了已接收字节的任务；断言失败后队列未恢复，后续默认队列检查也因此失败。独立命名队列的关闭时间窗、页面/HEAD/文件请求上下文、60 秒自动周期同步及 Rust 定向测试通过。已修夹具 URL 和 `finally` 恢复，但尚未复测修后整套。
+- [Firefox 补测](results/candidate-r11/followup/firefox/firefox.json)及 [Edge 补测](results/candidate-r11/followup/edge/edge.json)各完成前 9 项后，在重载后 ping 的 15 秒自动化脚本等待超时；[Firefox 初始离线](results/candidate-r11/followup/firefox/initial-offline/firefox.json)通过。重载 ping 已改为发送与状态轮询分开观察，允许覆盖 NativeBridge 的有界重试时间，待验证，不能据此认定产品已恢复连接。
+- 普通 URL 框 Enter 修复提交 `d50d425`，`gradlew compileKotlin --offline` 实际编译通过（2m 1s）；保留多行 cURL 换行和忙碌/无效输入限制。候选 69849b51 不含此修复；新候选及真实输入回归尚待完成。
+
+## 旧候选 c2a9bb6a 的限定验收
+
+产品源码提交 `c2a9bb6a7b58939bd457fdef57ed05acd9d8748e`，tree `95c258fae9b698dc66a084ba28d5c3770e96a0af`。后续验证脚本和报告提交不会改变此候选的源码来源。原始构建快照见 [BUILD-PROVENANCE](results/candidate-provenance/BUILD-PROVENANCE.json) 和 [ARTIFACT-MANIFEST](results/candidate-provenance/ARTIFACT-MANIFEST.json)。这是历史候选；当前包目录已由 69849b51 替换，旧 MSI 在项目内保留供升级验证。均未签名或发布。
 
 | 文件 | SHA-256 |
 | --- | --- |
@@ -61,14 +87,14 @@
 
 安装助手改用 Win32 进程枚举、路径核验和窗口关闭，直接调用 Engine 的 `--shutdown` 保存检查点，不再生成或启动 PowerShell 停机脚本。进程终止限于目标安装目录的客户端；Core 检查点失败时不强杀 Core，独占文件锁失败时保留原安装和用户数据。`shutdown-running.ps1` 仍有便携升级等调用，保留该脚本。
 
-回归入口为 `scripts/validation/installer_preflight_acceptance.py`，包含安装目录边界、版本 Host、锁失败、检查点失败保 Core、其他安装管道拒绝及失败后重试；进程夹具只能在 Sandbox 中运行。诊断 MSI 仅替换 Binary 表助手并刷新 PackageCode，不能冒充上表中的正式候选。正式新候选仍需重新构建及验收。
+回归入口为 `scripts/validation/installer_preflight_acceptance.py`，包含安装目录边界、版本 Host、锁失败、检查点失败保 Core、其他安装管道拒绝及失败后重试；进程夹具只能在 Sandbox 中运行。诊断 MSI 仅替换 Binary 表助手并刷新 PackageCode，不能冒充上表中的正式候选。新候选已构建，见前述 69849b51 节；其余同包矩阵继续进行。
 
 - r8 诊断 MSI SHA-256 `c95546703be6839afe58846f6d04baa8c776882f5e97b0ac6484a3987590443d`：[脚本报告](results/diagnostic-native-r8/native-msi.json) 在 240 秒超时，[完整 MSI 日志](results/diagnostic-native-r8/cold-uninstall.log) 随后记录卸载成功、`MainEngineThread is returning 0`。助手步骤约 1 秒，不能把整个脚本改判为通过。后续 MSI 日志先写沙盒本地再归档，避免共享目录逐行写入干扰。
 - r9 诊断 MSI SHA-256 `ceb7b99a690cc57edf49b641a701e8d9ffcf748e317442fbc8150507cb644aa4`：[8 组助手边界通过](results/diagnostic-native-r9/helper/result.json)，[全新安装及冷卸载返回 0](results/diagnostic-native-r9/native-msi.json)。真实 Core 检查点返回 0 后，退出中的工作台路径查询短暂拒绝访问，助手误判失败；[原日志](results/diagnostic-native-r9/Temp-HLSInstaller-2544-1793366012065797400.log) 保留。已增加退出信号短暂等待及最终停机轮询重试，r10 已复核通过。
 
-- r10 诊断 MSI SHA-256 `06818aadaae4b3082fd8583f6ee05fed68055131992cd7a61af2566f7c71ce9b`：[全部限定检查通过](results/diagnostic-native-r10/native-msi.json)，含冷安装/冷卸载、再次安装、真实 Core 检查点、32 MiB 续传 SHA-256、运行中卸载及数据库/成品保留；[8 组边界](results/diagnostic-native-r10/helper/result.json) 通过。受测助手 SHA-256 `381946f0eca9b3a5c0764e441b94b500f2c7ad7840fec8bcecc1c63b5e90bc3a`。这是修复版诊断包证据，正式候选仍需重新构建、升级/回滚及同包矩阵。
+- r10 诊断 MSI SHA-256 `06818aadaae4b3082fd8583f6ee05fed68055131992cd7a61af2566f7c71ce9b`：[全部限定检查通过](results/diagnostic-native-r10/native-msi.json)，含冷安装/冷卸载、再次安装、真实 Core 检查点、32 MiB 续传 SHA-256、运行中卸载及数据库/成品保留；[8 组边界](results/diagnostic-native-r10/helper/result.json) 通过。受测助手 SHA-256 `381946f0eca9b3a5c0764e441b94b500f2c7ad7840fec8bcecc1c63b5e90bc3a`。这是修复版诊断包证据，69849b51 已重新构建且 r11 升级/回滚通过，其余同包矩阵继续进行。
 
-抓站组合验收已加入 `scripts/validation/free_parity_acceptance.py`：页面数/深度边界、关闭队列时间窗零请求、页面与 HEAD/文件请求的站点上下文、60 秒周期同步。新增检查目前仅完成语法检查，不能作为功能已通过的证据。
+抓站组合验收已加入 `scripts/validation/free_parity_acceptance.py`，页面数/深度边界及定时/上下文组合的实际结果见 r11 与定向补测；不得将限定检查通过换算为整套通过。
 
 完整原始 MSI 日志、浏览器配置、夹具及诊断保留在项目内 `.tool-cache/free-parity-20261030/candidate-results-r*/`；选定可审查 JSON 入库。没有删除或改写原始失败。
 

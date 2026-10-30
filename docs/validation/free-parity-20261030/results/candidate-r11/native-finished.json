@@ -1,0 +1,22 @@
+{
+  "passed": false,
+  "subset_passed": true,
+  "scope": "Native input on candidate 69849b51; full P1 matrix incomplete",
+  "actions": [
+    "Real in-Sandbox Notepad select/copy and paste into ordinary URL field",
+    "Native create button submitted native.bin; 32 MiB completed",
+    "Escape closed new-task dialog",
+    "Double-click error task opened detail; long URL wrapped, error card scroll and fixed footer remained accessible",
+    "Native light-to-dark toggle updated main workbench",
+    "Settings opened with intact rounded border, scroll and fixed save footer; Escape closed it"
+  ],
+  "confirmed_defects": [
+    "Enter in ordinary URL field did not submit; source fix pending compilation and candidate rebuild"
+  ],
+  "limitations": [
+    "No full Windows OS DPI matrix; Sandbox display-settings entry did not expose scaling controls",
+    "Repeated native edge drag did not establish window resizing or minimum size; investigate framework behavior before claiming defect or pass",
+    "Full light/dark, size and long filename matrix incomplete",
+    "Existing same-JAR r2/r5 evidence is historical and not a current full-matrix pass"
+  ]
+}

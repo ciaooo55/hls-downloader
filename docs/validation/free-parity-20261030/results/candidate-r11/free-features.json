@@ -1,0 +1,118 @@
+{
+  "passed": false,
+  "finished": false,
+  "scope": "development component acceptance",
+  "checks": [
+    {
+      "name": "cli-starts-one-core-without-workbench",
+      "passed": true,
+      "seconds": 8.532,
+      "evidence": {
+        "core_count": 1,
+        "workbench_started": false
+      }
+    },
+    {
+      "name": "cli-lifecycle-recovery-export-import",
+      "passed": true,
+      "seconds": 12.406,
+      "evidence": {
+        "sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f",
+        "unicode_path": "C:\\QAWork\\free\\downloads\\中文 空格\\中文 文件.bin",
+        "preserved_on_remove": true,
+        "restart_restored_paused": true
+      }
+    },
+    {
+      "name": "cli-queue-controls-and-explicit-file-deletion",
+      "passed": true,
+      "seconds": 1.109,
+      "evidence": {
+        "queued_without_transfer": true,
+        "started_and_sha256_correct": true,
+        "csv_urls_export": true,
+        "explicit_delete_files": true
+      }
+    },
+    {
+      "name": "cli-stdin-context-and-default-redaction",
+      "passed": true,
+      "seconds": 0.297,
+      "evidence": {
+        "stdin_context_applied": true,
+        "default_result_redacted": true
+      }
+    },
+    {
+      "name": "zip-local-remote-bounded-and-resource-change",
+      "passed": true,
+      "seconds": 1.328,
+      "evidence": {
+        "archive_bytes": 8388843,
+        "metadata_bytes": 65577,
+        "remote_requests": [
+          {
+            "path": "/large.zip",
+            "method": "GET",
+            "range": "bytes=-65577",
+            "if_none_match": null,
+            "bytes": 65577,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+            "referer": null,
+            "cookie": null,
+            "crawl_header": null
+          }
+        ],
+        "central_directory_entries": 2200
+      }
+    },
+    {
+      "name": "crawl-loop-boundaries-preview-recovery-offline",
+      "passed": true,
+      "seconds": 13.922,
+      "evidence": {
+        "id": "crawl-1793369616988513800",
+        "pages": 2,
+        "resources": 4,
+        "selection_required": true,
+        "paused_restart": true,
+        "rewritten_html": "<base href=\"./\"><a href=\"f1d0de224af0d91996dc9da590f090df.html\">next</a><a href=\"130f1a05c79fc843eaf361f03561af6b.html#loop\">loop</a><link href=\"33713cd1b8d6f96a938500ea0f87b8e0.css\"><img src=\"6e3765aae2489f106bb446c577b5f0a1.bin\">"
+      }
+    },
+    {
+      "name": "crawl-redirect-blocked-before-cross-origin-request",
+      "passed": true,
+      "seconds": 1.219,
+      "evidence": {
+        "status": "paused",
+        "reason": "redirect left project origin",
+        "outside_requests": 0
+      }
+    },
+    {
+      "name": "sync-etag-no-repeat-failure-preserves-atomic-update",
+      "passed": true,
+      "seconds": 13.921,
+      "evidence": {
+        "unchanged_get_count": 0,
+        "failed_update_preserved_old": true,
+        "successful_update_sha256": "cf26009508c7e2a3996bfb7ae5d72e6f3678e7a2715690def6e46d276f9d96d6"
+      }
+    },
+    {
+      "name": "crawl-page-and-depth-limits",
+      "passed": true,
+      "seconds": 3.344,
+      "evidence": {
+        "page_limit_paused": true,
+        "limit_resume_refused": true,
+        "depth_boundary_preserved": true
+      }
+    }
+  ],
+  "components": {
+    "HLSDownloaderCli.exe": "9399d40d03ffb9e6b6b776ed7c4483ae0a36152be1a6e7cdc16d96180a52c04d",
+    "HLSDownloaderEngine.exe": "162a9883bc7e3f87a280b59085b8062bb86b6c2f108bd31b88b139739ec3bb40"
+  },
+  "phase": "crawl-queue-window-context-and-periodic-sync"
+}

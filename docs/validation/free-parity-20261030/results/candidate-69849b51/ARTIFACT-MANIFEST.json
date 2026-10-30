@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "package_tier": "candidate",
+  "source_commit": "69849b516ec0eef6f6d426e46ef6f27454bfc353",
+  "source_tree": "8ad97ad9febb2d01ddbbfc209861da336f2ddee7",
+  "feature_parity_path": "FEATURE-PARITY.json",
+  "feature_parity_sha256": "a119e56b15e697e3773804618f371f5b8aa43869c60ce8e110a32ca810a2fad5",
+  "artifacts": {
+    "exe": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-candidate.exe",
+      "sha256": "6096486967d0c85b006d823018ac13410b786429b903bd491d66d6d88951433c"
+    },
+    "msi": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-candidate.msi",
+      "sha256": "06efd23a16eb10c577edec48f5046a153e812b33777e7183a6bd1b22f4c905da"
+    },
+    "portable": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-Portable-candidate.zip",
+      "sha256": "9446dc91850dcff9964b60207d19a79d96b81f061b5c30d6e2fc4ea39695b090"
+    }
+  },
+  "extensions": {
+    "Chromium": {
+      "version": "7.0.3",
+      "path": "extensions/HLSDownloader-7.0.3-Chromium.zip",
+      "sha256": "84804fc1c64828f56aca6943edd48706229d5eee28b8e684d96d51a3399bc118"
+    },
+    "Firefox": {
+      "version": "7.0.3",
+      "path": "extensions/HLSDownloader-7.0.3-Firefox.zip",
+      "sha256": "fe1fc21de637f73d9f97f9c41ca5d6ed0f2de5c8ddea45df794cfade532bb773"
+    }
+  },
+  "components": {
+    "app/resources/HLSDownloaderEngine.exe": "162a9883bc7e3f87a280b59085b8062bb86b6c2f108bd31b88b139739ec3bb40",
+    "app/resources/HLSDownloaderNativeHost.exe": "d9d494228d9729012a84f7579aae1e31a6614ee0610a1b82213b4b7f4aa5659c",
+    "app/resources/HLSDownloaderUpdater.exe": "bf22f8e79952e4e94b5c29aad6e22d34415eeb9a41b439bc702b7c444794c6e1",
+    "app/resources/HLSDownloaderPresenter.exe": "13b395372a74c4eddb943acdb240d1317eb8b496add462000997ac83a27f50eb",
+    "app/resources/HLSDownloaderCli.exe": "9399d40d03ffb9e6b6b776ed7c4483ae0a36152be1a6e7cdc16d96180a52c04d"
+  },
+  "generated_at_utc": "2026-10-30T13:55:13.3251672Z"
+}

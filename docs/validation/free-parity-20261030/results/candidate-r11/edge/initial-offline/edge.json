@@ -1,0 +1,488 @@
+{
+  "passed": true,
+  "finished": true,
+  "started_at": "2026-10-30T14:20:39.970Z",
+  "offline_only": true,
+  "scope": "Actual Edge/current extension; registered Native Host absent; isolated actual Core observes no admissions; no desktop input",
+  "checks": [
+    {
+      "name": "initial-native-host-unavailable",
+      "actual": {
+        "ok": false,
+        "reconnecting": false,
+        "error": "Error: 下载器连接已断开"
+      }
+    },
+    {
+      "name": "initial-offline-original-browser-response-preserved",
+      "actual": {
+        "file": {
+          "bytesReceived": 1048576,
+          "canResume": false,
+          "danger": "safe",
+          "endTime": "2026-10-30T14:20:46.070Z",
+          "exists": true,
+          "fileSize": 1048576,
+          "filename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+          "finalUrl": "http://127.0.0.1:64122/offline",
+          "id": 1,
+          "incognito": false,
+          "mime": "application/octet-stream",
+          "paused": false,
+          "referrer": "http://127.0.0.1:64122/page",
+          "startTime": "2026-10-30T14:20:43.338Z",
+          "state": "complete",
+          "totalBytes": 1048576,
+          "url": "http://127.0.0.1:64122/offline"
+        },
+        "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+        "server_requests": 1,
+        "no_new_core_handoff": true,
+        "no_new_core_task": true,
+        "baseline_tasks": 6,
+        "ping": {
+          "ok": false,
+          "reconnecting": false,
+          "error": "Error: 下载器连接已断开"
+        }
+      }
+    }
+  ],
+  "server_requests": [
+    {
+      "method": "GET",
+      "url": "/page",
+      "range": null,
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "url": "/favicon.ico",
+      "range": null,
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "url": "/offline",
+      "range": null,
+      "bytes": 1048576
+    }
+  ],
+  "browser_events": [
+    {
+      "frameId": "E9171DB83025AFDF8D0A70CDF6C725B1",
+      "guid": "271cc9fe-e737-47b7-a7db-35e91d12f7fa",
+      "url": "http://127.0.0.1:64122/offline",
+      "suggestedFilename": "current.bin"
+    }
+  ],
+  "phase": "initial-offline-original-browser-response-preserved",
+  "background_sha256": "be0eec7c867ccf13a9851e741d6ea26b9a4bc0de6d07205b065f1351fc1902ab",
+  "browser_starts": [
+    {
+      "pid": 4740,
+      "port": "64120",
+      "endpoint": "/devtools/browser/6d83de08-f7a0-4da5-af45-a01d59f60bc7",
+      "started_at": "2026-10-30T14:20:41.168Z"
+    }
+  ],
+  "browser_version": {
+    "protocolVersion": "1.3",
+    "product": "Edg/156.0.4314.50",
+    "revision": "@af2ba23ae0ecf7084d900446fc59d5119dd5fd5e",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+    "jsVersion": "15.6.12.7"
+  },
+  "initial_targets": [
+    {
+      "targetId": "C4E2005373DE2E5C5886DA510BD62BE6",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "8EA82E51877328E24CB3F102D33EAAB9",
+      "type": "page",
+      "title": "",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "9505DC57C16B4DCA4A252B6218721F24",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "50F04A194E8E57501A364E9D7A7711D0",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "A0C67C8DBA50FF300B26571381D52576",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "926A54A40DCECB8B20D34F2BBA5D5408",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    }
+  ],
+  "last_evaluation": "chrome.downloads.search({})",
+  "worker_diagnostics": [
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "1",
+            "registrationId": "1",
+            "scriptURL": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+            "runningStatus": "starting",
+            "status": "new",
+            "scriptLastModified": 1793369822,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533"
+          },
+          {
+            "versionId": "0",
+            "registrationId": "0",
+            "scriptURL": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+            "runningStatus": "starting",
+            "status": "new",
+            "scriptLastModified": 0,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "05044B2CD3A51907D6C0997A61FCB697"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "0",
+            "registrationId": "0",
+            "scriptURL": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+            "runningStatus": "starting",
+            "status": "installing",
+            "scriptLastModified": 0,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "05044B2CD3A51907D6C0997A61FCB697"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "0",
+            "registrationId": "0",
+            "scriptURL": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+            "runningStatus": "running",
+            "status": "installing",
+            "scriptLastModified": 0,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "05044B2CD3A51907D6C0997A61FCB697"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "0",
+            "registrationId": "0",
+            "scriptURL": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+            "runningStatus": "running",
+            "status": "installed",
+            "scriptLastModified": 0,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "05044B2CD3A51907D6C0997A61FCB697"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "0",
+            "registrationId": "0",
+            "scriptURL": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+            "runningStatus": "running",
+            "status": "activating",
+            "scriptLastModified": 0,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "05044B2CD3A51907D6C0997A61FCB697"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "0",
+            "registrationId": "0",
+            "scriptURL": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+            "runningStatus": "running",
+            "status": "activated",
+            "scriptLastModified": 0,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "05044B2CD3A51907D6C0997A61FCB697"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "1",
+            "registrationId": "1",
+            "scriptURL": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+            "runningStatus": "starting",
+            "status": "installing",
+            "scriptLastModified": 1793369822,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "1",
+            "registrationId": "1",
+            "scriptURL": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+            "runningStatus": "running",
+            "status": "installing",
+            "scriptLastModified": 1793369822,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "1",
+            "registrationId": "1",
+            "scriptURL": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+            "runningStatus": "running",
+            "status": "installed",
+            "scriptLastModified": 1793369822,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "1",
+            "registrationId": "1",
+            "scriptURL": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+            "runningStatus": "running",
+            "status": "activating",
+            "scriptLastModified": 1793369822,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533"
+          }
+        ]
+      }
+    },
+    {
+      "method": "ServiceWorker.workerVersionUpdated",
+      "params": {
+        "versions": [
+          {
+            "versionId": "1",
+            "registrationId": "1",
+            "scriptURL": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+            "runningStatus": "running",
+            "status": "activated",
+            "scriptLastModified": 1793369822,
+            "scriptResponseTime": 0,
+            "controlledClients": [],
+            "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533"
+          }
+        ]
+      }
+    }
+  ],
+  "ready_targets": [
+    {
+      "targetId": "C7AB0BB430392AEAD0C20B5B1B3EA533",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/background.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "05044B2CD3A51907D6C0997A61FCB697",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "url": "chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "36B5159F836D0B61071115F45171D71D",
+      "type": "page",
+      "title": "HLS Downloader",
+      "url": "chrome-extension://bbdfldcjnikaemnimalegbopgaknjhla/popup.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 4448
+    },
+    {
+      "targetId": "C4E2005373DE2E5C5886DA510BD62BE6",
+      "type": "background_page",
+      "title": "Microsoft Voices",
+      "url": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "8EA82E51877328E24CB3F102D33EAAB9",
+      "type": "page",
+      "title": "",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "9505DC57C16B4DCA4A252B6218721F24",
+      "type": "background_page",
+      "title": "WebRTC Extension",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "50F04A194E8E57501A364E9D7A7711D0",
+      "type": "background_page",
+      "title": "Media Internals Services Extension",
+      "url": "chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "A0C67C8DBA50FF300B26571381D52576",
+      "type": "background_page",
+      "title": "WebRTC Internals Extension",
+      "url": "chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    },
+    {
+      "targetId": "926A54A40DCECB8B20D34F2BBA5D5408",
+      "type": "background_page",
+      "title": "Edge 反馈",
+      "url": "chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_background_page.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "981CD7AE0F0634CE26BA0C7F2EE6D7C2",
+      "pid": 0
+    }
+  ],
+  "ping": {
+    "ok": false,
+    "reconnecting": false,
+    "error": "Error: 下载器连接已断开"
+  },
+  "offline_browser_items": [
+    {
+      "bytesReceived": 1048576,
+      "canResume": false,
+      "danger": "safe",
+      "endTime": "2026-10-30T14:20:46.070Z",
+      "exists": true,
+      "fileSize": 1048576,
+      "filename": "C:\\QACurrentWork\\browser-downloads\\current.bin",
+      "finalUrl": "http://127.0.0.1:64122/offline",
+      "id": 1,
+      "incognito": false,
+      "mime": "application/octet-stream",
+      "paused": false,
+      "referrer": "http://127.0.0.1:64122/page",
+      "startTime": "2026-10-30T14:20:43.338Z",
+      "state": "complete",
+      "totalBytes": 1048576,
+      "url": "http://127.0.0.1:64122/offline"
+    }
+  ]
+}

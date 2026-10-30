@@ -49,7 +49,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "20261030_free_candidate_c2a9bb6a_scoped_passes_native_installer_diagnostic_passed_repackage_pending",
+  "audit_state": "20261030_free_candidate_69849b51_lifecycle_passed_ui_enter_fix_followups_pending",
   "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {
@@ -317,7 +317,7 @@
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
       "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks.",
-      "gap": "c2a9bb6a 候选 r6/r7 再现卸载 1603；直接 Win32 助手 r10 诊断包已通过冷安装/卸载、真实检查点恢复、运行中卸载和数据保留。正式新候选仍需重打及升级/回滚、同包验收。见 docs/validation/free-parity-20261030/README.md。"
+      "gap": "69849b51 候选 r11 已通过旧包同版本升级、注入失败回滚、64 组件哈希、32 MiB 续传、空闲及运行中卸载返回 0、成品/数据库保留；下一含 Enter 修复候选尚需重建和同包验证。原 c2a9bb6a 的 r6/r7 1603 原始失败保留。见 docs/validation/free-parity-20261030/README.md。"
     },
     {
       "id": "free.cli",
@@ -335,7 +335,7 @@
       "compose_entry": "工具 / 抓站与同步项目; CLI crawl",
       "core_command": "crawl capability and request; ordinary CreateTask",
       "state_event": "CrawlProject/CrawlResource; SQLite schema 6 to 7",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包循环去重、确认前无任务、暂停重启恢复、离线引用改写、跨域跳转零请求、ETag 无重复 GET、失败保旧及原子替换通过。限额、周期及请求上下文组合仍待验收。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包循环去重、确认前无任务、暂停重启恢复、离线引用改写、跨域跳转零请求、ETag 无重复 GET、失败保旧及原子替换通过。限额、周期及请求上下文组合仍待验收。 r11/followup/free-features.json 的队列关闭时间窗零请求、页面/HEAD/文件上下文与 60 秒自动同步组合检查通过；该套件其余检查因队列夹具复用 URL 及未恢复队列而失败，修正后整套待复测。"
     },
     {
       "id": "free.zip_preview",
@@ -344,7 +344,7 @@
       "compose_entry": "工具 / ZIP 内容预览; CLI zip",
       "core_command": "preview_zip capability and request",
       "state_event": "ZipPreview with metadata_bytes_read",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、无 Range 拒绝及有界读取通过；candidate-r2/native-finished.json 原生中文 121 条预览、滚动和关闭通过。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、无 Range 拒绝及有界读取通过；docs/validation/free-parity-20261030/results/candidate-r2/native-finished.json 原生中文 121 条预览、滚动和关闭通过。"
     },
     {
       "id": "http.active_tail_split",
@@ -353,7 +353,7 @@
       "compose_entry": "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
       "core_command": "existing RangeScheduler pending first, reserved read region",
       "state_event": "existing durable range checkpoints",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/active-split.json：三轮 18 样本 Core 对照，慢尾段收益、普通和限速场景无收益；split-recovery.json 两种网络路径拆分中暂停恢复哈希通过。全产品竞品对照未完成，实验默认关闭。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r11/active-split.json：三轮 18 样本 Core 对照，普通/限速/慢尾 off/on 中位秒 2.907/1.140、2.203/3.359、2.828/3.906；未证明稳定收益。旧 r2 的慢尾收益仅为历史夹具结果。实验默认关闭；r11 原恢复夹具超时；docs/validation/free-parity-20261030/results/candidate-r11/followup/split-recovery.json 事件同步后直连/系统代理两种路径暂停恢复哈希正确。"
     }
   ],
   "summary": {
