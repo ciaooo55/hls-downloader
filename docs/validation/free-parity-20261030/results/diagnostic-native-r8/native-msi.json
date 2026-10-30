@@ -1,0 +1,17 @@
+{
+  "finished": true,
+  "passed": false,
+  "scope": "diagnostic MSI with native helper; not production candidate",
+  "msi_sha256": "c95546703be6839afe58846f6d04baa8c776882f5e97b0ac6484a3987590443d",
+  "steps": [
+    {
+      "name": "cold-install",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 62.889999999999986
+    }
+  ],
+  "phase": "cold-uninstall",
+  "error": "TimeoutExpired(['msiexec', '/x', 'C:\\\\QANativeInstaller\\\\diagnostic.msi', '/qn', '/norestart', 'INSTALLDIR=C:\\\\QAInstalled', '/l*v', 'C:\\\\QAReports\\\\cold-uninstall.log'], 240)",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QARunners\\native_installer_guest.py\", line 26, in <module>\n    msirun('/i','cold-install');msirun('/x','cold-uninstall')\n                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QARunners\\native_installer_guest.py\", line 18, in msirun\n    def msirun(action,name):run(['msiexec',action,msi,'/qn','/norestart','INSTALLDIR='+str(install),'/l*v',report/(name+'.log')],name)\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QARunners\\native_installer_guest.py\", line 16, in run\n    code=p.wait(timeout=timeout)\n         ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAPython\\Lib\\subprocess.py\", line 1264, in wait\n    return self._wait(timeout=timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAPython\\Lib\\subprocess.py\", line 1593, in _wait\n    raise TimeoutExpired(self.args, timeout)\nsubprocess.TimeoutExpired: Command '['msiexec', '/x', 'C:\\\\QANativeInstaller\\\\diagnostic.msi', '/qn', '/norestart', 'INSTALLDIR=C:\\\\QAInstalled', '/l*v', 'C:\\\\QAReports\\\\cold-uninstall.log']' timed out after 240 seconds\n"
+}

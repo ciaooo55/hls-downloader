@@ -1,0 +1,26 @@
+{
+  "finished": true,
+  "passed": false,
+  "steps": [
+    {
+      "name": "install",
+      "exit_code": 0
+    },
+    {
+      "name": "install-idm",
+      "exit_code": 0
+    },
+    {
+      "name": "uninstall",
+      "exit_code": 1603
+    }
+  ],
+  "phase": "uninstall",
+  "paths": {
+    "idm": "C:\\Program Files (x86)\\Internet Download Manager\\IDMan.exe",
+    "ab": "C:\\QAPerformance\\ab\\ABDownloadManager\\ABDownloadManager.exe",
+    "hls": "C:\\QAInstalled\\HLSDownloader.exe"
+  },
+  "error": "PermissionError(13, '\u53e6\u4e00\u4e2a\u7a0b\u5e8f\u6b63\u5728\u4f7f\u7528\u6b64\u6587\u4ef6\uff0c\u8fdb\u7a0b\u65e0\u6cd5\u8bbf\u95ee\u3002', None, 32, None)",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QARunners\\performance_guest.py\", line 52, in <module>\n    for exe in [idm,ab]:subprocess.Popen([str(exe)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAPython\\Lib\\subprocess.py\", line 1026, in __init__\n    self._execute_child(args, executable, preexec_fn, close_fds,\n  File \"C:\\QAPython\\Lib\\subprocess.py\", line 1538, in _execute_child\n    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPermissionError: [WinError 32] \u53e6\u4e00\u4e2a\u7a0b\u5e8f\u6b63\u5728\u4f7f\u7528\u6b64\u6587\u4ef6\uff0c\u8fdb\u7a0b\u65e0\u6cd5\u8bbf\u95ee\u3002\n"
+}

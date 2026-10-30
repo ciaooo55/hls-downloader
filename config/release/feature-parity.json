@@ -49,7 +49,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "20261030_free_features_implemented_targeted_sandbox_passed_current_candidate_pending",
+  "audit_state": "20261030_free_candidate_c2a9bb6a_scoped_passes_native_installer_diagnostic_passed_repackage_pending",
   "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {
@@ -317,7 +317,7 @@
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
       "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks.",
-      "gap": "2026-10-30 诊断包三轮定向卸载通过，但旧间歇 1603 的根因未证实；新免费功能候选尚待同包安装、运行中卸载、覆盖升级和失败回滚。历史证据不等于当前包通过。"
+      "gap": "c2a9bb6a 候选 r6/r7 再现卸载 1603；直接 Win32 助手 r10 诊断包已通过冷安装/卸载、真实检查点恢复、运行中卸载和数据保留。正式新候选仍需重打及升级/回滚、同包验收。见 docs/validation/free-parity-20261030/README.md。"
     },
     {
       "id": "free.cli",
@@ -326,7 +326,7 @@
       "compose_entry": "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
       "core_command": "CoreIpcClient versioned Named Pipe; create_task_paused capability",
       "state_event": "TaskCreated/TaskUpdated/TaskExport",
-      "verification": "docs/validation/free-parity-20261030/README.md; CLI无工作台启动、单实例、中文路径、暂停重启续传、导入导出、错误码、删除保留在 component-results-r6 通过；新候选待验收"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包无工作台、单 Core、中文空格路径、生命周期、队列启停、导入导出、退出码、默认留成品及显式删除通过；当前完整发布门槛仍未关闭。"
     },
     {
       "id": "free.crawl_sync",
@@ -335,7 +335,7 @@
       "compose_entry": "工具 / 抓站与同步项目; CLI crawl",
       "core_command": "crawl capability and request; ordinary CreateTask",
       "state_event": "CrawlProject/CrawlResource; SQLite schema 6 to 7",
-      "verification": "docs/validation/free-parity-20261030/README.md; component-results-r6: 循环去重、确认前不下载、暂停重启、离线改写、跨域对端零请求、ETag不重复、失败保旧与重试原子替换通过；完整边界与新候选仍待验收"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包循环去重、确认前无任务、暂停重启恢复、离线引用改写、跨域跳转零请求、ETag 无重复 GET、失败保旧及原子替换通过。限额、周期及请求上下文组合仍待验收。"
     },
     {
       "id": "free.zip_preview",
@@ -344,7 +344,7 @@
       "compose_entry": "工具 / ZIP 内容预览; CLI zip",
       "core_command": "preview_zip capability and request",
       "state_event": "ZipPreview with metadata_bytes_read",
-      "verification": "docs/validation/free-parity-20261030/README.md; component-results-r6: 本地中文、空包、ZIP64、坏包、远程尾部与2200项中央目录、资源变化、非Range拒绝通过；新候选待验收"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/free-features.json：c2a9bb6a 同包本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、无 Range 拒绝及有界读取通过；candidate-r2/native-finished.json 原生中文 121 条预览、滚动和关闭通过。"
     },
     {
       "id": "http.active_tail_split",
@@ -353,7 +353,7 @@
       "compose_entry": "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
       "core_command": "existing RangeScheduler pending first, reserved read region",
       "state_event": "existing durable range checkpoints",
-      "verification": "docs/validation/free-parity-20261030/README.md; 活动安全区拆分定向Rust测试在Sandbox通过；重复正确性和收益对照待完成，尚不进入默认行为"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r2/active-split.json：三轮 18 样本 Core 对照，慢尾段收益、普通和限速场景无收益；split-recovery.json 两种网络路径拆分中暂停恢复哈希通过。全产品竞品对照未完成，实验默认关闭。"
     }
   ],
   "summary": {

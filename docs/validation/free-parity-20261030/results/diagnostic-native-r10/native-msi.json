@@ -1,0 +1,59 @@
+{
+  "finished": true,
+  "passed": true,
+  "scope": "diagnostic MSI with native helper; not production candidate",
+  "msi_sha256": "06818aadaae4b3082fd8583f6ee05fed68055131992cd7a61af2566f7c71ce9b",
+  "steps": [
+    {
+      "name": "helper-boundaries",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 74.93800000000002
+    },
+    {
+      "name": "cold-install",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 146.01600000000002
+    },
+    {
+      "name": "cold-uninstall",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 77.75000000000006
+    },
+    {
+      "name": "reinstall",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 66.09399999999994
+    },
+    {
+      "name": "create-checkpoint",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 132.20399999999995
+    },
+    {
+      "name": "running-native-helper",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 5.5
+    },
+    {
+      "name": "verify-checkpoint-resume",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 159.187
+    },
+    {
+      "name": "running-uninstall",
+      "exit_code": 0,
+      "expected": 0,
+      "seconds": 45.702999999999975
+    }
+  ],
+  "phase": "running-uninstall",
+  "output_sha256": "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0",
+  "preserved_database": true
+}

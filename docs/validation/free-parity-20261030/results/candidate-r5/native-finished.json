@@ -1,0 +1,22 @@
+{
+  "passed": false,
+  "subset_passed": true,
+  "scope": "Candidate native input supplement; does not certify entire P1 matrix",
+  "actions": [
+    "Batch dialog submitted two URLs; both completed 32 MiB",
+    "Import chooser navigated via native folders to tasks.txt; both imports completed 32 MiB",
+    "Export chooser saved hls-downloader-tasks.json in QAReports",
+    "Checkbox multi-select two; Esc clears selection",
+    "Double-click queued row opens details; Esc closes",
+    "Queue maximum active changed 1 to 2 with real keyboard and saved; Core readback 2",
+    "Tab moved from queue concurrency to rate field",
+    "Dragged seed-3 above seed-1; order retained after workbench restart",
+    "Dark theme retained after workbench restart"
+  ],
+  "limitations": [
+    "Sandbox clipboard redirection pasted stale content; import/export used folder navigation",
+    "Full OS DPI 100/125/150/200 matrix remains unverified; JVM scale is separate evidence",
+    "Full error and long-text interaction matrix remains incomplete",
+    "Window resize drag did not establish minimum dimensions; no minimum-window pass claim"
+  ]
+}

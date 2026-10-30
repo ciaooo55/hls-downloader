@@ -20,13 +20,18 @@ assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Windows Sandbox only'
 parser = argparse.ArgumentParser()
 for name in ('runtime', 'ab', 'idm', 'report'):
     parser.add_argument('--' + name, type=Path, required=True)
+parser.add_argument('--connections', type=int, choices=[1, 2, 4, 8, 16])
+parser.add_argument('--ab-settings', type=Path)
+parser.add_argument('--idm-connection-key')
 args = parser.parse_args()
+if args.connections and (not args.ab_settings or not args.idm_connection_key):
+    parser.error('Matched connections requires the observed AB settings file and IDM registry value name')
 ROOT = args.report
 ROOT.mkdir(parents=True, exist_ok=True)
 RUN_ID = uuid.uuid4().hex[:8]
 OUT = Path(r'C:\QAWork\comparison-clean') / RUN_ID
 PATTERN = bytes(range(256)) * 256
-REPORT = {'schema': 1, 'scope': 'loopback default-settings transfer and whole-product process resources; not UI response or public Internet', 'samples': [], 'errors': []}
+REPORT = {'schema': 2, 'scope': 'loopback transfer, cold process startup and whole-product process resources; not UI response or public Internet', 'connection_limit': args.connections, 'samples': [], 'errors': []}
 IDM = args.idm
 APPS = {'hls': args.runtime/'HLSDownloader.exe', 'ab': args.ab, 'idm': IDM}
 assert all(p.is_file() for p in APPS.values()), APPS
@@ -121,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if not body:
             return
-        request = {'start': start, 'end': end, 'status': status, 'sent': 0, 'started': time.perf_counter()}
+        request = {'start': start, 'end': end, 'status': status, 'sent': 0, 'started': time.perf_counter(), 'client_port': self.client_address[1]}
         with LOCK:
             state['requests'].append(request)
         began = time.perf_counter()
@@ -134,11 +139,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 with LOCK:
                     request['sent'] += size
+                    request['last_byte'] = time.perf_counter()
                     state.setdefault('first_byte', time.perf_counter())
                 if state['rate']:
                     remaining = request['sent'] / state['rate'] - (time.perf_counter() - began)
                     if remaining > 0:
                         time.sleep(remaining)
+        request['finished'] = time.perf_counter()
 
 
 def coverage(state):
@@ -166,8 +173,23 @@ def core(message):
 
 
 def start(product, round_index):
+    if args.connections and product == 'ab':
+        settings = json.loads(args.ab_settings.read_text(encoding='utf-8-sig'))
+        settings['threadCount'] = args.connections
+        args.ab_settings.write_text(json.dumps(settings), encoding='utf-8')
+        REPORT.setdefault('settings', {})['ab'] = {'path': str(args.ab_settings), 'threadCount': settings['threadCount']}
+    if args.connections and product == 'idm':
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\DownloadManager', 0, winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            _, kind = winreg.QueryValueEx(key, args.idm_connection_key)
+            assert kind == winreg.REG_DWORD, 'Observed IDM connection value must be DWORD'
+            winreg.SetValueEx(key, args.idm_connection_key, 0, kind, args.connections)
+            actual, _ = winreg.QueryValueEx(key, args.idm_connection_key)
+            assert actual == args.connections
+            REPORT.setdefault('settings', {})['idm'] = {args.idm_connection_key: actual}
     log = (ROOT / f'{product}-{round_index}.log').open('wb')
     environment = {**os.environ, 'HLS_V7_DATA_DIR': str(OUT / 'hls-data'), 'HLS_V7_DOWNLOAD_DIR': str(OUT / 'hls'), 'HLS_V6_SKIP_MIGRATE': '1'}
+    began = time.perf_counter()
     if product.startswith('hls'):
         subprocess.Popen([str(args.runtime/'app/resources/HLSDownloaderEngine.exe')], env=environment, stdout=log, stderr=log)
     subprocess.Popen([str(APPS[product])], env=environment, stdout=log, stderr=log)
@@ -185,11 +207,16 @@ def start(product, round_index):
             time.sleep(.2)
     else:
         raise RuntimeError(f'{product} did not become available')
+    startup_ms = (time.perf_counter() - began) * 1000
+    if args.connections and product == 'hls':
+        response = core({'type': 'store_settings', 'request_id': 1, 'values': {'default_concurrency': args.connections}})
+        assert response['default_concurrency'] == args.connections
+        REPORT.setdefault('settings', {})['hls'] = {'default_concurrency': response['default_concurrency']}
     time.sleep(8)
     before = resources(product)
     time.sleep(5)
     after = resources(product)
-    return {'sample_seconds': 5, 'before': before, 'after': after, 'cpu_seconds': after['cpu'] - before['cpu']}
+    return {'sample_seconds': 5, 'cold_process_ready_ms': startup_ms, 'ready_criterion': 'IPC ping' if product != 'idm' else 'process visible (not UI-ready)', 'before': before, 'after': after, 'cpu_seconds': after['cpu'] - before['cpu']}
 
 
 def transfer(product, round_index, scenario, server):
@@ -208,7 +235,7 @@ def transfer(product, round_index, scenario, server):
     began = time.perf_counter()
     if product.startswith('hls'):
         core({'type': 'store_setting', 'request_id': 1, 'key': 'download_dir', 'value': str(directory)})
-        response = core({'type': 'command', 'request_id': 2, 'command': {'kind': 'create_task', 'spec': {'url': url, 'resource_kind': 'file', 'filename': key, 'expected_size': size}}})
+        response = core({'type': 'command', 'request_id': 2, 'command': {'kind': 'create_task', 'spec': {'url': url, 'resource_kind': 'file', 'filename': key, 'expected_size': size, **({'concurrency': args.connections} if args.connections else {})}}})
         task_id = next(e['event']['snapshot']['task_id'] for e in response['events'] if e['event']['kind'] == 'task_created')
         core({'type': 'command', 'request_id': 3, 'command': {'kind': 'task_action', 'task_id': task_id, 'action': 'start'}})
     elif product == 'ab':
@@ -246,8 +273,14 @@ def transfer(product, round_index, scenario, server):
     time.sleep(.3)
     with LOCK:
         requests = [dict(r) for r in state['requests']]
+    boundaries = sorted((instant, delta) for r in requests if r['sent'] for instant, delta in [(r['started'], 1), (r['last_byte'], -1)])
+    active = maximum = 0
+    for _, delta in boundaries:
+        active += delta
+        maximum = max(maximum, active)
     sample = {'product': product, 'round': round_index, 'scenario': scenario, 'payload_bytes': size, 'submission_ms': submit_ms, 'first_byte_ms': (state['first_byte'] - began) * 1000, 'verified_output_ms': (finished - began) * 1000, 'last_ten_percent_ms': (finished - t90) * 1000 if t90 else None, 'sha256': expected, 'before': before, 'peak': peak, 'after': after, 'cpu_seconds': sampled_cpu_seconds, 'cpu_live_process_delta': after['cpu'] - before['cpu'], 'requests': requests, 'server_bytes_sent': sum(r['sent'] for r in requests), 'unique_server_bytes': coverage(state)}
     REPORT['samples'].append(sample)
+    sample['peak_overlapping_response_bodies'] = maximum
     save()
     print(json.dumps({k: sample[k] for k in ['product', 'round', 'scenario', 'verified_output_ms', 'cpu_seconds', 'server_bytes_sent']}), flush=True)
     if product.startswith('hls'):
@@ -294,3 +327,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    raise SystemExit(0 if REPORT.get('passed') else 1)

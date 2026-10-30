@@ -71,6 +71,8 @@ def main():
     large_zip = archive([('目录/文件.txt', b'hello'), ('payload.bin', payload)])
     central_zip = archive([(f'entry-{i:05}.txt', b'') for i in range(2200)])
     state = {'version': 1, 'broken': False, 'outside': 0, 'changing': 0}
+    gated_request = threading.Event()
+    periodic_get = threading.Event()
     origins = []
     base = 'http://127.0.0.1:18672'
 
@@ -85,8 +87,14 @@ def main():
         def handle_body(self, include):
             path = urlsplit(self.path).path
             record = {'path': path, 'method': self.command, 'range': self.headers.get('Range'),
-                      'if_none_match': self.headers.get('If-None-Match'), 'bytes': 0}
+                      'if_none_match': self.headers.get('If-None-Match'), 'bytes': 0,
+                      'user_agent': self.headers.get('User-Agent'), 'referer': self.headers.get('Referer'),
+                      'cookie': self.headers.get('Cookie'), 'crawl_header': self.headers.get('X-Crawl-Fixture')}
             requests.append(record)
+            if path.startswith('/gated/'):
+                gated_request.set()
+            if path == '/gated/asset.bin' and include and state['version'] == 2:
+                periodic_get.set()
             if self.server.server_port == 18673:
                 state['outside'] += 1
             if path == '/cross':
@@ -98,6 +106,9 @@ def main():
                 '/site/image.bin': b'image-version-' + str(state['version']).encode(),
                 '/sync/index.html': b'<a href="asset.bin">asset</a>',
                 '/sync/asset.bin': (b'original-' if state['version'] == 1 else b'updated-') * 8192,
+                '/gated/index.html': b'<a href="asset.bin">asset</a>',
+                '/gated/asset.bin': (b'original' if state['version'] == 1 else b'updated!') * 8192,
+                '/context.bin': b'context-fixture' * 4096,
                 '/fixture.bin': payload,
                 '/large.zip': large_zip,
                 '/central.zip': central_zip,
@@ -153,9 +164,9 @@ def main():
         except Exception as e:
             result['checks'].append({'name': name, 'passed': False, 'error': repr(e), 'traceback': traceback.format_exc()})
         save()
-    def invoke(*arguments, code=0):
+    def invoke(*arguments, code=0, input_text=None):
         (args.report.parent/'invocation.json').write_text(json.dumps({'arguments':list(map(str,arguments)),'started':time.time()}),encoding='utf-8')
-        proc = subprocess.run([str(cli), '--json', *map(str, arguments)], capture_output=True, timeout=40)
+        proc = subprocess.run([str(cli), '--json', *map(str, arguments)], input=input_text.encode('utf-8') if input_text is not None else None, capture_output=True, timeout=40)
         assert proc.returncode == code, (arguments, proc.returncode, proc.stdout.decode('utf-8', 'replace'), proc.stderr.decode('utf-8', 'replace'))
         return json.loads((proc.stdout if code == 0 else proc.stderr).decode('utf-8'))
     def ipc(message):
@@ -226,6 +237,37 @@ def main():
             return {'sha256':digest,'unicode_path':str(output),'preserved_on_remove':True,'restart_restored_paused':True}
         check('cli-lifecycle-recovery-export-import',cli_lifecycle)
 
+        def cli_queue():
+            assert invoke('queue','stop','default')['enabled'] is False
+            item=invoke('add',base+'/fixture.bin','--name','queue-control.bin')['tasks'][0]
+            current=task(item['task_id'])
+            assert current['downloaded_bytes']==0 and current['active_workers']==0,current
+            assert invoke('queue','start','default')['enabled'] is True
+            done=until(lambda:task(item['task_id']),lambda t:t['status'] in ['completed','failed'])
+            assert done['status']=='completed',done
+            output=Path(done['output_path']);assert hashlib.sha256(output.read_bytes()).digest()==hashlib.sha256(payload).digest()
+            for format in ['csv','urls']:
+                exported=args.work/('queue-export.'+format)
+                invoke('export',item['task_id'],'--format',format,'--output',exported)
+                assert exported.stat().st_size>0
+            invoke('remove',item['task_id'],'--delete-files');assert not output.exists()
+            invoke('queue','start','nonexistent-queue',code=4)
+            return {'queued_without_transfer':True,'started_and_sha256_correct':True,'csv_urls_export':True,'explicit_delete_files':True}
+        check('cli-queue-controls-and-explicit-file-deletion',cli_queue)
+
+        def cli_context():
+            context = dict(url=base+'/context.bin',headers={'Cookie':'cli-fixture=local-only','X-Crawl-Fixture':'stdin-fixture'})
+            created = invoke('add','--context','-','--name','context.bin',input_text=json.dumps(context))
+            assert 'cli-fixture' not in json.dumps(created) and context['url'] not in json.dumps(created)
+            item = created['tasks'][0]
+            done = until(lambda:task(item['task_id']),lambda t:t['status'] in ['completed','failed'])
+            assert done['status']=='completed',done
+            assert Path(done['output_path']).read_bytes()==b'context-fixture'*4096
+            observed = [r for r in requests if r['path']=='/context.bin']
+            assert observed and all(r['cookie']=='cli-fixture=local-only' and r['crawl_header']=='stdin-fixture' for r in observed),observed
+            return {'stdin_context_applied':True,'default_result_redacted':True}
+        check('cli-stdin-context-and-default-redaction',cli_context)
+
         def zip_preview():
             fixtures={'normal.zip':large_zip,'empty.zip':archive([]),'zip64.zip':zip64_empty(),'damaged.zip':b'not a zip'}
             for name,data in fixtures.items(): (args.work/name).write_bytes(data)
@@ -233,6 +275,9 @@ def main():
             assert invoke('zip',args.work/'empty.zip')['entries']==[]
             assert invoke('zip',args.work/'zip64.zip')['zip64']
             invoke('zip',args.work/'damaged.zip',code=4)
+            over_limit = args.work/'over-entry-limit.zip'
+            over_limit.write_bytes(archive([(f'{i}.txt',b'') for i in range(10001)]))
+            invoke('zip',over_limit,code=4)
             start=len(requests); remote=invoke('zip',base+'/large.zip')
             assert remote['entries']==local['entries'] and remote['metadata_bytes_read']<100000
             large_requests=[r for r in requests[start:] if r['path']=='/large.zip']; assert large_requests and all(r['range'] for r in large_requests)
@@ -292,6 +337,68 @@ def main():
             until(lambda:target.read_bytes(),lambda b:b==b'updated-'*8192,seconds=70)
             return {'unchanged_get_count':after-before,'failed_update_preserved_old':True,'successful_update_sha256':hashlib.sha256(target.read_bytes()).hexdigest()}
         check('sync-etag-no-repeat-failure-preserves-atomic-update',sync)
+
+        def crawl_limits():
+            before = len(requests)
+            p = create_project('/site/index.html', max_pages=1)
+            p = until(lambda:project(p['id']), lambda q:q['status']=='paused')
+            assert p['visited_pages']==1 and '上限' in p['reason'], p
+            assert not any(r['path']=='/site/next.html' for r in requests[before:])
+            invoke('crawl','resume',p['id'],code=4)
+            before = len(requests)
+            depth = create_project('/site/index.html', offline=True, max_depth=0)
+            depth = until(lambda:project(depth['id']), lambda q:q['status']=='ready')
+            assert depth['visited_pages']==1 and not any(r['path']=='/site/next.html' for r in requests[before:])
+            return {'page_limit_paused':True,'limit_resume_refused':True,'depth_boundary_preserved':True}
+        check('crawl-page-and-depth-limits',crawl_limits)
+
+        def scheduled_context_and_periodic_sync():
+            state.update(version=1,broken=False)
+            original = ipc({'type':'load_settings','request_id':1})
+            profiles = list(original['queue_profiles'])
+            minutes = time.localtime().tm_hour*60 + time.localtime().tm_min
+            clock = lambda offset:f'{((minutes+offset)//60)%24:02}:{(minutes+offset)%60:02}'
+            queue = dict(id='crawl-gated',name='Crawl acceptance',enabled=True,max_active=1,
+                         speed_limit_kib=64,schedule_enabled=True,start_time=clock(120),stop_time=clock(180))
+            try:
+                response = ipc({'type':'store_settings','request_id':1,'values':{
+                    'queue_profiles':profiles+[queue], 'download_speed_limit_kib':128,
+                    'site_rules':json.dumps([dict(host='127.0.0.1',enabled=True,user_agent='CrawlAcceptance/1',referer=base+'/reference')])}})
+                assert response['type']=='settings' and response['speed_limit_kib']==128,response
+                response = ipc({'type':'set_site_rule_credential','request_id':1,'host':'127.0.0.1',
+                                'cookie':'fixture=local-only','request_headers':{'X-Crawl-Fixture':'local-only'}})
+                assert response['type']=='settings',response
+                gated_request.clear()
+                p = create_project('/gated/index.html',queue_id=queue['id'],sync_interval_secs=60)
+                assert not gated_request.wait(2.5), 'discovery ignored the closed queue window'
+                queue['schedule_enabled'] = False
+                response = ipc({'type':'store_settings','request_id':1,'values':{'queue_profiles':profiles+[queue]}})
+                assert response['type']=='settings',response
+                p = until(lambda:project(p['id']),lambda q:q['status']=='ready')
+                invoke('crawl','enqueue',p['id'])
+                p = until(lambda:project(p['id']),lambda q:all(r['saved'] for r in q['resources']))
+                assert len(p['resources'])==1,p
+                output = Path(p['spec']['output_dir'])/p['resources'][0]['local_name']
+                assert output.read_bytes()==b'original'*8192
+                task_snapshot = task(p['resources'][0]['task_id'])
+                assert task_snapshot['queue_id']==queue['id'],task_snapshot
+                observed = [r for r in requests if r['path'].startswith('/gated/')]
+                assert {r['method'] for r in observed} >= {'GET','HEAD'},observed
+                assert all(r['user_agent']=='CrawlAcceptance/1' and r['referer']==base+'/reference'
+                           and r['cookie']=='fixture=local-only' and r['crawl_header']=='local-only' for r in observed),observed
+                periodic_get.clear()
+                state['version'] = 2
+                assert periodic_get.wait(75), 'periodic sync did not fetch changed resource'
+                until(lambda:output.read_bytes(),lambda b:b==b'updated!'*8192,seconds=15)
+                invoke('crawl','pause',p['id'])
+                return {'closed_window_zero_requests':True,'request_context_on_page_head_and_file':True,
+                        'queue_assignment':queue['id'],'configured_global_queue_kib':[128,64],
+                        'periodic_without_manual_sync':True,'sha256':hashlib.sha256(output.read_bytes()).hexdigest()}
+            finally:
+                ipc({'type':'store_settings','request_id':1,'values':{'queue_profiles':profiles,
+                     'download_speed_limit_kib':original['speed_limit_kib'],'site_rules':original['site_rules']}})
+                ipc({'type':'set_site_rule_credential','request_id':1,'host':'127.0.0.1','clear':True})
+        check('crawl-queue-window-context-and-periodic-sync',scheduled_context_and_periodic_sync)
 
         if args.unit_tests:
             def units():

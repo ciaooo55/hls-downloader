@@ -1,0 +1,32 @@
+{
+  "finished": true,
+  "passed": false,
+  "steps": [
+    {
+      "name": "install",
+      "exit_code": 0
+    },
+    {
+      "name": "install-idm",
+      "exit_code": 0
+    },
+    {
+      "name": "default",
+      "exit_code": 1
+    },
+    {
+      "name": "uninstall",
+      "exit_code": 1603
+    }
+  ],
+  "phase": "uninstall",
+  "paths": {
+    "idm": "C:\\Program Files (x86)\\Internet Download Manager\\IDMan.exe",
+    "ab": "C:\\QAPerformance\\ab\\ABDownloadManager\\ABDownloadManager.exe",
+    "hls": "C:\\QAInstalled\\HLSDownloader.exe"
+  },
+  "idm_connection_values": {},
+  "ab_settings_candidates": [],
+  "error": "AssertionError({})",
+  "traceback": "Traceback (most recent call last):\n  File \"C:\\QARunners\\performance_guest.py\", line 77, in <module>\n    observed=connection_values();name=config['idm_connection_key'];assert name in observed,observed\n                                                                          ^^^^^^^^^^^^^^^^\nAssertionError: {}\n"
+}

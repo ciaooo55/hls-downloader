@@ -1,0 +1,89 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Same candidate installation, free features, HTTP recovery, browser protocols and native input",
+  "host_product_install_performed": false,
+  "suites": [
+    {
+      "name": "free-features",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "http-boundaries",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "active-split",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "split-recovery",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "media",
+      "exit_code": 1,
+      "passed": false
+    },
+    {
+      "name": "firefox-matrix",
+      "exit_code": 1,
+      "passed": false
+    },
+    {
+      "name": "firefox-offline",
+      "exit_code": 0,
+      "passed": true
+    },
+    {
+      "name": "edge-matrix",
+      "exit_code": 1,
+      "passed": false
+    },
+    {
+      "name": "edge-offline",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "msi_sha256": "84a314f9c91980d3a7739775dc71b4944201ed1a19587a886be2db3dc0fa0f98",
+  "phase": "uninstall",
+  "source_commit": "c2a9bb6a7b58939bd457fdef57ed05acd9d8748e",
+  "native": {
+    "passed": false,
+    "subset_passed": true,
+    "scope": "Native sandbox input for new free tools and ordinary creation; partial P1 matrix",
+    "checks": [
+      "ZIP Chinese local path, 121 entries, list scroll, fixed footer, Escape",
+      "Crawl actual URL entry/create, two pages loop de-dup, preview before enqueue",
+      "Crawl checkbox + enqueue one -> completed 32MiB task; pause discovery state shown",
+      "Dark theme real toggle persisted after UI restart",
+      "JVM scale 1.0/1.25/1.5/2.0 layout observed; 1.25/2.0 create dialog accessible",
+      "Native ordinary URL + create -> task-6 completed 32MiB"
+    ],
+    "limitations": [
+      "No complete batch/import/export/queue/details/settings keyboard matrix",
+      "No full light/dark cross-product of scaling/window states",
+      "JVM scale observations are not OS DPI tests",
+      "Enter inside URL field does not submit; button click used"
+    ],
+    "tasks_native_created": [
+      "task-5",
+      "task-6"
+    ]
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}
