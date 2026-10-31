@@ -493,6 +493,11 @@ internal class UiTestApi private constructor(
                         icon?.getWidth(null) ?: 0, icon?.getHeight(null) ?: 0,
                         scale, scale,
                         rect.x, rect.y, rect.width, rect.height,
+                        resizable = (window as? Frame)?.isResizable,
+                        undecorated = (window as? Frame)?.isUndecorated,
+                        extendedState = (window as? Frame)?.extendedState,
+                        minimumWidth = window.minimumSize.width,
+                        minimumHeight = window.minimumSize.height,
                     )
                 }
                 jsonResponse(exchange, 200, protocolJson.encodeToString(snapshot))
@@ -914,6 +919,11 @@ private data class WindowSnapshot(
     val deviceY: Int = 0,
     val deviceWidth: Int = 0,
     val deviceHeight: Int = 0,
+    val resizable: Boolean? = null,
+    val undecorated: Boolean? = null,
+    val extendedState: Int? = null,
+    val minimumWidth: Int = 0,
+    val minimumHeight: Int = 0,
 )
 
 private fun escapeJson(value: String): String = buildString(value.length + 8) {

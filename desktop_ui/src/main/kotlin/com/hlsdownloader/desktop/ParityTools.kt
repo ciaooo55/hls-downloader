@@ -151,24 +151,6 @@ internal fun CrawlProjectsDialog(defaultDirectory: String, onDismiss: () -> Unit
                 }
                 SettingRow("同源边界", "跨域跳转也遵守此边界", sameOrigin) { sameOrigin = it }
                 SettingRow("静态离线", "保存 HTML、CSS 和引用资源，成功保存后改写本地引用", offline) { offline = it }
-                DialogPrimary("创建并发现", !busy && url.isNotBlank() && depth.toIntOrNull() in 0..10 && pages.toIntOrNull() in 1..500 && concurrency.toIntOrNull() in 1..2 && interval.toLongOrNull()?.let { it == 0L || it >= 60 } == true) {
-                    busy = true; error = ""
-                    scope.launch {
-                        runCatching {
-                            request(buildJsonObject {
-                                put("action", "create")
-                                put("spec", buildJsonObject {
-                                    put("entry_url", url.trim()); put("output_dir", directory.trim()); put("queue_id", queue.trim())
-                                    put("max_depth", depth.toInt()); put("max_pages", pages.toInt()); put("page_concurrency", concurrency.toInt())
-                                    put("same_origin", sameOrigin); put("offline", offline); put("sync_interval_secs", interval.toLong())
-                                    listOf("extensions" to extensions, "include_paths" to include, "exclude_paths" to exclude).forEach { (key, text) -> put(key, JsonArray(text.split(',').map(String::trim).filter(String::isNotEmpty).map(::JsonPrimitive))) }
-                                })
-                            })
-                        }.onSuccess { selectedId = it.first().text("id"); creating = false; projects = projects + it }
-                            .onFailure { error = it.message ?: "创建项目失败" }
-                        busy = false
-                    }
-                }
             } else {
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 110.dp)) {
                     items(projects, key = { it.text("id") }) { item ->
@@ -199,6 +181,23 @@ internal fun CrawlProjectsDialog(defaultDirectory: String, onDismiss: () -> Unit
             }
         }, actions = {
             DialogSecondary("关闭", onClick = onDismiss)
-            if (!creating) DialogPrimary("下载所选（${chosen.size}）", !busy && chosen.isNotEmpty()) { action("enqueue", chosen) }
+            if (creating) DialogPrimary("创建并发现", !busy && url.isNotBlank() && depth.toIntOrNull() in 0..10 && pages.toIntOrNull() in 1..500 && concurrency.toIntOrNull() in 1..2 && interval.toLongOrNull()?.let { it == 0L || it >= 60 } == true) {
+                busy = true; error = ""
+                scope.launch {
+                    runCatching {
+                        request(buildJsonObject {
+                            put("action", "create")
+                            put("spec", buildJsonObject {
+                                put("entry_url", url.trim()); put("output_dir", directory.trim()); put("queue_id", queue.trim())
+                                put("max_depth", depth.toInt()); put("max_pages", pages.toInt()); put("page_concurrency", concurrency.toInt())
+                                put("same_origin", sameOrigin); put("offline", offline); put("sync_interval_secs", interval.toLong())
+                                listOf("extensions" to extensions, "include_paths" to include, "exclude_paths" to exclude).forEach { (key, text) -> put(key, JsonArray(text.split(',').map(String::trim).filter(String::isNotEmpty).map(::JsonPrimitive))) }
+                            })
+                        })
+                    }.onSuccess { selectedId = it.first().text("id"); creating = false; projects = projects + it }
+                        .onFailure { error = it.message ?: "创建项目失败" }
+                    busy = false
+                }
+            } else DialogPrimary("下载所选（${chosen.size}）", !busy && chosen.isNotEmpty()) { action("enqueue", chosen) }
         })
 }
