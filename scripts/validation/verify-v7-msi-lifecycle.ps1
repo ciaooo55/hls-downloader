@@ -18,6 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
 . (Join-Path $PSScriptRoot 'V7MsiInspection.ps1')
+. (Join-Path $PSScriptRoot 'V7MsiExecution.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $artifacts = Join-Path $repo 'artifacts\v7-productization\msi-lifecycle'
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
@@ -47,20 +48,6 @@ function Add-Step([string]$Name, [bool]$Passed, $Actual) {
 function Resolve-FullPath([string]$Path, [string]$Base) {
     if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
     return [IO.Path]::GetFullPath((Join-Path $Base $Path))
-}
-
-function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
-    $allArguments = @($Arguments) + @('/norestart', 'REBOOT=ReallySuppress', '/l*v', $LogPath)
-    $quotedArguments = @($allArguments | ForEach-Object {
-        # MSI 属性有自己的解析规则：只给值加引号，不能把整个 KEY=value 包起来。
-        if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
-            $Matches[1] + '="' + $Matches[2].Replace('"', '""') + '"'
-        } elseif ($_ -match '[\s"]') {
-            '"' + $_.Replace('"', '""') + '"'
-        } else { $_ }
-    })
-    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $quotedArguments -Wait -PassThru
-    return [int]$process.ExitCode
 }
 
 function Get-RegistrationState {
@@ -231,7 +218,7 @@ try {
     }
 
     $installLog = Join-Path $artifacts "$($Scenario.ToLowerInvariant())-install-old.log"
-    $exit = Invoke-Msi @('/i', $old, '/qn', "INSTALLDIR=$InstallDir") $installLog
+    $exit = Invoke-V7Msi @('/i', $old, '/qn', "INSTALLDIR=$InstallDir") $installLog
     Add-Step 'install-old-exit' ($exit -in @(0, 3010, 1641)) $exit
     $oldProduct = Get-V7InstalledProduct $upgradeCode
     Add-Step 'old-product-registered' ($null -ne $oldProduct -and $oldProduct.version -eq $oldVersion) $oldProduct
@@ -252,7 +239,7 @@ try {
         Add-Step 'checkpointed-process-shutdown' ($LASTEXITCODE -eq 0) $LASTEXITCODE
         Add-Step 'old-engine-process-ended' ($null -eq (Get-Process -Id $beforeProcess.engine_pid -ErrorAction SilentlyContinue)) $beforeProcess.engine_pid
         Add-Step 'old-presenter-process-ended' ($null -eq (Get-Process -Id $beforeProcess.presenter_pid -ErrorAction SilentlyContinue)) $beforeProcess.presenter_pid
-        $exit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'upgrade-candidate.log')
+        $exit = Invoke-V7Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'upgrade-candidate.log')
         Add-Step 'upgrade-exit' ($exit -in @(0, 3010, 1641)) $exit
         $afterProduct = Get-V7InstalledProduct $upgradeCode
         Add-Step 'product-upgraded' ($afterProduct.version -eq $expectedCandidateVersion -and $afterProduct.product_code -ne $oldProduct.product_code) $afterProduct
@@ -281,7 +268,7 @@ try {
         Copy-Item -LiteralPath $candidate -Destination $rollbackMsi -Force
         Add-DeferredFailure $rollbackMsi
         Add-Step 'candidate-original-unchanged' (((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $candidateHash) $candidateHash
-        $exit = Invoke-Msi @('/i', $rollbackMsi, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'failure-rollback.log')
+        $exit = Invoke-V7Msi @('/i', $rollbackMsi, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'failure-rollback.log')
         Add-Step 'forced-failure-exit' ($exit -eq 1603) $exit
         $afterProduct = Get-V7InstalledProduct $upgradeCode
         Add-Step 'old-product-code-preserved' ($afterProduct.product_code -eq $oldProduct.product_code) $afterProduct.product_code
@@ -300,7 +287,7 @@ try {
     }
 
     Stop-InstalledProcesses $InstallDir
-    $uninstallExit = Invoke-Msi @('/x', $installedProductCode, '/qn') (Join-Path $artifacts "$($Scenario.ToLowerInvariant())-uninstall.log")
+    $uninstallExit = Invoke-V7Msi @('/x', $installedProductCode, '/qn') (Join-Path $artifacts "$($Scenario.ToLowerInvariant())-uninstall.log")
     Add-Step 'uninstall-exit' ($uninstallExit -in @(0, 3010, 1641)) $uninstallExit
     Add-Step 'product-unregistered' ($null -eq (Get-V7InstalledProduct $upgradeCode)) $installedProductCode
     $installedProductCode = $null
@@ -310,7 +297,7 @@ try {
 } finally {
     Stop-InstalledProcesses $InstallDir
     if ($installedProductCode) {
-        try { [void](Invoke-Msi @('/x', $installedProductCode, '/qn') (Join-Path $artifacts "$($Scenario.ToLowerInvariant())-cleanup.log")) } catch { }
+        try { [void](Invoke-V7Msi @('/x', $installedProductCode, '/qn') (Join-Path $artifacts "$($Scenario.ToLowerInvariant())-cleanup.log")) } catch { }
     }
     if (-not $ReportPath) { $ReportPath = Join-Path $artifacts "$($Scenario.ToLowerInvariant()).json" }
     $report = Resolve-FullPath $ReportPath $repo

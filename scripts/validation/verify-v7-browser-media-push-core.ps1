@@ -15,6 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
 . (Join-Path $PSScriptRoot 'V7MsiInspection.ps1')
+. (Join-Path $PSScriptRoot 'V7MsiExecution.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
 $expectedInstallDir = [IO.Path]::GetFullPath((Join-Path $repo '.tool-cache\test-tmp\browser-media-push')).TrimEnd('\', '/')
@@ -41,12 +42,6 @@ if (-not $private) { throw "TVBox receiver must use a private IPv4 LAN address: 
 function Resolve-FullPath([string]$Path, [string]$Base) {
     if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
     return [IO.Path]::GetFullPath((Join-Path $Base $Path))
-}
-
-function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
-    $allArguments = @($Arguments) + @('/norestart', 'REBOOT=ReallySuppress', '/l*v', $LogPath)
-    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $allArguments -Wait -PassThru
-    return [int]$process.ExitCode
 }
 
 function Get-FreeTcpPort {
@@ -204,7 +199,7 @@ if ($preEdgeRegistration.Count -gt 0 -or $preFirefoxRegistration.Count -gt 0) {
     throw "Browser media-push gate requires no pre-existing HLS Native Messaging registration before candidate MSI install: edge=$($preEdgeRegistration | ConvertTo-Json -Compress) firefox=$($preFirefoxRegistration | ConvertTo-Json -Compress)"
 }
 try {
-    $installExit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") $installLog
+    $installExit = Invoke-V7Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") $installLog
     if ($installExit -notin @(0, 3010, 1641)) { throw "Candidate MSI install failed with exit $installExit" }
     $installed = $true
     $product = Get-V7InstalledProduct $upgradeCode
@@ -341,7 +336,7 @@ try {
     }
     if ($installed) {
         try {
-            $uninstallExit = Invoke-Msi @('/x', $candidate, '/qn') $uninstallLog
+            $uninstallExit = Invoke-V7Msi @('/x', $candidate, '/qn') $uninstallLog
             if ($uninstallExit -notin @(0, 3010, 1641)) {
                 $cleanupFailures.Add("candidate MSI uninstall failed with exit $uninstallExit")
             }
