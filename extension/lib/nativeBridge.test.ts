@@ -326,7 +326,7 @@ describe('persistent native bridge', () => {
     vi.useFakeTimers()
     const port = new FakePort()
     const bridge = new NativeBridge(() => port, 100)
-    const request = bridge.request({ op: 'wait_handoff' }, 1_000)
+    const request = bridge.request({ op: 'handoff_status' }, 1_000)
     await vi.advanceTimersByTimeAsync(200)
     expect(port.disconnect).not.toHaveBeenCalled()
     port.onMessage.emit({ ok: true, handoff: { status: 'accepted' }, __request_id: port.posted[0].__request_id })

@@ -643,8 +643,8 @@ object EnginePipeClient {
             (candidate to size).takeIf { candidate.isNotBlank() && size > 0 }
         }.toMap()
     }
-    fun presentHandoff(handoffId: String, presented: Boolean = true, presenterId: String = "") = command(commandOf(
-        "present_handoff", "handoff_id" to requireId(handoffId), "ok" to presented, "presenter_id" to presenterId,
+    fun claimHandoffFallback(handoffId: String) = command(commandOf(
+        "present_handoff", "handoff_id" to requireId(handoffId), "ok" to false, "presenter_id" to "",
     ))
     fun rejectHandoff(handoffId: String, suppressSiteKind: Boolean = false) = command(commandOf(
         "reject_handoff", "handoff_id" to requireId(handoffId), "suppress_site_kind" to suppressSiteKind,

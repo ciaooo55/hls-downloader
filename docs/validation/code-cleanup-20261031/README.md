@@ -8,6 +8,8 @@
 
 第五轮的媒体拼接原子替换、工作台 URL 校验与扩展 ZIP 有界解压见 [对抗检查补充](adversarial-followup.md)。
 
+第六轮按当前调用方删除无依赖的兼容分支、旧操作别名及重复分派逻辑，见 [旧路径收敛](obsolete-path-cleanup.md)。
+
 ## 范围与结论
 
 本轮从 `7a1111c699894b12f1a942d3188e38db34e77486` 开始，起始工作区干净。检查范围包括 Rust Core、Native Host、CLI、Presenter、Compose 工作台、浏览器扩展，以及构建、安装、发布和验证脚本。

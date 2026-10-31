@@ -17,14 +17,12 @@ export function canResumeBrowserDownload(state: BrowserDownloadState): boolean {
   return state === 'in_progress' || state === 'interrupted'
 }
 
-export type HandoffPresentationMode = 'native-shell' | 'native-shell-pending' | 'desktop' | 'desktop-pending' | 'ui-fallback' | 'none' | string
-
 export interface BrowserHandoffPayload {
   id?: string
   status?: string
   presented?: boolean
   presentation?: string
-  presentation_mode?: HandoffPresentationMode
+  presentation_mode?: string
   presentation_ok?: boolean
   presentation_queued?: boolean
   presentation_error?: string

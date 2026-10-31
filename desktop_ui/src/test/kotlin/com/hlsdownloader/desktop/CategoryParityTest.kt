@@ -99,12 +99,6 @@ class CategoryParityTest {
                 "$kind 现在不是媒体分类了——Rust 侧仍然是",
             )
         }
-        // Core 的 ResourceKind 没有 media 变体；Kotlin 保留它只为兼容旧接管报文。
-        // 把它钉住，免得有人以为真有这么一个类型、顺手再加一个。
-        assertTrue(
-            downloadCategory("index.bin", "media") == TaskCategory.MEDIA,
-            "media 这个兼容值被删了",
-        )
     }
 
     @Test

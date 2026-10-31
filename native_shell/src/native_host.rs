@@ -211,27 +211,6 @@ impl NativeHostSession {
             .get("op")
             .and_then(Value::as_str)
             .ok_or_else(|| "Native Messaging 缺少 op".to_string())?;
-        if !matches!(
-            operation,
-            "ping"
-                | "activate"
-                | "offer"
-                | "recover_offer"
-                | "offer_local_file"
-                | "download"
-                | "handoff_status"
-                | "wait_handoff"
-                | "accept_handoff"
-                | "reject_handoff"
-                | "set_takeover_settings"
-                | "push_to_tv"
-                | "media_push"
-                | "media_push_status"
-                | "subtitle"
-        ) {
-            return Err(format!("不支持的 Native Messaging 操作: {operation}"));
-        }
-
         match operation {
             "subtitle" => {
                 let mut request = message.get("request").cloned().unwrap_or(json!({}));
@@ -282,13 +261,13 @@ impl NativeHostSession {
             }
             "offer_local_file" => self.offer(message, true),
             "download" => self.download(message),
-            "handoff_status" | "wait_handoff" => self.handoff_status(message),
+            "handoff_status" => self.handoff_status(message),
             "accept_handoff" => self.accept_handoff(message),
             "reject_handoff" => self.reject_handoff(message),
             "set_takeover_settings" => self.set_takeover_settings(message),
-            "push_to_tv" | "media_push" => self.media_push(message),
+            "media_push" => self.media_push(message),
             "media_push_status" => self.media_push_status(message),
-            _ => unreachable!(),
+            _ => Err(format!("不支持的 Native Messaging 操作: {operation}")),
         }
     }
 
@@ -602,10 +581,10 @@ impl NativeHostSession {
     }
 
     fn media_push(&mut self, message: &Value) -> Result<Value, String> {
-        let kind = message
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("cast");
+        let kind = match message.get("kind").and_then(Value::as_str) {
+            Some(kind @ ("tvbox" | "cast")) => kind,
+            _ => return Err("浏览器投送类型必须为 tvbox 或 cast".into()),
+        };
         let payload = resource_payload(message)?;
         let url = field(payload, "url");
         let title = field(payload, "title");
@@ -620,11 +599,6 @@ impl NativeHostSession {
         {
             return Err("浏览器投送地址无效".into());
         }
-        let kind = if matches!(kind, "tvbox" | "push_to_tv") {
-            "tvbox"
-        } else {
-            "cast"
-        };
         let request = MediaPushRequest {
             id: format!(
                 "media-push-{:x}-{}",
@@ -1216,6 +1190,22 @@ mod tests {
             .dispatch(&json!({"op": "delete_everything"}))
             .unwrap_err();
         assert!(error.contains("不支持"));
+    }
+
+    #[test]
+    fn media_push_rejects_invalid_kind_without_creating_a_request() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let before = session.core.local().store().load_handoffs().unwrap();
+        for mut message in [json!({}), json!({"kind": "unsupported"})] {
+            message["op"] = json!("media_push");
+            message["resource"] = json!({"url": "https://cdn.test/video.mp4"});
+            assert!(session.dispatch(&message).unwrap_err().contains("投送类型"));
+        }
+        assert_eq!(
+            session.core.local().store().load_handoffs().unwrap(),
+            before
+        );
+        assert!(session.media_push_ui_request_id.is_none());
     }
 
     #[test]

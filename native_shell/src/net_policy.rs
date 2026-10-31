@@ -287,7 +287,6 @@ impl TokenBucket {
 }
 
 struct ThrottleState {
-    legacy: TokenBucket,
     scoped: HashMap<String, TokenBucket>,
     hourly: RollingQuota,
     global_schedule: GlobalSchedule,
@@ -374,19 +373,11 @@ impl RollingQuota {
 fn throttle() -> &'static Mutex<ThrottleState> {
     THROTTLE.get_or_init(|| {
         Mutex::new(ThrottleState {
-            legacy: TokenBucket::new(),
             scoped: HashMap::new(),
             hourly: RollingQuota::new(),
             global_schedule: GlobalSchedule::default(),
         })
     })
-}
-
-#[cfg(test)]
-pub fn configure_limit_kib(limit_kib: u64) {
-    if let Ok(mut state) = throttle().lock() {
-        state.legacy.set_limit_kib(limit_kib);
-    }
 }
 
 pub fn configure_scoped_limit(scope: &str, limit_kib: u64) {
@@ -488,7 +479,7 @@ pub fn with_throttle_context<T>(context: Option<ThrottleContext>, work: impl FnO
 }
 
 fn consume_bucket<E>(
-    scope: Option<&str>,
+    scope: &str,
     nbytes: usize,
     check: &mut impl FnMut() -> Result<(), E>,
 ) -> Result<(), E> {
@@ -500,16 +491,13 @@ fn consume_bucket<E>(
         let Ok(mut state) = throttle().lock() else {
             return Ok(());
         };
-        if scope == Some("global") {
+        if scope == "global" {
             refresh_global_limit_at(&mut state, chrono_minutes_now());
         }
-        let bucket = match scope {
-            Some(scope) => state
-                .scoped
-                .entry(scope.to_string())
-                .or_insert_with(TokenBucket::new),
-            None => &mut state.legacy,
-        };
+        let bucket = state
+            .scoped
+            .entry(scope.to_string())
+            .or_insert_with(TokenBucket::new);
         if bucket.limit_bps <= 0.0 {
             return Ok(());
         }
@@ -563,19 +551,11 @@ fn consume_hourly_quota<E>(
 // 仅在限速/配额实际等待时轮询控制；无上限的热路径不增加控制文件 I/O。
 pub fn consume<E>(nbytes: usize, mut check: impl FnMut() -> Result<(), E>) -> Result<(), E> {
     let Some(context) = current_throttle_context() else {
-        return consume_bucket(None, nbytes, &mut check);
+        return Ok(());
     };
-    consume_bucket(Some("global"), nbytes, &mut check)?;
-    consume_bucket(
-        Some(&format!("queue:{}", context.queue_id)),
-        nbytes,
-        &mut check,
-    )?;
-    consume_bucket(
-        Some(&format!("task:{}", context.task_id)),
-        nbytes,
-        &mut check,
-    )?;
+    consume_bucket("global", nbytes, &mut check)?;
+    consume_bucket(&format!("queue:{}", context.queue_id), nbytes, &mut check)?;
+    consume_bucket(&format!("task:{}", context.task_id), nbytes, &mut check)?;
     consume_hourly_quota(nbytes, &mut check)
 }
 
@@ -903,7 +883,6 @@ mod tests {
     #[test]
     fn running_workers_switch_the_shared_global_bucket_at_schedule_boundaries() {
         let mut state = ThrottleState {
-            legacy: TokenBucket::new(),
             scoped: HashMap::new(),
             hourly: RollingQuota::new(),
             global_schedule: GlobalSchedule {
@@ -951,7 +930,6 @@ mod tests {
 
     #[test]
     fn throttle_unlimited_does_not_sleep() {
-        configure_limit_kib(0);
         let started = Instant::now();
         consume(1024 * 1024, || -> Result<(), ()> {
             panic!("unlimited transfer must not poll control")
@@ -965,10 +943,10 @@ mod tests {
         let scope = "fixture:interruptible-wait";
         configure_scoped_limit(scope, 1);
         assert_eq!(
-            consume_bucket(Some(scope), 64 * 1024, &mut || Err("paused")),
+            consume_bucket(scope, 64 * 1024, &mut || Err("paused")),
             Err("paused")
         );
-        consume_bucket(Some(scope), 64 * 1024, &mut || {
+        consume_bucket(scope, 64 * 1024, &mut || {
             // 同步回调可取得限速锁，且解除限速后不再等待剩余字节。
             configure_scoped_limit(scope, 0);
             Ok::<(), ()>(())
@@ -1027,7 +1005,7 @@ mod tests {
                 let barrier = std::sync::Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    consume_bucket(Some(scope), 32 * 1024, &mut || Ok::<(), ()>(())).unwrap();
+                    consume_bucket(scope, 32 * 1024, &mut || Ok::<(), ()>(())).unwrap();
                 })
             })
             .collect();

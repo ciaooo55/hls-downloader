@@ -2452,6 +2452,10 @@ impl CoreCoordinator {
         if handoff_id.trim().is_empty() {
             return Err("接管请求缺少编号".into());
         }
+        let presenter_id = presenter_id.trim();
+        if ok && presenter_id.is_empty() {
+            return Err("下载确认窗口缺少身份标识".into());
+        }
         let mut core = self.lock()?;
         let mut updated = false;
         for encoded in core
@@ -2489,16 +2493,10 @@ impl CoreCoordinator {
                 .get("presentation_lease_until_ms")
                 .and_then(Value::as_u64)
                 .unwrap_or_default();
-            let presenter_id = presenter_id.trim();
-            let claimant = if presenter_id.is_empty() {
-                "legacy-presenter"
-            } else {
-                presenter_id
-            };
             if ok && presentation == "fallback" {
                 return Err("接管请求已由主窗口处理".into());
             }
-            if ok && !owner.is_empty() && owner != claimant && lease_until > now {
+            if ok && !owner.is_empty() && owner != presenter_id && lease_until > now {
                 return Err("接管请求已由另一个确认窗口处理".into());
             }
             if !ok && presenter_id.is_empty() && lease_until > now {
@@ -2509,17 +2507,18 @@ impl CoreCoordinator {
             }
             if let Some(object) = value.as_object_mut() {
                 if ok {
-                    let next = if (owner == claimant && presentation == "presenting")
-                        || presenter_id.is_empty()
-                    {
+                    let next = if owner == presenter_id && presentation == "presenting" {
                         "presented"
-                    } else if owner == claimant {
+                    } else if owner == presenter_id {
                         presentation.as_str()
                     } else {
                         "presenting"
                     };
                     object.insert("presentation".into(), Value::String(next.into()));
-                    object.insert("presentation_owner".into(), Value::String(claimant.into()));
+                    object.insert(
+                        "presentation_owner".into(),
+                        Value::String(presenter_id.into()),
+                    );
                     object.insert(
                         "presentation_lease_until_ms".into(),
                         Value::from(now.saturating_add(HANDOFF_PRESENTER_LEASE_MS)),
@@ -8819,6 +8818,20 @@ mod tests {
                 },
             })
             .unwrap();
+        let before_claim = coordinator.lock().unwrap().store().load_handoffs().unwrap();
+        for presenter_id in ["", " \t "] {
+            assert!(coordinator
+                .dispatch(CoreCommand::PresentHandoff {
+                    handoff_id: "handoff-shown".into(),
+                    ok: true,
+                    presenter_id: presenter_id.into(),
+                })
+                .is_err());
+        }
+        assert_eq!(
+            coordinator.lock().unwrap().store().load_handoffs().unwrap(),
+            before_claim
+        );
         coordinator
             .dispatch(CoreCommand::PresentHandoff {
                 handoff_id: "handoff-shown".into(),

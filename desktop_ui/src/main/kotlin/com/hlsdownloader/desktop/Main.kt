@@ -1844,7 +1844,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
         var failureReported = false
         while (!presenterReady.value && handoffQueue.any { it.handoffId == offer.handoffId && it.presentation != "fallback" }) {
             val claimed = runCatching {
-                withContext(Dispatchers.IO) { EnginePipeClient.presentHandoff(offer.handoffId, presented = false) }
+                withContext(Dispatchers.IO) { EnginePipeClient.claimHandoffFallback(offer.handoffId) }
             }
             if (claimed.isSuccess) {
                 val index = handoffQueue.indexOfFirst { it.handoffId == offer.handoffId }
@@ -2379,7 +2379,7 @@ private fun displayStatus(status: String) = when (status.lowercase()) {
     // 未知状态显式展示为"其他"，避免被静默归入"排队中"导致过滤计数失真
     else -> "其他"
 }
-private val mediaResourceKinds = setOf("hls", "dash", "live", "media")
+private val mediaResourceKinds = setOf("hls", "dash", "live")
 internal val catMEDIA_EXTENSIONS = setOf(
     "mp4", "mkv", "webm", "mov", "avi", "m4v", "ts", "mp3", "m4a", "flac", "wav",
     "ac3", "aac", "3gp", "flv", "m2ts", "mka", "mpd", "mpeg", "mpg", "ogg", "opus",
@@ -2388,18 +2388,11 @@ internal val catMEDIA_EXTENSIONS = setOf(
 internal val catPROGRAM_EXTENSIONS = setOf("exe", "msi", "msix", "appx", "bat", "cmd", "com", "ps1")
 internal val catARCHIVE_EXTENSIONS = setOf("zip", "7z", "rar", "tar", "gz", "bz2", "xz", "iso")
 /**
- * 下载分类的**唯一**实现，与 `native_shell/src/category.rs::download_category` 一一对应。
- *
- * 在此之前它是两份代码，而且已经分叉：[taskCategory]（任务栏/分类筛选）漏了
- * ts / m4v / m4a / jpg / png / gif / webp，多了 Core 不认识的 apk / dmg / pkg，
- * 又少了 iso，还没有 hls/dash/live 的媒体短路。同一个 .ts 文件在接管弹窗里是"媒体"、
- * 在任务栏里却是"其他"。现在两边都走这一个函数。
- * 改这三张表必须同时改 `native_shell/src/media_ext.rs`；desktop_ui 的
- * CategoryParityTest 会把两边的扩展名清单逐项比对，防止再次分叉。
+ * 任务列表与接管弹窗共用分类规则，与 Rust category/media_ext 保持一致。
+ * CategoryParityTest 检查跨语言扩展名表和媒体类型，修改时需同步两端。
  */
 internal fun downloadCategory(filename: String, resourceKind: String): TaskCategory {
     // Core：ResourceKind::Hls | Dash | Live 一律算媒体，不看扩展名。
-    // Rust 的 ResourceKind 没有 media 变体，这里保留它只为向后兼容旧接管报文。
     if (resourceKind.lowercase() in mediaResourceKinds) return TaskCategory.MEDIA
     val extension = filename.substringAfterLast('.', "").lowercase()
     return when (extension) {

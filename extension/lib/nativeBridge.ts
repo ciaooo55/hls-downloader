@@ -153,7 +153,6 @@ export class NativeBridge {
     switch (String(message.op || '')) {
       // 交接前的探测不能排在挂起的后台长轮询后；普通心跳仍保持最低优先级。
       case 'ping': return message.interactive === true ? 30 : 0
-      case 'wait_handoff': return 10
       case 'handoff_status':
       case 'media_push_status': return 20
       default: return 30
