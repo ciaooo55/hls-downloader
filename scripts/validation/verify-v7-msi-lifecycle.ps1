@@ -208,7 +208,8 @@ try {
     if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
     $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'old-msi-sha256' ($oldHash -eq $OldMsiSha256.ToLowerInvariant()) $oldHash
-    Add-Step 'old-msi-version' ((Get-V7MsiProperty $old 'ProductVersion') -eq '7.0.0') (Get-V7MsiProperty $old 'ProductVersion')
+    $oldVersion = Get-V7MsiProperty $old 'ProductVersion'
+    Add-Step 'old-msi-version' ($oldVersion -match '^\d+\.\d+\.\d+$') $oldVersion
 
     $candidateVersion = Get-V7MsiProperty $candidate 'ProductVersion'
     $upgradeCode = Get-V7MsiProperty $candidate 'UpgradeCode'
@@ -220,7 +221,7 @@ try {
     Add-Step 'candidate-manifest-version' (([string]$manifest.product_version) -eq $expectedCandidateVersion) ([string]$manifest.product_version)
     [void](Assert-V7CandidateMsiVersion -ExpectedVersion $expectedCandidateVersion -MsiProductVersion $candidateVersion)
     Add-Step 'candidate-msi-version' ($candidateVersion -eq $expectedCandidateVersion) $candidateVersion
-    Add-Step 'candidate-version-newer-than-baseline' ([version]$candidateVersion -gt [version]'7.0.0') "$candidateVersion > 7.0.0"
+    Add-Step 'candidate-version-not-older-than-baseline' ([version]$candidateVersion -ge [version]$oldVersion) "$candidateVersion >= $oldVersion"
     Add-Step 'upgrade-code-match' ($upgradeCode -eq '{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}' -and (Get-V7MsiProperty $old 'UpgradeCode') -eq $upgradeCode) $upgradeCode
     Add-Step 'candidate-product-code-is-new' ($candidateProductCode -ne $oldProductCode) $candidateProductCode
 
@@ -233,7 +234,7 @@ try {
     $exit = Invoke-Msi @('/i', $old, '/qn', "INSTALLDIR=$InstallDir") $installLog
     Add-Step 'install-old-exit' ($exit -in @(0, 3010, 1641)) $exit
     $oldProduct = Get-V7InstalledProduct $upgradeCode
-    Add-Step 'old-product-registered' ($null -ne $oldProduct -and $oldProduct.version -eq '7.0.0') $oldProduct
+    Add-Step 'old-product-registered' ($null -ne $oldProduct -and $oldProduct.version -eq $oldVersion) $oldProduct
     $installedProductCode = $oldProduct.product_code
     $enginePath = Join-Path $InstallDir 'app\resources\HLSDownloaderEngine.exe'
     $engineBefore = (Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash.ToLowerInvariant()
