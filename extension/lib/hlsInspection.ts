@@ -1,8 +1,8 @@
 import { parseHlsManifest, resourceQuality, type HlsVariant } from './hlsManifest'
-import { replayableRequestHeaders, type MediaResource, type MediaAudioTrack } from './resources'
+import { type MediaResource, type MediaAudioTrack } from './resources'
+import { createManifestFetcher, estimatedManifestBytes, type ManifestFetcher } from './manifestInspection'
 import { readBoundedResponseText } from './boundedResponse'
 
-export type ManifestFetcher = (url: string, init: RequestInit) => Promise<Response>
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 
 export interface HlsInspectionResult {
@@ -29,27 +29,6 @@ type InspectionResource = Pick<MediaResource, 'url' | 'requestHeaders' | 'width'
   inspectionHeaders?: Record<string, string>
 }
 
-export function hlsInspectionHeaders(
-  values: Record<string, string> | undefined,
-  contextual: Record<string, string> | undefined = {},
-): Record<string, string> {
-  const headers = replayableRequestHeaders(values)
-  for (const name of Object.keys(headers)) {
-    if (['user-agent'].includes(name) || name.startsWith('sec-')) delete headers[name]
-  }
-  // Referer/Origin/Cookie are not replayed from arbitrary page payloads. They
-  // can only enter this map through the background's exact resource context
-  // (page URL + cookiesFor(resource URL)). Keep values bounded and reject
-  // header injection before handing them to fetch().
-  for (const [rawName, rawValue] of Object.entries(contextual || {})) {
-    const name = String(rawName || '').trim().toLowerCase()
-    const value = String(rawValue || '').trim()
-    if (!['referer', 'origin', 'cookie'].includes(name) || !value || /[\r\n]/.test(value) || value.length > 32 * 1024) continue
-    headers[name] = value
-  }
-  return headers
-}
-
 async function hlsManifestText(response: Response): Promise<string | null> {
   const text = await readBoundedResponseText(response, MAX_MANIFEST_BYTES)
   if (text === null) return null
@@ -57,36 +36,12 @@ async function hlsManifestText(response: Response): Promise<string | null> {
   return text
 }
 
-function estimatedBytes(duration: number | undefined, bandwidth: number | undefined): number | undefined {
-  if (!Number.isFinite(duration) || (duration || 0) <= 0
-    || !Number.isFinite(bandwidth) || (bandwidth || 0) <= 0) return undefined
-  const bytes = (duration || 0) * (bandwidth || 0) / 8
-  return Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : undefined
-}
-
 /** Inspect a captured HLS resource without treating a live window as a VOD. */
 export async function inspectHlsResource(
   resource: InspectionResource,
-  fetcher: ManifestFetcher = (url, init) => fetch(url, init),
+  fetcher?: ManifestFetcher,
 ): Promise<HlsInspectionResult | null> {
-  const headers = hlsInspectionHeaders(resource.requestHeaders, resource.inspectionHeaders)
-  const fallbackHeaders = hlsInspectionHeaders(resource.requestHeaders)
-  const hasContext = Object.keys(resource.inspectionHeaders || {}).length > 0
-  const fetchManifest = async (url: string) => {
-    const init = { credentials: 'include' as const, headers, signal: AbortSignal.timeout(5_000) }
-    try {
-      const response = await fetcher(url, init)
-      if (response.ok || !hasContext) return response
-      // A service worker/CORS policy may reject a manually supplied context
-      // header even when the same URL is publicly inspectable. Retry once with
-      // only replay-safe application headers instead of leaving the resource
-      // permanently uninspected.
-      return fetcher(url, { ...init, headers: fallbackHeaders })
-    } catch (error) {
-      if (!hasContext) throw error
-      return fetcher(url, { ...init, headers: fallbackHeaders })
-    }
-  }
+  const fetchManifest = createManifestFetcher(resource, fetcher)
   const response = await fetchManifest(resource.url)
   if (!response.ok) return null
   const manifestText = await hlsManifestText(response)
@@ -147,7 +102,7 @@ export async function inspectHlsResource(
     estimatedSize: live
       ? undefined
       : duration && bandwidth
-        ? estimatedBytes(duration, bandwidth)
+        ? estimatedManifestBytes(duration, bandwidth)
         : fallbackEstimatedSize,
     quality: best?.quality ? `最高 ${best.quality}` : resourceQuality(resource.url, resource.height),
   }

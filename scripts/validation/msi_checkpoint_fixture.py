@@ -7,10 +7,11 @@ import json
 import os
 from pathlib import Path
 import socket
-import struct
 import subprocess
 import threading
 import time
+
+from v7_core_ipc import connect, send_frame as send, wait_task
 
 
 PAYLOAD_SIZE = 32 * 1024 * 1024
@@ -66,55 +67,6 @@ class RangeHandler(BaseHTTPRequestHandler):
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{PAYLOAD_SIZE}")
         self.end_headers()
-
-
-def read_exact(stream: socket.socket, size: int) -> bytes:
-    data = bytearray()
-    while len(data) < size:
-        chunk = stream.recv(size - len(data))
-        if not chunk:
-            raise RuntimeError("Core IPC closed")
-        data.extend(chunk)
-    return bytes(data)
-
-
-def send(stream: socket.socket, message: dict[str, object]) -> dict[str, object]:
-    payload = json.dumps(message, separators=(",", ":")).encode()
-    stream.sendall(struct.pack("<I", len(payload)) + payload)
-    return json.loads(read_exact(stream, struct.unpack("<I", read_exact(stream, 4))[0]))
-
-
-def connect(port: int) -> socket.socket:
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        try:
-            stream = socket.create_connection(("127.0.0.1", port), timeout=1)
-            stream.settimeout(10)
-            hello = send(stream, {"type": "hello", "protocol": "hls-downloader-v7-core", "version": 1})
-            if hello.get("type") == "hello":
-                return stream
-        except OSError:
-            time.sleep(0.05)
-    raise TimeoutError("Engine TCP IPC did not become ready")
-
-
-def snapshot(stream: socket.socket, task_id: str, request_id: int) -> dict[str, object]:
-    response = send(stream, {"type": "snapshot", "request_id": request_id})
-    task = next((item for item in response.get("tasks", []) if item.get("task_id") == task_id), None)
-    if not task:
-        raise RuntimeError(f"task is absent from snapshot: {response}")
-    return task
-
-
-def wait_task(stream: socket.socket, task_id: str, predicate, request_id: int) -> dict[str, object]:
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        task = snapshot(stream, task_id, request_id)
-        request_id += 1
-        if predicate(task):
-            return task
-        time.sleep(0.05)
-    raise TimeoutError(f"task state deadline expired: {task}")
 
 
 def file_hash(path: Path) -> str:

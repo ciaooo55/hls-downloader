@@ -10,11 +10,12 @@ import os
 from pathlib import Path
 import shutil
 import socket
-import struct
 import subprocess
 import tempfile
 import threading
 import time
+
+from v7_core_ipc import free_port, send_frame
 
 
 PAYLOAD_SIZE = 256 * 1024 * 1024
@@ -81,24 +82,6 @@ class RangeHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def send_frame(stream: socket.socket, message: dict[str, object]) -> dict[str, object]:
-    payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
-    stream.sendall(struct.pack("<I", len(payload)) + payload)
-    header = read_exact(stream, 4)
-    size = struct.unpack("<I", header)[0]
-    return json.loads(read_exact(stream, size).decode("utf-8"))
-
-
-def read_exact(stream: socket.socket, size: int) -> bytes:
-    result = bytearray()
-    while len(result) < size:
-        chunk = stream.recv(size - len(result))
-        if not chunk:
-            raise RuntimeError("Core IPC closed before the response completed")
-        result.extend(chunk)
-    return bytes(result)
-
-
 class ProcessMemoryCounters(ctypes.Structure):
     _fields_ = [
         ("cb", wintypes.DWORD),
@@ -132,12 +115,6 @@ def working_set_bytes(pid: int) -> int:
 
 def expected_sha256() -> str:
     return hashlib.sha256(PAYLOAD).hexdigest()
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def wait_for_core(port: int, deadline: float) -> socket.socket:

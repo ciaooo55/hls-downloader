@@ -10,7 +10,8 @@ import subprocess
 import threading
 import traceback
 
-from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server, connect, send, wait_task
+from v7_core_ipc import connect, send_frame as send, wait_task
+from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 
 
 def main():

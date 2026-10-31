@@ -13,7 +13,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.io.EOFException
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -21,8 +22,6 @@ import java.io.RandomAccessFile
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -801,78 +800,24 @@ object EnginePipeClient {
         return requireNoCoreError(result, fallback)
     }
 
-    /** Windows 命名管道：优先，打不开才回退，所以 Windows 上的行为完全不变。 */
-    private class FileFrameChannel(private val pipe: RandomAccessFile) : FrameChannel {
-        override fun writeFrame(payload: ByteArray) {
-            pipe.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(payload.size).array())
-            pipe.write(payload)
-        }
-
-        override fun readFrame(): ByteArray {
-            val header = ByteArray(4)
-            try { pipe.readFully(header) } catch (_: EOFException) { throw EOFException("下载引擎连接已关闭") }
-            val size = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN).int
-            require(size in 1..MAX_FRAME) { "下载引擎响应长度无效" }
-            val body = ByteArray(size)
-            try { pipe.readFully(body) } catch (_: EOFException) { throw EOFException("下载引擎响应不完整") }
-            return body
-        }
-
-        override fun close() { pipe.close() }
-    }
-
-    /** TCP loopback 回退，帧格式和命名管道一致（4 字节小端长度 + JSON）。 */
-    private class TcpFrameChannel(address: InetSocketAddress) : FrameChannel {
-        private val socket: Socket = Socket().apply { connect(address, CORE_CONNECT_TIMEOUT_MS) }
-        private val out = socket.getOutputStream()
-        private val input = socket.getInputStream()
-
-        override fun writeFrame(payload: ByteArray) {
-            out.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(payload.size).array())
-            out.write(payload)
-            out.flush()
-        }
-
-        override fun readFrame(): ByteArray {
-            val header = ByteArray(4)
-            var read = 0
-            while (read < 4) {
-                val n = input.read(header, read, 4 - read)
-                if (n < 0) throw EOFException("下载引擎连接已关闭")
-                read += n
-            }
-            val size = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN).int
-            require(size in 1..MAX_FRAME) { "下载引擎响应长度无效" }
-            val body = ByteArray(size)
-            var filled = 0
-            while (filled < size) {
-                val n = input.read(body, filled, size - filled)
-                if (n < 0) throw EOFException("下载引擎响应不完整")
-                filled += n
-            }
-            return body
-        }
-
-        override fun close() { runCatching { socket.close() } }
-    }
-
-    /**
-     * 选传输通道：命名管道优先，Windows 命名管道路径在非 Windows 上直接走 TCP loopback。
-     *
-     * 这里不能用"打开失败再回退"：RandomAccessFile(path, "rw") 在 Linux 上对 `\.\pipe\HLSDownloader.v7`
-     * 这种路径会**就地创建一个普通文件**（实测在 cwd 下生成了 68 字节的 `\.\pipe\HLSDownloader.v7`，
-     * 正好是一帧 hello 的长度），不抛 IOException，于是请求写进垃圾文件、读到 EOF，
-     * 而且每次运行还会在磁盘上留下一个垃圾文件。所以必须先判断是不是 Windows 命名管道路径。
-     */
-    private fun openChannel(): FrameChannel {
+    // 非 Windows 必须先选 TCP；将命名管道路径交给 RandomAccessFile 会创建普通文件。
+    private fun openChannel(): CoreFrameChannel {
         val windowsPipe = pipePath.startsWith(WINDOWS_PIPE_PREFIX) || pipePath.startsWith("\\\\?\\pipe\\")
         if (windowsPipe && !IS_WINDOWS) {
-            return TcpFrameChannel(InetSocketAddress(CORE_TCP_HOST, CORE_TCP_PORT))
+            val socket = Socket()
+            try {
+                socket.connect(InetSocketAddress(CORE_TCP_HOST, CORE_TCP_PORT), CORE_CONNECT_TIMEOUT_MS)
+                return CoreFrameChannel(DataInputStream(socket.getInputStream()), DataOutputStream(socket.getOutputStream()), socket)
+            } catch (error: Throwable) {
+                runCatching(socket::close)
+                throw error
+            }
         }
         val deadline = System.nanoTime() + CORE_CONNECT_TIMEOUT_MS * 1_000_000L
         while (true) {
             try {
-                return FileFrameChannel(RandomAccessFile(pipePath, "rw"))
+                val pipe = RandomAccessFile(pipePath, "rw")
+                return CoreFrameChannel(pipe, pipe, pipe)
             } catch (error: FileNotFoundException) {
                 // Windows 会把管道实例暂时占满报告成 FileNotFoundException。只在打开阶段
                 // 等待服务端补充实例；此时尚未发送命令，不能重试已发送的删除、开始等操作。
@@ -923,19 +868,7 @@ object EnginePipeClient {
         }
     }
 
-    /**
-     * 引擎连接的一层抽象：Windows 上是命名管道，其他平台回退到 TCP loopback。
-     * 之所以要有 TCP 回退：Rust 引擎侧的 bind_local() 在非 Windows 上本来就在 TCP loopback
-     * 监听（core_server.rs，默认端口 V7_TCP_PORT=18765），但客户端此前只会开 Windows 命名管道，
-     * 于是在 Linux 上 RandomAccessFile 打不开 -> 异常被 runCatching 接住 -> snapshotReady 一直 false，
-     * snapshotState()/waitEvents() 从来没成功跑过一次。命名管道仍然优先，Windows 行为不变。
-     */
-    private interface FrameChannel : AutoCloseable {
-        fun writeFrame(payload: ByteArray)
-        fun readFrame(): ByteArray
-    }
-
-    private class PipeConnection(private val channel: FrameChannel) : AutoCloseable {
+    private class PipeConnection(private val channel: CoreFrameChannel) : AutoCloseable {
         private var idleAtMillis = 0L
         fun markIdle() { idleAtMillis = System.currentTimeMillis() }
         fun idleMillis(): Long = if (idleAtMillis == 0L) Long.MAX_VALUE else System.currentTimeMillis() - idleAtMillis
@@ -948,7 +881,6 @@ object EnginePipeClient {
 
         fun request(message: JsonObject): JsonObject {
             val payload = protocolJson.encodeToString(JsonObject.serializer(), message).encodeToByteArray()
-            require(payload.size <= MAX_FRAME) { "下载引擎请求过大" }
             channel.writeFrame(payload)
             val body = channel.readFrame()
             val response = protocolJson.parseToJsonElement(body.decodeToString()).jsonObject
@@ -966,7 +898,6 @@ object EnginePipeClient {
 
     @Volatile private var engineProcess: Process? = null
     @Volatile private var presenterProcess: Process? = null
-    const val MAX_FRAME = 4 * 1024 * 1024
     private const val MAX_IDLE_CONNECTIONS = 4
     private const val MAX_IDLE_MILLIS = 60_000L
     private val requestIds = AtomicLong(100)

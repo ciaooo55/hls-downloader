@@ -27,8 +27,7 @@ from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler, ThrottledDTPHandler
 from pyftpdlib.servers import FTPServer
 
-from msi_checkpoint_fixture import connect, send, snapshot, wait_task
-from smoke_v7_transfer_performance import free_port
+from v7_core_ipc import connect, free_port, send_frame as send, snapshot, wait_task
 
 
 def run(args):

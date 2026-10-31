@@ -24,7 +24,7 @@ import zipfile
 import psutil
 from PIL import Image
 
-from msi_checkpoint_fixture import connect, send, wait_task
+from v7_core_ipc import connect, send_frame as send, wait_task
 from smoke_v7_download_playback import wait
 from smoke_v7_native_host import responses
 from smoke_v7_portable_app import Pipe

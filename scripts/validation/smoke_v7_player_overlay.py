@@ -23,7 +23,7 @@ import uuid
 import psutil
 from PIL import Image, ImageChops, ImageStat
 
-from msi_checkpoint_fixture import connect, send, wait_task
+from v7_core_ipc import connect, send_frame as send, wait_task
 
 
 def wait(predicate, message, timeout=45):

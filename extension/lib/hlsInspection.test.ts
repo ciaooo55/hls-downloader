@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { inspectHlsResource, type ManifestFetcher } from './hlsInspection'
+import { inspectHlsResource } from './hlsInspection'
+import type { ManifestFetcher } from './manifestInspection'
 
 const master = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080\n1080/index.m3u8\n'
 const vod = '#EXTM3U\n#EXTINF:6,\na.ts\n#EXTINF:4,\nb.ts\n#EXT-X-ENDLIST\n'

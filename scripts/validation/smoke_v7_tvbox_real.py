@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import socket
-import struct
 import subprocess
 import tempfile
 import threading
@@ -18,35 +17,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-
-def frame(message: dict[str, object]) -> bytes:
-    payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
-    return struct.pack("<I", len(payload)) + payload
+from v7_core_ipc import free_port, send_frame as exchange_core_frame
 
 
-def read_exact(stream: socket.socket, size: int) -> bytes:
-    result = bytearray()
-    while len(result) < size:
-        chunk = stream.recv(size - len(result))
-        if not chunk:
-            raise RuntimeError("Core IPC closed before the response completed")
-        result.extend(chunk)
-    return bytes(result)
-
-
+# TVBox acceptance fails immediately on a Core error; soak tools inspect it.
 def send_frame(stream: socket.socket, message: dict[str, object]) -> dict[str, object]:
-    stream.sendall(frame(message))
-    size = struct.unpack("<I", read_exact(stream, 4))[0]
-    response = json.loads(read_exact(stream, size).decode("utf-8"))
+    response = exchange_core_frame(stream, message)
     if response.get("type") == "error":
         raise RuntimeError(f"Core rejected request: {response}")
     return response
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def local_lan_ip(peer: str | None = None) -> str:

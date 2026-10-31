@@ -17,11 +17,11 @@ from selenium import webdriver
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.edge.service import Service
 
-from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server, connect, send, wait_task
+from v7_core_ipc import connect, free_port, send_frame as send, wait_task
+from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 from smoke_extension_browsers import _chromium_extension_id
 from smoke_extension_media import _find_edge
 from smoke_extension_takeover import _registered_host, _wait_until
-from smoke_v7_transfer_performance import free_port
 from smoke_v7_presenter import native_message, wait_window
 
 

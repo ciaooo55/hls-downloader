@@ -20,7 +20,7 @@ import psutil
 from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 from smoke_v7_native_host import responses
 from smoke_v7_presenter import native_message, visible_window
-from smoke_v7_transfer_performance import free_port
+from v7_core_ipc import free_port
 
 
 class Pipe:

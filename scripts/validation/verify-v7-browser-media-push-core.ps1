@@ -14,6 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
+. (Join-Path $PSScriptRoot 'V7MsiInspection.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
 $expectedInstallDir = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
@@ -39,41 +40,6 @@ if (-not $private) { throw "TVBox receiver must use a private IPv4 LAN address: 
 function Resolve-FullPath([string]$Path, [string]$Base) {
     if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
     return [IO.Path]::GetFullPath((Join-Path $Base $Path))
-}
-
-function Get-MsiProperty([string]$Path, [string]$Property) {
-    $installer = New-Object -ComObject WindowsInstaller.Installer
-    $database = $null
-    $view = $null
-    $record = $null
-    try {
-        $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
-        $sql = "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$($Property.Replace("'", "''"))'"
-        $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($sql))
-        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
-        $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
-        if ($null -eq $record) { return $null }
-        return [string]$record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
-    } finally {
-        foreach ($item in @($record, $view, $database, $installer)) {
-            if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null }
-        }
-    }
-}
-
-function Get-InstalledProduct([string]$UpgradeCode) {
-    $installer = New-Object -ComObject WindowsInstaller.Installer
-    try {
-        foreach ($productCode in @($installer.RelatedProducts($UpgradeCode))) {
-            return [ordered]@{
-                product_code = [string]$productCode
-                version = [string]$installer.ProductInfo($productCode, 'VersionString')
-            }
-        }
-        return $null
-    } finally {
-        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null
-    }
 }
 
 function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
@@ -193,9 +159,9 @@ if ([int]$manifest.schema -ne 1 -or
 $candidate = Assert-Artifact $manifestRoot $manifest.artifacts.msi 'candidate MSI'
 $chromiumZip = Assert-Artifact $manifestRoot $manifest.extensions.Chromium 'candidate Chromium extension'
 $firefoxZip = Assert-Artifact $manifestRoot $manifest.extensions.Firefox 'candidate Firefox extension'
-$upgradeCode = Get-MsiProperty $candidate 'UpgradeCode'
+$upgradeCode = Get-V7MsiProperty $candidate 'UpgradeCode'
 if ($upgradeCode -ne '{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}') { throw "Candidate MSI UpgradeCode mismatch: $upgradeCode" }
-if ($null -ne (Get-InstalledProduct $upgradeCode)) {
+if ($null -ne (Get-V7InstalledProduct $upgradeCode)) {
     throw 'Browser media-push gate requires a clean dedicated release runner with no HLSDownloader product installed.'
 }
 
@@ -241,7 +207,7 @@ try {
     $installExit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") $installLog
     if ($installExit -notin @(0, 3010, 1641)) { throw "Candidate MSI install failed with exit $installExit" }
     $installed = $true
-    $product = Get-InstalledProduct $upgradeCode
+    $product = Get-V7InstalledProduct $upgradeCode
     if ($null -eq $product -or [string]$product.version -ne [string]$manifest.product_version) {
         throw "Installed candidate identity mismatch: $($product | ConvertTo-Json -Compress)"
     }
@@ -385,7 +351,7 @@ try {
         }
     }
     try {
-        if ($null -ne (Get-InstalledProduct $upgradeCode)) {
+        if ($null -ne (Get-V7InstalledProduct $upgradeCode)) {
             $cleanupFailures.Add('candidate MSI product registration survived cleanup')
         }
     } catch {

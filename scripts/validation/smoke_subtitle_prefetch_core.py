@@ -20,7 +20,7 @@ import traceback
 import uuid
 import psutil
 
-from msi_checkpoint_fixture import connect, send
+from v7_core_ipc import connect, send_frame as send
 from smoke_extension_subtitles import QuietHandler
 
 

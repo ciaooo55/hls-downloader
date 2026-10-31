@@ -28,6 +28,8 @@
 
 `validation` 的 Python 工具互相复用同目录帮助函数，因此保持一个模块目录。按名称定位 `smoke_extension_*`（插件）、`smoke_subtitle_*` / `smoke_qwencloud_*`（字幕）、`smoke_v7_player_*`（播放器）、`smoke_v7_*`（Core/桌面）、`test-*`（脚本回归）。`validation/fixtures` 是测试输入，不是运行缓存。
 
+Core TCP 连接、帧交换和空闲端口辅助统一从 `validation/v7_core_ipc.py` 导入；不要为取得辅助函数导入性能测试模块，其顶层会分配性能夹具。MSI 生命周期门禁共用 `validation/V7MsiInspection.ps1` 的只读查询函数。
+
 搬迁脚本必须同时更新调用方、CI、仓库根定位和夹具。PowerShell 默认静态检查及 CI Python 语法检查递归覆盖子目录。历史报告中的旧路径保留原样，不改写成新结果。
 
 执行前阅读参数和当前任务授权：部分工具会下载依赖、启动应用、修改本产品安装或产生云端费用，不能将整个目录当作无副作用的一键检查。

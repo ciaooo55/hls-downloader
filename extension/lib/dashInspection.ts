@@ -1,7 +1,6 @@
-import { replayableRequestHeaders, type MediaResource, type MediaVariant, type MediaAudioTrack } from './resources'
+import { type MediaResource, type MediaVariant, type MediaAudioTrack } from './resources'
+import { createManifestFetcher, estimatedManifestBytes, type ManifestFetcher } from './manifestInspection'
 import { readBoundedResponseText } from './boundedResponse'
-
-export type DashManifestFetcher = (url: string, init: RequestInit) => Promise<Response>
 
 export interface DashInspectionResult {
   audioTracks: MediaAudioTrack[]
@@ -41,12 +40,6 @@ function attributes(value: string): Record<string, string> {
 function positiveFiniteNumber(value = ''): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
-}
-
-function estimatedBytes(duration: number | undefined, bandwidth: number): number | undefined {
-  if (!Number.isFinite(duration) || (duration || 0) <= 0 || !Number.isFinite(bandwidth) || bandwidth <= 0) return undefined
-  const bytes = (duration || 0) * bandwidth / 8
-  return Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes) : undefined
 }
 
 function isoDuration(value = ''): number | null {
@@ -232,7 +225,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     width: best?.width || undefined,
     height: best?.height || undefined,
     bandwidth: best?.bandwidth || undefined,
-    estimatedSize: estimatedBytes(duration, totalBandwidth),
+    estimatedSize: estimatedManifestBytes(duration, totalBandwidth),
     quality: best?.height ? `最高 ${best.height}p` : undefined,
     variants: video.map(candidate => ({
       url: baseUrl, width: candidate.width || undefined, height: candidate.height || undefined,
@@ -248,33 +241,9 @@ export async function inspectDashResource(
   resource: Pick<MediaResource, 'url' | 'requestHeaders'> & {
     inspectionHeaders?: Record<string, string>
   },
-  fetcher: DashManifestFetcher = (url, init) => fetch(url, init),
+  fetcher?: ManifestFetcher,
 ): Promise<DashInspectionResult | null> {
-  const headers = replayableRequestHeaders(resource.requestHeaders)
-  for (const name of Object.keys(headers)) {
-    if (['user-agent'].includes(name) || name.startsWith('sec-')) delete headers[name]
-  }
-  for (const [rawName, rawValue] of Object.entries(resource.inspectionHeaders || {})) {
-    const name = String(rawName || '').trim().toLowerCase()
-    const value = String(rawValue || '').trim()
-    if (!['referer', 'origin', 'cookie'].includes(name) || !value || /[\r\n]/.test(value) || value.length > 32 * 1024) continue
-    headers[name] = value
-  }
-  const fallbackHeaders = replayableRequestHeaders(resource.requestHeaders)
-  for (const name of Object.keys(fallbackHeaders)) {
-    if (['user-agent'].includes(name) || name.startsWith('sec-')) delete fallbackHeaders[name]
-  }
-  const init = { credentials: 'include' as const, headers, signal: AbortSignal.timeout(5_000) }
-  let response: Response
-  try {
-    response = await fetcher(resource.url, init)
-    if (!response.ok && Object.keys(resource.inspectionHeaders || {}).length) {
-      response = await fetcher(resource.url, { ...init, headers: fallbackHeaders })
-    }
-  } catch (error) {
-    if (!Object.keys(resource.inspectionHeaders || {}).length) throw error
-    response = await fetcher(resource.url, { ...init, headers: fallbackHeaders })
-  }
+  const response = await createManifestFetcher(resource, fetcher)(resource.url)
   if (!response.ok) return null
   const text = await readBoundedResponseText(response, 2 * 1024 * 1024)
   if (text === null) return null

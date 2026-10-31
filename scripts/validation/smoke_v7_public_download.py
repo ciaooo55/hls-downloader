@@ -11,8 +11,7 @@ import subprocess
 import tempfile
 from urllib.request import urlopen
 
-from msi_checkpoint_fixture import connect, send, wait_task
-from smoke_v7_transfer_performance import free_port
+from v7_core_ipc import connect, free_port, send_frame as send, wait_task
 
 
 def run(args):

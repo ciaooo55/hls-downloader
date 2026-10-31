@@ -11,9 +11,9 @@ import tempfile
 import threading
 import uuid
 
-from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server, connect, send
+from v7_core_ipc import connect, free_port, send_frame as send
+from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 from smoke_v7_portable_app import wait
-from smoke_v7_transfer_performance import free_port
 
 
 def run(args):

@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
+. (Join-Path $PSScriptRoot 'V7MsiInspection.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $artifacts = Join-Path $repo 'artifacts\v7-productization\msi-lifecycle'
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
@@ -48,26 +49,6 @@ function Resolve-FullPath([string]$Path, [string]$Base) {
     return [IO.Path]::GetFullPath((Join-Path $Base $Path))
 }
 
-function Get-MsiProperty([string]$Path, [string]$Property) {
-    $installer = New-Object -ComObject WindowsInstaller.Installer
-    $database = $null
-    $view = $null
-    $record = $null
-    try {
-        $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
-        $sql = "SELECT ``Value`` FROM ``Property`` WHERE ``Property``='$($Property.Replace("'", "''"))'"
-        $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @($sql))
-        $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null) | Out-Null
-        $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
-        if ($null -eq $record) { return $null }
-        return [string]$record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, 1)
-    } finally {
-        foreach ($item in @($record, $view, $database, $installer)) {
-            if ($null -ne $item) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null }
-        }
-    }
-}
-
 function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
     $allArguments = @($Arguments) + @('/norestart', 'REBOOT=ReallySuppress', '/l*v', $LogPath)
     $quotedArguments = @($allArguments | ForEach-Object {
@@ -80,21 +61,6 @@ function Invoke-Msi([string[]]$Arguments, [string]$LogPath) {
     })
     $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $quotedArguments -Wait -PassThru
     return [int]$process.ExitCode
-}
-
-function Get-InstalledProduct([string]$UpgradeCode) {
-    $installer = New-Object -ComObject WindowsInstaller.Installer
-    try {
-        foreach ($productCode in @($installer.RelatedProducts($UpgradeCode))) {
-            return [ordered]@{
-                product_code = [string]$productCode
-                version = [string]$installer.ProductInfo($productCode, 'VersionString')
-            }
-        }
-        return $null
-    } finally {
-        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null
-    }
 }
 
 function Get-RegistrationState {
@@ -242,23 +208,23 @@ try {
     if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
     $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'old-msi-sha256' ($oldHash -eq $OldMsiSha256.ToLowerInvariant()) $oldHash
-    Add-Step 'old-msi-version' ((Get-MsiProperty $old 'ProductVersion') -eq '7.0.0') (Get-MsiProperty $old 'ProductVersion')
+    Add-Step 'old-msi-version' ((Get-V7MsiProperty $old 'ProductVersion') -eq '7.0.0') (Get-V7MsiProperty $old 'ProductVersion')
 
-    $candidateVersion = Get-MsiProperty $candidate 'ProductVersion'
-    $upgradeCode = Get-MsiProperty $candidate 'UpgradeCode'
-    $candidateProductCode = Get-MsiProperty $candidate 'ProductCode'
-    if ($null -ne (Get-InstalledProduct $upgradeCode)) {
+    $candidateVersion = Get-V7MsiProperty $candidate 'ProductVersion'
+    $upgradeCode = Get-V7MsiProperty $candidate 'UpgradeCode'
+    $candidateProductCode = Get-V7MsiProperty $candidate 'ProductCode'
+    if ($null -ne (Get-V7InstalledProduct $upgradeCode)) {
         throw 'MSI lifecycle requires an isolated Windows test environment with no existing product in this upgrade family.'
     }
-    $oldProductCode = Get-MsiProperty $old 'ProductCode'
+    $oldProductCode = Get-V7MsiProperty $old 'ProductCode'
     Add-Step 'candidate-manifest-version' (([string]$manifest.product_version) -eq $expectedCandidateVersion) ([string]$manifest.product_version)
     [void](Assert-V7CandidateMsiVersion -ExpectedVersion $expectedCandidateVersion -MsiProductVersion $candidateVersion)
     Add-Step 'candidate-msi-version' ($candidateVersion -eq $expectedCandidateVersion) $candidateVersion
     Add-Step 'candidate-version-newer-than-baseline' ([version]$candidateVersion -gt [version]'7.0.0') "$candidateVersion > 7.0.0"
-    Add-Step 'upgrade-code-match' ($upgradeCode -eq '{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}' -and (Get-MsiProperty $old 'UpgradeCode') -eq $upgradeCode) $upgradeCode
+    Add-Step 'upgrade-code-match' ($upgradeCode -eq '{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}' -and (Get-V7MsiProperty $old 'UpgradeCode') -eq $upgradeCode) $upgradeCode
     Add-Step 'candidate-product-code-is-new' ($candidateProductCode -ne $oldProductCode) $candidateProductCode
 
-    $existingProduct = Get-InstalledProduct $upgradeCode
+    $existingProduct = Get-V7InstalledProduct $upgradeCode
     if ($null -ne $existingProduct) {
         throw "MSI lifecycle gate requires a clean product state; found $($existingProduct.version) ($($existingProduct.product_code))."
     }
@@ -266,7 +232,7 @@ try {
     $installLog = Join-Path $artifacts "$($Scenario.ToLowerInvariant())-install-old.log"
     $exit = Invoke-Msi @('/i', $old, '/qn', "INSTALLDIR=$InstallDir") $installLog
     Add-Step 'install-old-exit' ($exit -in @(0, 3010, 1641)) $exit
-    $oldProduct = Get-InstalledProduct $upgradeCode
+    $oldProduct = Get-V7InstalledProduct $upgradeCode
     Add-Step 'old-product-registered' ($null -ne $oldProduct -and $oldProduct.version -eq '7.0.0') $oldProduct
     $installedProductCode = $oldProduct.product_code
     $enginePath = Join-Path $InstallDir 'app\resources\HLSDownloaderEngine.exe'
@@ -287,7 +253,7 @@ try {
         Add-Step 'old-presenter-process-ended' ($null -eq (Get-Process -Id $beforeProcess.presenter_pid -ErrorAction SilentlyContinue)) $beforeProcess.presenter_pid
         $exit = Invoke-Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'upgrade-candidate.log')
         Add-Step 'upgrade-exit' ($exit -in @(0, 3010, 1641)) $exit
-        $afterProduct = Get-InstalledProduct $upgradeCode
+        $afterProduct = Get-V7InstalledProduct $upgradeCode
         Add-Step 'product-upgraded' ($afterProduct.version -eq $expectedCandidateVersion -and $afterProduct.product_code -ne $oldProduct.product_code) $afterProduct
         Add-Step 'old-application-process-ended' ($null -eq (Get-Process -Id $beforeProcess.launcher_pid -ErrorAction SilentlyContinue)) $beforeProcess.launcher_pid
         $afterProcess = Start-InstalledApplication $InstallDir
@@ -316,7 +282,7 @@ try {
         Add-Step 'candidate-original-unchanged' (((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $candidateHash) $candidateHash
         $exit = Invoke-Msi @('/i', $rollbackMsi, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'failure-rollback.log')
         Add-Step 'forced-failure-exit' ($exit -eq 1603) $exit
-        $afterProduct = Get-InstalledProduct $upgradeCode
+        $afterProduct = Get-V7InstalledProduct $upgradeCode
         Add-Step 'old-product-code-preserved' ($afterProduct.product_code -eq $oldProduct.product_code) $afterProduct.product_code
         Add-Step 'old-engine-preserved' (((Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $engineBefore) $engineBefore
         $databaseAfterFailure = (Get-FileHash -LiteralPath ([string]$checkpointBefore.data_db) -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -335,7 +301,7 @@ try {
     Stop-InstalledProcesses $InstallDir
     $uninstallExit = Invoke-Msi @('/x', $installedProductCode, '/qn') (Join-Path $artifacts "$($Scenario.ToLowerInvariant())-uninstall.log")
     Add-Step 'uninstall-exit' ($uninstallExit -in @(0, 3010, 1641)) $uninstallExit
-    Add-Step 'product-unregistered' ($null -eq (Get-InstalledProduct $upgradeCode)) $installedProductCode
+    Add-Step 'product-unregistered' ($null -eq (Get-V7InstalledProduct $upgradeCode)) $installedProductCode
     $installedProductCode = $null
     $result = [ordered]@{ schema = 1; scenario = $Scenario; status = 'passed'; source_commit = [string]$manifest.source_commit; source_tree = [string]$manifest.source_tree; candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant(); candidate_msi_sha256 = $candidateHash; restart_scope = 'application-process-only'; system_reboot = $false; install_dir = $InstallDir; candidate_version = $expectedCandidateVersion; candidate_manifest = $manifestPath; candidate_msi = $candidate; old_msi = $old; old_msi_sha256 = $oldHash; started_at = $started; finished_at = (Get-Date).ToUniversalTime().ToString('o'); steps = $steps }
 } catch {

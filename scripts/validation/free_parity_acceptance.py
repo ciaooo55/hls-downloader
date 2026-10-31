@@ -22,7 +22,7 @@ import traceback
 from urllib.parse import urlsplit
 import zipfile
 
-from msi_checkpoint_fixture import connect, send
+from v7_core_ipc import connect, send_frame as send
 
 
 class Origin(ThreadingHTTPServer):

@@ -16,7 +16,7 @@ import uuid
 
 import psutil
 
-from msi_checkpoint_fixture import connect, send
+from v7_core_ipc import connect, send_frame as send
 from soak_v7_runtime import percentile
 
 

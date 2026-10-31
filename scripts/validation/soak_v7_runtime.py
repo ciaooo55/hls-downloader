@@ -10,10 +10,11 @@ from pathlib import Path
 import shutil
 import socket
 import statistics
-import struct
 import subprocess
 import tempfile
 import time
+
+from v7_core_ipc import free_port, send_frame
 
 
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -97,39 +98,9 @@ class ProcessProbe:
         self.close()
 
 
-def frame(message: dict[str, object]) -> bytes:
-    payload = json.dumps(message, separators=(",", ":")).encode("utf-8")
-    return struct.pack("<I", len(payload)) + payload
-
-
-def read_exact(stream: socket.socket, size: int) -> bytes:
-    result = bytearray()
-    while len(result) < size:
-        chunk = stream.recv(size - len(result))
-        if not chunk:
-            raise RuntimeError("Core IPC closed before the response completed")
-        result.extend(chunk)
-    return bytes(result)
-
-
-def send_frame(stream: socket.socket, message: dict[str, object]) -> dict[str, object]:
-    stream.sendall(frame(message))
-    size = struct.unpack("<I", read_exact(stream, 4))[0]
-    response = json.loads(read_exact(stream, size).decode("utf-8"))
-    if not isinstance(response, dict):
-        raise RuntimeError("Core IPC response was not an object")
-    return response
-
-
 def percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     return ordered[max(0, math.ceil(len(ordered) * fraction) - 1)]
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def wait_for_core(port: int, deadline: float) -> socket.socket:

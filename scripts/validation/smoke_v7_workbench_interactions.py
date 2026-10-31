@@ -21,7 +21,7 @@ from PIL import Image, ImageChops
 
 from smoke_v7_accessibility import AccessibleContextInfo, JabClient
 from smoke_v7_portable_app import Pipe, runtime_processes, wait
-from smoke_v7_transfer_performance import free_port
+from v7_core_ipc import free_port
 
 
 def run(args):

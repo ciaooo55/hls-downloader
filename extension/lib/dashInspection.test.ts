@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { inspectDashResource, parseDashManifest, type DashManifestFetcher } from './dashInspection'
+import { inspectDashResource, parseDashManifest } from './dashInspection'
+import type { ManifestFetcher } from './manifestInspection'
 
 const vod = `<?xml version="1.0"?>
 <MPD type="static" mediaPresentationDuration="PT1M30S">
@@ -182,7 +183,7 @@ describe('DASH browser inspection', () => {
   })
 
   it('does not invent a finite size for a dynamic MPD', async () => {
-    const fetcher = vi.fn<DashManifestFetcher>(async () => new Response(
+    const fetcher = vi.fn<ManifestFetcher>(async () => new Response(
       vod.replace('type="static"', 'type="dynamic"'),
       { status: 200, headers: { 'content-length': String(vod.length) } },
     ))

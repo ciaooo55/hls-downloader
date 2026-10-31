@@ -15,7 +15,7 @@ import threading
 import traceback
 import uuid
 
-from msi_checkpoint_fixture import connect, send, wait_task
+from v7_core_ipc import connect, send_frame as send, wait_task
 
 
 def run(args):

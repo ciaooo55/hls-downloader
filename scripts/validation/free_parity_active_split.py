@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 
-from msi_checkpoint_fixture import connect, send
+from v7_core_ipc import connect, send_frame as send
 
 
 def main():
