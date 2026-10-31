@@ -1,19 +1,20 @@
 //! Task execution adapter for the resident Rust download engine.
 
+use crate::http_engine::extract_http_status;
+use crate::net_policy::queue_profile_allowed;
+use crate::output_path::{constrain_untrusted_download_dir, logical_canonical, reject_path_escape};
 use crate::{
     apply_replay_json_for, run_job_report, with_replay_json, AvScanStatus, CoreCommand, CoreEvent,
     CredentialVault, EventEnvelope, MediaPushRequest, MirrorStatus, PersistentCore, QueueProfile,
     TaskSpec, TorrentSession,
 };
-use crate::http_engine::extract_http_status;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -270,69 +271,6 @@ fn initialize_torrent_selection(
         return Ok(());
     }
     write_torrent_selection_locked(path, selections)
-}
-
-pub fn constrain_untrusted_download_dir(
-    requested: &str,
-    configured: &str,
-) -> Result<String, String> {
-    reject_path_escape(requested)?;
-    let configured = configured.trim();
-    let root = PathBuf::from(if configured.is_empty() {
-        "downloads"
-    } else {
-        configured
-    });
-    let requested = requested.trim();
-    if requested.is_empty() {
-        return Ok(root.to_string_lossy().into_owned());
-    }
-    let path = Path::new(requested);
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-    let root_canon = logical_canonical(&root);
-    let candidate_canon = logical_canonical(&candidate);
-    if candidate_canon == root_canon || candidate_canon.starts_with(&root_canon) {
-        return Ok(candidate.to_string_lossy().into_owned());
-    }
-    Err("下载目录必须位于默认下载根目录内".into())
-}
-
-fn logical_canonical(path: &Path) -> PathBuf {
-    let mut cur = path.to_path_buf();
-    let mut suffix = Vec::new();
-    loop {
-        if let Ok(canon) = std::fs::canonicalize(&cur) {
-            let mut out = canon;
-            for part in suffix.iter().rev() {
-                out.push(part);
-            }
-            return out;
-        }
-        match cur.file_name() {
-            Some(name) => {
-                suffix.push(OsString::from(name));
-                if !cur.pop() {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
-    path.to_path_buf()
-}
-
-fn reject_path_escape(path: &str) -> Result<(), String> {
-    if Path::new(path)
-        .components()
-        .any(|item| matches!(item, Component::ParentDir))
-    {
-        return Err("下载目录不能包含 ..".into());
-    }
-    Ok(())
 }
 
 fn header_value_allowed(key: &str, value: &str) -> bool {
@@ -1286,7 +1224,9 @@ impl CoreCoordinator {
         pending_only: bool,
         after: Option<[i64; 2]>,
     ) -> Result<(Vec<String>, Option<[i64; 2]>), String> {
-        self.lock()?.store().query_handoffs_page(handoff_id, client_request_id, pending_only, after)
+        self.lock()?
+            .store()
+            .query_handoffs_page(handoff_id, client_request_id, pending_only, after)
     }
 
     fn request_media_push(&self, request: MediaPushRequest) -> Result<Vec<EventEnvelope>, String> {
@@ -1483,7 +1423,11 @@ impl CoreCoordinator {
                     .count();
                 events.extend(self.lock()?.emit(CoreEvent::Error {
                     code: "import_partial_failure".into(),
-                    message: format!("已导入 {count} 项任务，{} 项导入失败：\n{}", failures.len(), failures.join("\n")),
+                    message: format!(
+                        "已导入 {count} 项任务，{} 项导入失败：\n{}",
+                        failures.len(),
+                        failures.join("\n")
+                    ),
                 })?);
             }
             return Ok(events);
@@ -1669,7 +1613,11 @@ impl CoreCoordinator {
                     {
                         imported.download_dir.clear();
                     }
-                    if !settings.queue_profiles.iter().any(|queue| queue.id == imported.queue_id) {
+                    if !settings
+                        .queue_profiles
+                        .iter()
+                        .any(|queue| queue.id == imported.queue_id)
+                    {
                         imported.queue_id = crate::DEFAULT_QUEUE_ID.into();
                     }
                     imported.allow_duplicate = spec.allow_duplicate;
@@ -2210,12 +2158,23 @@ impl CoreCoordinator {
     }
 
     pub(crate) fn metadata_spec(&self, url: &str) -> Result<TaskSpec, String> {
-        self.apply_defaults_to_spec(TaskSpec { url: url.into(), ..TaskSpec::default() })
+        self.apply_defaults_to_spec(TaskSpec {
+            url: url.into(),
+            ..TaskSpec::default()
+        })
     }
 
-    pub(crate) fn read_metadata(&self, spec: TaskSpec, range: Option<&str>, limit: u64, origin: Option<&str>) -> Result<crate::http_engine::MetadataResponse, String> {
-        let (spec,replay)=hydrate_replay_headers(&self.core(),spec)?;
-        with_replay_json(&replay,||crate::http_engine::read_metadata(&spec,range,limit,origin))
+    pub(crate) fn read_metadata(
+        &self,
+        spec: TaskSpec,
+        range: Option<&str>,
+        limit: u64,
+        origin: Option<&str>,
+    ) -> Result<crate::http_engine::MetadataResponse, String> {
+        let (spec, replay) = hydrate_replay_headers(&self.core(), spec)?;
+        with_replay_json(&replay, || {
+            crate::http_engine::read_metadata(&spec, range, limit, origin)
+        })
     }
 
     fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
@@ -2523,7 +2482,10 @@ impl CoreCoordinator {
         }
         let mut core = self.lock()?;
         let mut updated = false;
-        for encoded in core.store().query_handoffs(Some(&handoff_id), None, false)? {
+        for encoded in core
+            .store()
+            .query_handoffs(Some(&handoff_id), None, false)?
+        {
             let Ok(mut value) = serde_json::from_str::<Value>(&encoded) else {
                 continue;
             };
@@ -2864,17 +2826,20 @@ impl CoreCoordinator {
                             .map(|spec| (spec.url.clone(), spec.credential_ref.is_some()))
                             .unwrap_or_default();
                         let failure = task_failure_from_error(
-                                &error,
-                                &stage,
-                                &url,
-                                attempt,
-                                has_credential_ref,
-                            );
-                        crate::record_runtime_log("task_failed", serde_json::json!({
-                            "task_id": task_id, "stage": stage, "code": failure.code,
-                            "http_status": failure.http_status, "attempt": attempt,
-                            "downloaded_bytes": downloaded, "total_bytes": total,
-                        }));
+                            &error,
+                            &stage,
+                            &url,
+                            attempt,
+                            has_credential_ref,
+                        );
+                        crate::record_runtime_log(
+                            "task_failed",
+                            serde_json::json!({
+                                "task_id": task_id, "stage": stage, "code": failure.code,
+                                "http_status": failure.http_status, "attempt": attempt,
+                                "downloaded_bytes": downloaded, "total_bytes": total,
+                            }),
+                        );
                         let _ = core.report_failure(&task_id, failure);
                     } else {
                         let _ = core.handle(CoreCommand::UpdateProgress {
@@ -2948,13 +2913,6 @@ fn load_queue_profiles(store: &crate::CoreStore) -> Result<Vec<QueueProfile>, St
         completion_action: store.setting_string("completion_power_action", "none")?,
         ..QueueProfile::default()
     }])
-}
-
-pub(crate) fn queue_profile_allowed(profile: &QueueProfile) -> bool {
-    profile.enabled
-        && crate::net_policy::weekday_allowed(&profile.active_days)
-        && (!profile.schedule_enabled
-            || crate::net_policy::schedule_window_active(&profile.start_time, &profile.stop_time))
 }
 
 fn task_schedule_allowed(task: &crate::TaskSnapshot) -> bool {
@@ -3656,7 +3614,6 @@ fn task_failure_from_error(
         attempt,
     }
 }
-
 
 /// Every transport words a size disagreement differently, so the classifier has
 /// to recognise all of them.  Matching only the literal "size mismatch" silently
@@ -5644,9 +5601,14 @@ fn check_update(coordinator: &CoreCoordinator, silent: bool) -> Result<Vec<Event
             installer_size: info.installer_size,
             sha256_verified: !info.expected_sha256.is_empty(),
         },
-        Ok(info) if !silent => CoreEvent::UpdateCurrent { current: info.current },
+        Ok(info) if !silent => CoreEvent::UpdateCurrent {
+            current: info.current,
+        },
         Ok(_) => return Ok(Vec::new()),
-        Err(error) if !silent => CoreEvent::Error { code: "update_failed".into(), message: error },
+        Err(error) if !silent => CoreEvent::Error {
+            code: "update_failed".into(),
+            message: error,
+        },
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "silent update check failed: {error}");
             return Ok(Vec::new());
@@ -7315,14 +7277,20 @@ mod tests {
     fn automatic_http_retry_respects_permanent_failure_and_keeps_queue_running() {
         // 后续任务完成证明前一任务已走完整个收尾/重排队过程，不能只观察短暂的 failed 状态。
         for (status, invalid_range, expected_attempts) in [
-            (401, false, 1), (403, false, 1), (404, false, 1),
-            (503, false, 3), (206, false, 1), (206, true, 1),
+            (401, false, 1),
+            (403, false, 1),
+            (404, false, 1),
+            (503, false, 3),
+            (206, false, 1),
+            (206, true, 1),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
                 while let Ok((mut stream, _)) = listener.accept() {
-                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
                     let mut reader = BufReader::new(stream);
                     let mut request = String::new();
                     reader.read_line(&mut request).unwrap();
@@ -7347,34 +7315,52 @@ mod tests {
                 }
             });
             let download_dir = std::env::temp_dir().join(format!(
-                "hls-http-retry-{}-{status}-{}", std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+                "hls-http-retry-{}-{status}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
             ));
             let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
-            coordinator.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
-            coordinator.set_setting("queue_max_active", serde_json::json!(1)).unwrap();
-            coordinator.set_setting("auto_retry_failed_max", serde_json::json!(2)).unwrap();
+            coordinator
+                .set_setting("legal_terms_accepted", serde_json::json!(true))
+                .unwrap();
+            coordinator
+                .set_setting("queue_max_active", serde_json::json!(1))
+                .unwrap();
+            coordinator
+                .set_setting("auto_retry_failed_max", serde_json::json!(2))
+                .unwrap();
             for filename in ["expired.bin", "next.bin"] {
-                coordinator.dispatch_created(TaskSpec {
-                    url: format!("http://{address}/{filename}"),
-                    filename: filename.into(),
-                    resource_kind: crate::ResourceKind::File,
-                    download_dir: download_dir.to_string_lossy().into_owned(),
-                    expected_size: Some(1),
-                    etag: "\"retry-fixture\"".into(),
-                    concurrency: 1,
-                    ..Default::default()
-                }).unwrap();
+                coordinator
+                    .dispatch_created(TaskSpec {
+                        url: format!("http://{address}/{filename}"),
+                        filename: filename.into(),
+                        resource_kind: crate::ResourceKind::File,
+                        download_dir: download_dir.to_string_lossy().into_owned(),
+                        expected_size: Some(1),
+                        etag: "\"retry-fixture\"".into(),
+                        concurrency: 1,
+                        ..Default::default()
+                    })
+                    .unwrap();
             }
             let notify = coordinator.event_notify().unwrap();
             let mut sequence = coordinator.latest_sequence().unwrap();
-            coordinator.dispatch(CoreCommand::TaskAction {
-                task_id: "task-1".into(), action: "start".into(),
-            }).unwrap();
+            coordinator
+                .dispatch(CoreCommand::TaskAction {
+                    task_id: "task-1".into(),
+                    action: "start".into(),
+                })
+                .unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let tasks = coordinator.tasks().unwrap();
-                if tasks.iter().any(|task| task.task_id == "task-2" && task.status == "completed") {
+                if tasks
+                    .iter()
+                    .any(|task| task.task_id == "task-2" && task.status == "completed")
+                {
                     let failed = tasks.iter().find(|task| task.task_id == "task-1").unwrap();
                     assert_eq!(failed.status, "failed", "HTTP {status}");
                     assert_eq!(failed.http_status, (status != 206).then_some(status));
@@ -7387,15 +7373,27 @@ mod tests {
                         assert!(failed.error_hint.contains("新建任务"));
                         assert!(!download_dir.join("expired.bin").exists());
                     }
-                    assert_eq!(failed.error_attempt, expected_attempts, "HTTP {status} automatic attempts");
-                    assert!(failed.available_actions.iter().any(|action| action == "retry"));
+                    assert_eq!(
+                        failed.error_attempt, expected_attempts,
+                        "HTTP {status} automatic attempts"
+                    );
+                    assert!(failed
+                        .available_actions
+                        .iter()
+                        .any(|action| action == "retry"));
                     assert_eq!(fs::read(download_dir.join("next.bin")).unwrap(), b"x");
                     break;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                assert!(!remaining.is_zero(), "HTTP {status}: queue did not finish: {tasks:?}");
+                assert!(
+                    !remaining.is_zero(),
+                    "HTTP {status}: queue did not finish: {tasks:?}"
+                );
                 let guard = notify.0.lock().unwrap();
-                let (guard, _) = notify.1.wait_timeout_while(guard, remaining, |current| *current <= sequence).unwrap();
+                let (guard, _) = notify
+                    .1
+                    .wait_timeout_while(guard, remaining, |current| *current <= sequence)
+                    .unwrap();
                 sequence = *guard;
             }
             server.join().unwrap();
@@ -8647,62 +8645,6 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_download_dir_must_stay_under_configured_root() {
-        let root = std::env::temp_dir().join("hls-v6-dl-root");
-        let root = root.to_string_lossy().into_owned();
-        assert!(
-            constrain_untrusted_download_dir("", &root)
-                .unwrap()
-                .replace('\\', "/")
-                .ends_with("hls-v6-dl-root")
-                || constrain_untrusted_download_dir("", &root).unwrap() == root
-        );
-        assert!(constrain_untrusted_download_dir("nested", &root)
-            .unwrap()
-            .contains("nested"));
-        assert!(constrain_untrusted_download_dir("../escape", &root).is_err());
-        #[cfg(windows)]
-        assert!(constrain_untrusted_download_dir(r"C:\Windows", &root).is_err());
-        #[cfg(not(windows))]
-        assert!(constrain_untrusted_download_dir("/etc", &root).is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn untrusted_download_dir_rejects_junction_escape() {
-        use std::process::Command;
-        let stamp = std::process::id();
-        let root = std::env::temp_dir().join(format!("hls-v6-junc-root-{stamp}"));
-        let outside = std::env::temp_dir().join(format!("hls-v6-junc-out-{stamp}"));
-        let junction = root.join("escape");
-        let _ = fs::create_dir_all(&root);
-        let _ = fs::create_dir_all(&outside);
-        let _ = fs::remove_dir(&junction);
-        let ok = Command::new("cmd")
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &junction.to_string_lossy(),
-                &outside.to_string_lossy(),
-            ])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !ok {
-            let _ = fs::remove_dir_all(&root);
-            let _ = fs::remove_dir_all(&outside);
-            return;
-        }
-        let requested = junction.to_string_lossy().into_owned();
-        let configured = root.to_string_lossy().into_owned();
-        assert!(constrain_untrusted_download_dir(&requested, &configured).is_err());
-        let _ = fs::remove_dir(&junction);
-        let _ = fs::remove_dir_all(&root);
-        let _ = fs::remove_dir_all(&outside);
-    }
-
-    #[test]
     fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         coordinator
@@ -9634,7 +9576,10 @@ mod tests {
             .unwrap();
         let download_dir = std::env::temp_dir().join("hls-import-current-computer");
         target
-            .set_setting("download_dir", serde_json::json!(download_dir.to_string_lossy()))
+            .set_setting(
+                "download_dir",
+                serde_json::json!(download_dir.to_string_lossy()),
+            )
             .unwrap();
         let imported = target
             .dispatch(CoreCommand::ImportPaths {
@@ -9660,23 +9605,41 @@ mod tests {
         let root = std::env::temp_dir().join(format!("hls-v7-batch-import-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let paths: Vec<_> = ["first.json", "invalid.json", "last.json"]
-            .iter().map(|name| root.join(name)).collect();
+            .iter()
+            .map(|name| root.join(name))
+            .collect();
         for (index, path) in paths.iter().enumerate() {
-            let data = if index == 1 { "invalid JSON".into() } else {
+            let data = if index == 1 {
+                "invalid JSON".into()
+            } else {
                 serde_json::json!({"schema":"hls-downloader.tasks.v1", "tasks":[{
                     "url":format!("https://cdn.test/batch-{index}.bin"),
                     "scheduled_start_at":"2999-01-01T00:00:00Z"
-                }]}).to_string()
+                }]})
+                .to_string()
             };
             fs::write(path, data).unwrap();
         }
         let target = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
-        target.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
-        let events = target.dispatch(CoreCommand::ImportPaths {
-            paths: paths.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
-        }).unwrap();
+        target
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        let events = target
+            .dispatch(CoreCommand::ImportPaths {
+                paths: paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
+            })
+            .unwrap();
         assert_eq!(target.tasks().unwrap().len(), 2);
-        assert_eq!(events.iter().filter(|event| matches!(event.event, CoreEvent::TaskCreated { .. })).count(), 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, CoreEvent::TaskCreated { .. }))
+                .count(),
+            2
+        );
         assert!(events.iter().any(|event| matches!(&event.event,
             CoreEvent::Error { code, message } if code == "import_partial_failure"
                 && message.contains("2 项任务") && message.contains("第 2 项")
@@ -9686,18 +9649,33 @@ mod tests {
 
     #[test]
     fn task_list_import_uses_default_for_a_queue_missing_on_this_computer() {
-        let path = std::env::temp_dir().join(format!("hls-import-queue-{}.json", std::process::id()));
-        fs::write(&path, serde_json::json!({"schema":"hls-downloader.tasks.v1", "tasks":[{
-            "url":"https://cdn.test/queued.bin", "queue_id":"another-computers-queue",
-            "scheduled_start_at":"2999-01-01T00:00:00Z"
-        }]}).to_string()).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("hls-import-queue-{}.json", std::process::id()));
+        fs::write(
+            &path,
+            serde_json::json!({"schema":"hls-downloader.tasks.v1", "tasks":[{
+                "url":"https://cdn.test/queued.bin", "queue_id":"another-computers-queue",
+                "scheduled_start_at":"2999-01-01T00:00:00Z"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
         let target = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
-        target.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
-        let events = target.dispatch(CoreCommand::ImportPaths {
-            paths: vec![path.to_string_lossy().into_owned()],
-        }).unwrap();
+        target
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        let events = target
+            .dispatch(CoreCommand::ImportPaths {
+                paths: vec![path.to_string_lossy().into_owned()],
+            })
+            .unwrap();
         let _ = fs::remove_file(path);
-        assert!(!events.iter().any(|event| matches!(event.event, CoreEvent::Error { .. })), "{events:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.event, CoreEvent::Error { .. })),
+            "{events:?}"
+        );
         let tasks = target.tasks().unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].queue_id, crate::DEFAULT_QUEUE_ID);

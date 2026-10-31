@@ -63,8 +63,14 @@ pub fn tcp_loopback_enabled() -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeRequest {
-    Crawl { request_id: u64, request: crate::CrawlRequest },
-    PreviewZip { request_id: u64, source: String },
+    Crawl {
+        request_id: u64,
+        request: crate::CrawlRequest,
+    },
+    PreviewZip {
+        request_id: u64,
+        source: String,
+    },
     Hello {
         protocol: String,
         version: u32,
@@ -164,8 +170,14 @@ pub enum CorePipeRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeResponse {
-    Crawl { request_id: u64, projects: Vec<crate::CrawlProject> },
-    ZipPreview { request_id: u64, preview: crate::ZipPreview },
+    Crawl {
+        request_id: u64,
+        projects: Vec<crate::CrawlProject>,
+    },
+    ZipPreview {
+        request_id: u64,
+        preview: crate::ZipPreview,
+    },
     Hello {
         protocol: String,
         version: u32,
@@ -1146,8 +1158,8 @@ impl CoreIpcClient {
                 match Self::connect_pipe_timeout(&v7_pipe_name(), pipe_timeout) {
                     Ok(client) => return Ok(client),
                     Err(error) => {
-                        let remaining = deadline
-                            .saturating_duration_since(std::time::Instant::now());
+                        let remaining =
+                            deadline.saturating_duration_since(std::time::Instant::now());
                         if remaining.is_zero() {
                             break error;
                         }
@@ -1325,7 +1337,9 @@ impl CoreIpcClient {
                 CorePipeResponse::Handoffs { items, next, .. } => {
                     result.extend(items);
                     match next {
-                        Some(key) if after.is_none_or(|previous| key > previous) => after = Some(key),
+                        Some(key) if after.is_none_or(|previous| key > previous) => {
+                            after = Some(key)
+                        }
                         Some(_) => return Err("接管分页游标未前进".into()),
                         None => return Ok(result),
                     }

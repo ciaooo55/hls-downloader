@@ -15,7 +15,6 @@ import functools
 import hashlib
 import http.server
 import json
-import socket
 import subprocess
 import tempfile
 import threading

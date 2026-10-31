@@ -1211,7 +1211,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     scheduler.split_minimum = (std::env::var("HLS_HTTP_ACTIVE_SPLIT").as_deref() == Ok("1")
         && ((!job.etag.trim().is_empty() && !job.etag.starts_with("W/"))
             || !job.last_modified.trim().is_empty()))
-        .then_some(256 * 1024);
+    .then_some(256 * 1024);
     let scheduler = Arc::new(scheduler);
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(RangeCheckpoints::new(loaded));
@@ -1486,17 +1486,32 @@ impl RangeScheduler {
                 Some(range) => range,
                 None => {
                     let minimum = self.split_minimum?;
-                    let candidate = active_ranges.iter().filter_map(|item| {
-                        let p = item.progress.lock().unwrap_or_else(|err| err.into_inner());
-                        let remaining = p.stop.saturating_add(1).saturating_sub(p.reserved_until.max(p.cursor));
-                        (p.splittable && remaining >= minimum * 2).then_some((remaining, item))
-                    }).max_by_key(|(remaining, _)| *remaining).map(|(_, item)| item)?;
-                    let mut p = candidate.progress.lock().unwrap_or_else(|err| err.into_inner());
+                    let candidate = active_ranges
+                        .iter()
+                        .filter_map(|item| {
+                            let p = item.progress.lock().unwrap_or_else(|err| err.into_inner());
+                            let remaining = p
+                                .stop
+                                .saturating_add(1)
+                                .saturating_sub(p.reserved_until.max(p.cursor));
+                            (p.splittable && remaining >= minimum * 2).then_some((remaining, item))
+                        })
+                        .max_by_key(|(remaining, _)| *remaining)
+                        .map(|(_, item)| item)?;
+                    let mut p = candidate
+                        .progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner());
                     let safe_start = p.reserved_until.max(p.cursor);
                     let remaining = p.stop.saturating_add(1).saturating_sub(safe_start);
-                    if !p.splittable || remaining < minimum * 2 { return None; }
+                    if !p.splittable || remaining < minimum * 2 {
+                        return None;
+                    }
                     let split = safe_start + remaining / 2;
-                    let range = WorkRange { start: split, end: p.stop };
+                    let range = WorkRange {
+                        start: split,
+                        end: p.stop,
+                    };
                     p.stop = split - 1;
                     range
                 }
@@ -1527,9 +1542,9 @@ impl RangeScheduler {
             })),
         };
         active_ranges.push(ActiveRange {
-                id: active.id,
-                progress: Arc::clone(&active.progress),
-            });
+            id: active.id,
+            progress: Arc::clone(&active.progress),
+        });
         Some(active)
     }
 
@@ -1884,8 +1899,10 @@ fn fetch_range(
         }
         // curl's file-backed response has already consumed the original tail.
         // Splitting that transport cannot improve network completion time.
-        progress.lock().unwrap_or_else(|err| err.into_inner()).splittable =
-            !matches!(&fetched.body, Body::File { .. });
+        progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .splittable = !matches!(&fetched.body, Body::File { .. });
         let mut reader = fetched.body;
         if file.seek(SeekFrom::Start(cursor)).is_err() {
             return Err(EngineErrorCode::Failed("seek failed".into()));
@@ -1911,11 +1928,17 @@ fn fetch_range(
             }
             let read_limit = {
                 let mut state = progress.lock().unwrap_or_else(|err| err.into_inner());
-                let limit = state.stop.saturating_add(1).saturating_sub(cursor).min(buffer.len() as u64) as usize;
+                let limit = state
+                    .stop
+                    .saturating_add(1)
+                    .saturating_sub(cursor)
+                    .min(buffer.len() as u64) as usize;
                 state.reserved_until = cursor + limit as u64;
                 limit
             };
-            if read_limit == 0 { break; }
+            if read_limit == 0 {
+                break;
+            }
             let count = match reader.read(&mut buffer[..read_limit]) {
                 Ok(count) => count,
                 Err(err) => {
@@ -2261,8 +2284,12 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
     let mut hop = job.clone();
     apply_browser_profile(&mut headers);
     for _ in 0..16 {
-        if !job.origin_boundary.is_empty() && http_origin(&url).as_deref() != Some(job.origin_boundary.as_str()) {
-            return Some(Err(EngineError::Failed("redirect left project origin".into())));
+        if !job.origin_boundary.is_empty()
+            && http_origin(&url).as_deref() != Some(job.origin_boundary.as_str())
+        {
+            return Some(Err(EngineError::Failed(
+                "redirect left project origin".into(),
+            )));
         }
         hop.url = url.clone();
         hop.headers = headers.clone();
@@ -2309,14 +2336,21 @@ fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineErr
     fetch_follow_restricted(job, range, None).map(|(response, _)| response)
 }
 
-fn fetch_follow_restricted(job: &Job, range: Option<&str>, origin: Option<&str>) -> Result<(FetchResult, String), EngineError> {
+fn fetch_follow_restricted(
+    job: &Job,
+    range: Option<&str>,
+    origin: Option<&str>,
+) -> Result<(FetchResult, String), EngineError> {
     let mut url = job.url.clone();
     let replay = job_replay_json(job);
     let mut headers = headers_for_request(job, &url);
     let mut hop = job.clone();
     for _ in 0..16 {
-        if origin.filter(|v| !v.is_empty()).or_else(|| (!job.origin_boundary.is_empty()).then_some(job.origin_boundary.as_str()))
-            .is_some_and(|origin| http_origin(&url).as_deref() != Some(origin)) {
+        if origin
+            .filter(|v| !v.is_empty())
+            .or_else(|| (!job.origin_boundary.is_empty()).then_some(job.origin_boundary.as_str()))
+            .is_some_and(|origin| http_origin(&url).as_deref() != Some(origin))
+        {
             return Err(EngineError::Failed("redirect left project origin".into()));
         }
         let parsed = parse_http_url(&url)?;
@@ -2387,7 +2421,12 @@ fn fetch_follow_restricted(job: &Job, range: Option<&str>, origin: Option<&str>)
 
 pub(crate) fn http_origin(url: &str) -> Option<String> {
     let parsed = parse_http_url(url).ok()?;
-    Some(format!("{}://{}:{}", if parsed.https { "https" } else { "http" }, parsed.host.to_ascii_lowercase(), parsed.port))
+    Some(format!(
+        "{}://{}:{}",
+        if parsed.https { "https" } else { "http" },
+        parsed.host.to_ascii_lowercase(),
+        parsed.port
+    ))
 }
 
 pub(crate) struct MetadataResponse {
@@ -2402,52 +2441,115 @@ pub(crate) struct MetadataResponse {
 
 /// Bounded metadata transfer using the normal streaming transports. No curl
 /// fallback: that transport may buffer a whole response before returning headers.
-pub(crate) fn read_metadata(spec: &crate::TaskSpec, range: Option<&str>, limit: u64, origin: Option<&str>) -> Result<MetadataResponse, String> {
-    let root = if spec.work_dir.is_empty() { std::env::temp_dir() } else { PathBuf::from(&spec.work_dir) };
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+pub(crate) fn read_metadata(
+    spec: &crate::TaskSpec,
+    range: Option<&str>,
+    limit: u64,
+    origin: Option<&str>,
+) -> Result<MetadataResponse, String> {
+    let root = if spec.work_dir.is_empty() {
+        std::env::temp_dir()
+    } else {
+        PathBuf::from(&spec.work_dir)
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let dir = root.join(format!("metadata-{}-{stamp}", std::process::id()));
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let result = (|| {
-        let control = crate::net_policy::current_throttle_context().map(|c| c.control)
-            .filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| dir.join("control"));
-        if !control.exists() { fs::write(&control, "run").map_err(|e| e.to_string())?; }
+        let control = crate::net_policy::current_throttle_context()
+            .map(|c| c.control)
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| dir.join("control"));
+        if !control.exists() {
+            fs::write(&control, "run").map_err(|e| e.to_string())?;
+        }
         let mut job = Job {
-            url: spec.url.clone(), headers: spec.headers.clone().into_iter().collect(),
-            output: dir.join("body"), connections: 1, chunk_bytes: 64 * 1024, total: 0,
-            sequential: true, resume_from: 0, proxy: spec.proxy.clone(), resource_key: spec.url.clone(),
-            etag: spec.etag.clone(), last_modified: spec.last_modified.clone(), control,
-            progress: dir.join("progress"), method: if spec.request_method == "HEAD" { "HEAD" } else { "GET" }.into(), body_path: PathBuf::new(),
-            mirrors: Vec::new(), replay_json: String::new(), curl_body_limit: Some(limit),
+            url: spec.url.clone(),
+            headers: spec.headers.clone().into_iter().collect(),
+            output: dir.join("body"),
+            connections: 1,
+            chunk_bytes: 64 * 1024,
+            total: 0,
+            sequential: true,
+            resume_from: 0,
+            proxy: spec.proxy.clone(),
+            resource_key: spec.url.clone(),
+            etag: spec.etag.clone(),
+            last_modified: spec.last_modified.clone(),
+            control,
+            progress: dir.join("progress"),
+            method: if spec.request_method == "HEAD" {
+                "HEAD"
+            } else {
+                "GET"
+            }
+            .into(),
+            body_path: PathBuf::new(),
+            mirrors: Vec::new(),
+            replay_json: String::new(),
+            curl_body_limit: Some(limit),
             origin_boundary: spec.origin_boundary.clone(),
         };
         apply_browser_profile(&mut job.headers);
-        let (fetched, final_url) = fetch_follow_restricted(&job, range, origin).map_err(|e| e.to_string())?;
+        let (fetched, final_url) =
+            fetch_follow_restricted(&job, range, origin).map_err(|e| e.to_string())?;
         if range.is_some() && fetched.status != 206 {
             return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
         }
         require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
-        if job.method != "HEAD" && fetched.content_length.is_some_and(|n| n > limit) { return Err("元数据超过读取上限".into()); }
-        let parsed_range = fetched.content_range.as_deref().and_then(parse_content_range);
+        let has_body = job.method != "HEAD" && fetched.status != 304;
+        if has_body && fetched.content_length.is_some_and(|n| n > limit) {
+            return Err("元数据超过读取上限".into());
+        }
+        let parsed_range = fetched
+            .content_range
+            .as_deref()
+            .and_then(parse_content_range);
         let mut body = Vec::new();
         let status = fetched.status;
         let content_length = fetched.content_length;
-        let expected = if job.method == "HEAD" || fetched.status == 304 { None } else { content_length };
+        let expected = if has_body { content_length } else { None };
         let etag = fetched.etag.clone();
         let last_modified = fetched.last_modified.clone();
         let mut reader = fetched.body;
         let mut buffer = [0; 16 * 1024];
-        while job.method != "HEAD" && status != 304 {
-            check_control(&job.control).map_err(|e| e.to_string())?;
-            let want = (limit.saturating_add(1).saturating_sub(body.len() as u64)).min(buffer.len() as u64) as usize;
-            if want == 0 { return Err("元数据超过读取上限".into()); }
-            let n = reader.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
-            if n == 0 { break; }
-            crate::net_policy::consume(n, || check_control(&job.control)).map_err(|e| e.to_string())?;
-            body.extend_from_slice(&buffer[..n]);
-            if body.len() as u64 > limit { return Err("元数据超过读取上限".into()); }
+        if has_body {
+            loop {
+                check_control(&job.control).map_err(|e| e.to_string())?;
+                let want = (limit.saturating_add(1).saturating_sub(body.len() as u64))
+                    .min(buffer.len() as u64) as usize;
+                if want == 0 {
+                    return Err("元数据超过读取上限".into());
+                }
+                let n = reader
+                    .read(&mut buffer[..want])
+                    .map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                crate::net_policy::consume(n, || check_control(&job.control))
+                    .map_err(|e| e.to_string())?;
+                body.extend_from_slice(&buffer[..n]);
+                if body.len() as u64 > limit {
+                    return Err("元数据超过读取上限".into());
+                }
+            }
         }
-        if expected.is_some_and(|n| n != body.len() as u64) { return Err("元数据响应不完整".into()); }
-        Ok(MetadataResponse { status, final_url, body, range: parsed_range, etag, last_modified, content_length })
+        if expected.is_some_and(|n| n != body.len() as u64) {
+            return Err("元数据响应不完整".into());
+        }
+        Ok(MetadataResponse {
+            status,
+            final_url,
+            body,
+            range: parsed_range,
+            etag,
+            last_modified,
+            content_length,
+        })
     })();
     let _ = fs::remove_dir_all(dir);
     result
@@ -3947,7 +4049,9 @@ mod tests {
 
     #[test]
     fn hls_byte_range_rejects_oversize_body_before_eof() {
-        for (use_proxy, declared_length) in [(false, false), (false, true), (true, false), (true, true)] {
+        for (use_proxy, declared_length) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
             if use_proxy && !cfg!(windows) {
                 continue;
             }
@@ -4005,24 +4109,30 @@ mod tests {
 
     #[test]
     fn active_split_preserves_reserved_read_and_never_overlaps_tail() {
-        let mut scheduler=RangeScheduler::new(vec![WorkRange {start:0,end:999}],2);
-        scheduler.split_minimum=Some(100);
-        let original=scheduler.claim(0).unwrap();
-        assert!(scheduler.claim(1).is_none(), "a response is not splittable before identity and transport validation");
+        let mut scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 999 }], 2);
+        scheduler.split_minimum = Some(100);
+        let original = scheduler.claim(0).unwrap();
+        assert!(
+            scheduler.claim(1).is_none(),
+            "a response is not splittable before identity and transport validation"
+        );
         {
-            let mut progress=original.progress.lock().unwrap();
-            progress.splittable=true;
-            progress.cursor=100;
-            progress.reserved_until=400;
+            let mut progress = original.progress.lock().unwrap();
+            progress.splittable = true;
+            progress.cursor = 100;
+            progress.reserved_until = 400;
         }
-        let tail=scheduler.claim(1).unwrap();
-        let first=original.progress.lock().unwrap();
-        let second=tail.progress.lock().unwrap();
-        assert_eq!((first.cursor,first.stop),(100,699));
-        assert_eq!((second.cursor,second.stop),(700,999));
-        assert!(first.stop>=first.reserved_until);
-        assert_eq!(first.stop+1,second.cursor);
-        assert_eq!(second.stop-first.cursor+1,(first.stop-first.cursor+1)+(second.stop-second.cursor+1));
+        let tail = scheduler.claim(1).unwrap();
+        let first = original.progress.lock().unwrap();
+        let second = tail.progress.lock().unwrap();
+        assert_eq!((first.cursor, first.stop), (100, 699));
+        assert_eq!((second.cursor, second.stop), (700, 999));
+        assert!(first.stop >= first.reserved_until);
+        assert_eq!(first.stop + 1, second.cursor);
+        assert_eq!(
+            second.stop - first.cursor + 1,
+            (first.stop - first.cursor + 1) + (second.stop - second.cursor + 1)
+        );
     }
 
     #[test]
@@ -4237,6 +4347,71 @@ mod tests {
             },
             dir,
         )
+    }
+
+    #[test]
+    fn metadata_body_limits_preserve_head_and_not_modified_responses() {
+        for (method, response, expected_body, expected_error) in [
+            (
+                "HEAD",
+                "HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\n",
+                "",
+                "",
+            ),
+            (
+                "GET",
+                "HTTP/1.1 304 Not Modified\r\nContent-Length: 4096\r\n\r\n",
+                "",
+                "",
+            ),
+            (
+                "GET",
+                "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc",
+                "abc",
+                "",
+            ),
+            (
+                "GET",
+                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabcde",
+                "",
+                "元数据超过读取上限",
+            ),
+            (
+                "GET",
+                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc",
+                "",
+                "元数据响应不完整",
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+            let (_, dir) = temp_job(&url, true, 0, 1);
+            let spec = crate::TaskSpec {
+                url,
+                request_method: method.into(),
+                work_dir: dir.to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            let result = read_metadata(&spec, None, 4, None);
+            server.join().unwrap();
+            if expected_error.is_empty() {
+                assert_eq!(result.unwrap().body, expected_body.as_bytes());
+            } else {
+                assert!(result.err().unwrap().contains(expected_error));
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
@@ -6038,7 +6213,13 @@ mod tests {
     }
 
     fn check_cloudflare_replay_retry(transport: &str) {
-        for context in ["headers", "cookie", "request_headers", "scoped", "cookie_jar"] {
+        for context in [
+            "headers",
+            "cookie",
+            "request_headers",
+            "scoped",
+            "cookie_jar",
+        ] {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
@@ -6098,7 +6279,9 @@ mod tests {
                 let value = match context {
                     "cookie" => serde_json::json!({"cookie": cookie}),
                     "request_headers" => serde_json::json!({"request_headers": {"Cookie": cookie}}),
-                    "scoped" => serde_json::json!({"request_contexts": {origin: {"cookie": cookie}}}),
+                    "scoped" => {
+                        serde_json::json!({"request_contexts": {origin: {"cookie": cookie}}})
+                    }
                     "cookie_jar" => serde_json::json!({"request_contexts": {origin: {"cookies": [
                         {"name":"__cf_bm", "value":"stale", "domain":"127.0.0.1", "path":"/"},
                         {"name":"__cflb", "value":"pool-a", "domain":"127.0.0.1", "path":"/"},
@@ -6106,7 +6289,8 @@ mod tests {
                     ]}}}),
                     _ => unreachable!(),
                 };
-                job.replay_json = crate::credentials::bind_replay_source_url(&value.to_string(), &url);
+                job.replay_json =
+                    crate::credentials::bind_replay_source_url(&value.to_string(), &url);
             }
             let replay = job.replay_json.clone();
             if transport == "winhttp" {
@@ -6117,12 +6301,16 @@ mod tests {
             } else {
                 fetch_follow(&job, None)
             };
-            let mut fetched = result.unwrap_or_else(|error| panic!("{transport}/{context}: {error:?}"));
+            let mut fetched =
+                result.unwrap_or_else(|error| panic!("{transport}/{context}: {error:?}"));
             assert_eq!(fetched.status, 200, "{transport}/{context}");
             let mut body = Vec::new();
             fetched.body.read_to_end(&mut body).unwrap();
             assert_eq!(body, b"ok", "{transport}/{context}");
-            assert_eq!(job.replay_json, replay, "saved replay must remain unchanged");
+            assert_eq!(
+                job.replay_json, replay,
+                "saved replay must remain unchanged"
+            );
             let seen = seen.lock().unwrap_or_else(|err| err.into_inner());
             assert_eq!(seen.len(), 2, "{transport}/{context}");
             assert!(seen[0].0.contains("__cf_bm"));
@@ -6220,14 +6408,21 @@ mod tests {
         use std::sync::mpsc;
         assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
         assert!(curl_impersonate_exe().is_some(), "bundled curl required");
-        for case in ["gzip-valid", "gzip-oversize", "chunked-oversize", "length-oversize"] {
+        for case in [
+            "gzip-valid",
+            "gzip-oversize",
+            "chunked-oversize",
+            "length-oversize",
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
             let (ready_tx, ready_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let server = thread::spawn(move || {
                 let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
                 let mut reader = BufReader::new(stream);
                 loop {
                     let mut line = String::new();
@@ -6237,12 +6432,26 @@ mod tests {
                 }
                 let mut stream = reader.into_inner();
                 // 固定 gzip 夹具：线上压缩长度大于范围长度，合法响应不可误判。
-                let gzip_valid: &[u8] = &[31,139,8,0,0,0,0,0,2,10,51,52,50,54,49,53,51,183,0,0,175,218,224,154,8,0,0,0];
-                let gzip_oversize: &[u8] = &[31,139,8,0,0,0,0,0,2,10,51,52,50,54,49,53,51,183,176,4,0,38,57,244,203,9,0,0,0];
+                let gzip_valid: &[u8] = &[
+                    31, 139, 8, 0, 0, 0, 0, 0, 2, 10, 51, 52, 50, 54, 49, 53, 51, 183, 0, 0, 175,
+                    218, 224, 154, 8, 0, 0, 0,
+                ];
+                let gzip_oversize: &[u8] = &[
+                    31, 139, 8, 0, 0, 0, 0, 0, 2, 10, 51, 52, 50, 54, 49, 53, 51, 183, 176, 4, 0,
+                    38, 57, 244, 203, 9, 0, 0, 0,
+                ];
                 let (framing, body) = match case {
-                    "gzip-valid" => ("Content-Encoding: gzip\r\nContent-Length: 28\r\n", gzip_valid),
-                    "gzip-oversize" => ("Content-Encoding: gzip\r\nContent-Length: 29\r\n", gzip_oversize),
-                    "chunked-oversize" => ("Transfer-Encoding: chunked\r\n", &b"9\r\n123456789\r\n"[..]),
+                    "gzip-valid" => (
+                        "Content-Encoding: gzip\r\nContent-Length: 28\r\n",
+                        gzip_valid,
+                    ),
+                    "gzip-oversize" => (
+                        "Content-Encoding: gzip\r\nContent-Length: 29\r\n",
+                        gzip_oversize,
+                    ),
+                    "chunked-oversize" => {
+                        ("Transfer-Encoding: chunked\r\n", &b"9\r\n123456789\r\n"[..])
+                    }
                     _ => ("Content-Length: 64\r\n", &b"123456789"[..]),
                 };
                 write!(stream, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/8\r\n{framing}Connection: close\r\n\r\n").unwrap();
@@ -6264,7 +6473,9 @@ mod tests {
             let _ = release_tx.send(());
             server.join().unwrap();
             worker.join().unwrap();
-            let result = result.expect("curl must reject oversize before EOF").expect("curl available");
+            let result = result
+                .expect("curl must reject oversize before EOF")
+                .expect("curl available");
             if case == "gzip-valid" {
                 let mut fetched = result.unwrap();
                 let mut body = Vec::new();
@@ -6276,7 +6487,12 @@ mod tests {
                     Err(error) => error,
                     Ok(_) => panic!("{case}: oversized response accepted"),
                 };
-                assert!(error.to_string().contains("byte range response body exceeds 8"), "{case}: {error}");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("byte range response body exceeds 8"),
+                    "{case}: {error}"
+                );
             }
             fs::remove_dir_all(dir).unwrap();
         }

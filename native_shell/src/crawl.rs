@@ -175,7 +175,7 @@ pub(crate) fn dispatch(
         let root = if spec.output_dir.is_empty() {
             prepared.download_dir.clone()
         } else {
-            crate::download_worker::constrain_untrusted_download_dir(
+            crate::output_path::constrain_untrusted_download_dir(
                 &spec.output_dir,
                 &prepared.download_dir,
             )?
@@ -379,7 +379,7 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
         .iter()
         .find(|q| q.id == state.project.spec.queue_id)
         .ok_or("项目队列已被移除")?;
-    if !queue.enabled || !crate::download_worker::queue_profile_allowed(queue) {
+    if !crate::net_policy::queue_profile_allowed(queue) {
         return Ok(());
     }
     let active = coordinator
@@ -464,25 +464,24 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
                     continue;
                 }
                 add_resource(&mut latest, &reference.url, &reference.kind);
-                if reference.kind == "page"
-                    || latest.project.spec.offline && reference.kind == "style"
+                if (reference.kind == "page"
+                    || latest.project.spec.offline && reference.kind == "style")
+                    && latest.seen.insert(reference.url.clone())
                 {
-                    if latest.seen.insert(reference.url.clone()) {
-                        let queued_pages =
-                            latest.pending.iter().filter(|p| p.kind == "page").count() as u32;
-                        if reference.kind == "page"
-                            && latest.project.visited_pages + queued_pages
-                                >= latest.project.spec.max_pages
-                        {
-                            latest.project.status = "paused".into();
-                            latest.project.reason = "达到页面数量上限".into();
-                        } else if latest.seen.len() <= MAX_RESOURCES {
-                            latest.pending.push_back(Page {
-                                url: reference.url,
-                                depth,
-                                kind: reference.kind,
-                            });
-                        }
+                    let queued_pages =
+                        latest.pending.iter().filter(|p| p.kind == "page").count() as u32;
+                    if reference.kind == "page"
+                        && latest.project.visited_pages + queued_pages
+                            >= latest.project.spec.max_pages
+                    {
+                        latest.project.status = "paused".into();
+                        latest.project.reason = "达到页面数量上限".into();
+                    } else if latest.seen.len() <= MAX_RESOURCES {
+                        latest.pending.push_back(Page {
+                            url: reference.url,
+                            depth,
+                            kind: reference.kind,
+                        });
                     }
                 }
             }

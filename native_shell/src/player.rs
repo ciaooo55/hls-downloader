@@ -702,10 +702,13 @@ impl PlayerChild {
         let value = match result {
             Ok(value) => value,
             Err(error) => {
-                crate::record_runtime_log("player_transport_failed", serde_json::json!({
-                    "operation": op, "elapsed_ms": started.elapsed().as_millis(),
-                    "child_exited": self.process.try_wait().ok().flatten().is_some(),
-                }));
+                crate::record_runtime_log(
+                    "player_transport_failed",
+                    serde_json::json!({
+                        "operation": op, "elapsed_ms": started.elapsed().as_millis(),
+                        "child_exited": self.process.try_wait().ok().flatten().is_some(),
+                    }),
+                );
                 self.terminate();
                 return Err(error);
             }

@@ -1,9 +1,73 @@
-//! IDM-style output collision policy: rename, overwrite, or skip.
+//! Download path boundaries and output collision policy: rename, overwrite, or skip.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+
+pub(crate) fn constrain_untrusted_download_dir(
+    requested: &str,
+    configured: &str,
+) -> Result<String, String> {
+    reject_path_escape(requested)?;
+    let configured = configured.trim();
+    let root = PathBuf::from(if configured.is_empty() {
+        "downloads"
+    } else {
+        configured
+    });
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return Ok(root.to_string_lossy().into_owned());
+    }
+    let path = Path::new(requested);
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let root_canon = logical_canonical(&root);
+    let candidate_canon = logical_canonical(&candidate);
+    if candidate_canon == root_canon || candidate_canon.starts_with(&root_canon) {
+        return Ok(candidate.to_string_lossy().into_owned());
+    }
+    Err("下载目录必须位于默认下载根目录内".into())
+}
+
+pub(crate) fn logical_canonical(path: &Path) -> PathBuf {
+    let mut cur = path.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(&cur) {
+            let mut out = canon;
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match cur.file_name() {
+            Some(name) => {
+                suffix.push(OsString::from(name));
+                if !cur.pop() {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    path.to_path_buf()
+}
+
+pub(crate) fn reject_path_escape(path: &str) -> Result<(), String> {
+    if Path::new(path)
+        .components()
+        .any(|item| matches!(item, Component::ParentDir))
+    {
+        return Err("下载目录不能包含 ..".into());
+    }
+    Ok(())
+}
 
 static OUTPUT_PUBLISH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -411,6 +475,62 @@ pub fn publish_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untrusted_download_dir_must_stay_under_configured_root() {
+        let root = std::env::temp_dir().join("hls-v6-dl-root");
+        let root = root.to_string_lossy().into_owned();
+        assert!(
+            constrain_untrusted_download_dir("", &root)
+                .unwrap()
+                .replace('\\', "/")
+                .ends_with("hls-v6-dl-root")
+                || constrain_untrusted_download_dir("", &root).unwrap() == root
+        );
+        assert!(constrain_untrusted_download_dir("nested", &root)
+            .unwrap()
+            .contains("nested"));
+        assert!(constrain_untrusted_download_dir("../escape", &root).is_err());
+        #[cfg(windows)]
+        assert!(constrain_untrusted_download_dir(r"C:\Windows", &root).is_err());
+        #[cfg(not(windows))]
+        assert!(constrain_untrusted_download_dir("/etc", &root).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn untrusted_download_dir_rejects_junction_escape() {
+        use std::process::Command;
+        let stamp = std::process::id();
+        let root = std::env::temp_dir().join(format!("hls-v6-junc-root-{stamp}"));
+        let outside = std::env::temp_dir().join(format!("hls-v6-junc-out-{stamp}"));
+        let junction = root.join("escape");
+        let _ = fs::create_dir_all(&root);
+        let _ = fs::create_dir_all(&outside);
+        let _ = fs::remove_dir(&junction);
+        let ok = Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &junction.to_string_lossy(),
+                &outside.to_string_lossy(),
+            ])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !ok {
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&outside);
+            return;
+        }
+        let requested = junction.to_string_lossy().into_owned();
+        let configured = root.to_string_lossy().into_owned();
+        assert!(constrain_untrusted_download_dir(&requested, &configured).is_err());
+        let _ = fs::remove_dir(&junction);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
 
     fn test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

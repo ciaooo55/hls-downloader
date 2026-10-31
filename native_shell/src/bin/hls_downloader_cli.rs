@@ -85,10 +85,11 @@ fn connect() -> Result<CoreIpcClient> {
             std::io::stdout().as_raw_handle(),
             std::io::stderr().as_raw_handle(),
         ] {
-            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
-                if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
-                    return Err(Failure(3, "无法隔离 Core 的标准输入输出句柄".into()));
-                }
+            if !handle.is_null()
+                && handle != INVALID_HANDLE_VALUE
+                && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
+            {
+                return Err(Failure(3, "无法隔离 Core 的标准输入输出句柄".into()));
             }
         }
     }

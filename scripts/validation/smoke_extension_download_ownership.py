@@ -14,7 +14,6 @@ import json
 import os
 from pathlib import Path
 import threading
-import time
 import traceback
 
 from selenium import webdriver

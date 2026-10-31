@@ -128,19 +128,24 @@ impl SubtitleService {
                 if key.len() > 4096 || key.contains(['\r', '\n']) {
                     return Err("API Key 格式无效".into());
                 }
-                let preferences = request.get("preferences").map(|value| {
-                    let preferences: SubtitlePreferences = serde_json::from_value(value.clone())
-                        .map_err(|_| "字幕选项格式无效")?;
-                    if (preferences.source != "auto" && !LANGUAGES.contains(&preferences.source.as_str()))
-                        || !LANGUAGES.contains(&preferences.target.as_str())
-                    {
-                        return Err("字幕语种不受支持");
-                    }
-                    if !preferences.offset.is_finite() || preferences.offset.abs() > 30.0 {
-                        return Err("字幕偏移必须在 -30 到 30 秒之间");
-                    }
-                    serde_json::to_value(preferences).map_err(|_| "字幕选项格式无效")
-                }).transpose()?;
+                let preferences = request
+                    .get("preferences")
+                    .map(|value| {
+                        let preferences: SubtitlePreferences =
+                            serde_json::from_value(value.clone())
+                                .map_err(|_| "字幕选项格式无效")?;
+                        if (preferences.source != "auto"
+                            && !LANGUAGES.contains(&preferences.source.as_str()))
+                            || !LANGUAGES.contains(&preferences.target.as_str())
+                        {
+                            return Err("字幕语种不受支持");
+                        }
+                        if !preferences.offset.is_finite() || preferences.offset.abs() > 30.0 {
+                            return Err("字幕偏移必须在 -30 到 30 秒之间");
+                        }
+                        serde_json::to_value(preferences).map_err(|_| "字幕选项格式无效")
+                    })
+                    .transpose()?;
                 let protected = if key.is_empty() {
                     None
                 } else {
@@ -162,10 +167,12 @@ impl SubtitleService {
                         })
                 };
                 let mut settings = json!({"provider": provider});
-                let previous: Value = serde_json::from_str(
-                    &locked.store().setting_string(PROVIDER_SETTING, "{}")?
-                ).map_err(|_| "字幕配置损坏")?;
-                if let Some(preferences) = preferences.or_else(|| previous.get("preferences").cloned()) {
+                let previous: Value =
+                    serde_json::from_str(&locked.store().setting_string(PROVIDER_SETTING, "{}")?)
+                        .map_err(|_| "字幕配置损坏")?;
+                if let Some(preferences) =
+                    preferences.or_else(|| previous.get("preferences").cloned())
+                {
                     settings["preferences"] = preferences;
                 }
                 if provider == DASHSCOPE {
@@ -1173,17 +1180,36 @@ mod tests {
         let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
         let preferences = json!({"enabled": true, "source": "ja", "target": "zh",
             "offset": -0.4, "showSource": false, "prefetch": true});
-        let saved = service.dispatch(&core, &json!({"action": "configure",
-            "provider": "qwencloud", "preferences": preferences})).unwrap();
+        let saved = service
+            .dispatch(
+                &core,
+                &json!({"action": "configure",
+            "provider": "qwencloud", "preferences": preferences}),
+            )
+            .unwrap();
         assert_eq!(saved["preferences"], preferences);
         assert!(saved.get("api_key").is_none());
-        for invalid in [json!({"target": "unsupported"}), json!({"offset": 31}),
-            json!({"enabled": "true"}), json!({"api_key": "must-not-be-stored-here"})] {
-            assert!(service.dispatch(&core, &json!({"action": "configure", "provider": "qwencloud",
-                "preferences": invalid})).is_err());
+        for invalid in [
+            json!({"target": "unsupported"}),
+            json!({"offset": 31}),
+            json!({"enabled": "true"}),
+            json!({"api_key": "must-not-be-stored-here"}),
+        ] {
+            assert!(service
+                .dispatch(
+                    &core,
+                    &json!({"action": "configure", "provider": "qwencloud",
+                "preferences": invalid})
+                )
+                .is_err());
             assert_eq!(configuration(&core).unwrap()["preferences"], preferences);
         }
-        service.dispatch(&core, &json!({"action": "configure", "provider": "qwencloud"})).unwrap();
+        service
+            .dispatch(
+                &core,
+                &json!({"action": "configure", "provider": "qwencloud"}),
+            )
+            .unwrap();
         assert_eq!(configuration(&core).unwrap()["preferences"], preferences);
     }
 

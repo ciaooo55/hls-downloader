@@ -76,8 +76,8 @@ pub fn paint_from_progress(
     };
     if downloading && active.is_empty() {
         if let Some((_, end)) = ranges.last() {
-            if *end + 1 < total {
-                let frontier = (*end + 1).min(total.saturating_sub(1));
+            if *end < total {
+                let frontier = *end;
                 active.push((frontier, (frontier + 1).min(total)));
             }
         } else if downloaded > 0 && downloaded < total {
@@ -272,6 +272,24 @@ fn coalesce(parts: &mut Vec<ConnectionPart>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_activity_starts_at_the_first_unfinished_byte() {
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-range-frontier-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let progress = root.join("progress.json");
+        let ranges = progress.with_file_name("native-engine.ranges.json");
+        std::fs::write(&ranges, r#"{"ranges":[[0,3]]}"#).unwrap();
+        let parts = paint_from_progress(&progress, 4, 8, true);
+        let active = parts.iter().find(|part| part.state == "active").unwrap();
+        assert_eq!((active.start, active.end), (4, 4));
+        std::fs::write(&ranges, format!(r#"{{"ranges":[[0,{}]]}}"#, u64::MAX)).unwrap();
+        assert!(paint_from_progress(&progress, 4, 8, true)
+            .iter()
+            .all(|part| part.state == "done"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn paints_done_active_and_queued() {

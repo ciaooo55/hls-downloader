@@ -13,9 +13,6 @@ mod clipboard;
 #[cfg(feature = "full-core")]
 mod connection_parts;
 mod contract;
-mod crawl_contract;
-#[cfg(feature = "full-core")]
-mod crawl;
 mod core_ipc;
 #[cfg(feature = "full-core")]
 mod core_runtime;
@@ -24,6 +21,9 @@ mod core_server;
 #[cfg(feature = "full-core")]
 mod core_service;
 mod core_spawn;
+#[cfg(feature = "full-core")]
+mod crawl;
+mod crawl_contract;
 #[cfg(feature = "full-core")]
 mod credentials;
 #[cfg(feature = "full-core")]
@@ -122,13 +122,12 @@ pub use connection_parts::{
     active_worker_count, paint_file_map, paint_from_progress, summarize as summarize_parts,
 };
 pub use contract::{
-    AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, EventEnvelope, HarvestCandidate,
-    MediaPushRequest, MirrorStatus, PlayerTrack, QueueProfile, ResourceKind, ResourceOffer,
-    StreamVariant, TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry, TorrentFileSelection,
-    DEFAULT_QUEUE_ID, LEGAL_TERMS_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
-    ZipEntryPreview, ZipPreview,
+    AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, EventEnvelope,
+    HarvestCandidate, MediaPushRequest, MirrorStatus, PlayerTrack, QueueProfile, ResourceKind,
+    ResourceOffer, StreamVariant, TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry,
+    TorrentFileSelection, ZipEntryPreview, ZipPreview, DEFAULT_QUEUE_ID, LEGAL_TERMS_VERSION,
+    V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
 };
-pub use crawl_contract::{CrawlSpec, CrawlResource, CrawlProject, CrawlRequest};
 pub use core_ipc::{
     default_core_bind, hello_request, serve_tcp_listener, tcp_loopback_enabled, v7_pipe_name,
     CoreIpcClient, CorePipeRequest, CorePipeResponse, V7_PIPE_NAME, V7_TCP_PORT,
@@ -143,6 +142,7 @@ pub use core_server::CoreServer;
 pub use core_service::PersistentCore;
 pub use core_spawn::{install_root, locate_core_executable, spawn_core};
 pub use core_spawn::{locate_desktop_executable, spawn_desktop_ui};
+pub use crawl_contract::{CrawlProject, CrawlRequest, CrawlResource, CrawlSpec};
 #[cfg(feature = "full-core")]
 pub use credentials::{
     apply_replay_json, apply_replay_json_for, with_replay_json, CredentialVault,

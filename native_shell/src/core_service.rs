@@ -90,7 +90,9 @@ impl PersistentCore {
             status,
         } = &command
         {
-            let state_changed = self.runtime.snapshot(task_id)
+            let state_changed = self
+                .runtime
+                .snapshot(task_id)
                 .is_some_and(|previous| previous.stage != *stage || previous.status != *status);
             let event = self.runtime.progress_event(
                 task_id,
@@ -109,10 +111,13 @@ impl PersistentCore {
             self.runtime.commit_progress(events[0].event.clone());
             self.notify_committed(&events);
             if state_changed {
-                crate::record_runtime_log("task_state_changed", serde_json::json!({
-                    "task_id": task_id, "stage": stage, "status": status,
-                    "downloaded_bytes": downloaded_bytes, "total_bytes": total_bytes,
-                }));
+                crate::record_runtime_log(
+                    "task_state_changed",
+                    serde_json::json!({
+                        "task_id": task_id, "stage": stage, "status": status,
+                        "downloaded_bytes": downloaded_bytes, "total_bytes": total_bytes,
+                    }),
+                );
             }
             return Ok(events);
         }
@@ -722,7 +727,11 @@ mod tests {
         assert!(core.store().load_handoffs().unwrap().is_empty());
         assert_eq!(core.tasks(), tasks);
         assert_eq!(core.store().load_tasks().unwrap(), tasks);
-        assert!(core.store().load_task_log("task-1", 500).unwrap().is_empty());
+        assert!(core
+            .store()
+            .load_task_log("task-1", 500)
+            .unwrap()
+            .is_empty());
         assert_eq!(core.store().latest_sequence().unwrap(), sequence);
         assert_eq!(core.latest_sequence(), sequence);
         assert_eq!(core.events_after(0, 4096), events);
@@ -748,16 +757,15 @@ mod tests {
     fn persisted_progress_preserves_runtime_lifecycle_and_other_tasks() {
         let mut core = PersistentCore::in_memory().unwrap();
         let mut runtime = CoreRuntime::new();
-        let progress = |task_id: &str, bytes, status: &str, stage: &str| {
-            CoreCommand::UpdateProgress {
+        let progress =
+            |task_id: &str, bytes, status: &str, stage: &str| CoreCommand::UpdateProgress {
                 task_id: task_id.into(),
                 downloaded_bytes: bytes,
                 total_bytes: Some(4096),
                 speed_bytes_per_sec: 512,
                 stage: stage.into(),
                 status: status.into(),
-            }
-        };
+            };
         for command in [
             CoreCommand::CreateTask { spec: test_spec() },
             CoreCommand::CreateTask { spec: test_spec() },

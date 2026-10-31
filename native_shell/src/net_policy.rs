@@ -78,6 +78,13 @@ fn host_key(url: &str) -> String {
         .to_ascii_lowercase()
 }
 
+pub(crate) fn queue_profile_allowed(profile: &crate::QueueProfile) -> bool {
+    profile.enabled
+        && weekday_allowed(&profile.active_days)
+        && (!profile.schedule_enabled
+            || schedule_window_active(&profile.start_time, &profile.stop_time))
+}
+
 pub fn url_allowed(url: &str, patterns: &str) -> bool {
     if patterns.trim().is_empty() {
         return true;

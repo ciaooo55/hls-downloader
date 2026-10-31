@@ -181,7 +181,10 @@ impl Sha1Hasher {
     }
 
     pub fn finish_hex(self) -> String {
-        self.finish().iter().map(|byte| format!("{byte:02x}")).collect()
+        self.finish()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
@@ -697,7 +700,11 @@ mod tests {
                 for piece in data.chunks(chunk) {
                     hasher.update(piece);
                 }
-                assert_eq!(hasher.finish_hex(), *expected, "length {length} chunk {chunk}");
+                assert_eq!(
+                    hasher.finish_hex(),
+                    *expected,
+                    "length {length} chunk {chunk}"
+                );
             }
         }
     }

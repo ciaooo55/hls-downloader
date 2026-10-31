@@ -118,8 +118,10 @@ fn run_ffmpeg(command: &mut Command, log_path: &Path, control: &Path) -> Result<
         .spawn()
         .map_err(|error| format!("ffmpeg 启动失败: {error}"))?;
     let stderr = child.stderr.take().ok_or("ffmpeg stderr 不可用")?;
-    let logging = match std::thread::Builder::new().name("ffmpeg-log".into())
-        .spawn(move || capture_ffmpeg_log(stderr, log)) {
+    let logging = match std::thread::Builder::new()
+        .name("ffmpeg-log".into())
+        .spawn(move || capture_ffmpeg_log(stderr, log))
+    {
         Ok(worker) => worker,
         Err(error) => {
             let _ = child.kill();
@@ -149,7 +151,9 @@ fn run_ffmpeg(command: &mut Command, log_path: &Path, control: &Path) -> Result<
             }
         }
     };
-    let log_result = logging.join().map_err(|_| "ffmpeg 日志读取线程失败".to_string())
+    let log_result = logging
+        .join()
+        .map_err(|_| "ffmpeg 日志读取线程失败".to_string())
         .and_then(|result| result.map_err(|error| error.to_string()));
     let status = result?;
     if let Err(error) = log_result {
@@ -184,18 +188,28 @@ fn capture_ffmpeg_log(mut source: impl Read, mut file: fs::File) -> std::io::Res
     let mut truncated = false;
     loop {
         let count = source.read(&mut buffer)?;
-        if count == 0 { break; }
+        if count == 0 {
+            break;
+        }
         tail.extend_from_slice(&buffer[..count]);
-        if tail.len() > TAIL { tail.drain(..tail.len() - TAIL); }
+        if tail.len() > TAIL {
+            tail.drain(..tail.len() - TAIL);
+        }
         let keep = count.min(LIMIT - written);
-        if keep < count { truncated = true; }
+        if keep < count {
+            truncated = true;
+        }
         if keep > 0 && write_error.is_none() {
-            if let Err(error) = file.write_all(&buffer[..keep]) { write_error = Some(error); }
+            if let Err(error) = file.write_all(&buffer[..keep]) {
+                write_error = Some(error);
+            }
         }
         written += keep;
         // 即使日志盘写失败也持续读 stderr，不能让 FFmpeg 卡在满管道上。
     }
-    if let Some(error) = write_error { return Err(error); }
+    if let Some(error) = write_error {
+        return Err(error);
+    }
     if truncated {
         let marker = b"\n[log truncated; final stderr follows]\n";
         file.seek(SeekFrom::Start((LIMIT - tail.len() - marker.len()) as u64))?;
@@ -376,7 +390,11 @@ mod tests {
         let path = std::env::temp_dir().join(format!("hls-merge-log-{}.txt", std::process::id()));
         let mut source = vec![b'x'; 2 * 1024 * 1024];
         source.extend_from_slice(b"final decoder failure\n");
-        capture_ffmpeg_log(std::io::Cursor::new(source), fs::File::create(&path).unwrap()).unwrap();
+        capture_ffmpeg_log(
+            std::io::Cursor::new(source),
+            fs::File::create(&path).unwrap(),
+        )
+        .unwrap();
         let log = fs::read(&path).unwrap();
         fs::remove_file(path).unwrap();
         assert_eq!(log.len(), 1024 * 1024);

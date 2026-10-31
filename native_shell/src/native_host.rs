@@ -330,7 +330,7 @@ impl NativeHostSession {
                 .query_handoffs(None, Some(request_id), false)?
                 .into_iter()
                 .filter_map(|encoded| serde_json::from_str::<Handoff>(&encoded).ok())
-                .last()
+                .next_back()
             {
                 return Ok(json!({"ok": true, "handoff": existing.public(None)}));
             }
@@ -509,7 +509,7 @@ impl NativeHostSession {
                 .query_handoffs(None, Some(request_id), false)?
                 .into_iter()
                 .filter_map(|row| serde_json::from_str::<Handoff>(&row).ok())
-                .last();
+                .next_back();
             match found {
                 Some(handoff) => handoff,
                 // Absence is an observation, not proof that an earlier timed-out
@@ -1221,9 +1221,11 @@ mod tests {
     #[test]
     fn browser_cannot_write_subtitle_configuration() {
         let mut session = NativeHostSession::in_memory().unwrap();
-        let error = session.dispatch(&json!({"op": "subtitle", "request": {
-            "action": "configure", "provider": "qwencloud", "clear_key": true
-        }})).unwrap_err();
+        let error = session
+            .dispatch(&json!({"op": "subtitle", "request": {
+                "action": "configure", "provider": "qwencloud", "clear_key": true
+            }}))
+            .unwrap_err();
         assert!(error.contains("主程序"));
     }
 
@@ -1321,7 +1323,10 @@ mod tests {
         }
         // Pending requests can also exceed one frame; the IPC client must read
         // every page instead of dropping requests or disconnecting the pipe.
-        assert_eq!(session.core.query_handoffs(None, None, true).unwrap().len(), 13);
+        assert_eq!(
+            session.core.query_handoffs(None, None, true).unwrap().len(),
+            13
+        );
         server.shutdown();
     }
 

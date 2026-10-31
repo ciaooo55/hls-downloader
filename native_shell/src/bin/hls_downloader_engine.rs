@@ -158,11 +158,17 @@ fn main() -> ExitCode {
                 eprintln!("Core diagnostic log initialization failed: {error}");
             }
         }
-        hls_native_shell::record_runtime_log("core_starting", serde_json::json!({"version": env!("CARGO_PKG_VERSION")}));
+        hls_native_shell::record_runtime_log(
+            "core_starting",
+            serde_json::json!({"version": env!("CARGO_PKG_VERSION")}),
+        );
         let server = match hls_native_shell::CoreServer::open_default() {
             Ok(server) => server,
             Err(error) => {
-                hls_native_shell::record_runtime_log("core_start_failed", serde_json::json!({"stage":"open_store"}));
+                hls_native_shell::record_runtime_log(
+                    "core_start_failed",
+                    serde_json::json!({"stage":"open_store"}),
+                );
                 eprintln!("download engine startup failed: {error}");
                 return ExitCode::from(1);
             }
@@ -173,7 +179,10 @@ fn main() -> ExitCode {
         match server.bind_local() {
             Ok((address, worker)) => {
                 mark("ipc_ready");
-                hls_native_shell::record_runtime_log("core_ready", serde_json::json!({"elapsed_ms": started.elapsed().as_millis()}));
+                hls_native_shell::record_runtime_log(
+                    "core_ready",
+                    serde_json::json!({"elapsed_ms": started.elapsed().as_millis()}),
+                );
                 eprintln!("download engine listening on {address}");
                 match worker.join() {
                     Ok(Ok(())) => ExitCode::SUCCESS,
@@ -185,7 +194,10 @@ fn main() -> ExitCode {
                 }
             }
             Err(error) => {
-                hls_native_shell::record_runtime_log("core_start_failed", serde_json::json!({"stage":"bind_ipc"}));
+                hls_native_shell::record_runtime_log(
+                    "core_start_failed",
+                    serde_json::json!({"stage":"bind_ipc"}),
+                );
                 eprintln!("download engine bind failed: {error}");
                 ExitCode::from(1)
             }

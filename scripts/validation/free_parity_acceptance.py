@@ -6,7 +6,6 @@ the installer, browser or native workbench matrices passed for these binaries.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io

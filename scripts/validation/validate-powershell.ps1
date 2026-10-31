@@ -9,7 +9,8 @@ if ($usingDefaultPath) {
     # hard-coded list previously let media-push wrapper/core scripts bypass the
     # PowerShell 5.1/7 parser job entirely.
     $Path = @(
-        Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot -Parent) -Filter '*.ps1' -File -Recurse |
+        Get-ChildItem -LiteralPath (Split-Path $PSScriptRoot -Parent) -File -Recurse |
+            Where-Object { $_.Extension -in @('.ps1', '.psm1', '.psd1') } |
             Sort-Object Name |
             Select-Object -ExpandProperty FullName
     )

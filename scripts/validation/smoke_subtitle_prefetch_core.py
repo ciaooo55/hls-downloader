@@ -2,7 +2,6 @@
 import argparse
 import base64
 import concurrent.futures
-import contextlib
 from functools import partial
 from http.server import ThreadingHTTPServer
 import json

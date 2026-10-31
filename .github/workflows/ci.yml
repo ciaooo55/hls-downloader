@@ -102,6 +102,7 @@ jobs:
           Get-ChildItem -Path scripts -Filter *.py -File -Recurse | ForEach-Object {
             python.exe -m py_compile $_.FullName
           }
+          python.exe -m unittest discover -s scripts/validation -p test_v7_core_ipc.py
 
   rust_core:
     name: Rust Core
@@ -137,9 +138,10 @@ jobs:
           # The updater binary owns runtime release-signer authorization tests, including the Windows WinTrust path.
           cargo test --locked --bin HLSDownloaderUpdater
           cargo build --locked --bin HLSDownloaderUpdater
-          # Product/test-helper reachability and stable IPC/media interfaces intentionally trigger these structural lints.
+          # Stable IPC/media interfaces intentionally retain these structural lints.
           # Keep every other Clippy warning fatal so new actionable warnings still fail CI.
-          cargo clippy --locked --all-targets -- -D warnings -A dead_code -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
+          cargo clippy --locked --all-targets -- -D warnings -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
+          cargo clippy --locked --no-default-features --features presenter-client --all-targets -- -D warnings
 
   presenter:
     name: Native presenter

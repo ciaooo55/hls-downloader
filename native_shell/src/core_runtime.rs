@@ -4,8 +4,8 @@
 //! exchange the shared contract instead of owning separate task state.
 
 use crate::contract::{
-    AvScanStatus, CoreCommand, CoreEvent, EventEnvelope, MediaPushRequest, MirrorStatus, ResourceKind,
-    ResourceOffer, TaskFailure, TaskSnapshot, TaskSpec,
+    AvScanStatus, CoreCommand, CoreEvent, EventEnvelope, MediaPushRequest, MirrorStatus,
+    ResourceKind, ResourceOffer, TaskFailure, TaskSnapshot, TaskSpec,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -320,7 +320,12 @@ impl CoreRuntime {
         let snapshot = TaskSnapshot {
             task_id: task_id.clone(),
             resource_kind: spec.resource_kind,
-            status: if spec.start_paused { "paused" } else { "queued" }.into(),
+            status: if spec.start_paused {
+                "paused"
+            } else {
+                "queued"
+            }
+            .into(),
             stage: "waiting".into(),
             title,
             filename: spec.filename.clone(),
@@ -555,7 +560,8 @@ impl CoreRuntime {
             .filter(|item| item.queue_id == task.queue_id)
             .collect();
         tasks.sort_by(|a, b| {
-            a.queue_index.cmp(&b.queue_index)
+            a.queue_index
+                .cmp(&b.queue_index)
                 .then_with(|| a.task_id.cmp(&b.task_id))
         });
         tasks.into_iter().map(|item| item.task_id.clone()).collect()
@@ -740,7 +746,8 @@ impl CoreRuntime {
                         ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
                     )
                 {
-                    let downloading = matches!(effective_status.as_str(), "downloading" | "recording");
+                    let downloading =
+                        matches!(effective_status.as_str(), "downloading" | "recording");
                     let parts = crate::paint_from_progress(
                         &progress,
                         snapshot.downloaded_bytes,
@@ -1056,11 +1063,14 @@ mod tests {
 
     #[test]
     fn create_paused_does_not_enter_the_schedulable_queue() {
-        let mut runtime=CoreRuntime::new();
-        let mut spec=task();spec.start_paused=true;
-        let events=runtime.handle(CoreCommand::CreateTask {spec});
-        assert!(events.iter().any(|e|matches!(&e.event,CoreEvent::TaskCreated {snapshot} if snapshot.status=="paused")));
-        assert!(runtime.list_tasks().iter().all(|t|t.status!="queued"));
+        let mut runtime = CoreRuntime::new();
+        let mut spec = task();
+        spec.start_paused = true;
+        let events = runtime.handle(CoreCommand::CreateTask { spec });
+        assert!(events.iter().any(
+            |e| matches!(&e.event,CoreEvent::TaskCreated {snapshot} if snapshot.status=="paused")
+        ));
+        assert!(runtime.list_tasks().iter().all(|t| t.status != "queued"));
     }
 
     fn task() -> TaskSpec {
@@ -1350,7 +1360,8 @@ mod tests {
         );
         for (delta, expected) in [(i32::MAX, "task-1"), (i32::MIN, "task-3")] {
             runtime.handle(CoreCommand::ReorderQueue {
-                task_id: "task-3".into(), delta,
+                task_id: "task-3".into(),
+                delta,
             });
             assert_eq!(runtime.list_tasks()[0].task_id, expected);
         }

@@ -808,7 +808,10 @@ pub fn download_hls_with(
             // away the record of every completed segment and the resumed run
             // downloaded them again.
             if live {
-                for item in prepared.iter().filter(|item| completed.contains(&item.path)) {
+                for item in prepared
+                    .iter()
+                    .filter(|item| completed.contains(&item.path))
+                {
                     timeline.insert(TimelineEntry {
                         identity: item.identity.clone(),
                         media_sequence: item.segment.media_sequence,
@@ -820,7 +823,12 @@ pub fn download_hls_with(
                     });
                 }
                 timeline.save(&state_path)?;
-                write_timeline_playlist(task_dir, playlist.target_duration, &timeline.entries, false)?;
+                write_timeline_playlist(
+                    task_dir,
+                    playlist.target_duration,
+                    &timeline.entries,
+                    false,
+                )?;
             } else {
                 for item in prepared
                     .iter()

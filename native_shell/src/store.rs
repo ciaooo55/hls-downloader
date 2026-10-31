@@ -88,25 +88,47 @@ impl CoreStore {
     }
 
     pub(crate) fn crawl_states(&self) -> Result<Vec<crate::crawl::CrawlState>, String> {
-        let mut query = self.connection.prepare("SELECT state_json FROM crawl_projects ORDER BY project_id").map_err(|e| e.to_string())?;
-        let rows = query.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
-        rows.map(|row| serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())).collect()
+        let mut query = self
+            .connection
+            .prepare("SELECT state_json FROM crawl_projects ORDER BY project_id")
+            .map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| {
+            serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        })
+        .collect()
     }
 
     pub(crate) fn crawl_ids(&self) -> Result<Vec<String>, String> {
-        let mut query = self.connection.prepare("SELECT project_id FROM crawl_projects ORDER BY project_id").map_err(|e| e.to_string())?;
-        let rows = query.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+        let mut query = self
+            .connection
+            .prepare("SELECT project_id FROM crawl_projects ORDER BY project_id")
+            .map_err(|e| e.to_string())?;
+        let rows = query
+            .query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
         rows.map(|r| r.map_err(|e| e.to_string())).collect()
     }
 
     pub(crate) fn crawl_state(&self, id: &str) -> Result<crate::crawl::CrawlState, String> {
-        let json: String = self.connection.query_row("SELECT state_json FROM crawl_projects WHERE project_id=?1",params![id],|row|row.get(0)).map_err(|_| "抓站项目不存在")?;
-        serde_json::from_str(&json).map_err(|e|e.to_string())
+        let json: String = self
+            .connection
+            .query_row(
+                "SELECT state_json FROM crawl_projects WHERE project_id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|_| "抓站项目不存在")?;
+        serde_json::from_str(&json).map_err(|e| e.to_string())
     }
 
     pub(crate) fn save_crawl(&self, state: &crate::crawl::CrawlState) -> Result<(), String> {
         let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
-        if json.len() > 3 * 1024 * 1024 { return Err("抓站项目状态超过 3 MiB 上限".into()); }
+        if json.len() > 3 * 1024 * 1024 {
+            return Err("抓站项目状态超过 3 MiB 上限".into());
+        }
         self.connection.execute("INSERT INTO crawl_projects(project_id,state_json) VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET state_json=excluded.state_json", params![state.project.id, json]).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -362,7 +384,11 @@ impl CoreStore {
             .map_err(|error| format!("read Core setting {key}: {error}"))
     }
 
-    fn setting_or<T: serde::de::DeserializeOwned>(&self, key: &str, fallback: T) -> Result<T, String> {
+    fn setting_or<T: serde::de::DeserializeOwned>(
+        &self,
+        key: &str,
+        fallback: T,
+    ) -> Result<T, String> {
         let Some(raw) = self.setting_json(key)? else {
             return Ok(fallback);
         };
@@ -616,7 +642,11 @@ impl CoreStore {
         pending_only: bool,
         after: Option<[i64; 2]>,
     ) -> Result<(Vec<String>, Option<[i64; 2]>), String> {
-        let selection = if handoff_id.is_some() { "handoff_id = ?1" } else { "?1 IS NULL" };
+        let selection = if handoff_id.is_some() {
+            "handoff_id = ?1"
+        } else {
+            "?1 IS NULL"
+        };
         let mut statement = self.connection.prepare(&format!(
             "SELECT created_at_ms, rowid, public_json FROM handoffs WHERE \
              ({selection}) \
@@ -625,10 +655,23 @@ impl CoreStore {
              AND (?4 IS NULL OR (created_at_ms, rowid) > (?4, ?5)) \
              ORDER BY created_at_ms, rowid LIMIT 65"
         )).map_err(|error| format!("prepare Core handoff page: {error}"))?;
-        let rows = statement.query_map(
-            params![handoff_id, client_request_id, pending_only, after.map(|key| key[0]), after.map(|key| key[1])],
-            |row| Ok(([row.get::<_, i64>(0)?, row.get::<_, i64>(1)?], row.get::<_, String>(2)?)),
-        ).map_err(|error| format!("query Core handoff page: {error}"))?;
+        let rows = statement
+            .query_map(
+                params![
+                    handoff_id,
+                    client_request_id,
+                    pending_only,
+                    after.map(|key| key[0]),
+                    after.map(|key| key[1])
+                ],
+                |row| {
+                    Ok((
+                        [row.get::<_, i64>(0)?, row.get::<_, i64>(1)?],
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| format!("query Core handoff page: {error}"))?;
         let mut items = Vec::new();
         let mut bytes = 0;
         let mut last = None;
@@ -636,7 +679,10 @@ impl CoreStore {
             let (key, encoded) = row.map_err(|error| format!("read Core handoff page: {error}"))?;
             // IPC carries each saved JSON document as a string, so budget its
             // escaped wire size rather than database bytes or item count alone.
-            let wire_bytes = serde_json::to_string(&encoded).map_err(|error| error.to_string())?.len() + 1;
+            let wire_bytes = serde_json::to_string(&encoded)
+                .map_err(|error| error.to_string())?
+                .len()
+                + 1;
             if wire_bytes > crate::core_ipc::V7_PIPE_MAX_FRAME - 512 {
                 return Err("接管记录超过单帧大小限制，无法读取".into());
             }
@@ -927,15 +973,20 @@ mod tests {
 
     #[test]
     fn schema_six_migration_preserves_tasks_and_settings() {
-        let mut store=CoreStore::in_memory().unwrap();
-        let mut runtime=CoreRuntime::new();
-        store.apply_events(&runtime.handle(CoreCommand::CreateTask {spec:spec()})).unwrap();
-        store.set_setting("minimum_bytes",42u64).unwrap();
-        store.connection.execute_batch("DROP TABLE crawl_projects; PRAGMA user_version=6;").unwrap();
+        let mut store = CoreStore::in_memory().unwrap();
+        let mut runtime = CoreRuntime::new();
+        store
+            .apply_events(&runtime.handle(CoreCommand::CreateTask { spec: spec() }))
+            .unwrap();
+        store.set_setting("minimum_bytes", 42u64).unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE crawl_projects; PRAGMA user_version=6;")
+            .unwrap();
         store.initialize(6).unwrap();
-        assert_eq!(store.schema_version().unwrap(),CURRENT_SCHEMA_VERSION);
-        assert_eq!(store.load_tasks().unwrap().len(),1);
-        assert_eq!(store.setting_u64("minimum_bytes",0).unwrap(),42);
+        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+        assert_eq!(store.load_tasks().unwrap().len(), 1);
+        assert_eq!(store.setting_u64("minimum_bytes", 0).unwrap(), 42);
         assert!(store.crawl_ids().unwrap().is_empty());
     }
 
@@ -1035,34 +1086,73 @@ mod tests {
                 "id": format!("page-{index}"), "request_id": "page-client",
                 "title": if index < 3 { "\\\"".repeat(120 * 1024) } else { String::new() },
                 "status": status,
-            }).to_string();
-            store.save_handoff(&format!("page-{index}"), &encoded, status, None, if index < 3 { 2 } else { 1 }).unwrap();
+            })
+            .to_string();
+            store
+                .save_handoff(
+                    &format!("page-{index}"),
+                    &encoded,
+                    status,
+                    None,
+                    if index < 3 { 2 } else { 1 },
+                )
+                .unwrap();
         }
         let mut after = None;
         let mut seen = Vec::new();
         let mut pages = 0;
         loop {
-            let (items, next) = store.query_handoffs_page(None, Some("page-client"), true, after).unwrap();
+            let (items, next) = store
+                .query_handoffs_page(None, Some("page-client"), true, after)
+                .unwrap();
             assert!(items.len() <= 64);
             let wire = crate::core_ipc::encode_message(&crate::CorePipeResponse::Handoffs {
-                request_id: 1, items: items.clone(), next,
-            }).unwrap();
+                request_id: 1,
+                items: items.clone(),
+                next,
+            })
+            .unwrap();
             assert!(wire.len() <= crate::core_ipc::V7_PIPE_MAX_FRAME + 4);
-            seen.extend(items.iter().map(|item| serde_json::from_str::<serde_json::Value>(item).unwrap()["id"].as_str().unwrap().to_string()));
+            seen.extend(items.iter().map(|item| {
+                serde_json::from_str::<serde_json::Value>(item).unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }));
             pages += 1;
             match next {
-                Some(key) => { assert!(after.is_none_or(|previous| key > previous)); after = Some(key); }
+                Some(key) => {
+                    assert!(after.is_none_or(|previous| key > previous));
+                    after = Some(key);
+                }
                 None => break,
             }
         }
-        let expected: Vec<_> = (3..70).filter(|index| *index != 12).chain(0..3).map(|index| format!("page-{index}")).collect();
+        let expected: Vec<_> = (3..70)
+            .filter(|index| *index != 12)
+            .chain(0..3)
+            .map(|index| format!("page-{index}"))
+            .collect();
         assert_eq!(seen, expected);
         assert!(pages > 1);
-        let (one, next) = store.query_handoffs_page(Some("page-0"), None, true, None).unwrap();
+        let (one, next) = store
+            .query_handoffs_page(Some("page-0"), None, true, None)
+            .unwrap();
         assert_eq!(one.len(), 1);
         assert_eq!(next, None);
-        store.save_handoff("too-large", &"x".repeat(crate::core_ipc::V7_PIPE_MAX_FRAME), "pending", None, 3).unwrap();
-        assert!(store.query_handoffs_page(Some("too-large"), None, true, None).unwrap_err().contains("单帧"));
+        store
+            .save_handoff(
+                "too-large",
+                &"x".repeat(crate::core_ipc::V7_PIPE_MAX_FRAME),
+                "pending",
+                None,
+                3,
+            )
+            .unwrap();
+        assert!(store
+            .query_handoffs_page(Some("too-large"), None, true, None)
+            .unwrap_err()
+            .contains("单帧"));
     }
 
     #[test]
@@ -1070,17 +1160,30 @@ mod tests {
         let mut store = CoreStore::in_memory().unwrap();
         assert!(store.setting_bool("missing", true).unwrap());
         assert_eq!(store.setting_u64("missing", 42).unwrap(), 42);
-        assert_eq!(store.setting_string("missing", "default").unwrap(), "default");
-        store.connection.execute(
-            "INSERT INTO settings(key, value_json) VALUES ('invalid', 'not-json')", [],
-        ).unwrap();
+        assert_eq!(
+            store.setting_string("missing", "default").unwrap(),
+            "default"
+        );
+        store
+            .connection
+            .execute(
+                "INSERT INTO settings(key, value_json) VALUES ('invalid', 'not-json')",
+                [],
+            )
+            .unwrap();
         assert!(store.setting_bool("invalid", true).unwrap());
         assert_eq!(store.setting_u64("invalid", 42).unwrap(), 42);
-        assert_eq!(store.setting_string("invalid", "default").unwrap(), "not-json");
+        assert_eq!(
+            store.setting_string("invalid", "default").unwrap(),
+            "not-json"
+        );
         store.set_setting("wrong_type", "text").unwrap();
         assert!(!store.setting_bool("wrong_type", false).unwrap());
         assert_eq!(store.setting_u64("wrong_type", 42).unwrap(), 42);
-        assert_eq!(store.setting_string("wrong_type", "default").unwrap(), "text");
+        assert_eq!(
+            store.setting_string("wrong_type", "default").unwrap(),
+            "text"
+        );
     }
 
     #[test]
@@ -1088,14 +1191,21 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "hls-v7-settings-reopen-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let database = root.join("data.db");
         let mut store = CoreStore::open(&database).unwrap();
         store.set_setting("takeover_enabled", false).unwrap();
         store.set_setting("minimum_bytes", 42_u64).unwrap();
         let observer = Connection::open(&database).unwrap();
-        let data_version = || observer.query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0)).unwrap();
+        let data_version = || {
+            observer
+                .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
         // 先建立观察连接，关闭写连接后再取基线，避免把关闭时的 checkpoint 算成重开写入。
         let _ = data_version();
         drop(store);
@@ -1103,7 +1213,11 @@ mod tests {
         let reopened = CoreStore::open(&database).unwrap();
         assert!(!reopened.setting_bool("takeover_enabled", true).unwrap());
         assert_eq!(reopened.setting_u64("minimum_bytes", 0).unwrap(), 42);
-        assert_eq!(data_version(), before, "reopening the current schema must not commit a write");
+        assert_eq!(
+            data_version(),
+            before,
+            "reopening the current schema must not commit a write"
+        );
         drop(reopened);
         drop(observer);
         fs::remove_dir_all(root).unwrap();

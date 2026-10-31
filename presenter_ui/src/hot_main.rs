@@ -1,4 +1,7 @@
-#![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(windows, not(debug_assertions), not(test)),
+    windows_subsystem = "windows"
+)]
 
 slint::include_modules!();
 
@@ -1429,8 +1432,10 @@ fn round_native_window(window: &slint::Window) {
             }
             let actual = native.inner_size();
             let rendered = window.size();
-            actual.width > 0 && actual.height > 0
-                && actual.width == rendered.width && actual.height == rendered.height
+            actual.width > 0
+                && actual.height > 0
+                && actual.width == rendered.width
+                && actual.height == rendered.height
         });
         if ready_to_repaint == Some(true) {
             // 隐藏后 Win32 画布会被清空，但 softbuffer 仍可能报告缓冲可复用。

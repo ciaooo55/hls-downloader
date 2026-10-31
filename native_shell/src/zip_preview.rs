@@ -73,6 +73,9 @@ impl Source {
         if end > self.total {
             return Err(CORRUPT.into());
         }
+        if length == 0 {
+            return Ok(Vec::new());
+        }
         let tail_start = self.total - self.tail.len() as u64;
         if offset >= tail_start {
             return Ok(
@@ -346,6 +349,21 @@ fn decode_cp437(name: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_remote_directory_does_not_issue_a_range_request() {
+        let mut source = Source {
+            file: None,
+            spec: Some(TaskSpec::default()),
+            total: TAIL + 22,
+            tail: vec![0; TAIL as usize],
+            read: TAIL,
+            modified: None,
+        };
+        assert!(source.bytes(0, 0).unwrap().is_empty());
+        assert_eq!(source.read, TAIL);
+        assert!(source.bytes(source.total + 1, 0).is_err());
+    }
 
     #[test]
     fn directory_preserves_utf8_encryption_and_zip64_sizes() {
