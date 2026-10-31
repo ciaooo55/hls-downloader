@@ -1,0 +1,10 @@
+{
+  "files_sha256": {
+    "ARTIFACT-MANIFEST.json": "ad20f283bdcbd25048bf462dd6eb56886857ba74e35e2735dce1e5e8bb3892dc",
+    "BUILD-PROVENANCE.json": "ef346d10dafb12e303a2d8ab1c81b570c726ecff06909913ed8a56758addefd1",
+    "build-result.json": "7296832b66743c4a718b16f7a0e1d217cef6aa9c0d55e519e6f7e5315f1b3bca",
+    "expected-components.json": "3beb5a648ee0c6da2100a1f3eac01f8bfb1b45a9fa5e17c7fe50022b7dad8572",
+    "FEATURE-PARITY.json": "8dbcde78e4df8b5bd8ab99dd3f37c285489016790aaac371e81223289d9635d5"
+  },
+  "release_ready": false
+}

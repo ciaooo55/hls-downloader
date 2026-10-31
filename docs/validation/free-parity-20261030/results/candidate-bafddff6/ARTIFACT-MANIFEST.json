@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "product_version": "7.0.3",
+  "package_tier": "candidate",
+  "source_commit": "bafddff6b2d185be08a9f3522d952bd347f5c285",
+  "source_tree": "a3e21a578ea780beefa1aab44da22ea74e334f98",
+  "feature_parity_sha256": "8dbcde78e4df8b5bd8ab99dd3f37c285489016790aaac371e81223289d9635d5",
+  "feature_parity_path": "FEATURE-PARITY.json",
+  "artifacts": {
+    "exe": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-candidate.exe",
+      "sha256": "77c62529b507f91c318f5ea3b6656073d383a8263ed0fd336a15f6a463015ec7"
+    },
+    "msi": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-candidate.msi",
+      "sha256": "78105372fb19e85aedca2588518db285418d1f162fa2a4cb31ef27fe7d13ecd9"
+    },
+    "portable": {
+      "path": "HLSDownloader-7.0.3-Windows-x64-Portable-candidate.zip",
+      "sha256": "247306440fdc7c1e4584e8b86e57d7f838a6b42a14238257ce43b0c61faaba11"
+    }
+  },
+  "components": {
+    "app/resources/HLSDownloaderCli.exe": "bddff34260fb591e1ff54e37648f2d748c0a42e1863b5251b14511ceff1f1301",
+    "app/resources/HLSDownloaderEngine.exe": "3901fff834bbf8a4b27d65d72d3a48cf2f9b2179b7f361c8fe669bcffb6bcf48",
+    "app/resources/HLSDownloaderNativeHost.exe": "de47da593fa16a05e47e986df2c44a9b2b0235f520f5a01fab63166fca8fba17",
+    "app/resources/HLSDownloaderPresenter.exe": "13b395372a74c4eddb943acdb240d1317eb8b496add462000997ac83a27f50eb",
+    "app/resources/HLSDownloaderUpdater.exe": "4a2e1e9b04f7e893ce85201857861c0157e34e4809b408cd30ac6e558b544876"
+  },
+  "extensions": {
+    "Chromium": {
+      "version": "7.0.3",
+      "path": "extensions/HLSDownloader-7.0.3-Chromium.zip",
+      "sha256": "8df39d054474b8edf08deb25156a150ac9e0164ab3247915db048d5ad0560e05"
+    },
+    "Firefox": {
+      "version": "7.0.3",
+      "path": "extensions/HLSDownloader-7.0.3-Firefox.zip",
+      "sha256": "1d1e0a01e7a58ccd2f7fa1a93c3ec313f2301a2630ed4557f340ee981d3ea371"
+    }
+  },
+  "recovery_note": "Canonical build compiled and validated artifacts, then directory swap failed due to active Sandbox mapping. EXE/MSI recovered from verified build outputs; portable recreated by existing create-v7-portable.ps1 with source-bound provenance. Canonical candidate directory preserved."
+}

@@ -1,0 +1,16 @@
+{
+  "source_commit": "bafddff6b2d185be08a9f3522d952bd347f5c285",
+  "build_compile_and_packaging": "Gradle BUILD SUCCESSFUL in 5m 53s; EXE embedded MSI verified",
+  "canonical_build_exit_code": 1,
+  "canonical_build_failure": "Directory swap failed because active r20 Sandbox maps the old candidate; original candidate preserved",
+  "recovered_output": "artifacts\\v7-productization\\candidate-bafddff6",
+  "recovery": "Existing generated EXE/MSI verified against postprocessing output; portable regenerated with existing create-v7-portable.ps1; 64 components, source provenance, wrapper and both extensions checked",
+  "temporary_pointer_diagnostics_in_new_package": false,
+  "same_package_acceptance": "Not started; r21 runners prepared",
+  "release_ready": false,
+  "logs_sha256": {
+    "build-bafddff6-candidate.log": "e3dddc103beecdaf91ade57c477198b34a36c788116115dd371013c7935299d5",
+    "build-bafddff6-cached-media.log": "3e16fb99f5aa7199783fecc74c9bcbae248589320ddbb4a2386b711615a8ac1a",
+    "recover-bafddff6-portable.log": "8b76cb9eb51c8fed7f03f15773b2dcd9588db341ae251ace5cd90bebd527ba7d"
+  }
+}

@@ -22,7 +22,21 @@
 
 后续同包通过和新增失败见下节。旧候选的 1603 失败保留，不能用多次成功覆盖新的失败。
 
-## 当前候选 f53019e
+## 新候选 bafddff6：已生成，安装后验收未开始
+
+源码 `bafddff6b2d185be08a9f3522d952bd347f5c285` 包含固定抓站创建按钮修复 `948f6595`。新包保存在 `artifacts/v7-productization/candidate-bafddff6/`，原 f53019e 候选目录完整保留。[构建来源](results/candidate-bafddff6/BUILD-PROVENANCE.json)、[交付清单](results/candidate-bafddff6/ARTIFACT-MANIFEST.json)、[64 组件清单](results/candidate-bafddff6/expected-components.json)及[构建结果](results/candidate-bafddff6/build-result.json)已归档。
+
+| 文件 | SHA-256 |
+| --- | --- |
+| EXE | `77c62529b507f91c318f5ea3b6656073d383a8263ed0fd336a15f6a463015ec7` |
+| MSI | `78105372fb19e85aedca2588518db285418d1f162fa2a4cb31ef27fe7d13ecd9` |
+| 便携 ZIP | `247306440fdc7c1e4584e8b86e57d7f838a6b42a14238257ce43b0c61faaba11` |
+
+首次构建因遗漏现有 FFmpeg 缓存路径在依赖检查处停止。补入已核对哈希的缓存后，Gradle 编译与打包成功（5 分 53 秒），安装器后处理和 EXE 内嵌 MSI 核验通过；但最后候选目录交换被仍在运行的 r20 沙盒目录映射锁住，完整构建命令返回 1。保留该失败，直接从已生成输出恢复并核对 EXE/MSI，使用原有 `create-v7-portable.ps1` 重新生成便携包，未重编译或改写构建来源。重新核对源码、工作区、64 组件、Skiko 包装及两浏览器扩展。新生产 JAR 不含临时鼠标事件诊断。
+
+新候选的安装、升级、卸载、浏览器及原生输入验收尚未开始；r21 夹具已准备并沿用修正的 HTML HEAD/GET/Range 响应，不强制 JVM 比例代替 OS DPI。r20 开发诊断沙盒暂留：自动拖动的按下事件被处理时，全局鼠标已到终点，导致框架读到零位移，正等待人工慢拖区分实际缩放行为。完整矩阵和 `release_ready` 仍为未通过。旧包 r14–r18 证据不能代替新包验收。
+
+## 旧候选 f53019e
 
 源码 `f53019e0968c2d919d4c1ace2aa099f18679c678`，打包前工作区干净，包含便携升级检查点修复 `425ab01`。新包位于 `artifacts/v7-productization/candidate/`；原始[构建来源](results/candidate-f53019e/BUILD-PROVENANCE.json)、[交付清单](results/candidate-f53019e/ARTIFACT-MANIFEST.json)与[64 组件及便携助手清单](results/candidate-f53019e/expected-components.json)已保存。
 
