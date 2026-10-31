@@ -320,13 +320,7 @@ def visible_handoff_smoke(
                     [str(presenter)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
                 )
                 presenter_pid_after_restart = presenter_process.pid
-                restart_deadline = time.monotonic() + 30
-                while not ready_file.exists():
-                    if presenter_process.poll() is not None:
-                        raise RuntimeError(f"Presenter exited during recovery: {presenter_process.returncode}")
-                    if time.monotonic() >= restart_deadline:
-                        raise TimeoutError("restarted Presenter did not report ready within 30 seconds")
-                    time.sleep(0.01)
+                # Pending recovery opens the real confirmation instead of the idle prewarm.
                 wait_window(presenter_process.pid, "确认下载", True, 30)
                 expect_warmup_next = True
             rejected = native_message(host_process, {"op": "reject_handoff", "handoff_id": handoff_id})

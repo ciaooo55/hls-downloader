@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import traceback
@@ -25,7 +26,7 @@ def run(args):
     report = {'passed': False, 'checks': [], 'samples': [], 'source':
               'https://commons.wikimedia.org/wiki/File:JFK_inaugural_address.ogg'}
     driver = server = popup = page = sid = None
-    temporary = tempfile.TemporaryDirectory(prefix='hls-cloud-continuous-')
+    temporary = tempfile.TemporaryDirectory(prefix='hls-cloud-continuous-', dir=test_tmp())
     key = args.key_file.read_text(encoding='utf-8-sig').strip() if args.key_file else ''
     if args.key_file:
         args.key_file.unlink()

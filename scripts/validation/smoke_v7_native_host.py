@@ -10,6 +10,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import uuid
@@ -106,8 +107,9 @@ def main() -> int:
         raise RuntimeError("Native Host and engine binaries must exist before smoke testing")
 
     # 隔离 stage 目录的卷决定了“首次执行全新路径”的系统开销（杀毒扫描/预取缺失）。
-    # 默认沿用系统临时目录；调用方可用 --stage-root 显式指定，并把卷记入报告。
-    stage_root = (Path(args.stage_root) if args.stage_root else Path(tempfile.gettempdir())).resolve()
+    # 默认使用工作区缓存；调用方可用 --stage-root 显式指定，并把卷记入报告。
+    stage_root = (Path(args.stage_root) if args.stage_root else test_tmp()).resolve()
+    stage_root.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="hls-v7-native-host-", dir=str(stage_root)))
     # The Native Host resolves its Core by the installed product name next to its
     # own executable, so stage both binaries under product names in an isolated

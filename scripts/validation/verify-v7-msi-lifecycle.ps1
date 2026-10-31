@@ -242,6 +242,9 @@ try {
         $exit = Invoke-V7Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'upgrade-candidate.log')
         Add-Step 'upgrade-exit' ($exit -in @(0, 3010, 1641)) $exit
         $afterProduct = Get-V7InstalledProduct $upgradeCode
+        if ($afterProduct.product_code -eq $candidateProductCode) {
+            $installedProductCode = $candidateProductCode
+        }
         Add-Step 'product-upgraded' ($afterProduct.version -eq $expectedCandidateVersion -and $afterProduct.product_code -ne $oldProduct.product_code) $afterProduct
         Add-Step 'old-application-process-ended' ($null -eq (Get-Process -Id $beforeProcess.launcher_pid -ErrorAction SilentlyContinue)) $beforeProcess.launcher_pid
         $afterProcess = Start-InstalledApplication $InstallDir
@@ -259,7 +262,6 @@ try {
         ) $checkpointAfter
         Add-Step 'registration-present' (@(Get-RegistrationState).Count -gt 0) (Get-RegistrationState)
         Add-Step 'shortcuts-present' (@(Get-ShortcutState).Count -gt 0) (Get-ShortcutState)
-        $installedProductCode = $afterProduct.product_code
     } else {
         $oldProcess = Start-InstalledApplication $InstallDir
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\install\shutdown-running.ps1') -InstallDir $InstallDir

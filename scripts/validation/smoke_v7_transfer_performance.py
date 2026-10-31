@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 
@@ -147,7 +148,7 @@ def main() -> int:
     if not args.engine.is_file():
         raise FileNotFoundError(args.engine)
     if args.storage_only:
-        stage_root = args.stage_root or Path(tempfile.gettempdir())
+        stage_root = args.stage_root or test_tmp()
         with tempfile.TemporaryDirectory(prefix='hls-v7-storage-', dir=stage_root) as temporary:
             output = Path(temporary)/'fixture.bin'
             started = time.perf_counter()

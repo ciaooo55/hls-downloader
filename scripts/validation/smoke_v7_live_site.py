@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -26,7 +27,7 @@ from smoke_v7_presenter import native_message
 
 def record(engine, host, ffmpeg, resource):
     result = {"passed": False, "samples": []}
-    with tempfile.TemporaryDirectory(prefix="live-replay-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="live-replay-", dir=test_tmp()) as temporary:
         local = Path(temporary)
         downloads = local / "downloads"
         downloads.mkdir()
@@ -100,7 +101,7 @@ def record(engine, host, ffmpeg, resource):
 def run(args):
     assert os.environ.get("HLS_VM_ACCEPTANCE") == "1", "Sandbox only"
     report = {"passed": False, "browser_manifest_statuses": []}
-    with tempfile.TemporaryDirectory(prefix="live-browser-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="live-browser-", dir=test_tmp()) as temporary:
         options = Options()
         options.add_argument("--no-first-run")
         options.add_argument("--autoplay-policy=no-user-gesture-required")

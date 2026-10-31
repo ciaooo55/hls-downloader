@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import uuid
@@ -51,7 +52,7 @@ def run(args):
     root.mkdir(parents=True, exist_ok=True)
     # SQLite and download state stay on the guest's local filesystem; only
     # evidence is written through the host's mapped folder.
-    local = Path(tempfile.mkdtemp(prefix="presenter-repaint-"))
+    local = Path(tempfile.mkdtemp(prefix="presenter-repaint-", dir=test_tmp()))
     environment = os.environ.copy()
     pipe_name = rf"\\.\pipe\HLSDownloader.repaint-{uuid.uuid4().hex}"
     environment.update(HLS_V7_DATA_DIR=str(local / "profile"), HLS_V7_PIPE=pipe_name,

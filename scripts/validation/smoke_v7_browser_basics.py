@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import traceback
@@ -140,9 +141,7 @@ def run(args):
     def tasks():
         return core({'type': 'snapshot', 'request_id': 1})['tasks']
 
-    # 并行识别测试不拥有下载任务，只以保存的用户基线核验数据保留。
-    baseline = json.loads((args.report.parent / 'user-tasks-before.json').read_text(encoding='utf8'))
-    initial = {t['task_id'] for t in baseline['tasks']}
+    initial = {t['task_id'] for t in tasks()}
 
     def record(name, actual=True):
         report['checks'].append({'name': name, 'actual': actual})
@@ -332,7 +331,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
             mm.addMessageListener('hls-qa-popup',listener);mm.loadFrameScript(url,false);
         """, 'data:application/javascript,' + quote(source))
 
-    with tempfile.TemporaryDirectory(prefix='browser-basics-', dir=runtime.parents[1] / 'test-tmp') as temporary:
+    with tempfile.TemporaryDirectory(prefix='browser-basics-', dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
             if args.stage in {'toolbar', 'entries', 'errors'}:
@@ -447,6 +446,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                     return None
                 video = wait(frame_video, 'Public video missing', 20)
                 driver.execute_script('arguments[0].muted=true;arguments[0].play().catch(()=>{})', video)
+                ActionChains(driver).move_to_element(video).perform()
                 wait(lambda: shadow('.video-download:not(.identifying)'), 'Public video not recognized', 30)
                 driver.switch_to.default_content()
                 address = driver.capabilities['ms:edgeOptions']['debuggerAddress']
@@ -830,6 +830,7 @@ ConvertTo-Json -InputObject @($matches) -Compress
                     if driver.find_elements(By.TAG_NAME, 'video'): break
                     driver.switch_to.default_content()
                 driver.execute_script('const v=document.querySelector("video");if(v){v.muted=true;v.loop=true;v.play().catch(()=>{})}')
+                ActionChains(driver).move_to_element(driver.find_element(By.TAG_NAME, 'video')).perform()
                 wait(lambda: driver.execute_script('return Boolean(document.querySelector("hls-downloader-media-panel")?.shadowRoot?.querySelector(".video-download:not(.identifying)"))'), 'Public video not recognized', 25)
                 driver.switch_to.default_content()
                 browser_title = driver.title

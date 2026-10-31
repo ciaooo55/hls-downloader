@@ -12,6 +12,7 @@ from pathlib import Path
 import ssl
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import traceback
@@ -378,7 +379,7 @@ def run(args):
                 if attempt == 2:
                     raise
 
-    with tempfile.TemporaryDirectory(prefix="extension-interactions-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="extension-interactions-", dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
             fixture_root = stage / 'video-fixture'
@@ -549,6 +550,7 @@ def run(args):
                 return False
             wait(find_video, "Public page contains no video player", 20)
             driver.execute_script("document.querySelector('video').muted=true;document.querySelector('video').play()")
+            ActionChains(driver).move_to_element(driver.find_element(By.TAG_NAME, "video")).perform()
             wait(lambda: driver.execute_script("return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download:not(.identifying)'))"), "Public video not identified", 40)
             driver.execute_script("""
                 window.__hlsUiErrors=[];window.__hlsPointerEvents=[];
@@ -972,7 +974,7 @@ def run(args):
                 wait(lambda: popup_button(label).get_attribute("aria-pressed") == old, "Popup toggle did not restore: " + label, 10)
                 record("popup toggle and restore: " + label)
             popup_button("资源").click()
-            popup_button("重新识别").click()
+            popup_button("嗅探全部资源").click()
             wait(lambda: driver.execute_script("return !document.querySelector('.scan-button').disabled"), "Rescan did not finish", 20)
             wait(lambda: driver.find_elements(By.CSS_SELECTOR,"article .copy-link"), "Rescan lost local video", 20)
             resource_more = driver.find_element(By.CSS_SELECTOR, "article .resource-more summary")

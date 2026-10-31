@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import statistics
 import threading
 import time
@@ -90,7 +91,7 @@ def main():
                        '; loopback; not TLS, full-product or IDM/AB parity',
               'sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest()
                          for name, path in engines.items()}}
-    root = Path(r'C:\QAWork')/('http-headers-'+uuid.uuid4().hex)
+    root = test_tmp()/('http-headers-'+uuid.uuid4().hex)
     names = list(engines)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     try:

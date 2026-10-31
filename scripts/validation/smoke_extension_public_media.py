@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 import zipfile
 
 from selenium import webdriver
+from selenium.webdriver import ActionChains
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
@@ -180,6 +181,10 @@ def run(args):
                         play_frames(driver)
                         # 小屏幕沙盒中 HLS demo 的播放器位于首屏下方；入口只随可见播放器显示。
                         driver.execute_script("document.querySelector('video')?.scrollIntoView({block:'center',inline:'nearest'})")
+                        for video in driver.find_elements(By.TAG_NAME, 'video'):
+                            if video.is_displayed():
+                                ActionChains(driver).move_to_element(video).perform()
+                                break
                         state = _overlay_state(driver)
                         record["state"] = state
                         # The button must point at the requested manifest/media, not merely any detected URL.

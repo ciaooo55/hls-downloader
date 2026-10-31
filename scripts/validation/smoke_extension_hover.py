@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import zipfile
@@ -19,7 +20,7 @@ from selenium.webdriver.edge.service import Service
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
 
-from smoke_extension_media import QuietStaticHandler, _make_media, _overlay_state, _current_frame_overlay_state
+from smoke_extension_media import QuietStaticHandler, _make_media, _overlay_state, _current_frame_overlay_state, _media_videos
 
 
 def wait(condition, description, seconds=15):
@@ -36,7 +37,7 @@ def run(args):
     if os.environ.get("HLS_VM_ACCEPTANCE") != "1":
         raise RuntimeError("Run this test inside the acceptance sandbox")
     report = {"passed": False, "browser": args.browser, "cases": []}
-    with tempfile.TemporaryDirectory(prefix="media-hover-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="media-hover-", dir=test_tmp()) as temporary:
         root = Path(temporary)
         site = root / "site"
         site.mkdir()
@@ -87,12 +88,7 @@ def run(args):
                 ActionChains(driver).move_to_element(driver.find_element("tag name", "h1")).perform()
                 time.sleep(.7)
                 assert not state_now()["labels"], f"{mode}: unsolicited overlay"
-                videos = driver.execute_script("""
-                    const videos=[];
-                    function visit(root){root.querySelectorAll('video').forEach(v=>videos.push(v));
-                      root.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)visit(e.shadowRoot)});}
-                    visit(document);return videos;
-                """)
+                videos = _media_videos(driver)
                 identities = []
                 for video in videos:
                     ActionChains(driver).move_to_element(video).perform()

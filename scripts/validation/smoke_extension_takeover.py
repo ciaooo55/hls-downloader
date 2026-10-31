@@ -19,6 +19,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import zipfile
@@ -864,15 +865,10 @@ def run_real(args) -> dict[str, Any]:
         finally: p.close()
     def tasks(): return core({'type':'snapshot','request_id':1})['tasks']
     initial_handoffs = {json.loads(encoded)['id'] for encoded in core({'type':'load_handoffs','request_id':7})['items']}
-    def single_resolved_handoff(name, path=None, filename=None):
-        url = f'http://127.0.0.1:{server.server_port}/{path or name + ".bin"}'
+    def single_resolved_handoff(name, task_id):
         handoffs = [json.loads(encoded) for encoded in core({'type':'load_handoffs','request_id':7})['items']]
-        if filename:
-            matches = [handoff for handoff in handoffs
-                if handoff['id'] not in initial_handoffs and handoff.get('offer',{}).get('filename') == filename]
-        else:
-            matches = [handoff for handoff in handoffs
-                if handoff.get('offer',{}).get('url') == url]
+        matches = [handoff for handoff in handoffs
+                   if handoff['id'] not in initial_handoffs and handoff.get('task_id') == task_id]
         assert len(matches) == 1 and matches[0]['status'] != 'pending', f'Duplicate or unresolved takeover: {matches}'
         record('one-resolved-handoff-'+name, {'id':matches[0]['id'],'status':matches[0]['status']})
     initial = {t['task_id'] for t in tasks()}
@@ -887,7 +883,7 @@ def run_real(args) -> dict[str, Any]:
         assert not items and not events, {'items': items, 'created_events': events}
         return {'items': items, 'created_events': events}
     # 真实浏览器配置放本地临时目录，隔离沙盒映射盘对 Native Messaging 启动的影响。
-    temp_root = Path(tempfile.gettempdir())
+    temp_root = test_tmp()
     with tempfile.TemporaryDirectory(prefix='real-takeover-',dir=temp_root) as temporary:
         stage = Path(temporary)
         try:
@@ -1018,7 +1014,7 @@ def run_real(args) -> dict[str, Any]:
                     f'{name} browser copy remained after accepted takeover',20)
                 wait(lambda:not list(downloads.glob(f'{output_name}*')),
                     f'{name} duplicate browser output',5)
-                single_resolved_handoff(name,path,output_name if filename else None)
+                single_resolved_handoff(name,task['task_id'])
                 if no_content_length:
                     header_sets=RealDownloadHandler.response_headers.get(path or name+'.bin',[])
                     assert header_sets and all(not any(header.lower()=='content-length' for header,_ in headers)
@@ -1356,7 +1352,7 @@ def run_real(args) -> dict[str, Any]:
                 result['failure_browser_files'] = [{'name':file.name,'size':file.stat().st_size}
                     for file in downloads.iterdir() if file.is_file()]
                 result['failure_handoffs'] = [json.loads(item) for item in core({'type':'load_handoffs','request_id':7})['items']
-                    if server and json.loads(item).get('offer',{}).get('url','').startswith(f'http://127.0.0.1:{server.server_port}/')]
+                    if json.loads(item)['id'] not in initial_handoffs]
                 if driver and inspector:
                     driver.switch_to.window(inspector)
                     result['failure_browser_downloads'] = _download_items(driver, inspector)
@@ -1395,7 +1391,7 @@ def run_real(args) -> dict[str, Any]:
                     created.update(t['task_id'] for t in tasks() if t['url'].startswith(marker))
                     for encoded in core({'type':'load_handoffs','request_id':3})['items']:
                         handoff=json.loads(encoded)
-                        if handoff.get('status')=='pending' and handoff.get('offer',{}).get('url','').startswith(marker):
+                        if handoff.get('status')=='pending' and any(handoff.get('offer',{}).get(field,'').startswith(marker) for field in ('url','source_page_url')):
                             core({'type':'command','request_id':4,'command':{'kind':'reject_handoff','handoff_id':handoff['id'],'suppress_site_kind':False}})
                 for task_id in created:
                     core({'type':'command','request_id':5,'command':{'kind':'task_action','task_id':task_id,'action':'delete_files'}})

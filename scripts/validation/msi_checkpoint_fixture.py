@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from v7_core_ipc import connect, send_frame as send, wait_task
+from v7_core_ipc import connect, send_frame as send, snapshot, wait_task
 
 
 PAYLOAD_SIZE = 32 * 1024 * 1024

@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import tempfile
+from validation_workspace import test_tmp
 import time
 from pathlib import Path
 from typing import Any
@@ -383,7 +384,7 @@ def run(args, api_key: str) -> dict[str, Any]:
     try:
         result["core_configuration"] = _configure_core(api_key)
         result["checks"].append("Core confirmed encrypted QwenCloud configuration")
-        temp_context = tempfile.TemporaryDirectory(prefix="qwencloud-public-subtitles-")
+        temp_context = tempfile.TemporaryDirectory(prefix="qwencloud-public-subtitles-", dir=test_tmp())
         temp = Path(temp_context.__enter__())
         result["profile_root"] = str(temp.resolve())
         profile = temp / "profile"

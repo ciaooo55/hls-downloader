@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import ssl
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import traceback
@@ -65,7 +66,7 @@ def run(args):
         assert result.get('type') != 'error', result
         return result
 
-    with tempfile.TemporaryDirectory(prefix='firefox-response-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='firefox-response-', dir=test_tmp()) as temporary:
         root = Path(temporary)
         downloads = root / 'browser-downloads'
         downloads.mkdir()

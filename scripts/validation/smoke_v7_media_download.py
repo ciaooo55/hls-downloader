@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import uuid
@@ -68,7 +69,7 @@ def run(args):
                                           "-map", "0:v:0", "-f", "framemd5", "-"], timeout=60).decode()
         return [line.rsplit(",", 1)[-1].strip() for line in output.splitlines() if line and not line.startswith("#")]
 
-    with tempfile.TemporaryDirectory(prefix="core-media-", dir=runtime.parents[1] / "test-tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="core-media-", dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
             source = stage / "source.mp4"

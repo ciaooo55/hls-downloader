@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import zipfile
@@ -73,7 +74,7 @@ def run(args):
         print(name, flush=True)
 
     try:
-        temporary = tempfile.TemporaryDirectory(prefix="browser-progress-")
+        temporary = tempfile.TemporaryDirectory(prefix="browser-progress-", dir=test_tmp())
         stage = Path(temporary.name)
         site = stage / 'site'
         site.mkdir()
@@ -289,6 +290,7 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
         def button():
             return driver.execute_script("return document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download:not(.identifying)') || null")
 
+        ActionChains(driver).move_to_element(driver.find_element('tag name', 'video')).perform()
         target = wait(button, 'Player not identified', 45)
         wait(lambda: driver.execute_script("return [...document.querySelectorAll('video')].some(v=>v.currentTime>0)"),
              'Player not actually playing', 20)
@@ -371,7 +373,7 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
                 report['last_task'] = task
                 assert task['status'] != 'failed', task.get('error_message')
                 if args.media != 'file' and task['status'] == 'downloading' and task['downloaded_bytes'] > 0 and not hud_closed:
-                    hud = presenter_window('下载进度', args.runtime)
+                    hud = presenter_window('下载进度', runtime=args.runtime)
                     assert hud, 'Transferring task has no visible HUD'
                     assert user32.GetWindowLongW(hud, -20) & 8, 'HUD is behind browser (not topmost)'
                     samples.append({'bytes': task['downloaded_bytes'], 'speed': task['speed_bytes_per_sec']})
@@ -399,9 +401,9 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
                         user32.SetCursorPos(rect.right-round(26*scale), rect.top+round(27*scale))
                         user32.mouse_event(2, 0, 0, 0, 0)
                         user32.mouse_event(4, 0, 0, 0, 0)
-                        wait(lambda: not presenter_window('下载进度', args.runtime), 'Close did not hide HUD', 5)
+                        wait(lambda: not presenter_window('下载进度', runtime=args.runtime), 'Close did not hide HUD', 5)
                         time.sleep(.6)
-                        assert not presenter_window('下载进度', args.runtime), 'Progress event reopened dismissed HUD'
+                        assert not presenter_window('下载进度', runtime=args.runtime), 'Progress event reopened dismissed HUD'
                         hud_closed = True
                         record('hud-close-keeps-download-running-and-does-not-reopen', True)
                 if task['status'] == 'completed':
@@ -470,6 +472,7 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
         driver.switch_to.default_content()
         driver.get(origin + '/unresolved.html')
         wait(lambda: driver.execute_script("return document.querySelector('video').currentTime > 0"), 'Blob video not playing', 15)
+        ActionChains(driver).move_to_element(driver.find_element('tag name', 'video')).perform()
         unresolved = wait(lambda: driver.execute_script("return document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download') || null"), 'Unresolved overlay missing', 10)
         ActionChains(driver).move_to_element(unresolved).perform()
         wait(lambda: driver.execute_script("return document.querySelector('hls-downloader-media-panel').shadowRoot.querySelector('.video-download').textContent.includes('重新识别')"), 'Recognition never terminates', 18)

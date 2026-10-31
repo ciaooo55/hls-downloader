@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import shutil
 import socket
 import subprocess
@@ -259,12 +260,12 @@ def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
     product = json.loads(args.manifest.read_text(encoding='utf-8-sig'))['product_code']
-    install = Path(r'C:\QAWork\Custom Install Path') / ('HLSDownloader-' + uuid.uuid4().hex[:8])
+    install = (test_tmp() / 'Custom Install Path') / ('HLSDownloader-' + uuid.uuid4().hex[:8])
     assert not install.exists(), 'Fresh custom installation required'
     report = {'passed': False, 'checks': [], 'msi_sha256': hashlib.sha256(args.msi.read_bytes()).hexdigest()}
     processes = []
     installed = False
-    stage = Path(r'C:\QAWork') / ('installer-' + product.strip('{}'))
+    stage = test_tmp() / ('installer-' + product.strip('{}'))
     stage.mkdir(parents=True, exist_ok=True)
     local_msi = stage/'package.msi'
     # Windows Installer 服务不共享桌面用户的沙盒映射，安装文件和日志先落在虚拟机本地。

@@ -85,7 +85,9 @@ html = (
     + token_css('dark') + '\n' + token_css('light') + '\nbody{margin:0}\n'
     + '</style></head><body><pre id="out"></pre><script>' + js + '</script></body></html>'
 )
-with tempfile.TemporaryDirectory(prefix='hls-colour-check-') as directory:
+staging = Path(__file__).resolve().parents[2] / '.tool-cache' / 'test-tmp'
+staging.mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='hls-colour-check-', dir=staging) as directory:
     html_path = Path(directory) / 'mixcheck.html'
     html_path.write_text(html, encoding='utf-8')
     proc = subprocess.run(

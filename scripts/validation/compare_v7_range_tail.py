@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import random
 import socket
 import statistics
@@ -156,7 +157,7 @@ def main():
     args = parser.parse_args()
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     engines = {'baseline-a': args.baseline, 'baseline-b': args.baseline, 'candidate': args.candidate}
-    root = Path(r'C:\QAWork')/('range-tail-' + uuid.uuid4().hex)
+    root = test_tmp()/('range-tail-' + uuid.uuid4().hex)
     result = {'passed': False, 'samples': [], 'medians': {},
               'scope': 'Core-only 64MiB loopback HTTP ranges with 4 connections; not TLS/Internet or IDM-AB parity',
               'engine_sha256': {key: hashlib.sha256(value.read_bytes()).hexdigest()

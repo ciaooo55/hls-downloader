@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from validation_workspace import test_tmp
 import threading
 from urllib.request import urlopen
 import winreg
@@ -17,11 +18,23 @@ from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 
-from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, Server
+from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 from smoke_extension_media import _find_firefox
-from smoke_v7_local_app import Handler
 from smoke_v7_portable_app import Pipe, wait
 from smoke_v7_browser_download_confirmation import click_download_confirmation
+
+
+class Handler(RangeHandler):
+    def do_GET(self):
+        if self.path == "/page":
+            data = b"<!doctype html><title>Portable download test</title><script>fetch('/file.bin',{headers:{Range:'bytes=0-0'}}).then(r=>r.arrayBuffer()).then(()=>document.body.dataset.ready='1')</script><body>Portable download test</body>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            super().do_GET()
 
 
 def run(args):
@@ -44,7 +57,7 @@ def run(args):
         if not passed:
             raise AssertionError(f"{name}: {actual}")
 
-    with tempfile.TemporaryDirectory(prefix="portable-browser-", dir=root.parents[1] / "test-tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="portable-browser-", dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader") as key:
@@ -103,7 +116,7 @@ def run(args):
             def download(value, expected_bytes, expected_hash, name):
                 requested = message({"type": "download-now", "resource": {**value, "tabId": tab_id, "pageUrl": page_url}})
                 check(name+"-plugin-request", requested.get("ok") is True, requested)
-                click_download_confirmation()
+                click_download_confirmation(runtime=root)
 
                 def task():
                     tasks = pipe.request({"type": "snapshot", "request_id": 10})["tasks"]

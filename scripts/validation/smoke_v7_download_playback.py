@@ -11,6 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import re
 import socket
 import subprocess
@@ -38,7 +39,7 @@ def wait(predicate, message, timeout=45):
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    root = Path(r'C:\QAWork') / ('download-playback-' + uuid.uuid4().hex)
+    root = test_tmp() / ('download-playback-' + uuid.uuid4().hex)
     fixture = root / 'fixtures'
     fixture.mkdir(parents=True)
     resources = args.runtime / 'app/resources'

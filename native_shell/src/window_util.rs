@@ -183,9 +183,9 @@ pub fn activate_window_by_title(title: &str) -> bool {
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            BringWindowToTop, GetWindowLongPtrW, SetForegroundWindow, SetWindowPos, ShowWindow,
-            GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-            SW_RESTORE, WS_EX_TOPMOST,
+            BringWindowToTop, GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow,
+            SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, WS_EX_TOPMOST,
         };
 
         let Some(raw_hwnd) = window_handle_by_title(title) else {
@@ -206,7 +206,7 @@ pub fn activate_window_by_title(title: &str) -> bool {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
             ) != 0;
             let _ = BringWindowToTop(hwnd);
-            let focused = SetForegroundWindow(hwnd) != 0;
+            let focused = SetForegroundWindow(hwnd) != 0 || GetForegroundWindow() == hwnd;
             let restored = SetWindowPos(
                 hwnd,
                 if was_topmost {

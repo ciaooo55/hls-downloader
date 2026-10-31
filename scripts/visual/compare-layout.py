@@ -182,13 +182,14 @@ def selftest(d):
     check('identical images', p, p, True)
     check('different panel structure (tasks_1000 vs settings)', p, q, False)
 
-    # 3px shift: the tolerance must not be loose enough to swallow a real move.
+    # Shift the settings panel, whose borders this comparator measures.
+    # The task-only fixture can have no qualifying vertical panel borders.
     shifted = os.path.join(d, '_selftest_shift3.png')
-    arr = np.asarray(Image.open(p).convert('RGB'), dtype=np.uint8)
+    arr = np.asarray(Image.open(q).convert('RGB'), dtype=np.uint8)
     shifted_arr = np.roll(arr, 3, axis=1)
     Image.fromarray(shifted_arr).save(shifted)
     try:
-        check('same image shifted 3px', p, shifted, False)
+        check('settings panel shifted 3px', q, shifted, False)
     finally:
         if os.path.exists(shifted):
             os.remove(shifted)

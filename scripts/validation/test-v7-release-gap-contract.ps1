@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$Shell
@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $assertScript = Join-Path $repo 'scripts\release\assert-v7-release-gaps.ps1'
 $shellPath = (Get-Command $Shell -ErrorAction Stop).Source
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('hls-v7-gap-contract-' + [guid]::NewGuid().ToString('n'))
+$tempRoot = Join-Path (Join-Path $repo '.tool-cache\test-tmp') ('hls-v7-gap-contract-' + [guid]::NewGuid().ToString('n'))
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 function Write-Fixture([string]$Path, [bool]$WithGap) {

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from validation_workspace import test_tmp
 import time
 import uuid
 import zipfile
@@ -33,14 +34,13 @@ from PIL import ImageGrab
 PAGE = 'https://interactive-examples.mdn.mozilla.net/pages/tabbed/video.html'
 MEDIA = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm'
 SHA256 = 'c6f8a348953395598a9a73b9bab1676436410797bce9f398f4be1531d6e76dda'
-os.environ.setdefault('HLS_V7_PRESENTER_TRACE_FILE', str(Path(tempfile.gettempdir()) / 'hls-downloader-presenter-trace.log'))
+os.environ.setdefault('HLS_V7_PRESENTER_TRACE_FILE', str(test_tmp() / 'hls-downloader-presenter-trace.log'))
 _last_presenter_diagnostic = 0.0
 _presenter_self_test_done = False
 
 
-def presenter_window(title='确认下载', runtime=None):
+def presenter_window(title='确认下载', *, runtime):
     global _last_presenter_diagnostic, _presenter_self_test_done
-    runtime = runtime or Path(__file__).resolve().parents[2] / '.tool-cache/runtime/HLSDownloader'
     runtime = runtime.resolve()
     processes = runtime_processes(runtime)
     presenters = [process for process in processes if process['name'] == 'HLSDownloaderPresenter.exe']
@@ -171,7 +171,7 @@ def confirmation_rendered(handle):
         include_layered_windows=True, all_screens=True))
 
 
-def click_download_confirmation(accept=True, input_mode='system', evidence_path=None, runtime=None):
+def click_download_confirmation(accept=True, input_mode='system', evidence_path=None, *, runtime):
     handle = wait(lambda: presenter_window(runtime=runtime), 'Desktop confirmation did not appear', 10)
     # 隔离浏览器的系统通知位于右下角；将测试窗口移到左上角，保留真实按钮输入。
     user32.SetWindowPos(handle, wintypes.HWND(-1), 24, 12, 0, 0, 0x0001 | 0x0040)
@@ -271,8 +271,10 @@ def click_download_confirmation(accept=True, input_mode='system', evidence_path=
 def run(args):
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {'passed': False, 'browser': args.browser, 'page': PAGE, 'checks': []}
+    desktop_jars = list((args.runtime / 'app').glob('HLSDownloaderDesktop-*.jar'))
+    assert len(desktop_jars) == 1, desktop_jars
     report['installed_sha256'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in [args.runtime/'app/HLSDownloaderDesktop-7.0.3.jar',
+        for p in [desktop_jars[0],
                   args.runtime/'app/resources/HLSDownloaderEngine.exe',
                   args.runtime/'app/resources/HLSDownloaderPresenter.exe']}
     driver = None
@@ -304,7 +306,7 @@ def run(args):
         print(json.dumps({'check': name}, ensure_ascii=True), flush=True)
 
     def popup_window(title='确认下载'):
-        return presenter_window(title, args.runtime)
+        return presenter_window(title, runtime=args.runtime)
 
     def reject_confirmation():
         click_download_confirmation(accept=False, runtime=args.runtime,
@@ -323,7 +325,7 @@ def run(args):
         assert not any(t['task_id'] not in initial and t['url'] == unique_url for t in tasks()), 'Task started before confirmation'
         record('public-media-click-shows-confirmation-before-task', {'latency_ms': round(latency, 2)})
 
-    with tempfile.TemporaryDirectory(prefix='browser-confirmation-', dir=args.runtime.resolve().parents[1] / 'test-tmp') as temporary:
+    with tempfile.TemporaryDirectory(prefix='browser-confirmation-', dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
             initial = {t['task_id'] for t in tasks()}
@@ -388,6 +390,7 @@ def run(args):
             wait(find_video, 'Public page has no video', 15)
             driver.execute_script('const v=document.querySelector("video");v.src=arguments[0];v.muted=true;v.loop=true;v.play();', unique_url)
             wait(lambda: driver.execute_script('return document.querySelector("video").currentTime > 0'), 'Public video did not play', 20)
+            ActionChains(driver).move_to_element(driver.find_element(By.TAG_NAME, 'video')).perform()
             click_media()
             if args.cold_ui:
                 assert not any(p['name'] == 'HLSDownloader.exe' for p in runtime_processes(args.runtime.resolve()))

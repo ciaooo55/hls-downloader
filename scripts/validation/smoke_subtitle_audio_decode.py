@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 
 
@@ -15,7 +16,7 @@ def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
     report = {'passed': False}
     server = None
-    with tempfile.TemporaryDirectory(prefix='hls-subtitle-decode-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='hls-subtitle-decode-', dir=test_tmp()) as temporary:
         root = Path(temporary)
 
         def ff(*values):

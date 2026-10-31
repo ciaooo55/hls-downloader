@@ -12,6 +12,7 @@ import socket
 import statistics
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import time
 
 from v7_core_ipc import free_port, send_frame
@@ -159,7 +160,7 @@ def main() -> int:
     if args.idle_seconds < 30 or args.stress_requests < 100:
         raise ValueError("soak test requires at least 30 idle seconds and 100 requests")
 
-    root = Path(tempfile.mkdtemp(prefix="hls-v7-runtime-soak-"))
+    root = Path(tempfile.mkdtemp(prefix="hls-v7-runtime-soak-", dir=test_tmp()))
     engine_path = root / "HLSDownloaderEngine.exe"
     shutil.copy2(args.engine, engine_path)
     port = free_port()
@@ -198,6 +199,9 @@ def main() -> int:
                     raise RuntimeError(f"Engine exited during idle soak: {engine.returncode}")
                 idle_samples.append(probe.sample(time.monotonic() - started))
 
+            # Core closes idle connections; the stress phase starts a new session.
+            stream.close()
+            stream = wait_for_core(port, time.monotonic() + 10)
             stress_samples = [probe.sample(time.monotonic() - started)]
             latencies: list[float] = []
             errors: list[str] = []

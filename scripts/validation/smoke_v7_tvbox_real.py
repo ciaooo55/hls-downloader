@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -164,7 +165,7 @@ def main() -> int:
         raise FileNotFoundError("engine or media fixture is missing")
 
     started = time.perf_counter()
-    root = Path(tempfile.mkdtemp(prefix="hls-v7-tvbox-real-"))
+    root = Path(tempfile.mkdtemp(prefix="hls-v7-tvbox-real-", dir=test_tmp()))
     engine_path = root / "HLSDownloaderEngine.exe"
     shutil.copy2(args.engine, engine_path)
     core_port = free_port()

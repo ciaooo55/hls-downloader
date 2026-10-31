@@ -11,6 +11,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import traceback
 import uuid
@@ -43,7 +44,7 @@ def run(args):
         result["checks"].append({"name": name, **details})
         print(json.dumps(result["checks"][-1]), flush=True)
 
-    with tempfile.TemporaryDirectory(prefix="hls-task-import-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="hls-task-import-", dir=test_tmp()) as temporary:
         root = Path(temporary)
 
         @contextlib.contextmanager

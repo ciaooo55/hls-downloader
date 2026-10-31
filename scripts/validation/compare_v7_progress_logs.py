@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import statistics
 import uuid
 
@@ -22,7 +23,7 @@ def main():
     result = {'passed': False, 'rounds': [], 'medians': {},
               'scope': 'previous backend versus candidate; baseline-a/b use the same executable',
               'sha256': {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in engines.items()}}
-    root = Path(r'C:\QAWork') / ('log-comparison-' + uuid.uuid4().hex)
+    root = test_tmp() / ('log-comparison-' + uuid.uuid4().hex)
     names = list(engines)
     try:
         for task_count in (10, 1000):

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$Shell
@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $validator = Join-Path $repo 'scripts\validation\validate-powershell.ps1'
 $shellPath = (Get-Command $Shell -ErrorAction Stop).Source
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('hls-v7-script-hygiene-' + [guid]::NewGuid().ToString('n'))
+$tempRoot = Join-Path (Join-Path $repo '.tool-cache\test-tmp') ('hls-v7-script-hygiene-' + [guid]::NewGuid().ToString('n'))
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
 function Write-Fixture([string]$Path, [string]$Body) {

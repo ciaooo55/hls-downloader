@@ -21,6 +21,7 @@ import socketserver
 import struct
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import wave
@@ -218,8 +219,7 @@ def run(args):
     browser = Path(args.browser_binary).resolve() if firefox else _find_chromium_binary(args.browser_binary)
     family = "firefox" if firefox else "edge" if "msedge" in browser.name.lower() else "chrome"
     if firefox and args.capture == 'tab': raise ValueError('Firefox cannot use tab capture')
-    temp_root = Path(tempfile.gettempdir()) if args.system_temp else Path(__file__).resolve().parents[2]/'.tool-cache'/'test-tmp'
-    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_root = test_tmp()
     with tempfile.TemporaryDirectory(prefix="hls-subtitle-smoke-", dir=temp_root) as temporary:
         root = Path(temporary)
         site = root/"site"; site.mkdir()
@@ -412,7 +412,7 @@ def run(args):
                     wait(lambda:evaluate(page,"window.testMedia.currentTime > 0.5"),"next cue did not seek into prepared subtitles")
                     prefetch_checks.extend(['manual commit waits for completed translation', 'originally paused player stays paused', 'PCM positions remain accurate during page thread stall', 'bounded pretranslation stops PCM', 'next cue seeks into prepared cache'])
                     core.hold_ready = True
-                    evaluate(page, '(()=>{window.testMedia.currentTime=40; return window.testMedia.play().then(()=>true)})()')
+                    evaluate(page, '(()=>{window.testMedia.currentTime=40; return window.testMedia.play().then(()=>true).catch(error=>{if(error.name==="AbortError")return false;throw error})})()')
                     wait(lambda:evaluate(page, 'window.testMedia.paused'), 'playback did not pause for missing subtitles')
                     wait(lambda:any(s['pending'] for s in core.sessions.values()), 'new seek window not committed', timeout=20)
                     assert evaluate(page, 'window.testMedia.currentTime < 40.5'), 'player ran ahead of untranslated seek window'
@@ -516,7 +516,6 @@ if __name__ == "__main__":
     parser.add_argument('--firefox-driver')
     parser.add_argument('--capture', choices=('element','tab','prefetch'), default='element')
     parser.add_argument('--player-dom', choices=('document','shadow','dynamic-shadow','nested-shadow'), default='document')
-    parser.add_argument('--system-temp', action='store_true')
     parser.add_argument('--headed', action='store_true')
     parser.add_argument('--idle-reconnect', action='store_true', help='Verify subtitle IPC after 125 seconds of actual idle time')
     print(json.dumps(run(parser.parse_args()),ensure_ascii=False,indent=2))

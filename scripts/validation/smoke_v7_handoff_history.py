@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import socket
 import sqlite3
 import struct
@@ -17,7 +18,7 @@ from v7_core_ipc import connect, send_frame as send
 
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Windows Sandbox only'
-    root = Path(r'C:\QAWork')/('handoff-history-'+uuid.uuid4().hex[:8])
+    root = test_tmp()/('handoff-history-'+uuid.uuid4().hex[:8])
     data = root/'data'
     data.mkdir(parents=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)

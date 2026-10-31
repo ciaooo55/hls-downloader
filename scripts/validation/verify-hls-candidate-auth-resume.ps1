@@ -139,7 +139,7 @@ function Wait-Snapshot($Client, [string]$TaskId, [string[]]$Statuses, [int]$Seco
     } while ($true)
 }
 
-function Invoke-CandidateCase([string]$Mode, [int]$Ordinal, [string]$Engine, [string]$DataRoot) {
+function Invoke-CandidateCase([string]$Mode, [int]$Ordinal, [string]$Engine) {
     $caseRoot = Join-Path $runRoot "$Mode-$Ordinal"
     $serverRoot = Join-Path $caseRoot 'server'
     $downloadRoot = Join-Path $caseRoot 'downloads'
@@ -214,7 +214,7 @@ function Invoke-CandidateCase([string]$Mode, [int]$Ordinal, [string]$Engine, [st
             $resumeResponse = Send-CoreRequest $client $resume
             if ($resumeResponse.type -eq 'error') { throw "Task resume failed: $($resumeResponse.message)" }
             $completed = Wait-Snapshot $client $taskId @('completed') 45
-            $output = Join-Path $downloadRoot $filename
+            $output = [string]$completed.output_path
             if (-not (Test-Path -LiteralPath $output -PathType Leaf)) { throw "Candidate output is missing: $output" }
             $body = [IO.File]::ReadAllBytes($output)
             $expected = if ($Mode -eq 'vod') { 'CANDIDATE-VOD-0CANDIDATE-VOD-1' } else { 'CANDIDATE-LIVE-0CANDIDATE-LIVE-1' }
@@ -278,7 +278,7 @@ try {
     for ($run = 1; $run -le $Runs; $run++) {
         foreach ($mode in @('vod','live')) {
             try {
-                $result = Invoke-CandidateCase $mode $run $engine (Join-Path $runRoot 'data')
+                $result = Invoke-CandidateCase $mode $run $engine
                 $report.Add((ConvertTo-Json -InputObject $result -Compress -Depth 8))
                 $report.Add("RESULT: $mode run $run passed")
             } catch {

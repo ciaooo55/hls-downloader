@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 from urllib.request import urlopen
 
 from v7_core_ipc import connect, free_port, send_frame as send, wait_task
@@ -21,8 +22,7 @@ def run(args):
     if not expected or len(expected) > 8 * 1024 * 1024:
         raise ValueError("Unexpected public media fixture size")
     expected_hash = hashlib.sha256(expected).hexdigest()
-    temp_root = Path(tempfile.gettempdir()) if args.system_temp else Path(__file__).resolve().parents[2] / ".tool-cache" / "test-tmp"
-    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_root = test_tmp()
     args.report.parent.mkdir(parents=True, exist_ok=True)
     result = {"passed": False, "url": url, "expected_bytes": len(expected), "expected_sha256": expected_hash,
               "engine_sha256": hashlib.sha256(args.engine.read_bytes()).hexdigest()}
@@ -73,5 +73,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--system-temp", action="store_true", help="Stage the executable on the VM local disk instead of a mapped source folder")
     raise SystemExit(0 if run(parser.parse_args())["passed"] else 1)

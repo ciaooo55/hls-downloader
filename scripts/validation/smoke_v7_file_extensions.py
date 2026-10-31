@@ -1,5 +1,6 @@
 """Guest-only acceptance for response filenames and actual downloaded formats."""
 from pathlib import Path
+from validation_workspace import test_tmp
 import argparse,hashlib,io,json,os,subprocess,threading,traceback,uuid,zipfile
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from smoke_v7_portable_app import Pipe,wait
@@ -18,7 +19,7 @@ def run(runtime,report_path):
     def command(value):return request({'type':'command','request_id':1,'command':value})
     def task(tid):return next(t for t in request({'type':'snapshot','request_id':2})['tasks'] if t['task_id']==tid)
     try:
-        root=Path(r'C:\QAWork')/('suffix-'+uuid.uuid4().hex)
+        root=test_tmp()/('suffix-'+uuid.uuid4().hex)
         root.mkdir(parents=True)
         environment={**os.environ,'HLS_V7_PIPE':pipe_name,'HLS_V7_DATA_DIR':str(root/'data'),
                      'HLS_V7_DOWNLOAD_DIR':str(root/'downloads')}

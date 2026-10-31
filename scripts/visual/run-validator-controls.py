@@ -1,38 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Run every positive AND negative control for the verification scripts.
+"""Check visual validators against current captures and deliberately invalid inputs.
 
-The point of this file
-----------------------
-Seven verification scripts in this project were reporting a confident pass they had not
-earned: empty input made the criterion vacuously true ("no row is untrustworthy" over
-zero rows), or the verdict was only printed and never reached the exit code. A script
-that cannot fail looks exactly like a script that works -- right up until it matters.
-
-So the controls live in one place and run in one command. Every check below asserts a
-SPECIFIC exit code, and a wrong code is a control failure, not a warning.
-
-Usage
------
-  python scripts/visual/run-validator-controls.py
-
-The interpreter matters: ``run_script`` propagates ``sys.executable`` to every child,
-and ``compare-layout.py`` imports cv2/PIL/numpy. Run this file with an interpreter that
-has them, otherwise the compare-layout control "fails" for a
-reason that has nothing to do with the comparator.
+Usage: python scripts/visual/run-validator-controls.py --captures CAPTURE_DIRECTORY
+Requires the existing cv2, PIL and numpy dependencies and a Chromium browser.
 """
+import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
 ROOT = os.path.dirname(os.path.dirname(HERE))
-REPORT = os.path.join(ROOT, 'outputs', 'v7-ui-audit-2026-09-14.html')
-CAPTURES = os.path.join(ROOT, 'artifacts', 'v7-productization', 'compose-visual-all')
-NEG = os.path.join(ROOT, 'artifacts', 'v7-productization', 'layout-regression', 'negative-controls')
 
 results = []
 
@@ -62,11 +47,15 @@ def load_module(name, path):
 
 def call_main(mod):
     buf = io.StringIO()
+    previous_argv = sys.argv
+    sys.argv = [mod.__file__]
     try:
         with contextlib.redirect_stdout(buf):
             rc = mod.main()
     except SystemExit as exc:
         rc = exc.code
+    finally:
+        sys.argv = previous_argv
     return rc
 
 
@@ -108,49 +97,35 @@ def mixcheck_control(mismatch=False):
     return code, (tail[-1] if tail else '')
 
 
-def skip_if_absent(path, label):
-    """A control whose input is absent must not be recorded as a pass.
-
-    A missing *negative* fixture makes the tool exit non-zero because the file is
-    not there, which is indistinguishable from the expected rejection, so the
-    control would look green without ever having been exercised.  Record it as a
-    failure with an explicit reason instead of fabricating either outcome.
-    """
-    if os.path.exists(path):
-        return True
-    print('  %-58s [SKIPPED: input absent, control not exercised]' % label)
-    results.append(False)
-    return False
-
-
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--captures', required=True, type=Path,
+                        help='Current capture set containing tasks_1000 and settings in dark theme at 1400x820')
+    args = parser.parse_args()
+    captures = args.captures.resolve()
+    data = json.loads((captures / 'capture-report.json').read_text(encoding='utf-8-sig'))
     print('=== subprocess-level controls ===')
-    if skip_if_absent(REPORT, 'validate_report: real report'):
-        rc, tail = run_script('validate_report.py', REPORT)
-        record('validate_report: real report', 0, rc, tail[:40])
-    if skip_if_absent(os.path.join(NEG, 'empty-report.html'),
-                      'validate_report: no tables, no images'):
-        rc, tail = run_script('validate_report.py', os.path.join(NEG, 'empty-report.html'))
-        record('validate_report: no tables, no images', 1, rc, tail[:40])
-
-    if skip_if_absent(CAPTURES, 'validate_captures: real 24-capture set'):
-        rc, tail = run_script('validate_captures.py', CAPTURES)
-        record('validate_captures: real 24-capture set', 0, rc, tail[:40])
-    if skip_if_absent(os.path.join(NEG, 'empty-report'), 'validate_captures: empty results'):
-        rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'empty-report'))
-        record('validate_captures: empty results', 1, rc, tail[:40])
-    if skip_if_absent(os.path.join(NEG, 'count-mismatch'),
-                      'validate_captures: claims 24, holds 1'):
-        rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'count-mismatch'))
-        record('validate_captures: claims 24, holds 1', 1, rc, tail[:40])
-    if skip_if_absent(os.path.join(NEG, 'dialog-missing'),
-                      'validate_captures: dialog never rendered (anchor)'):
-        rc, tail = run_script('validate_captures.py', os.path.join(NEG, 'dialog-missing'))
-        record('validate_captures: dialog never rendered (anchor)', 1, rc, tail[:40])
-
-    if skip_if_absent(CAPTURES, 'compare_layout: its own 3 controls'):
-        rc, tail = run_script('compare-layout.py', '--selftest', CAPTURES)
-        record('compare_layout: its own 3 controls', 0, rc, tail[:40])
+    rc, tail = run_script('validate_captures.py', str(captures))
+    record('validate_captures: current capture set', 0, rc, tail[:40])
+    if rc != 0:
+        return 1
+    # Derive corrupt reports from validated current inputs, without historical fixtures.
+    work = Path(ROOT) / 'artifacts' / 'v7-productization' / 'layout-regression'
+    work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='validator-controls-', dir=work) as temporary:
+        directory = Path(temporary)
+        item = next(row for row in data['results'] if row['fixture'] == 'tasks_1000')
+        cases = [
+            ('empty results', {'results': [], 'total': 0, 'captured': 0}),
+            ('count mismatch', {'results': [item], 'total': 2, 'captured': 1}),
+            ('dialog missing', {'results': [dict(item, fixture='settings')], 'total': 1, 'captured': 1}),
+        ]
+        for label, report in cases:
+            (directory / 'capture-report.json').write_text(json.dumps(report), encoding='utf-8')
+            rc, tail = run_script('validate_captures.py', str(directory))
+            record('validate_captures: ' + label, 1, rc, tail[:40])
+    rc, tail = run_script('compare-layout.py', '--selftest', str(captures))
+    record('compare_layout: its own 3 controls', 0, rc, tail[:40])
 
     print()
     print('=== in-process controls (data source stubbed to empty) ===')

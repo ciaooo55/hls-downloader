@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $preserved = @('data','downloads')
 
 function Full([string]$Path) { [IO.Path]::GetFullPath($Path).TrimEnd('\','/') }
@@ -48,7 +49,7 @@ function Assert-AppImage([string]$Root) {
     if ([int]$provenance.schema -ne 1 -or
         [string]$provenance.product_version -ne $productVersion -or
         @('candidate', 'formal') -notcontains [string]$provenance.package_tier -or
-        @('artifacts/v7-productization/feature-parity.json', 'config/release/feature-parity.json') -notcontains [string]$provenance.feature_parity_path -or
+        [string]$provenance.feature_parity_path -ne 'config/release/feature-parity.json' -or
         [string]$provenance.source_commit -notmatch '^[0-9a-fA-F]{40}$' -or
         [string]$provenance.source_tree -notmatch '^[0-9a-fA-F]{40}$') {
         throw "v7 portable image provenance is invalid: $Root"
@@ -63,14 +64,18 @@ function Assert-AppImage([string]$Root) {
         if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
             throw "v7 portable image is missing the $browser extension archive: $archive"
         }
-        $check = Join-Path ([IO.Path]::GetTempPath()) ("hls-v7-upgrade-extension-" + [guid]::NewGuid().ToString('n'))
+        $zip = [IO.Compression.ZipFile]::OpenRead($archive)
         try {
-            Expand-Archive -LiteralPath $archive -DestinationPath $check -Force
-            $manifestPath = Join-Path $check 'manifest.json'
-            if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+            $entry = $zip.GetEntry('manifest.json')
+            if ($null -eq $entry) {
                 throw "v7 $browser extension archive is missing manifest.json: $archive"
             }
-            $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $reader = New-Object IO.StreamReader($entry.Open())
+            try {
+                $manifest = $reader.ReadToEnd() | ConvertFrom-Json
+            } finally {
+                $reader.Dispose()
+            }
             if ([string]$manifest.version -ne $productVersion -or [int]$manifest.manifest_version -ne 3) {
                 throw "v7 $browser extension manifest is not version $productVersion Manifest V3: $archive"
             }
@@ -84,7 +89,7 @@ function Assert-AppImage([string]$Root) {
             }
             $identities[$browser] = $identity
         } finally {
-            Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
+            $zip.Dispose()
         }
     }
     return $identities

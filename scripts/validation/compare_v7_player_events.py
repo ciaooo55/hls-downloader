@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import sqlite3
 import statistics
 import time
@@ -87,7 +88,7 @@ def main():
               'scope': 'Player status without active decoding; real IPC and SQLite checkpoint commits; identical baseline-a/b control',
               'sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest()
                          for name, path in engines.items()}}
-    root = Path(r'C:\QAWork')/('player-events-'+uuid.uuid4().hex)
+    root = test_tmp()/('player-events-'+uuid.uuid4().hex)
     names = list(engines)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     try:

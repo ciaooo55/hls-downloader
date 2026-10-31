@@ -9,11 +9,13 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import uuid
 import zipfile
 
 from selenium import webdriver
+from selenium.webdriver import ActionChains
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 from selenium.common.exceptions import StaleElementReferenceException
@@ -41,7 +43,7 @@ def run(args):
         report["steps"].append({"name": name, "actual": actual})
         print(json.dumps({"passed": name}, ensure_ascii=False), flush=True)
 
-    with tempfile.TemporaryDirectory(prefix="firefox-overlay-", dir=runtime.parents[1] / "test-tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="firefox-overlay-", dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
             media_name = f"overlay-regression-{uuid.uuid4().hex}.mp4"
@@ -88,6 +90,7 @@ def run(args):
                 driver.get(url)
                 wait(lambda: driver.execute_script("return document.querySelector('video').currentTime>0"),
                      "Fixture video did not play", 30)
+                ActionChains(driver).move_to_element(driver.find_element("tag name", "video")).perform()
                 wait(lambda: driver.execute_script(
                     "return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot"
                     "?.querySelector('.video-download:not(.identifying)'))"),
@@ -111,7 +114,7 @@ def run(args):
             good_id = driver.install_addon(str(addon_file("valid.xpi")), temporary=True)
             assert good_id == manifest["browser_specific_settings"]["gecko"]["id"]
             open_player()
-            click_download_confirmation()
+            click_download_confirmation(runtime=runtime)
 
             def download_task():
                 current = pipe.request({"type": "snapshot", "request_id": 2})["tasks"]
@@ -132,7 +135,7 @@ def run(args):
             driver.uninstall_addon(good_id)
             driver.install_addon(str(stage / "valid.xpi"), temporary=True)
             open_player()
-            click_download_confirmation()
+            click_download_confirmation(runtime=runtime)
             task = wait(download_task, "Cached playback click was rejected", 45)
             assert task["status"] == "completed", task.get("log_tail")
             assert hashlib.sha256(Path(task["output_path"]).read_bytes()).digest() == hashlib.sha256(media.read_bytes()).digest()

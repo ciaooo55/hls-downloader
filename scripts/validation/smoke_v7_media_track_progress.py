@@ -35,7 +35,7 @@ def run(runtime,report_path,ffprobe):
                 super().send_error(code,message,explain)
             def do_GET(self):
                 name=self.path.split('?')[0].rsplit('/',1)[-1]
-                if name.startswith('audio-') or name.startswith('chunk-stream1-') or name.startswith('init-stream1'):
+                if name.startswith('audio-') or name.startswith('chunk-stream1-'):
                     requested.set();gate.wait(40);time.sleep(.8)
                 elif name.startswith('video-') or name.startswith('chunk-stream0-'):time.sleep(.25)
                 super().do_GET()

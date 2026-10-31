@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import zipfile
 
 from selenium import webdriver
+from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -376,6 +377,16 @@ def _make_media(root: Path, ffmpeg: str) -> None:
     (llhls / "index.m3u8").write_text("\n".join(llhls_lines) + "\n", encoding="utf-8")
 
 
+def _media_videos(driver):
+    """Return players in the current frame, including open shadow roots."""
+    return driver.execute_script("""
+        const videos=[];
+        function visit(root){root.querySelectorAll('video').forEach(v=>videos.push(v));
+          root.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)visit(e.shadowRoot)});}
+        visit(document);return videos;
+    """)
+
+
 def _current_frame_overlay_state(driver) -> dict:
     return driver.execute_script(
         """
@@ -570,7 +581,6 @@ def run(
                     state = _overlay_state(driver)
                     expected = 2 if mode in {"multi-mse", "multi-dash-mse", "multi-worker"} else 1
                     playing = sum(not item.get("paused") and float(item.get("currentTime") or 0) > 0 for item in state.get("videos", [])) == expected
-                    actionable = state.get("labels", []).count("下载视频") == (0 if mode == "dash-unknown-mse" else expected)
                     expected_player = "main" if mode == "ad-direct" else "spa-two" if mode == "spa" else ""
                     main_ready = not expected_player or any(
                         f"player={expected_player}" in str(item.get("src") or "")
@@ -578,9 +588,31 @@ def run(
                     )
                     expected_frames = 2 if mode in {"iframe", "cross-iframe", "srcdoc"} else 1
                     frames_ready = state.get("frameMarkers", []).count("1") == expected_frames
-                    if state.get("marker") == "1" and frames_ready and playing and actionable and main_ready:
+                    if state.get("marker") == "1" and frames_ready and playing and main_ready:
                         break
                     time.sleep(0.2)
+                # Each player exposes its control only while hovered. Record the
+                # successive hovers instead of expecting simultaneous buttons.
+                hovered = []
+                for frame in state.get('frameStates', []):
+                    driver.switch_to.default_content()
+                    for index in frame['framePath']:
+                        driver.switch_to.frame(driver.find_elements(By.TAG_NAME, 'iframe')[index])
+                    for video in _media_videos(driver):
+                        ActionChains(driver).move_to_element(video).perform()
+                        hover_deadline = time.monotonic() + 10
+                        while True:
+                            sample = _current_frame_overlay_state(driver)
+                            if sample['labels'] == ['下载视频'] or mode == 'dash-unknown-mse':
+                                break
+                            if time.monotonic() >= hover_deadline:
+                                raise AssertionError(f'{mode}: hovered player has no unique control: {sample}')
+                            time.sleep(.1)
+                        hovered.append(sample)
+                driver.switch_to.default_content()
+                state['hoveredPlayers'] = hovered
+                for key in ('labels', 'resourceIds', 'moreButtons'):
+                    state[key] = [value for sample in hovered for value in sample[key]]
                 state["mode"] = mode
                 state["browserErrors"] = _browser_errors(driver, f"http://127.0.0.1:{server.server_port}")
                 results.append(state)
@@ -638,6 +670,7 @@ def run(
                         document.querySelector('#mount').append(window.detachedTestVideo);
                         window.detachedTestVideo.play().then(()=>done(true), error=>done(String(error)));
                     """)
+                    ActionChains(driver).move_to_element(_media_videos(driver)[0]).perform()
                     deadline = time.monotonic() + 5
                     while time.monotonic() < deadline:
                         restored = _overlay_state(driver)
@@ -650,6 +683,13 @@ def run(
                     if browser_name == 'firefox':
                         driver.install_addon(str(resolved_addon), temporary=True)
                         driver.refresh()
+                        deadline = time.monotonic() + 10
+                        while not driver.execute_script("return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.wrap'))"):
+                            if time.monotonic() >= deadline:
+                                raise AssertionError('Reloaded extension did not initialize its player UI')
+                            time.sleep(.1)
+                        ActionChains(driver).move_to_element(driver.find_element('tag name', 'h1')).perform()
+                        ActionChains(driver).move_to_element(_media_videos(driver)[0]).perform()
                         deadline = time.monotonic() + 10
                         while time.monotonic() < deadline:
                             reloaded = _overlay_state(driver)
@@ -680,6 +720,14 @@ def run(
                     panels = []
                     for video in state['videos']:
                         resource_id = _resource_id(video['manifest'])
+                        player = next(item for item in _media_videos(driver)
+                                      if driver.execute_script('return arguments[0].dataset.manifest', item) == video['manifest'])
+                        ActionChains(driver).move_to_element(player).perform()
+                        deadline = time.monotonic() + 5
+                        while resource_id not in _current_frame_overlay_state(driver)['resourceIds']:
+                            if time.monotonic() >= deadline:
+                                raise AssertionError(f'{mode}: hovered player did not select {resource_id}')
+                            time.sleep(.1)
                         opened = driver.execute_script("""
                             const root=document.querySelector('hls-downloader-media-panel')?.shadowRoot;
                             const button=[...root.querySelectorAll('.video-download')]

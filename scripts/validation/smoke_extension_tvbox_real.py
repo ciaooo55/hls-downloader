@@ -17,6 +17,7 @@ import http.server
 import json
 import subprocess
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import time
 import zipfile
@@ -336,7 +337,7 @@ def run_browser(
     resolved_browser_binary = (browser_binary or (_find_edge() if browser == "edge" else _find_firefox())).resolve()
     if not resolved_browser_binary.is_file():
         raise FileNotFoundError(f"{browser}: browser executable is missing: {resolved_browser_binary}")
-    with tempfile.TemporaryDirectory(prefix=f"hls-{browser}-tvbox-real-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=f"hls-{browser}-tvbox-real-", dir=test_tmp()) as temporary:
         root = Path(temporary)
         media_root = root / "site"
         profile = root / "profile"

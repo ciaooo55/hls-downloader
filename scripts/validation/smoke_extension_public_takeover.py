@@ -7,6 +7,7 @@ import json
 import ssl
 from pathlib import Path
 import tempfile
+from validation_workspace import test_tmp
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -45,7 +46,7 @@ def run(args):
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     initial = None
-    temporary = tempfile.TemporaryDirectory(prefix="public-takeover-")
+    temporary = tempfile.TemporaryDirectory(prefix="public-takeover-", dir=test_tmp())
     try:
         initial = {task["task_id"] for task in tasks()}
         driver, popup_url, extension_id = _open_driver(args, args.extension, Path(temporary.name) / "profile")

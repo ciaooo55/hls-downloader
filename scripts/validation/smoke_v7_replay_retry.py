@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import sqlite3
 import threading
 import uuid
@@ -174,6 +175,6 @@ if __name__ == '__main__':
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
-    result = run(args.engine, Path(r'C:\QAWork')/('replay-retry-' + uuid.uuid4().hex))
+    result = run(args.engine, test_tmp()/('replay-retry-' + uuid.uuid4().hex))
     result.update(passed=True, engine_sha256=hashlib.sha256(args.engine.read_bytes()).hexdigest())
     args.report.write_text(json.dumps(result, indent=2), encoding='utf-8')

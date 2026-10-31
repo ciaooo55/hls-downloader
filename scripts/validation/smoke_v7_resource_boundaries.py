@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import shutil
 import socket
 import sqlite3
@@ -212,7 +213,7 @@ def main():
     parser.add_argument('--player-only', action='store_true')
     args = parser.parse_args()
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
-    root = Path(r'C:\QAWork')/('resources-'+uuid.uuid4().hex)
+    root = test_tmp()/('resources-'+uuid.uuid4().hex)
     result = {'passed': False, 'scope': 'provided baseline and candidate binaries; same VM/fixture; identities recorded below',
               'sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest()
                          for name, path in [('baseline',args.baseline),('candidate',args.candidate)]}}

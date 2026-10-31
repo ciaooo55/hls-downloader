@@ -20,12 +20,13 @@ if (-not $evidence.StartsWith((Join-Path $repo 'artifacts\v7-productization\'), 
 New-Item -ItemType Directory -Force -Path $root, $evidence | Out-Null
 $enginePath = (Resolve-Path -LiteralPath $Engine).Path
 $hostPath = (Resolve-Path -LiteralPath $NativeHost).Path
+$runtimePath = (Resolve-Path -LiteralPath (Join-Path (Split-Path $enginePath) 'vcruntime140.dll')).Path
 $upgradeCode = [guid]::NewGuid().ToString('B').ToUpperInvariant()
 $oldCode = [guid]::NewGuid().ToString('B').ToUpperInvariant()
 $newCode = [guid]::NewGuid().ToString('B').ToUpperInvariant()
 $steps = New-Object Collections.ArrayList
 $report = [ordered]@{
-    scope = 'Isolated two-binary MSI lifecycle fixture using the production lifecycle patch; not a product package or release'
+    scope = 'Isolated minimal MSI lifecycle fixture using the production lifecycle patch; not a product package or release'
     install_dir = $install; upgrade_code = $upgradeCode; old_product = $oldCode; new_product = $newCode
     engine_sha256 = (Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash.ToLowerInvariant()
     native_host_sha256 = (Get-FileHash -LiteralPath $hostPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -92,22 +93,27 @@ function Build-Fixture([string]$Label, [string]$Code) {
     $msi = Join-Path $evidence ($Label + '-fixture.msi')
     $xmlEngine = [Security.SecurityElement]::Escape($enginePath)
     $xmlHost = [Security.SecurityElement]::Escape($hostPath)
+    $xmlRuntime = [Security.SecurityElement]::Escape($runtimePath)
     $xmlMarker = [Security.SecurityElement]::Escape($marker)
     $xml = @"
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
  <Product Id="$Code" Name="HLS Downloader Isolated Installer Test" Language="1033" Version="7.0.2" Manufacturer="HLS Downloader Tests" UpgradeCode="$upgradeCode">
   <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" Platform="x64"/>
   <MediaTemplate EmbedCab="yes"/>
-  <Upgrade Id="$upgradeCode"><UpgradeVersion Maximum="7.0.2" IncludeMaximum="yes" Property="JP_UPGRADABLE_FOUND"/></Upgrade>
+  <Upgrade Id="$upgradeCode">
+   <UpgradeVersion Maximum="7.0.2" IncludeMaximum="yes" Property="JP_UPGRADABLE_FOUND"/>
+   <UpgradeVersion Minimum="7.0.2" IncludeMinimum="no" OnlyDetect="yes" Property="JP_DOWNGRADABLE_FOUND"/>
+  </Upgrade>
   <Property Id="SAVED_INSTALLDIR"><RegistrySearch Id="FindSavedDir" Root="HKCU" Key="Software\HLSDownloaderIsolated\$upgradeCode" Name="InstallDir" Type="raw"/></Property>
   <Directory Id="TARGETDIR" Name="SourceDir"><Directory Id="LocalAppDataFolder"><Directory Id="INSTALLDIR" Name="HLSDownloaderIsolated"><Directory Id="APPDIR" Name="app"><Directory Id="RESOURCES" Name="resources">
    <Component Id="EngineComponent" Guid="*" Win64="yes"><File Id="EngineFile" Name="HLSDownloaderEngine.exe" Source="$xmlEngine" KeyPath="yes"/></Component>
    <Component Id="HostComponent" Guid="*" Win64="yes"><File Id="HostFile" Name="HLSDownloaderNativeHost.exe" Source="$xmlHost" KeyPath="yes"/></Component>
+   <Component Id="RuntimeComponent" Guid="*" Win64="yes"><File Id="RuntimeFile" Name="vcruntime140.dll" Source="$xmlRuntime" KeyPath="yes"/></Component>
    <Component Id="MarkerComponent" Guid="*" Win64="yes"><File Id="MarkerFile" Name="installed-version.txt" Source="$xmlMarker" KeyPath="yes"/></Component>
   </Directory></Directory>
    <Component Id="DirectoryComponent" Guid="*" Win64="yes"><RegistryValue Root="HKCU" Key="Software\HLSDownloaderIsolated\$upgradeCode" Name="InstallDir" Value="[INSTALLDIR]" Type="string" KeyPath="yes"/><util:RemoveFolderEx On="uninstall" Property="SAVED_INSTALLDIR"/></Component>
   </Directory></Directory></Directory>
-  <Feature Id="Main" Title="Fixture" Level="1"><ComponentRef Id="EngineComponent"/><ComponentRef Id="HostComponent"/><ComponentRef Id="MarkerComponent"/><ComponentRef Id="DirectoryComponent"/></Feature>
+  <Feature Id="Main" Title="Fixture" Level="1"><ComponentRef Id="EngineComponent"/><ComponentRef Id="HostComponent"/><ComponentRef Id="RuntimeComponent"/><ComponentRef Id="MarkerComponent"/><ComponentRef Id="DirectoryComponent"/></Feature>
   <InstallExecuteSequence><RemoveExistingProducts Before="InstallInitialize"/></InstallExecuteSequence>
  </Product>
 </Wix>

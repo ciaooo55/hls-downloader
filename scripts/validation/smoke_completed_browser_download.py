@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from validation_workspace import test_tmp
 import threading
 import traceback
 
@@ -78,7 +79,7 @@ def run(args):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     driver = None
     try:
-        with tempfile.TemporaryDirectory(prefix='completed-get-', ignore_cleanup_errors=True) as temporary:
+        with tempfile.TemporaryDirectory(prefix='completed-get-', dir=test_tmp(), ignore_cleanup_errors=True) as temporary:
             root = Path(temporary)
             downloads = root/'downloads'
             downloads.mkdir()
@@ -90,7 +91,7 @@ def run(args):
                    else {'allowed_origins': [f'chrome-extension://{EXTENSION_ID}/']}),
             }), encoding='utf-8')
             with _registered_host(manifest, args.browser):
-                driver = _create_driver(args.browser, args.binary, args.extension, root/'profile', downloads, args.driver)
+                driver = _create_driver(args.browser, args.binary, args.extension, root/'profile', downloads, args.driver, headed=args.headed)
                 driver.set_script_timeout(60)
                 report['browser_version'] = driver.capabilities.get('browserVersion')
                 if args.browser == 'firefox':
@@ -232,6 +233,7 @@ if __name__ == '__main__':
     parser.add_argument('--browser', choices=('firefox', 'edge'), required=True)
     for flag in ('runtime', 'extension', 'binary', 'driver', 'report'):
         parser.add_argument('--'+flag, type=Path, required=True)
+    parser.add_argument('--headed', action='store_true')
     result = run(parser.parse_args())
     print(json.dumps({'passed': result['passed'], 'error': result.get('error')}, ensure_ascii=False))
     raise SystemExit(0 if result['passed'] else 1)

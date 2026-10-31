@@ -369,7 +369,12 @@ def render_fixture(presenter: Path, output: Path, fixture: str, dark: bool, logi
             time.sleep(0.01)
         if not ready.exists():
             raise TimeoutError("visual fixture did not write its ready marker")
-        simulation = simulate_confirm_height(hwnd, logical_height) if logical_height is not None else None
+        simulation = None
+        if logical_height is not None:
+            # show() schedules production fitting on the event loop. Resize only
+            # after that first layout settles; the ready marker precedes the loop.
+            time.sleep(0.5)
+            simulation = simulate_confirm_height(hwnd, logical_height)
         # 等待尺寸事件和随后的渲染；后面仍须核对实际尺寸，等待本身不是成功证据。
         time.sleep(0.08)
         theme = "dark" if dark else "light"

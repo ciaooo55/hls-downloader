@@ -1,5 +1,6 @@
 """Guest-only regression for HLS segments whose URL suffix is not their format."""
 from pathlib import Path
+from validation_workspace import test_tmp
 import argparse
 from collections import Counter
 import hashlib
@@ -19,7 +20,7 @@ from v7_core_ipc import connect, free_port, send_frame as send, wait_task
 
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Run in the acceptance VM'
-    root = Path(r'C:\QAWork') / ('suffix-regression-' + uuid.uuid4().hex)
+    root = test_tmp() / ('suffix-regression-' + uuid.uuid4().hex)
     root.mkdir(parents=True, exist_ok=True)
     fixture = root / 'fixture'
     fixture.mkdir(exist_ok=True)

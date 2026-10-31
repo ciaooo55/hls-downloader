@@ -10,6 +10,7 @@ import os
 import shutil
 import statistics
 from pathlib import Path
+from validation_workspace import test_tmp
 import socket
 import struct
 import subprocess
@@ -35,7 +36,7 @@ def wait(predicate, description, timeout=30):
 
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Run only in the acceptance VM'
-    root = Path(os.environ['TEMP']) / ('hls-prefetch-' + uuid.uuid4().hex)
+    root = test_tmp() / ('hls-prefetch-' + uuid.uuid4().hex)
     root.mkdir()
     fixture = root / 'media'
     fixture.mkdir()

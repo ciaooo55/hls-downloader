@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import subprocess
 import threading
 import time
@@ -29,7 +30,7 @@ if args.connections and (not args.ab_settings or not args.idm_connection_key):
 ROOT = args.report
 ROOT.mkdir(parents=True, exist_ok=True)
 RUN_ID = uuid.uuid4().hex[:8]
-OUT = Path(r'C:\QAWork\comparison-clean') / RUN_ID
+OUT = (test_tmp() / 'comparison-clean') / RUN_ID
 PATTERN = bytes(range(256)) * 256
 REPORT = {'schema': 2, 'scope': 'loopback transfer, cold process startup and whole-product process resources; not UI response or public Internet', 'connection_limit': args.connections, 'samples': [], 'errors': []}
 IDM = args.idm

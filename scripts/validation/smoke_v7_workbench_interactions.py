@@ -714,7 +714,7 @@ def run(args):
                 window = ui("window")
                 action("click", x=x+width//3-window["deviceX"], y=y+height//2-window["deviceY"])
                 wait(lambda: queued["task_id"] in ui("state")["selectedTaskIds"], "Queued row was not selected", 10)
-                pointer("toolbar.全部开始")
+                pointer("toolbar.开始 / 继续")
                 wait(lambda: any(t["task_id"] == queued["task_id"] and t["downloaded_bytes"] > 262144 for t in tasks()),
                      "Start button did not begin transfer", 20)
                 wait(resume_gate_reached.is_set, "Resume fixture did not reach its pause gate", 15)
@@ -723,12 +723,12 @@ def run(args):
                     "UI did not expose pause for the selected running task", 15)
                 pause_before = next(t for t in tasks() if t["task_id"] == queued["task_id"])
                 assert 0 < pause_before["downloaded_bytes"] < PAYLOAD_SIZE, pause_before
-                pause_click = pointer("toolbar.全部暂停")
+                pause_click = pointer("toolbar.暂停")
                 report["pause_diagnostic"] = {
                     "ui_running_task": running_ui,
                     "core_before_click": pause_before,
                     "ui_at_click": pause_click["state"],
-                    "click": {"control": "toolbar.全部暂停", "bounds": pause_click["bounds"], "point": pause_click["point"]},
+                    "click": {"control": "toolbar.暂停", "bounds": pause_click["bounds"], "point": pause_click["point"]},
                     "core_after_click": next(t for t in tasks() if t["task_id"] == queued["task_id"]),
                     "ui_after_click": ui("state"),
                 }
@@ -742,8 +742,8 @@ def run(args):
                 assert next(t for t in tasks() if t["task_id"] == downloaded["task_id"])["status"] == "completed", "All-start restarted a completed download"
                 if queued["task_id"] not in ui("state")["selectedTaskIds"]:
                     pointer("taskrow."+queued["task_id"])
-                wait(lambda: "toolbar.开始" in ui("state")["controlBounds"], "Selected paused task has no start toolbar", 10)
-                pointer("toolbar.开始")
+                wait(lambda: "toolbar.开始 / 继续" in ui("state")["controlBounds"], "Selected paused task has no start toolbar", 10)
+                pointer("toolbar.开始 / 继续")
                 resumed = wait(lambda: next((t for t in tasks() if t["task_id"] == queued["task_id"] and t["status"] == "completed"), None),
                                "Resume button did not complete", 90)
                 assert hashlib.sha256(Path(resumed["output_path"]).read_bytes()).hexdigest() == expected
@@ -925,7 +925,7 @@ def run(args):
                 user.keybd_event(vk,0,flag,0)
                 time.sleep(.05)
             wait(lambda: set(ui("state")["selectedTaskIds"])=={t["task_id"] for t in ours},"Select-all included hidden tasks",10)
-            pointer("toolbar.删除")
+            pointer("toolbar.删除所选任务")
             node("此操作将影响 3 个任务")
             click("取消",-1)
             assert all(any(t["task_id"]==o["task_id"] for t in snapshot()) for o in ours)
@@ -951,7 +951,7 @@ def run(args):
             record("settings save persists changed option; original restored in cleanup")
             pointer("taskrow."+ours[0]["task_id"])
             wait(lambda: ui("state")["selectedTaskIds"]==[ours[0]["task_id"]],"Delete fixture selection failed",10)
-            pointer("toolbar.删除")
+            pointer("toolbar.删除所选任务")
             click("确认删除")
             wait(lambda: all(t["task_id"]!=ours[0]["task_id"] for t in snapshot()),"Delete confirmation did not remove record",15)
             assert Path(ours[0]["output_path"]).exists()
@@ -1430,12 +1430,12 @@ public class DragFixture {
                 wait(lambda:ui("state")["selectedTaskIds"]==[source["task_id"]],"Export source not selected",10)
                 bounds=ui("state")["controlBounds"]["toolbar.更多操作"]
                 action("click",x=(bounds[0]+bounds[2])//2,y=(bounds[1]+bounds[3])//2)
-                exported=evidence/"tasks-roundtrip.json"
+                exported=evidence/f"tasks-roundtrip-{file_token}.json"
                 use_chooser("导出任务列表","导出任务列表",exported)
                 wait(exported.is_file,"Export did not write file",15)
                 document=json.loads(exported.read_text(encoding="utf8"))
                 assert len(document["tasks"])==1 and document["tasks"][0]["url"]==file_url,document
-                click("删除")
+                click("删除所选任务")
                 click("确认删除")
                 wait(lambda:not file_tasks(),"Delete did not remove exported record",15)
                 assert Path(source["output_path"]).read_bytes()==payload

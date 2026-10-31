@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import subprocess
 import sys
 import time
@@ -24,7 +25,7 @@ def run(args):
     resources = args.runtime / 'app/resources'
     os.environ['PYTHONPATH'] = str(args.extension.parent / 'python-deps')
     engine = resources / 'HLSDownloaderEngine.exe'
-    work = Path(r'C:\QAWork') / f'adversarial-round-{args.round}'
+    work = test_tmp() / f'adversarial-round-{args.round}'
     work.mkdir(parents=True, exist_ok=True)
     result = {'round': args.round, 'passed': False, 'checks': [],
               'engine_sha256': hashlib.sha256(engine.read_bytes()).hexdigest(),

@@ -1,6 +1,7 @@
-param([Parameter(Mandatory=$true)][string]$ArchivePath)
+﻿param([Parameter(Mandatory=$true)][string]$ArchivePath)
 $ErrorActionPreference = 'Stop'
-$root = Join-Path ([IO.Path]::GetTempPath()) ('hls-v7-portable-smoke-' + [guid]::NewGuid().ToString('n'))
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$root = Join-Path (Join-Path $repo '.tool-cache\test-tmp') ('hls-v7-portable-smoke-' + [guid]::NewGuid().ToString('n'))
 $source = Join-Path $root 'source\HLSDownloader'
 $target = Join-Path $root 'target'
 $upgradeScript = Join-Path $source 'scripts\upgrade-v7-portable.ps1'

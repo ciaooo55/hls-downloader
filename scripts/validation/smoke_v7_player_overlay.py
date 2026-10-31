@@ -12,6 +12,7 @@ import json
 import io
 import os
 from pathlib import Path
+from validation_workspace import test_tmp
 import socket
 import subprocess
 import threading
@@ -44,7 +45,7 @@ def free_port():
 
 def run(args):
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
-    root = Path(r'C:\QAWork') / ('overlay-' + uuid.uuid4().hex)
+    root = test_tmp() / ('overlay-' + uuid.uuid4().hex)
     root.mkdir(parents=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {'passed': False, 'checks': [], 'requested_java_ui_scale': args.ui_scale}
