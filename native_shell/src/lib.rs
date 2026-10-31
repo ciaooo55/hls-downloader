@@ -154,9 +154,7 @@ pub use download_worker::{CoreCoordinator, CoreSettings, TaskPaths};
 #[cfg(feature = "full-core")]
 pub use harvest::{harvest_html, harvest_html_filtered, HarvestLink};
 #[cfg(feature = "full-core")]
-pub use http_engine::{
-    fetch_bytes, run_job, run_job_report, EngineError, HttpMirrorReport, HttpRunReport,
-};
+pub use http_engine::{run_job, run_job_report, EngineError, HttpMirrorReport, HttpRunReport};
 pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
 #[cfg(feature = "full-core")]
 pub use metalink::{looks_like_metalink, parse_metalink};

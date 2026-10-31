@@ -1,7 +1,8 @@
 //! HLS / LL-HLS downloader. Segments use the HTTP engine; mux is local.
 
 use crate::http_engine::{
-    extract_http_status, fetch_hls_bytes, fetch_hls_bytes_range, retryable_http_status, EngineError,
+    extract_http_status, fetch_hls_bytes, fetch_hls_bytes_limited, fetch_hls_bytes_range,
+    retryable_http_status, EngineError,
 };
 use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
@@ -1681,7 +1682,7 @@ fn load_key(
         return Ok(bytes.clone());
     }
     let (status, bytes) =
-        fetch_hls_bytes(&key.uri, headers, proxy).map_err(|error| error.to_string())?;
+        fetch_hls_bytes_limited(&key.uri, headers, proxy, 16).map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("HLS key HTTP {status}"));
     }
@@ -1993,7 +1994,8 @@ fn capture_live_subtitle_track(
     control: &Path,
 ) -> Result<(), String> {
     let (status, body) =
-        fetch_hls_bytes(&track.uri, headers, proxy).map_err(|error| error.to_string())?;
+        fetch_hls_bytes_limited(&track.uri, headers, proxy, super::MAX_MANIFEST_BYTES)
+            .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Ok(());
     }
@@ -2043,7 +2045,8 @@ fn download_vod_subtitle(
         "pause" => return Err("paused".into()),
         _ => {}
     }
-    let (status, body) = fetch_hls_bytes(uri, headers, proxy).map_err(|error| error.to_string())?;
+    let (status, body) = fetch_hls_bytes_limited(uri, headers, proxy, super::MAX_MANIFEST_BYTES)
+        .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("HLS subtitle HTTP {status}"));
     }
@@ -2102,7 +2105,8 @@ fn load_playlist(
     headers: &HashMap<String, String>,
     proxy: &str,
 ) -> Result<Playlist, String> {
-    let (status, body) = fetch_hls_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
+    let (status, body) = fetch_hls_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
+        .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("HLS playlist HTTP {status}"));
     }

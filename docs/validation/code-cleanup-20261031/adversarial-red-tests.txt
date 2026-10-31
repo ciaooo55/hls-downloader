@@ -1,0 +1,53 @@
+
+running 11 tests
+test core_ipc::tests::adversarial_pipe_frame_rejects_oversize_and_truncated ... ok
+test core_ipc::tests::adversarial_pipe_frame_rejects_valid_frame_with_unparseable_payload ... ok
+test download_worker::tests::adversarial_drops_injected_headers_and_non_http_mirrors ... ok
+test download_worker::tests::adversarial_rejects_bom_null_ms_schemes_and_reserved_names ... ok
+test download_worker::tests::adversarial_rejects_helper_and_scan_interpreters ... ok
+test download_worker::tests::adversarial_rejects_script_data_blob_and_refresh ... ok
+test harvest::tests::adversarial_unicode_links_never_split_utf8 ... FAILED
+test torrent_engine::tests::adversarial_bencode_rejects_excessive_nesting_and_invalid_integers ... FAILED
+test torrent_engine::tests::adversarial_info_hash_ignores_embedded_key_text_in_comments ... FAILED
+test torrent_engine::tests::adversarial_torrent_paths_reject_windows_prefixes_and_aliases ... FAILED
+test torrent_engine::tests::adversarial_torrent_total_length_cannot_overflow ... FAILED
+
+failures:
+
+---- harvest::tests::adversarial_unicode_links_never_split_utf8 stdout ----
+
+thread 'harvest::tests::adversarial_unicode_links_never_split_utf8' (8500) panicked at src\harvest.rs:52:22:
+start byte index 1 is not a char boundary; it is inside '中' (bytes 0..3 of string)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- torrent_engine::tests::adversarial_bencode_rejects_excessive_nesting_and_invalid_integers stdout ----
+
+thread 'torrent_engine::tests::adversarial_bencode_rejects_excessive_nesting_and_invalid_integers' (3832) panicked at src\torrent_engine.rs:1958:9:
+assertion failed: bencode::parse(nested.as_bytes()).is_err()
+
+---- torrent_engine::tests::adversarial_info_hash_ignores_embedded_key_text_in_comments stdout ----
+
+thread 'torrent_engine::tests::adversarial_info_hash_ignores_embedded_key_text_in_comments' (17900) panicked at src\torrent_engine.rs:1982:9:
+assertion `left == right` failed
+  left: "4f090169697c9ea17242b3d74bcd6582e3ab23ad"
+ right: "299de47859edd0a202d6c0bf3a2230a9b0271901"
+
+---- torrent_engine::tests::adversarial_torrent_paths_reject_windows_prefixes_and_aliases stdout ----
+
+thread 'torrent_engine::tests::adversarial_torrent_paths_reject_windows_prefixes_and_aliases' (19724) panicked at src\torrent_engine.rs:1950:13:
+C:/outside.bin
+
+---- torrent_engine::tests::adversarial_torrent_total_length_cannot_overflow stdout ----
+
+thread 'torrent_engine::tests::adversarial_torrent_total_length_cannot_overflow' (8112) panicked at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\iter\traits\accum.rs:206:1:
+attempt to add with overflow
+
+
+failures:
+    harvest::tests::adversarial_unicode_links_never_split_utf8
+    torrent_engine::tests::adversarial_bencode_rejects_excessive_nesting_and_invalid_integers
+    torrent_engine::tests::adversarial_info_hash_ignores_embedded_key_text_in_comments
+    torrent_engine::tests::adversarial_torrent_paths_reject_windows_prefixes_and_aliases
+    torrent_engine::tests::adversarial_torrent_total_length_cannot_overflow
+
+test result: FAILED. 6 passed; 5 failed; 0 ignored; 0 measured; 671 filtered out; finished in 0.07s

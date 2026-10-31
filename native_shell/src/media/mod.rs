@@ -9,6 +9,8 @@ pub(crate) mod preview;
 pub(crate) use merge::locate_ffmpeg;
 mod subtitles;
 
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Resolve a playlist/manifest URI against `base`. Absolute schemes other than
 /// http(s) (file, javascript, data, skd, …) are dropped so fetch/mux never
 /// follow them. Relative paths keep the existing origin/directory join.

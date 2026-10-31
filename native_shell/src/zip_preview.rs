@@ -385,8 +385,16 @@ mod tests {
         assert!(entries[0].encrypted);
         assert_eq!(entries[0].uncompressed_bytes, 9_000_000_000);
         assert_eq!(entries[0].compressed_bytes, 4_000_000_000);
-        directory.pop();
-        assert!(parse_directory(&directory, 1).is_err());
-        assert!(parse_directory(&[], 1).is_err());
+        for end in 0..directory.len() {
+            assert!(
+                parse_directory(&directory[..end], 1).is_err(),
+                "truncated at {end}"
+            );
+        }
+        for offset in [28, 30, 32] {
+            let mut corrupt = directory.clone();
+            corrupt[offset..offset + 2].fill(0xff);
+            assert!(parse_directory(&corrupt, 1).is_err());
+        }
     }
 }

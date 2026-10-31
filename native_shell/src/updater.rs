@@ -153,8 +153,9 @@ pub fn check_for_update(current: &str) -> Result<UpdateInfo, String> {
     let mut headers = std::collections::HashMap::new();
     headers.insert("User-Agent".into(), "hls-downloader-v7".into());
     headers.insert("Accept".into(), "application/vnd.github+json".into());
-    let (status, body) = crate::http_engine::fetch_bytes(LATEST_API, &headers, "")
-        .map_err(|error| error.to_string())?;
+    let (status, body) =
+        crate::http_engine::fetch_bytes_limited(LATEST_API, &headers, "", 1024 * 1024)
+            .map_err(|error| error.to_string())?;
     if status != 200 {
         return Err(format!("GitHub releases HTTP {status}"));
     }

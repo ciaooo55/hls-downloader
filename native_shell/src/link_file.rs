@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_LINK_FILE_BYTES: u64 = 256 * 1024;
@@ -52,7 +53,13 @@ pub fn urls_from_path(path: &Path) -> Result<Vec<String>, String> {
     if ext == "torrent" {
         return Ok(vec![path.to_string_lossy().into_owned()]);
     }
-    let data = fs::read(path).map_err(|error| error.to_string())?;
+    let mut data = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(MAX_LINK_FILE_BYTES + 1).read_to_end(&mut data))
+        .map_err(|error| error.to_string())?;
+    if data.is_empty() || data.len() as u64 > MAX_LINK_FILE_BYTES {
+        return Err("link file is empty or too large".into());
+    }
     let text = decode_link_bytes(&data);
     if ext == "meta4" || ext == "metalink" {
         return Ok(vec![text]);

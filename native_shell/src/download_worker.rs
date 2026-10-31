@@ -2,7 +2,10 @@
 
 use crate::http_engine::extract_http_status;
 use crate::net_policy::queue_profile_allowed;
-use crate::output_path::{constrain_untrusted_download_dir, logical_canonical, reject_path_escape};
+use crate::output_path::{
+    constrain_untrusted_download_dir, logical_canonical, reject_path_escape,
+    reserved_dos_device_name,
+};
 use crate::{
     apply_replay_json_for, run_job_report, with_replay_json, AvScanStatus, CoreCommand, CoreEvent,
     CredentialVault, EventEnvelope, MediaPushRequest, MirrorStatus, PersistentCore, QueueProfile,
@@ -507,45 +510,6 @@ fn safe_filename(filename: &str, url: &str) -> String {
     } else {
         cleaned
     }
-}
-
-fn reserved_dos_device_name(name: &str) -> bool {
-    let stem = name
-        .split('.')
-        .next()
-        .unwrap_or(name)
-        .trim()
-        .to_ascii_uppercase();
-    matches!(
-        stem.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "CONIN$"
-            | "CONOUT$"
-            | "CLOCK$"
-            | "COM0"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT0"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
 }
 
 #[derive(Clone)]
@@ -1643,9 +1607,13 @@ impl CoreCoordinator {
             return Ok(specs);
         }
         if spec.harvest {
-            let (_, body) =
-                crate::fetch_bytes(&spec.url, &std::collections::HashMap::new(), &spec.proxy)
-                    .map_err(|error| error.to_string())?;
+            let (_, body) = crate::http_engine::fetch_bytes_limited(
+                &spec.url,
+                &std::collections::HashMap::new(),
+                &spec.proxy,
+                1024 * 1024,
+            )
+            .map_err(|error| error.to_string())?;
             let text = String::from_utf8_lossy(&body);
             if crate::looks_like_metalink(&text) {
                 return specs_from_metalink(&text, &spec, auto, &dirs);
@@ -1665,9 +1633,13 @@ impl CoreCoordinator {
         }
         let lower = spec.url.to_ascii_lowercase();
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
-            let (_, body) =
-                crate::fetch_bytes(&spec.url, &std::collections::HashMap::new(), &spec.proxy)
-                    .map_err(|error| error.to_string())?;
+            let (_, body) = crate::http_engine::fetch_bytes_limited(
+                &spec.url,
+                &std::collections::HashMap::new(),
+                &spec.proxy,
+                1024 * 1024,
+            )
+            .map_err(|error| error.to_string())?;
             return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, &dirs);
         }
         Ok(vec![spec_from_url(
@@ -7560,6 +7532,7 @@ mod tests {
                 spec: TaskSpec {
                     url: source.to_string_lossy().into_owned(),
                     resource_kind: ResourceKind::Torrent,
+                    start_paused: true,
                     filename: String::new(),
                     download_dir: root.to_string_lossy().into_owned(),
                     ..Default::default()
@@ -7617,7 +7590,8 @@ mod tests {
         assert_eq!(snapshot.filename, "demo");
         assert_eq!(snapshot.total_bytes, Some(5));
         assert_eq!(snapshot.total_ranges, 2);
-        let _ = fs::remove_dir_all(root);
+        drop(coordinator);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -9204,6 +9178,7 @@ mod tests {
                     spec: TaskSpec {
                         url: url.into(),
                         filename: "x.bin".into(),
+                        start_paused: true,
                         ..Default::default()
                     },
                 })
@@ -9221,6 +9196,7 @@ mod tests {
                 spec: TaskSpec {
                     url: "https://cdn.test/ok.bin".into(),
                     filename: "ok.bin".into(),
+                    start_paused: true,
                     ..Default::default()
                 },
             })
@@ -9330,6 +9306,7 @@ mod tests {
                     spec: TaskSpec {
                         url: url.into(),
                         filename: "x.bin".into(),
+                        start_paused: true,
                         ..Default::default()
                     },
                 })
@@ -9347,6 +9324,7 @@ mod tests {
                 spec: TaskSpec {
                     url: "https://cdn.test/con.bin".into(),
                     filename: "CON".into(),
+                    start_paused: true,
                     ..Default::default()
                 },
             })
@@ -9372,6 +9350,7 @@ mod tests {
                 spec: TaskSpec {
                     url: "https://cdn.test/conin.bin".into(),
                     filename: "CONIN$.txt".into(),
+                    start_paused: true,
                     ..Default::default()
                 },
             })
@@ -9421,6 +9400,7 @@ mod tests {
                         "file:///C:/Windows/win.ini".into(),
                         "https://mirror.test/a.bin".into(),
                     ],
+                    start_paused: true,
                     ..Default::default()
                 },
             })

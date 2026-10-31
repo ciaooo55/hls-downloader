@@ -1514,7 +1514,8 @@ fn describe_device(location: &str) -> Option<CastDeviceInfo> {
     if !is_lan_url(location) {
         return None;
     }
-    let (_, body) = crate::http_engine::fetch_bytes(location, &HashMap::new(), "").ok()?;
+    let (_, body) =
+        crate::http_engine::fetch_bytes_limited(location, &HashMap::new(), "", 1024 * 1024).ok()?;
     parse_device_description(&String::from_utf8_lossy(&body), location)
 }
 

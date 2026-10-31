@@ -119,8 +119,13 @@ pub fn probe_with_harvest_context(
     let mut variants = Vec::new();
     let mut harvest = Vec::new();
     if matches!(kind, ResourceKind::Hls | ResourceKind::Live) {
-        let (status, body) = crate::http_engine::fetch_bytes(url, headers, proxy)
-            .map_err(|error| error.to_string())?;
+        let (status, body) = crate::http_engine::fetch_bytes_limited(
+            url,
+            headers,
+            proxy,
+            crate::media::MAX_MANIFEST_BYTES,
+        )
+        .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             return Err(format!("识别播放列表失败 HTTP {status}"));
         }
@@ -128,8 +133,13 @@ pub fn probe_with_harvest_context(
         variants = crate::media::variant_choices(&playlist);
         variants.extend(crate::media::audio_choices(&playlist));
     } else if kind == ResourceKind::Dash {
-        let (status, body) = crate::http_engine::fetch_bytes(url, headers, proxy)
-            .map_err(|error| error.to_string())?;
+        let (status, body) = crate::http_engine::fetch_bytes_limited(
+            url,
+            headers,
+            proxy,
+            crate::media::MAX_MANIFEST_BYTES,
+        )
+        .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             return Err(format!("识别 DASH 失败 HTTP {status}"));
         }
@@ -137,7 +147,12 @@ pub fn probe_with_harvest_context(
         variants = crate::media::representation_choices(&manifest);
         variants.extend(crate::media::dash_audio_choices(&manifest));
     } else if kind == ResourceKind::File && is_http_resource_url(url) {
-        if let Ok((status, body)) = crate::http_engine::fetch_bytes(url, headers, proxy) {
+        if let Ok((status, body)) = crate::http_engine::fetch_bytes_limited(
+            url,
+            headers,
+            proxy,
+            crate::media::MAX_MANIFEST_BYTES,
+        ) {
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {

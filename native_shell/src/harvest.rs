@@ -47,14 +47,21 @@ fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
     let mut urls = Vec::new();
     let mut rest = html;
     while let Some(index) = find_href(rest) {
-        let after = &rest[index + 5..];
-        let quote = after.chars().next();
-        rest = &after[1.min(after.len())..];
-        let value = match quote {
-            Some('"') => after[1..].split('"').next().unwrap_or(""),
-            Some('\'') => after[1..].split('\'').next().unwrap_or(""),
-            _ => continue,
+        let after = rest[index + 5..].trim_start();
+        let (value, remaining) = match after.chars().next() {
+            Some(quote @ ('"' | '\'')) => {
+                let tail = &after[1..];
+                tail.split_once(quote).unwrap_or((tail, ""))
+            }
+            Some(_) => {
+                let end = after
+                    .find(|ch: char| ch.is_whitespace() || ch == '>')
+                    .unwrap_or(after.len());
+                (&after[..end], &after[end..])
+            }
+            None => break,
         };
+        rest = remaining;
         let lookahead = after.get(..200.min(after.len())).unwrap_or(after);
         let tag_size = parse_data_size(lookahead);
         if let Some(url) = resolve(base, value) {
@@ -69,10 +76,12 @@ fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
         let slice = &search[index..];
         let end = slice
             .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '<' | '"' | '\'' | ')'))
-            .unwrap_or(slice.len().min(2048));
-        let raw = slice[..end].trim_end_matches(['.', ',', ';']);
-        if let Some(url) = resolve(base, raw) {
-            urls.push((url, 0));
+            .unwrap_or(slice.len());
+        if end <= 2048 {
+            let raw = slice[..end].trim_end_matches(['.', ',', ';']);
+            if let Some(url) = resolve(base, raw) {
+                urls.push((url, 0));
+            }
         }
         search = &slice[end.max(1)..];
         if urls.len() >= 512 {
@@ -319,6 +328,16 @@ fn decode_html_entity(value: &str) -> Option<(char, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adversarial_unicode_links_never_split_utf8() {
+        let links = harvest_html("<a href=中文.zip>下载</a>", "https://site.test/page");
+        assert!(links
+            .iter()
+            .any(|link| link.url == "https://site.test/中文.zip"));
+        let long = format!("https://cdn.test/{}.zip", "中".repeat(700));
+        let _ = harvest_html(&long, "https://site.test/page");
+    }
 
     #[test]
     fn harvests_href_and_absolute_file_links() {

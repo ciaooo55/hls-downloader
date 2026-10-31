@@ -7,6 +7,7 @@ use crate::http_engine::{run_job, Job};
 use crate::{TorrentFileEntry, TorrentFileSelection};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -186,6 +187,9 @@ fn push_http_seed(seeds: &mut Vec<String>, url: &str) {
 }
 
 pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
+    if bytes.len() > MAX_UT_METADATA_BYTES {
+        return Err("torrent metadata exceeds byte limit".into());
+    }
     let value = bencode::parse(bytes).map_err(|error| error.to_string())?;
     let dict = value
         .as_dict()
@@ -253,21 +257,11 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
             pieces.push(hash);
         }
     }
-    let files = torrent_files(info);
-    let length = if let Some(len) = info
-        .and_then(|info| info.get(b"length".as_ref()))
-        .and_then(BValue::as_int)
-    {
-        len.max(0) as u64
-    } else if let Some(BValue::List(files)) = info.and_then(|info| info.get(b"files".as_ref())) {
-        files
-            .iter()
-            .filter_map(|file| file.as_dict()?.get(b"length".as_ref())?.as_int())
-            .map(|len| len.max(0) as u64)
-            .sum()
-    } else {
-        0
-    };
+    let files = torrent_files(info)?;
+    let length = files
+        .iter()
+        .try_fold(0u64, |total, file| total.checked_add(file.size))
+        .ok_or("torrent total length overflows")?;
     if length == 0 && !pieces.is_empty() {
         return Err("torrent piece hash list exists without payload length".into());
     }
@@ -312,84 +306,116 @@ pub fn probe_torrent_source(
             Ok(magnet)
         };
     }
-    let bytes = if source.starts_with("http://") || source.starts_with("https://") {
-        crate::http_engine::fetch_bytes(source, headers, proxy)
-            .map_err(|error| error.to_string())?
-            .1
-    } else {
-        fs::read(source).map_err(|error| error.to_string())?
-    };
+    let bytes = read_torrent_bytes(source, headers, proxy)?;
     parse_torrent_file(&bytes)
+}
+
+fn read_torrent_bytes(
+    source: &str,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+) -> Result<Vec<u8>, String> {
+    if source.starts_with("http://") || source.starts_with("https://") {
+        let (status, bytes) = crate::http_engine::fetch_bytes_limited(
+            source,
+            headers,
+            proxy,
+            MAX_UT_METADATA_BYTES as u64,
+        )
+        .map_err(|error| error.to_string())?;
+        if !matches!(status, 200 | 206) {
+            return Err(format!("torrent metadata HTTP {status}"));
+        }
+        return Ok(bytes);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(source)
+        .map_err(|error| error.to_string())?
+        .take(MAX_UT_METADATA_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_UT_METADATA_BYTES {
+        return Err("torrent metadata exceeds byte limit".into());
+    }
+    Ok(bytes)
 }
 
 fn torrent_files(
     info: Option<&std::collections::BTreeMap<Vec<u8>, BValue>>,
-) -> Vec<TorrentFileEntry> {
-    let Some(info) = info else { return Vec::new() };
-    if let Some(length) = info.get(b"length".as_ref()).and_then(BValue::as_int) {
+) -> Result<Vec<TorrentFileEntry>, String> {
+    let info = info.ok_or("torrent info dictionary is missing")?;
+    if let Some(value) = info.get(b"length".as_ref()) {
+        let size = value
+            .as_int()
+            .filter(|size| *size >= 0)
+            .ok_or("invalid torrent file length")? as u64;
         let path = info
             .get(b"name".as_ref())
             .and_then(BValue::as_str)
-            .unwrap_or("torrent")
+            .ok_or("torrent file name is missing")?
             .to_string();
-        return vec![TorrentFileEntry {
+        return Ok(vec![TorrentFileEntry {
             index: 0,
             path,
-            size: length.max(0) as u64,
+            size,
             offset: 0,
-        }];
+        }]);
     }
-    let Some(BValue::List(files)) = info.get(b"files".as_ref()) else {
-        return Vec::new();
-    };
+    let files = info
+        .get(b"files".as_ref())
+        .and_then(BValue::as_list)
+        .ok_or("torrent file list is missing")?;
     let mut offset = 0u64;
     let mut entries = Vec::with_capacity(files.len());
+    let mut paths = BTreeSet::new();
     for (index, file) in files.iter().enumerate() {
-        let Some(dict) = file.as_dict() else { continue };
+        let dict = file.as_dict().ok_or("invalid torrent file entry")?;
         let size = dict
             .get(b"length".as_ref())
             .and_then(BValue::as_int)
-            .unwrap_or(0)
-            .max(0) as u64;
+            .filter(|size| *size >= 0)
+            .ok_or("invalid torrent file length")? as u64;
         let components = dict
             .get(b"path".as_ref())
             .and_then(BValue::as_list)
-            .map(|parts| {
-                parts
-                    .iter()
-                    .filter_map(BValue::as_str)
-                    .filter(|part| !part.is_empty() && *part != "." && *part != "..")
-                    .collect::<Vec<_>>()
+            .ok_or("torrent file path is missing")?
+            .iter()
+            .map(|part| {
+                part.as_str()
+                    .filter(|part| !part.contains('/'))
+                    .ok_or("invalid torrent path component")
             })
-            .unwrap_or_default();
-        if components.is_empty() || size == 0 {
-            continue;
+            .collect::<Result<Vec<_>, _>>()?;
+        let path = components.join("/");
+        if !torrent_path_is_safe(&path) || !paths.insert(path.to_lowercase()) {
+            return Err(format!("invalid or duplicate torrent path: {path}"));
         }
         entries.push(TorrentFileEntry {
             index: index as u32,
-            path: components.join("/"),
+            path,
             size,
             offset,
         });
-        offset = offset.saturating_add(size);
+        offset = offset
+            .checked_add(size)
+            .ok_or("torrent total length overflows")?;
     }
-    entries
+    Ok(entries)
 }
 
-/// One predicate for both selection branches.
-///
-/// A torrent's `path` list reaches the filesystem as
-/// `destination.join(path.replace('/', MAIN_SEPARATOR_STR))`, so the check has
-/// to reject everything that can survive that join as a traversal: any
-/// backslash (a Windows separator the torrent format does not use, and the
-/// escape hatch for `..\..\evil.exe`), and any `/`-separated component that is
-/// empty, `.` or `..`.  `torrent_files` only drops components that are exactly
-/// `".."`, which does not catch the backslash form.
+/// Both selection branches must produce ordinary relative Windows components:
+/// no drive prefix, alternate data stream, device alias, or normalization escape.
 fn torrent_path_is_safe(path: &str) -> bool {
-    !path.contains('\\')
-        && !path
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
+    !path
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+        && !path.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.ends_with([' ', '.'])
+                || crate::output_path::reserved_dos_device_name(part)
+        })
 }
 
 pub fn validate_torrent_selection(
@@ -397,14 +423,6 @@ pub fn validate_torrent_selection(
     selections: &[TorrentFileSelection],
 ) -> Result<Vec<TorrentFileSelection>, String> {
     if selections.is_empty() {
-        // "Select everything" is the default for a fresh task, so it is exactly
-        // the path a hostile torrent takes.  It used to return every file
-        // without the component checks the explicit branch applies below, and
-        // `materialize_selected_files` then did
-        // `destination.join(path.replace('/', MAIN_SEPARATOR_STR))` -- so a
-        // single path component such as `..\..\Windows\Temp\evil.exe` (kept by
-        // `torrent_files`, which only drops components that ARE exactly "..")
-        // joined outside the download directory and wrote there.
         let mut every = Vec::with_capacity(meta.files.len());
         for file in &meta.files {
             if !torrent_path_is_safe(&file.path) {
@@ -448,42 +466,69 @@ pub fn materialize_selected_files(
     meta: &TorrentMeta,
     selections: &[TorrentFileSelection],
 ) -> Result<u64, String> {
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::io::{Seek, SeekFrom};
     let checked = validate_torrent_selection(meta, selections)?;
     let mut source = fs::File::open(payload).map_err(|error| error.to_string())?;
-    let mut total = 0u64;
+    let source_length = source.metadata().map_err(|error| error.to_string())?.len();
+    let mut files = Vec::new();
     for selection in checked.iter().filter(|item| item.selected) {
         let file = meta
             .files
             .iter()
             .find(|file| file.index == selection.index && file.path == selection.path)
             .ok_or_else(|| format!("种子文件不存在: {}", selection.path))?;
-        let target = destination.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        if file
+            .offset
+            .checked_add(file.size)
+            .is_none_or(|end| end > source_length)
+        {
+            return Err(format!("种子临时数据不完整: {}", file.path));
         }
-        source
-            .seek(SeekFrom::Start(file.offset))
-            .map_err(|error| error.to_string())?;
-        let mut output = fs::File::create(&target).map_err(|error| error.to_string())?;
-        let mut remaining = file.size;
-        let mut buffer = [0u8; 64 * 1024];
-        while remaining > 0 {
-            let chunk = remaining.min(buffer.len() as u64) as usize;
-            let read_size = source
-                .read(&mut buffer[..chunk])
-                .map_err(|error| error.to_string())?;
-            if read_size == 0 {
-                return Err(format!("种子临时数据不完整: {}", selection.path));
-            }
-            output
-                .write_all(&buffer[..read_size])
-                .map_err(|error| error.to_string())?;
-            remaining -= read_size as u64;
-            total = total.saturating_add(read_size as u64);
-        }
+        // Resolve existing junctions and links before touching the destination.
+        let target = crate::output_path::constrain_untrusted_download_dir(
+            &file.path,
+            &destination.to_string_lossy(),
+        )?;
+        files.push((file, PathBuf::from(target)));
     }
-    Ok(total)
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let stage = payload.with_file_name(format!(
+        ".hls-torrent-publish-{}-{stamp}",
+        std::process::id()
+    ));
+    fs::create_dir(&stage).map_err(|error| error.to_string())?;
+    let staged_file = stage.join("payload");
+    let result = (|| {
+        let mut total = 0u64;
+        for (file, target) in files {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            source
+                .seek(SeekFrom::Start(file.offset))
+                .map_err(|error| error.to_string())?;
+            let mut output =
+                fs::File::create_new(&staged_file).map_err(|error| error.to_string())?;
+            let copied = std::io::copy(&mut (&mut source).take(file.size), &mut output)
+                .map_err(|error| error.to_string())?;
+            if copied != file.size {
+                return Err(format!("种子临时数据不完整: {}", file.path));
+            }
+            output.sync_all().map_err(|error| error.to_string())?;
+            drop(output);
+            crate::output_path::publish_file(&staged_file, &target, "overwrite", false)?;
+            total = total
+                .checked_add(copied)
+                .ok_or("selected torrent length overflows")?;
+        }
+        Ok(total)
+    })();
+    let _ = fs::remove_file(&staged_file);
+    let _ = fs::remove_dir(&stage);
+    result
 }
 
 pub fn download_torrent(
@@ -545,13 +590,7 @@ fn download_torrent_with_telemetry(
         }
         meta
     } else if spec_url.ends_with(".torrent") || spec_url.starts_with("http") {
-        let bytes = if spec_url.starts_with("http") {
-            crate::http_engine::fetch_bytes(spec_url, headers, proxy)
-                .map_err(|error| error.to_string())?
-                .1
-        } else {
-            fs::read(spec_url).map_err(|error| error.to_string())?
-        };
+        let bytes = read_torrent_bytes(spec_url, headers, proxy)?;
         parse_torrent_file(&bytes)?
     } else {
         return Err("unsupported torrent source".into());
@@ -668,7 +707,12 @@ fn fetch_magnet_metadata(
         format!("https://btcache.me/torrent/{hash}"),
         format!("https://thetorrent.org/torrent/{hash}.torrent"),
     ] {
-        match crate::http_engine::fetch_bytes(&url, headers, proxy) {
+        match crate::http_engine::fetch_bytes_limited(
+            &url,
+            headers,
+            proxy,
+            MAX_UT_METADATA_BYTES as u64,
+        ) {
             Ok((status, body)) if status == 200 || status == 206 => {
                 if let Ok(mut parsed) = parse_torrent_file(&body) {
                     if canonical_info_hash(&parsed.info_hash).as_deref() != Some(hash.as_str()) {
@@ -737,16 +781,17 @@ fn decode_base32(value: &str) -> Option<Vec<u8>> {
 }
 
 fn info_hash_from_torrent(bytes: &[u8]) -> Option<String> {
-    let needle = b"4:info";
-    let pos = bytes
-        .windows(needle.len())
-        .position(|window| window == needle)?;
-    let start = pos + needle.len();
-    let (_, rest) = bencode::parse_value(&bytes[start..]).ok()?;
-    let consumed = bytes[start..].len().checked_sub(rest.len())?;
-    Some(crate::crypto_lite::sha1_hex(
-        &bytes[start..start + consumed],
-    ))
+    let mut rest = bytes.strip_prefix(b"d")?;
+    while rest.first() != Some(&b'e') {
+        let (key, value_start) = bencode::parse_value(rest).ok()?;
+        let (_, next) = bencode::parse_value(value_start).ok()?;
+        if key.as_bytes()? == b"info" {
+            let consumed = value_start.len().checked_sub(next.len())?;
+            return Some(crate::crypto_lite::sha1_hex(&value_start[..consumed]));
+        }
+        rest = next;
+    }
+    None
 }
 
 fn download_swarm(
@@ -847,7 +892,9 @@ fn announce_peers(
             percent_encode(b"-HL0001-0123456789ab"),
             meta.length
         );
-        if let Ok((_, body)) = crate::http_engine::fetch_bytes(&url, headers, proxy) {
+        if let Ok((_, body)) =
+            crate::http_engine::fetch_bytes_limited(&url, headers, proxy, 1024 * 1024)
+        {
             peers.extend(parse_compact_peers(&body));
         }
     }
@@ -1825,10 +1872,17 @@ mod bencode {
     }
 
     pub(super) fn parse_value(input: &[u8]) -> Result<(BValue, &[u8]), String> {
+        parse_value_at_depth(input, 0)
+    }
+
+    fn parse_value_at_depth(input: &[u8], depth: usize) -> Result<(BValue, &[u8]), String> {
+        if depth >= 64 {
+            return Err("bencode nesting exceeds 64 levels".into());
+        }
         match input.first() {
             Some(b'i') => parse_int(input),
-            Some(b'l') => parse_list(input),
-            Some(b'd') => parse_dict(input),
+            Some(b'l') => parse_list(input, depth),
+            Some(b'd') => parse_dict(input, depth),
             Some(b'0'..=b'9') => parse_bytes(input),
             _ => Err("invalid bencode".into()),
         }
@@ -1840,7 +1894,18 @@ mod bencode {
             .position(|byte| *byte == b'e')
             .ok_or("truncated int")?;
         let number = std::str::from_utf8(&input[1..end]).map_err(|error| error.to_string())?;
-        Ok((BValue::Int(number.parse().unwrap_or(0)), &input[end + 1..]))
+        let digits = number.strip_prefix('-').unwrap_or(number);
+        if digits.is_empty()
+            || !digits.bytes().all(|byte| byte.is_ascii_digit())
+            || digits.len() > 1 && digits.starts_with('0')
+            || number == "-0"
+        {
+            return Err("invalid bencode integer".into());
+        }
+        let number = number
+            .parse()
+            .map_err(|_| "bencode integer exceeds supported range")?;
+        Ok((BValue::Int(number), &input[end + 1..]))
     }
 
     fn parse_bytes(input: &[u8]) -> Result<(BValue, &[u8]), String> {
@@ -1868,18 +1933,18 @@ mod bencode {
         Ok((BValue::Bytes(input[start..end].to_vec()), &input[end..]))
     }
 
-    fn parse_list(input: &[u8]) -> Result<(BValue, &[u8]), String> {
+    fn parse_list(input: &[u8], depth: usize) -> Result<(BValue, &[u8]), String> {
         let mut rest = &input[1..];
         let mut items = Vec::new();
         while rest.first() != Some(&b'e') {
-            let (value, next) = parse_value(rest)?;
+            let (value, next) = parse_value_at_depth(rest, depth + 1)?;
             items.push(value);
             rest = next;
         }
         Ok((BValue::List(items), &rest[1..]))
     }
 
-    fn parse_dict(input: &[u8]) -> Result<(BValue, &[u8]), String> {
+    fn parse_dict(input: &[u8], depth: usize) -> Result<(BValue, &[u8]), String> {
         let mut rest = &input[1..];
         let mut map = BTreeMap::new();
         while rest.first() != Some(&b'e') {
@@ -1887,8 +1952,10 @@ mod bencode {
             let BValue::Bytes(key) = key else {
                 return Err("dict key must be bytes".into());
             };
-            let (value, next) = parse_value(next)?;
-            map.insert(key, value);
+            let (value, next) = parse_value_at_depth(next, depth + 1)?;
+            if map.insert(key, value).is_some() {
+                return Err("duplicate bencode dictionary key".into());
+            }
             rest = next;
         }
         Ok((BValue::Dict(map), &rest[1..]))
@@ -1943,6 +2010,166 @@ impl BValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adversarial_bencode_mutations_and_truncations_return_without_panicking() {
+        for seed in [
+            &b"d4:infod6:lengthi0e4:name4:demoee"[..],
+            &b"d5:filesld6:lengthi2e4:pathl1:aeed6:lengthi0e4:pathl1:beeee"[..],
+            &b"d1:ali-9223372036854775808e0:ee"[..],
+        ] {
+            for end in 0..=seed.len() {
+                let _ = parse_torrent_file(&seed[..end]);
+            }
+            for at in 0..seed.len() {
+                for byte in [0, 0xff, b'i', b'l', b'd', b':', b'e', b'9'] {
+                    let mut input = seed.to_vec();
+                    input[at] = byte;
+                    let _ = parse_torrent_file(&input);
+                }
+            }
+        }
+        for depth in 64..=128 {
+            let input = format!("{}i0e{}", "d1:k".repeat(depth), "e".repeat(depth));
+            assert!(bencode::parse(input.as_bytes()).is_err());
+        }
+        assert!(bencode::parse(b"d1:ai0e1:ai1ee").is_err());
+    }
+
+    #[test]
+    fn adversarial_torrent_file_map_rejects_dropped_components_and_missing_offsets() {
+        for files in [
+            "d6:lengthi1e4:pathl2:..1:aee",
+            "d6:lengthi1ee",
+            "d6:lengthi-1e4:pathl1:aee",
+            "d6:lengthi1e4:pathl1:aeei2e",
+            "d6:lengthi1e4:pathl1:aeed6:lengthi1e4:pathl1:Aee",
+            "d6:lengthi1e4:pathl3:a/bee",
+        ] {
+            let bytes = format!("d5:filesl{files}ee");
+            let value = bencode::parse(bytes.as_bytes()).unwrap();
+            assert!(torrent_files(value.as_dict()).is_err(), "{files}");
+        }
+        let value = bencode::parse(b"d5:filesld6:lengthi0e4:pathl5:emptyeed6:lengthi3e4:pathl1:aeed6:lengthi2e4:pathl1:beeee").unwrap();
+        let files = torrent_files(value.as_dict()).unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[1].offset, 0);
+        assert_eq!(files[2].offset, 3);
+    }
+
+    #[test]
+    fn adversarial_short_torrent_payload_preserves_all_existing_files() {
+        let root = std::env::temp_dir().join(format!("hls-torrent-short-{}", std::process::id()));
+        let payload = root.join("payload");
+        let destination = root.join("published");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(&payload, b"ab").unwrap();
+        fs::write(destination.join("one.bin"), b"old-one").unwrap();
+        fs::write(destination.join("two.bin"), b"old-two").unwrap();
+        let meta = TorrentMeta {
+            name: "demo".into(),
+            magnet: false,
+            web_seeds: Vec::new(),
+            info_hash: String::new(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 16,
+            pieces: Vec::new(),
+            length: 4,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "one.bin".into(),
+                    size: 2,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "two.bin".into(),
+                    size: 2,
+                    offset: 2,
+                },
+            ],
+        };
+        assert!(materialize_selected_files(&payload, &destination, &meta, &[]).is_err());
+        assert_eq!(fs::read(destination.join("one.bin")).unwrap(), b"old-one");
+        assert_eq!(fs::read(destination.join("two.bin")).unwrap(), b"old-two");
+        #[cfg(windows)]
+        {
+            let outside = root.join("outside");
+            let junction = destination.join("linked");
+            fs::create_dir(&outside).unwrap();
+            fs::write(outside.join("out.bin"), b"old-outside").unwrap();
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let linked = TorrentMeta {
+                files: vec![TorrentFileEntry {
+                    index: 0,
+                    path: "linked/out.bin".into(),
+                    size: 2,
+                    offset: 0,
+                }],
+                ..meta
+            };
+            assert!(materialize_selected_files(&payload, &destination, &linked, &[]).is_err());
+            assert_eq!(fs::read(outside.join("out.bin")).unwrap(), b"old-outside");
+            fs::remove_dir(junction).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adversarial_torrent_paths_reject_windows_prefixes_and_aliases() {
+        for path in [
+            "C:/outside.bin",
+            "C:outside.bin",
+            "safe/file:stream",
+            "safe/.. /outside.bin",
+            "NUL.txt",
+            "safe/COM¹.log",
+        ] {
+            assert!(!torrent_path_is_safe(path), "{path}");
+        }
+        assert!(torrent_path_is_safe("中文/影片.mp4"));
+    }
+
+    #[test]
+    fn adversarial_bencode_rejects_excessive_nesting_and_invalid_integers() {
+        let nested = format!("{}i1e{}", "l".repeat(128), "e".repeat(128));
+        assert!(bencode::parse(nested.as_bytes()).is_err());
+        let normal = format!("{}i1e{}", "l".repeat(16), "e".repeat(16));
+        assert!(bencode::parse(normal.as_bytes()).is_ok());
+        for value in ["ie", "iabce", "i9223372036854775808e", "i-0e", "i01e"] {
+            assert!(bencode::parse(value.as_bytes()).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn adversarial_torrent_total_length_cannot_overflow() {
+        let mut bytes = b"d4:infod5:filesl".to_vec();
+        for name in ['a', 'b', 'c'] {
+            bytes.extend_from_slice(format!("d6:lengthi{}e4:pathl1:{name}ee", i64::MAX).as_bytes());
+        }
+        bytes.extend_from_slice(b"e4:name4:demo12:piece lengthi1e6:pieces0:ee");
+        assert!(parse_torrent_file(&bytes).is_err());
+    }
+
+    #[test]
+    fn adversarial_info_hash_ignores_embedded_key_text_in_comments() {
+        let info = b"d6:lengthi0e4:name4:demo12:piece lengthi1e6:pieces0:e";
+        let mut bytes = b"d7:comment6:4:info4:info".to_vec();
+        bytes.extend_from_slice(info);
+        bytes.push(b'e');
+        assert_eq!(
+            parse_torrent_file(&bytes).unwrap().info_hash,
+            crate::crypto_lite::sha1_hex(info)
+        );
+    }
 
     fn benc_str(value: &str) -> Vec<u8> {
         let mut out = format!("{}:", value.len()).into_bytes();
@@ -2274,12 +2501,17 @@ mod tests {
         bytes.extend(benc_str("http://tracker.test/announce"));
         bytes.extend(benc_str("info"));
         bytes.push(b'd');
+        bytes.extend(benc_str("length"));
+        bytes.extend(b"i0e");
         bytes.extend(benc_str("name"));
         bytes.extend(benc_str("demo"));
         bytes.extend(b"ee");
         let meta = parse_torrent_file(&bytes).unwrap();
         assert_eq!(meta.name, "demo");
-        assert_eq!(meta.info_hash.len(), 40);
+        assert_eq!(
+            meta.info_hash,
+            crate::crypto_lite::sha1_hex(b"d6:lengthi0e4:name4:demoe")
+        );
     }
 
     #[test]

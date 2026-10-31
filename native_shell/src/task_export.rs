@@ -2,6 +2,7 @@ use crate::{ResourceKind, TaskSnapshot, TaskSpec, DEFAULT_QUEUE_ID};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
@@ -104,7 +105,13 @@ fn import_tasks_from_path(path: &Path) -> Result<Vec<TaskSpec>, String> {
     if metadata.len() == 0 || metadata.len() > MAX_IMPORT_BYTES {
         return Err("任务 JSON 为空或超过 1 MiB".into());
     }
-    let bytes = fs::read(path).map_err(|error| format!("读取任务列表失败: {error}"))?;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(MAX_IMPORT_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|error| format!("读取任务列表失败: {error}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_IMPORT_BYTES {
+        return Err("任务 JSON 为空或超过 1 MiB".into());
+    }
     let text = std::str::from_utf8(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))
         .map_err(|_| "任务 JSON 必须使用 UTF-8 编码".to_string())?;
     import_tasks(text)

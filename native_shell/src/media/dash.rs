@@ -1,6 +1,6 @@
 //! Native DASH downloader. Unsupported multi-period codec switches fail closed.
 
-use crate::http_engine::{fetch_bytes, run_job, Job};
+use crate::http_engine::{fetch_bytes_limited, run_job, Job};
 use crate::media::merge::merge_with_ffmpeg;
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
 use std::collections::HashMap;
@@ -302,7 +302,8 @@ pub fn download_dash_selected(
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
-    let (status, body) = fetch_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
+    let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
+        .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("DASH manifest HTTP {status}"));
     }
@@ -525,7 +526,8 @@ pub fn download_dash_selected(
             "cancel" => return Err("canceled".into()),
             _ => break,
         }
-        let (status, body) = fetch_bytes(url, headers, proxy).map_err(|error| error.to_string())?;
+        let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
+            .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             break;
         }

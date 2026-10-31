@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { readBoundedResponseText } from './boundedResponse'
 
 describe('bounded response reader', () => {
+  it('cancels the transport when Content-Length already exceeds the limit', async () => {
+    let canceled = false
+    const stream = new ReadableStream<Uint8Array>({ cancel() { canceled = true } })
+    const response = new Response(stream, { headers: { 'Content-Length': '99999' } })
+    expect(await readBoundedResponseText(response, 4)).toBeNull()
+    expect(canceled).toBe(true)
+  })
+
   it('reads a normal response and honors the byte limit', async () => {
     expect(await readBoundedResponseText(new Response('héllo'), 16)).toBe('héllo')
     expect(await readBoundedResponseText(new Response('0123456789'), 4)).toBeNull()

@@ -797,12 +797,13 @@ fn run_job_once(job: &Job) -> Result<(), EngineError> {
     }
 }
 
-pub fn fetch_bytes(
+pub(crate) fn fetch_bytes_limited(
     url: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
+    limit: u64,
 ) -> Result<(u16, Vec<u8>), EngineError> {
-    fetch_bytes_with_transport(url, headers, proxy, false)
+    fetch_bytes_with_transport(url, headers, proxy, false, Some(limit))
 }
 
 pub fn fetch_hls_bytes(
@@ -810,7 +811,16 @@ pub fn fetch_hls_bytes(
     headers: &HashMap<String, String>,
     proxy: &str,
 ) -> Result<(u16, Vec<u8>), EngineError> {
-    fetch_bytes_with_transport(url, headers, proxy, true)
+    fetch_bytes_with_transport(url, headers, proxy, true, None)
+}
+
+pub(crate) fn fetch_hls_bytes_limited(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    limit: u64,
+) -> Result<(u16, Vec<u8>), EngineError> {
+    fetch_bytes_with_transport(url, headers, proxy, true, Some(limit))
 }
 
 fn fetch_bytes_with_transport(
@@ -818,6 +828,7 @@ fn fetch_bytes_with_transport(
     headers: &HashMap<String, String>,
     proxy: &str,
     browser_first: bool,
+    limit: Option<u64>,
 ) -> Result<(u16, Vec<u8>), EngineError> {
     if !http_fetch_url_allowed(url) {
         return Err(EngineError::Failed("url must be http(s)".into()));
@@ -855,7 +866,7 @@ fn fetch_bytes_with_transport(
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
         replay_json: String::new(),
-        curl_body_limit: None,
+        curl_body_limit: limit,
         origin_boundary: String::new(),
     };
     let result = (|| {
@@ -866,11 +877,25 @@ fn fetch_bytes_with_transport(
         };
         let status = fetched.status;
         let expected_length = fetched.content_length;
+        if status != 304
+            && limit.is_some_and(|limit| expected_length.is_some_and(|length| length > limit))
+        {
+            return Err(EngineError::Failed(
+                "metadata response exceeds byte limit".into(),
+            ));
+        }
         let mut body = Vec::new();
-        let mut reader = fetched.body;
+        let mut reader = fetched
+            .body
+            .take(limit.map_or(u64::MAX, |limit| limit.saturating_add(1)));
         if let Err(error) = reader.read_to_end(&mut body) {
             check_control(&job.control)?;
             return Err(EngineError::Failed(error.to_string()));
+        }
+        if limit.is_some_and(|limit| body.len() as u64 > limit) {
+            return Err(EngineError::Failed(
+                "metadata response exceeds byte limit".into(),
+            ));
         }
         if matches!(status, 200 | 206)
             && expected_length.is_some_and(|expected| expected != body.len() as u64)
@@ -4347,6 +4372,39 @@ mod tests {
             },
             dir,
         )
+    }
+
+    #[test]
+    fn adversarial_metadata_fetch_stops_at_the_byte_limit() {
+        for (response, expected) in [
+            ("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nabcde", None),
+            ("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nabcde", None),
+            ("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nabcde\r\n0\r\n\r\n", None),
+            ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd", Some("abcd")),
+            ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabc", None),
+            ("HTTP/1.1 304 Not Modified\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n", Some("")),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = reader.get_mut().write_all(response.as_bytes());
+            });
+            let result = fetch_bytes_limited(&url, &HashMap::new(), "", 4);
+            server.join().unwrap();
+            match expected {
+                Some(body) => assert_eq!(result.unwrap().1, body.as_bytes()),
+                None => assert!(result.is_err(), "{response}"),
+            }
+        }
     }
 
     #[test]

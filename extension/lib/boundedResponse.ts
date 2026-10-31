@@ -9,7 +9,10 @@ export async function readBoundedResponseText(
   // so treat non-finite limits as zero and fail closed on non-empty bodies.
   const limit = Number.isFinite(numericLimit) ? Math.max(0, Math.floor(numericLimit)) : 0
   const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > limit) return null
+  if (declared > limit) {
+    try { await response.body?.cancel() } catch {}
+    return null
+  }
 
   const reader = response.body?.getReader()
   if (!reader) {
