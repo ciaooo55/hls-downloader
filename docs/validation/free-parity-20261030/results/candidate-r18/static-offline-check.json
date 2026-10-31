@@ -1,0 +1,6 @@
+{
+  "passed": true,
+  "pages": 2,
+  "all_rewritten_local_targets_present": true,
+  "html_hashes_match_post_uninstall_outputs": true
+}

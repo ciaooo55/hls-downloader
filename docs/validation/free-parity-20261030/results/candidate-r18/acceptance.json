@@ -1,0 +1,52 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Native UI followup only, exact f53019e candidate; existing correctness suites not repeated",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "c46b241618a1b05bb412f367ffb05b31e7c0d1ce4c2dc41d9880db4da5947734",
+  "phase": "uninstall",
+  "source_commit": "f53019e0968c2d919d4c1ace2aa099f18679c678",
+  "native": {
+    "passed": false,
+    "scope": "Native followup; full matrix incomplete",
+    "checks": {
+      "task_drag_core_and_ui_order": [
+        2,
+        3,
+        1
+      ],
+      "crawl_preview_before_confirm_tasks": 5,
+      "crawl_pages": 2,
+      "crawl_resources": 3,
+      "crawl_confirmed_tasks_added": 3,
+      "crawl_all_resources_completed": true,
+      "crawl_pause_resume_native": true,
+      "crawl_sync_unchanged_tasks_before": 8,
+      "crawl_sync_unchanged_tasks_after": 8,
+      "maximize_restore": true
+    },
+    "observations": {
+      "OS_scale": 1.25,
+      "edge_resize": "No effective width change observed, 1214x600 before and after; unverified",
+      "OS_DPI_selector": "Sandbox desktop Display settings opened System home without Display entry; 100/150/200 not executed",
+      "create_button": "Reachable after dragging form scrollbar to bottom; moving to fixed actions in next development build"
+    },
+    "remaining": [
+      "Effective minimum window resizing",
+      "OS DPI 100/125/150/200 full matrix",
+      "Complete theme/control matrix",
+      "Native verification of fixed create action"
+    ]
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}

@@ -1,0 +1,32 @@
+{
+  "passed": false,
+  "scope": "Native followup; full matrix incomplete",
+  "checks": {
+    "task_drag_core_and_ui_order": [
+      2,
+      3,
+      1
+    ],
+    "crawl_preview_before_confirm_tasks": 5,
+    "crawl_pages": 2,
+    "crawl_resources": 3,
+    "crawl_confirmed_tasks_added": 3,
+    "crawl_all_resources_completed": true,
+    "crawl_pause_resume_native": true,
+    "crawl_sync_unchanged_tasks_before": 8,
+    "crawl_sync_unchanged_tasks_after": 8,
+    "maximize_restore": true
+  },
+  "observations": {
+    "OS_scale": 1.25,
+    "edge_resize": "No effective width change observed, 1214x600 before and after; unverified",
+    "OS_DPI_selector": "Sandbox desktop Display settings opened System home without Display entry; 100/150/200 not executed",
+    "create_button": "Reachable after dragging form scrollbar to bottom; moving to fixed actions in next development build"
+  },
+  "remaining": [
+    "Effective minimum window resizing",
+    "OS DPI 100/125/150/200 full matrix",
+    "Complete theme/control matrix",
+    "Native verification of fixed create action"
+  ]
+}

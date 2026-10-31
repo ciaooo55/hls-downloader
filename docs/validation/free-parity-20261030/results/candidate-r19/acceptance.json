@@ -1,0 +1,52 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Development UI overlay on f53019e candidate; not same-package release acceptance",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "c46b241618a1b05bb412f367ffb05b31e7c0d1ce4c2dc41d9880db4da5947734",
+  "phase": "uninstall",
+  "development_ui": {
+    "base_head": "1e9039ebd157e242619020982eda2ad816022008",
+    "diff_sha256": "7b9a113647641742c434b899cf373d83c14be5d22ebc378786537be958ee081b",
+    "ui_jar_sha256": "457aed88436d3c567f4f92fb3bd4e20352e6c2bc71e046897cd77328cf871412",
+    "validation": "compileKotlin and jar offline succeeded; development UI overlay, not a rebuilt candidate"
+  },
+  "source_commit": "f53019e0968c2d919d4c1ace2aa099f18679c678",
+  "native": {
+    "passed": false,
+    "scope": "Development UI overlay; targeted fixed footer validation only",
+    "checks": {
+      "create_action_visible_at_form_top": true,
+      "empty_url_disables_create": true,
+      "paste_url_enables_create": true,
+      "scroll_keeps_create_action_visible": true,
+      "native_create_succeeded": true,
+      "created_project_visited_pages": 2,
+      "created_project_resources": 1,
+      "no_download_without_confirm": true,
+      "light_dark_footer_visible": true,
+      "escape_closes_dialog": true
+    },
+    "remaining": [
+      "Effective edge resizing and minimum window",
+      "Complete OS DPI and theme/control matrix",
+      "Rebuilt candidate and same-package validation"
+    ],
+    "observations": {
+      "os_scale": 1.25,
+      "native_window": "1400x816; resizable true; undecorated true; minimum 1024x600",
+      "edge_drag": "No width change"
+    }
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}

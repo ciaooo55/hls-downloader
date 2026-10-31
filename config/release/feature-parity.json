@@ -49,7 +49,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "20261031_free_candidate_f53019e_r14_scoped_suites_passed_full_native_and_performance_incomplete",
+  "audit_state": "20261031_free_candidate_f53019e_r16_performance_r18_native_followups_r19_development_footer_full_native_incomplete",
   "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {
@@ -77,7 +77,7 @@
       "compose_entry": "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
       "core_command": "none (rendering architecture)",
       "state_event": "all UI states",
-      "verification": "Material3 direct dependency removed; Compose tests; light/dark 1024x600 125% visual captures 2026-10-31 f53019e 当前包：r14 当前包浅色设置及深色菜单/ZIP 弹窗限定观察无圆角遮挡；完整控件/主题/DPI 矩阵仍未完成。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
+      "verification": "Material3 direct dependency removed; Compose tests; light/dark 1024x600 125% visual captures 2026-10-31 f53019e 当前包：r14 当前包浅色设置及深色菜单/ZIP 弹窗限定观察无圆角遮挡；完整控件/主题/DPI 矩阵仍未完成。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 r19 为 f53019e 上覆盖开发 UI JAR 的定向验证，固定抓站创建按钮在浅深主题可达、空值禁用、滚动保持可见、真实创建成功；修复源码 948f6595，未重建候选，不计同包完整验收。见 docs/validation/free-parity-20261030/results/candidate-r19/native-finished.json。"
     },
     {
       "id": "tasks.selection_keyboard_queue",
@@ -353,7 +353,7 @@
       "compose_entry": "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
       "core_command": "existing RangeScheduler pending first, reserved read region",
       "state_event": "existing durable range checkpoints",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r11/active-split.json：三轮 18 样本 Core 对照，普通/限速/慢尾 off/on 中位秒 2.907/1.140、2.203/3.359、2.828/3.906；未证明稳定收益。旧 r2 的慢尾收益仅为历史夹具结果。实验默认关闭；r11 原恢复夹具超时；docs/validation/free-parity-20261030/results/candidate-r11/followup/split-recovery.json 事件同步后直连/系统代理两种路径暂停恢复哈希正确。 当前 f53019e 同包两路径活动拆分暂停恢复通过，见 docs/validation/free-parity-20261030/results/candidate-r14/split-recovery.json；当前候选未重做性能比较，默认仍关闭。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r11/active-split.json：三轮 18 样本 Core 对照，普通/限速/慢尾 off/on 中位秒 2.907/1.140、2.203/3.359、2.828/3.906；未证明稳定收益。旧 r2 的慢尾收益仅为历史夹具结果。实验默认关闭；r11 原恢复夹具超时；docs/validation/free-parity-20261030/results/candidate-r11/followup/split-recovery.json 事件同步后直连/系统代理两种路径暂停恢复哈希正确。 当前 f53019e 同包两路径活动拆分暂停恢复通过，见 docs/validation/free-parity-20261030/results/candidate-r14/split-recovery.json；r16 当前候选全产品默认/同连接上限各三轮共 36 样本完成；该比较保持拆分关闭，不能证明拆分收益，默认仍关闭。见 docs/validation/free-parity-20261030/results/candidate-r16/performance/summary.json。"
     }
   ],
   "summary": {

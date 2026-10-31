@@ -1,0 +1,30 @@
+{
+  "source_commit": "f53019e0968c2d919d4c1ace2aa099f18679c678",
+  "msi_sha256": "c46b241618a1b05bb412f367ffb05b31e7c0d1ce4c2dc41d9880db4da5947734",
+  "files_sha256": {
+    "acceptance.json": "4dc8387e69e0c14fe1cc2195a6e82e0992831ad56bbefb73e8b426d31bf8c205",
+    "core-final.json": "dc9fa70d1eb5bf1442fb1c8b190b6e5d464568b4893c0a2c66ce6ed9f4ffc8e0",
+    "fixture-http-contract.json": "72c86ad838f48429ae322601bcce718b16b48baf020b1f72fa9109c56c6f0845",
+    "guest-exit.json": "124fd50cb6d223cdd18fedc166d00af7254199b6e6dedf9be82f71db87af6d01",
+    "installed-critical-components.json": "672688755b070e980f0ad210fae7d97ad036938f5f88924f76b34b5f06d43cdc",
+    "native-crawl-after-sync.json": "71ed01666f9e754baedea5b54674147adcbb34498ec6da7dbce39fdc0aff35a2",
+    "native-crawl-before-confirm.json": "b984138714e937ab1103616e7f27a3f8395389330948974ddabeaac7066c556d",
+    "native-crawl-saved-before-sync.json": "71ed01666f9e754baedea5b54674147adcbb34498ec6da7dbce39fdc0aff35a2",
+    "native-finished.json": "a68d7b29890e2e5601833c985f0c3acbc5906a959842dba6cfa50cd9cebc6561",
+    "native-fixture-settings.json": "b52e81da6d4cec1b95c032cc8dbad132e1121c7afc022b4a96c48a91c101c2cb",
+    "native-fixtures.json": "bbe3c1bc0e71130f4d0fd085a8ada8e2fcd84a086cb29bde76a72af55f211c9a",
+    "native-task-drag.json": "b984138714e937ab1103616e7f27a3f8395389330948974ddabeaac7066c556d",
+    "output-fixture-completed.json": "516d0dba3b3d6799153a2e8db1fab47c14283dce0db201e0269e3d8877452a34",
+    "output-fixture-create.json": "056af7dd2c47ef8a513710ff0fba8014862a13ec04647937c745864df66c9477",
+    "output-hashes.json": "3c4980c9eeb5cb2b04ef7900e0742bdffadb08f9b4bac1307c62e863b2d6af8a",
+    "restart-completed-1.json": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "restart-ui-1.json": "e3566b3a06430868d71e9287dfd6c6c520a3da027aabea01951d407ee131dc2f",
+    "runner.py": "591206693f3c4ef44b4b9bb921cb817f6255655a6582d85b2da719567d7d0b84",
+    "saved-html.json": "fb4a4e0327921297d903767dbad6dbd0cae1100947ae687304a6842911ab7140",
+    "settings-final.json": "1462a9e94250d0ab7f3dd50670b84b6b9312c8d29a02922036515f84acbbdb9f",
+    "skiko-wrapper-validation.json": "5691ddce5d77d3969b8de649cd0b483657ce6db573a6b7f9ede93548837022dc",
+    "static-offline-check.json": "4cde9bb9d5deefd74303a769eddc602e7f3cd9c7e83907c00500ed7a1ee0c422",
+    "window-after-edge-drag.json": "3e2b13fb3a2c1333c528290ef70fd033584fd0523b875bfd66ee6334be7f6c96"
+  },
+  "release_ready": false
+}

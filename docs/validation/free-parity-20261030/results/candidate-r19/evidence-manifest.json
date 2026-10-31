@@ -1,0 +1,23 @@
+{
+  "scope": "Development UI overlay on f53019e candidate; not same-package release acceptance",
+  "source_base": "1e9039ebd157e242619020982eda2ad816022008",
+  "files_sha256": {
+    "acceptance.json": "8210e8be4744071425b2857bc79a2556d225bd68071e64338c283095e7c6f2f8",
+    "core-final.json": "9bbfcf2e63383522d6386158ef106e98f364afe0c788a7da35371c99ae8c55fa",
+    "development-ui.json": "ae08d914bb7c1949e4cf4823ce1566e1d41a21c484011c3ec3b2aa99b722c63e",
+    "development-ui.patch": "7b9a113647641742c434b899cf373d83c14be5d22ebc378786537be958ee081b",
+    "fixture-http-contract.json": "72c86ad838f48429ae322601bcce718b16b48baf020b1f72fa9109c56c6f0845",
+    "guest-exit.json": "124fd50cb6d223cdd18fedc166d00af7254199b6e6dedf9be82f71db87af6d01",
+    "installed-critical-components.json": "672688755b070e980f0ad210fae7d97ad036938f5f88924f76b34b5f06d43cdc",
+    "native-finished.json": "5d8d4ea4848c9a583a230cdcbf99ffa25a5696c98f93c89caa0801bf50b14b84",
+    "native-fixture-settings.json": "b52e81da6d4cec1b95c032cc8dbad132e1121c7afc022b4a96c48a91c101c2cb",
+    "native-fixtures.json": "bbe3c1bc0e71130f4d0fd085a8ada8e2fcd84a086cb29bde76a72af55f211c9a",
+    "output-hashes.json": "a287510a67f7fec04a967964f04d00dc79e6d54967c8fc02bcce1da31d416050",
+    "runner.py": "1f5fd266436f2cc89eb5e974f77bf8b177ae85baa3718f50af9bca5328f7595e",
+    "settings-final.json": "bc2374f6e893abc527e2fcdfb2f105a0ea387f006e741f895735054b50057889",
+    "skiko-wrapper-validation.json": "5691ddce5d77d3969b8de649cd0b483657ce6db573a6b7f9ede93548837022dc",
+    "window-before-resize.json": "aba42ac071885d23f4eae2fb738cc23aa4ca7f01418a8aefda1cca59d68a7044",
+    "window-latest.json": "aba42ac071885d23f4eae2fb738cc23aa4ca7f01418a8aefda1cca59d68a7044"
+  },
+  "release_ready": false
+}

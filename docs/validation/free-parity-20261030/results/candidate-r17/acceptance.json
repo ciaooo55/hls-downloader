@@ -1,0 +1,46 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Native UI followup only, exact f53019e candidate; existing correctness suites not repeated",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "c46b241618a1b05bb412f367ffb05b31e7c0d1ce4c2dc41d9880db4da5947734",
+  "phase": "uninstall",
+  "source_commit": "f53019e0968c2d919d4c1ace2aa099f18679c678",
+  "native": {
+    "passed": false,
+    "scope": "Native followup only; full native matrix remains open",
+    "checks": {
+      "queue_edit_reopen_and_core_readback": true,
+      "queue_core_values_after_ui_restart": true,
+      "crawl_discovery_preview_no_download": true,
+      "crawl_selected_only_creates_one_task": true,
+      "crawl_selected_file_completed": true
+    },
+    "observations": {
+      "crawl_before_tasks": 5,
+      "crawl_selected_after_tasks": 6,
+      "crawl_found_pages": 2,
+      "crawl_found_resources": 3,
+      "window_edge_drag": "No effective resize observed; Compose built-in resizer exists, cause unresolved",
+      "html_downloads": "Rejected RANGE_UNSUPPORTED; fixture HEAD inherited 32MiB binary headers while GET serves short HTML; not a product pass"
+    },
+    "remaining": [
+      "Correct crawl HTML fixture and rerun static save",
+      "OS DPI 100/125/150/200",
+      "Effective minimum window resize",
+      "Native task drag",
+      "Full theme/control matrix"
+    ]
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}

@@ -1,0 +1,8 @@
+{
+  "installed_path": "skiko-awt-runtime-windows-x64-0.150.1-5e24cb6f602a8f636c30f8e1e75ca330.jar",
+  "installed_sha256": "11f35f4520ed5b09f4032e265560bd98e84a65becee89f2b68a498fcac02c5bd",
+  "portable_wrappers": {
+    "app/skiko-awt-runtime-windows-x64-0.150.1-64c8424bd21d313f5dd5a1a5a9942.jar": "9873b8083e019718abeb896ad10db24546282b7c94597e0ba2436f79c3ecbdba"
+  },
+  "contents": "Empty manifest only; actual native DLL verified separately"
+}

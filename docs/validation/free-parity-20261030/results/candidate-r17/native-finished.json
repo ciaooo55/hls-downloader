@@ -1,0 +1,26 @@
+{
+  "passed": false,
+  "scope": "Native followup only; full native matrix remains open",
+  "checks": {
+    "queue_edit_reopen_and_core_readback": true,
+    "queue_core_values_after_ui_restart": true,
+    "crawl_discovery_preview_no_download": true,
+    "crawl_selected_only_creates_one_task": true,
+    "crawl_selected_file_completed": true
+  },
+  "observations": {
+    "crawl_before_tasks": 5,
+    "crawl_selected_after_tasks": 6,
+    "crawl_found_pages": 2,
+    "crawl_found_resources": 3,
+    "window_edge_drag": "No effective resize observed; Compose built-in resizer exists, cause unresolved",
+    "html_downloads": "Rejected RANGE_UNSUPPORTED; fixture HEAD inherited 32MiB binary headers while GET serves short HTML; not a product pass"
+  },
+  "remaining": [
+    "Correct crawl HTML fixture and rerun static save",
+    "OS DPI 100/125/150/200",
+    "Effective minimum window resize",
+    "Native task drag",
+    "Full theme/control matrix"
+  ]
+}

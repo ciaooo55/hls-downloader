@@ -10,5 +10,7 @@
   "completed_setup": ["Candidate MSI install returned 0", "64 installed component hashes verified by guest runner", "IDM install returned 0", "AB settings file exists"],
   "pending_setup": ["Verify persisted AB threadCount", "Observe and persist IDM default connection setting", "Create default-start marker only after native setup completes"],
   "raw_evidence": ".tool-cache/free-parity-20261030/candidate-results-r15/performance/",
-  "release_ready": false
+  "release_ready": false,
+  "followup_observed_at": "2026-10-31T12:24:53+08:00",
+  "followup": "Original Sandbox processes are no longer running. The shared report remains at default-start with no samples. A separate r16 output directory is used for continuation; r15 reports are preserved."
 }

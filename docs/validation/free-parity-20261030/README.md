@@ -7,9 +7,9 @@
 | 阶段 | 当前状态 |
 | --- | --- |
 | P0 安装器与证据 | f53019e 候选 r14 同版本运行中升级、故障回滚、64 组件、续传、空闲及运行中卸载通过；完整便携包升级/回滚和活动检查点通过。5 个原生成品卸载后保持哈希。历史 1603 原样保留。 |
-| P1 UI 与原生操作 | r14 真实输入复核普通 URL Enter、空输入禁用、多行 cURL 换行、Esc、批量、导出/独立 URL 文件导入、Ctrl+A/Esc、并发设置保存/Core 读回/工作台重启、浅深主题及 ZIP 滚动。完整 OS DPI、有效最小窗口、拖动及主题/控件组合矩阵未完成。 |
+| P1 UI 与原生操作 | r14 真实输入复核普通 URL Enter、空输入禁用、多行 cURL 换行、Esc、批量、导出/独立 URL 文件导入、Ctrl+A/Esc、并发设置保存/Core 读回/工作台重启、浅深主题及 ZIP 滚动。r17 队列编辑/重开，r18 抓站原生确认、暂停/继续/更新、任务拖动及静态引用补测通过；r19 开发 UI 固定创建按钮通过定向验证，尚未进入重建候选。完整 OS DPI、有效最小窗口及主题/控件组合矩阵未完成。 |
 | P2 浏览器交接 | r14 Edge、Firefox 各 11 项及两浏览器初始离线通过。Firefox 重载及重启的清理分别约 748/14 ms；r13 超时保留，不能由一次成功认定延迟彻底消除。DownloadItem 按入口记录。 |
-| P3 分段与恢复 | r14 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧、直连/系统代理活动拆分恢复通过。三轮活动拆分性能不稳定，默认关闭；全产品性能对照未完成。 |
+| P3 分段与恢复 | r14 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧、直连/系统代理活动拆分恢复通过。活动拆分性能不稳定，默认关闭；r16 全产品默认/同连接上限各三轮共 36 样本完成，仍存在性能差距。 |
 | P4 CLI | 已进入安装与便携包。f53019e 的 r14 免费整套 11 组通过，含单 Core、中文路径、生命周期、重启续传、队列启停、导入导出、退出码及显式删文件。 |
 | P5 抓站与同步 | r14 整套通过：循环去重、预览确认、恢复、静态改写、跨域边界、页面/深度限制、ETag/失败保旧/原子替换、关闭队列时间窗零请求、请求上下文及 60 秒自动周期。完整原生 UI 矩阵未完成。 |
 | P6 ZIP 预览 | r14 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。同包原生中文路径 121 项、滚动/关闭通过；完整主题/缩放组合未完成。 |
@@ -34,7 +34,7 @@
 
 固定 pnpm 11.7.0、现有 JDK 21、Cargo 和 FFmpeg 缓存完成构建，Gradle `BUILD SUCCESSFUL in 8m 2s`，安装器后处理、EXE 内嵌 MSI 哈希及便携内容核验通过；完整构建命令最终退出 0。最初 PATH 指向 pnpm 11.25.0 被构建门禁拒绝；随后因遗漏原 Cargo 缓存配置触发依赖获取，停止该次构建后使用既有缓存重建，原始日志保留。构建后的 Gradle 停止命令超时，仅清理本任务确认的 Gradle/Kotlin 进程后，构建会话退出 0。
 
-r14 同包回归已正常结束，限定套件全部通过。包内 Core、CLI、Host 哈希与前候选不同，本节使用新包实际结果。完整 UI 和性能门槛仍未关闭，总结果为 `passed:false`，`release_ready:false`。未推送、发布或签名。
+r14 同包回归已正常结束，限定套件全部通过。包内 Core、CLI、Host 哈希与前候选不同，本节使用新包实际结果。r16 已完成性能对照，完整 UI 门槛仍未关闭；r14 总结果仍为 `passed:false`，`release_ready:false`。未推送、发布或签名。
 
 ### f53019e 的 r14 同包结果
 
@@ -46,6 +46,51 @@ r14 同包回归已正常结束，限定套件全部通过。包内 Core、CLI�
 - [原生输入](results/candidate-r14/native-finished.json)：普通 URL Return 创建并完成下载，空输入 Return 不创建，多行 cURL Return 只换行；真实批量两项完成；导出[8 项 JSON](results/candidate-r14/hls-downloader-tasks.json)，重导保持 8 项并提示重复。原有失败夹具按既有规则触发重试并报错，该步只作为去重证据；另选独立 URL 文本文件成功导入并完成任务 9。Ctrl+A 选中 9 项、Esc 清为 0；[并发值快照](results/candidate-r14/native-settings-persisted.json)为 2，重开设置及仅重启工作台后仍显示 2。这不等于本轮重启 Core。
 - 原生 ZIP 中文路径显示 121 项、读取元数据 15,735 字节，列表滚动时固定底部按钮保持可达，Esc 关闭；浅色设置及深色列表/菜单未见所观察窗口中的圆角遮挡。拖动没有建立有效主窗口缩放结果，最小窗口不计通过。原生抓站完整流程、队列编辑/拖动、完整主题控件组合及 Windows OS DPI 仍未完成。
 - [证据清单](results/candidate-r14/evidence-manifest.json)关联同包 MSI 和归档 JSON 的哈希。完整日志留在 `.tool-cache/free-parity-20261030/candidate-results-r14/`；r14 沙盒已关闭。
+
+### f53019e 的 r16 性能对照
+
+r15 的沙盒进程在关机中断后已退出，未产生样本；原报告保留。r16 使用新的沙盒与输出目录，候选安装及 64 组件核验通过，默认配置和相同连接上限各三轮、轮换顺序，共 36 个样本全部完成且 SHA-256 正确，无测试错误；清理时卸载返回 0。见[运行结果](results/candidate-r16/performance/performance.json)、[默认全部样本](results/candidate-r16/performance/default/comparison-clean.json)、[同连接全部样本](results/candidate-r16/performance/matched/comparison-clean.json)及[资源汇总](results/candidate-r16/performance/summary.json)。
+
+AB 与 IDM 默认连接数通过真实界面观察并保存后分别读回 `threadCount=8`、`MaxConnectionsNumber=8`；同连接组逐产品保存并读回上限 4，详见[初始化证据](results/candidate-r16/performance/native-setup.json)。本项目默认设置由候选包使用；同连接组显式设为 4。活动慢尾段拆分保持默认关闭。
+
+下表为各配置各产品三轮的耗时中位数，单位秒；快速端点 128 MiB，限速端点 64 MiB、每连接 4 MiB/s 和 80 ms 延迟，均在完整成品 SHA-256 正确后停止计时。
+
+| 配置 / 场景 | 本项目 | AB | IDM |
+| --- | ---: | ---: | ---: |
+| 默认 / 快速 | 2.498 | 4.019 | 2.048 |
+| 默认 / 限速 | 5.207 | 2.802 | 3.896 |
+| 上限 4 / 快速 | 2.463 | 3.634 | 2.174 |
+| 上限 4 / 限速 | 6.650 | 4.680 | 5.126 |
+
+同连接上限 4、限速场景的全产品采样私有内存峰值中位数为本项目 245.9 MiB、AB 313.0 MiB、IDM 21.0 MiB；CPU 时间中位数分别为 2.734、6.078、0.547 秒。本项目在这些夹具中比 AB 使用更少 CPU/内存，但限速传输更慢，CPU/内存也明显高于 IDM，不能认定普遍领先。全部样本、范围和采样指标保留于汇总与原始结果。
+
+冷启动统计按 HLS/AB IPC 可用、IDM 进程可见判断，并不使用相同的 UI 就绪条件，不能用其数值比较用户可操作速度；完整 UI 响应和公网场景未纳入本轮。没有新增网络依赖，沙盒外部网络禁用。r16 沙盒在归档后已关闭。
+
+### f53019e 的 r17 原生补测
+
+[本轮结果](results/candidate-r17/acceptance.json)正常结束，完整原生矩阵仍为 `passed:false`。实际完成：队列 01 并发从 1 改为 2、移至队列 02 后，保存后 Core 读回与弹窗重开一致；仅重启工作台后 Core 设置保持，见[重启后设置](results/candidate-r17/native-queue-after-ui-restart.json)。这不代表重启 Core。
+
+抓站从真实输入创建同源、深度 2、500 页、并发 2、静态离线项目，发现 2 页与 3 个资源；[确认前快照](results/candidate-r17/native-crawl-before-confirm.json)仍为 5 个任务。只勾选 image.bin 后，仅新增一个任务并完成，[成品 SHA-256](results/candidate-r17/output-hashes.json)与夹具一致。随后确认全部发现时，两个 HTML 被 `RANGE_UNSUPPORTED` 拒绝：原生夹具 HEAD 继承了 32 MiB 二进制响应头，GET 却返回短 HTML。这是已定位的夹具不一致，本轮不计静态页面保存通过；失败证据保留。
+
+边缘拖动未观察到有效缩放，不能计最小窗口通过；Compose 1.12 自带边缘缩放实现，原因仍需定位。完整 Windows DPI、主题控件及任务拖动尚未关闭。运行中卸载返回 0，两个成品卸载后保持哈希。[证据清单](results/candidate-r17/evidence-manifest.json)关联同包 64 组件及原生报告；原始日志留在 `.tool-cache/free-parity-20261030/candidate-results-r17/`，沙盒已关闭。
+
+### f53019e 的 r18 原生抓站与拖动补测
+
+[本轮结果](results/candidate-r18/acceptance.json)正常结束，仍保留完整矩阵 `passed:false`。修正原生夹具 HEAD/GET 长度与 Range 一致性，先通过[HTTP 夹具自检](results/candidate-r18/fixture-http-contract.json)，再实际创建静态离线项目、预览 2 页与 3 个资源、确认全部下载。确认前为 5 个任务，确认后仅增加 3 个；两页 HTML 和 32 MiB 资源全部完成。
+
+实际点击暂停、继续及立即检查更新；[更新前](results/candidate-r18/native-crawl-saved-before-sync.json)与[更新后](results/candidate-r18/native-crawl-after-sync.json)均为 8 个任务，没有重复新增。[保存的 HTML](results/candidate-r18/saved-html.json)中页面互链、片段和图片引用均已改成本地名称，[引用检查](results/candidate-r18/static-offline-check.json)确认目标存在且内容哈希与卸载后成品一致。运行中卸载返回 0，四个成品保持哈希。
+
+真实拖动任务 1 到任务 3 后，Core 与列表顺序均成为 2、3、1，见[拖动快照](results/candidate-r18/native-task-drag.json)。最大化/还原实际生效；边缘拖动仍未改变 1214×600 尺寸。只读窗口数据确认当前 OS 比例 125%；沙盒显示设置入口打开系统首页，没有显示比例选择，100%/150%/200% 未执行，完整 DPI 与最小窗口验收仍开放。创建按钮需滚到长表单底部才可见，随后源码已将它移至固定底栏，须单独验证新 UI。
+
+[证据清单](results/candidate-r18/evidence-manifest.json)保留同包组件哈希及[原生夹具源码](results/candidate-r18/runner.py)。该轮沙盒已关闭，原始日志留在 `.tool-cache/free-parity-20261030/candidate-results-r18/`。
+
+### 固定抓站创建操作的 r19 开发 UI 验证
+
+抓站表单的“创建并发现”从滚动内容移到共享弹窗固定底栏，沿用原有校验及创建逻辑。离线 `compileKotlin` 与 `jar` 均实际成功；[开发来源](results/candidate-r19/development-ui.json)记录基线、差异和 JAR 哈希，[差异](results/candidate-r19/development-ui.patch)保留验证时源码。此次在 f53019e 安装后覆盖开发 UI JAR，**不是重建候选包，也不构成同包发布验收**。
+
+[真实输入结果](results/candidate-r19/native-finished.json)：空地址禁用、粘贴本地地址启用、滚动后按钮仍可见，点击固定底栏成功创建项目，界面显示访问 2 页、发现 1 个文件资源；未确认下载时任务仍为 5 个。浅深主题中底栏可达，Esc 可关闭弹窗。只读诊断确认浮动窗口可缩放、无原生装饰、最小尺寸 1024×600，但拖边仍未产生尺寸变化，不能计最小窗口通过。
+
+[本轮结果](results/candidate-r19/acceptance.json)记录运行中卸载返回 0，成品卸载后保持哈希；完整原生矩阵仍为 `passed:false`。OS DPI、有效边缘缩放和完整主题控件组合继续开放。[证据清单](results/candidate-r19/evidence-manifest.json)关联原安装组件与开发 UI，沙盒已关闭，原始日志留在 `.tool-cache/free-parity-20261030/candidate-results-r19/`。
 
 ## 历史候选 f4b0f53b
 
