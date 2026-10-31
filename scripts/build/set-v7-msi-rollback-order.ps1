@@ -300,10 +300,6 @@ try {
     if ($prepareSequence -ge [int]$finalize) {
         throw 'MSI does not provide legal Native Host registration action slots.'
     }
-    foreach ($legacyAction in @('V7RegisterNativeHost', 'V7UnregisterNativeHost')) {
-        Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='$legacyAction'"
-        Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$legacyAction'"
-    }
     # An installed-file action is valid only when its component is scheduled locally.
     $prepareCondition = 'NOT REMOVE~="ALL" AND $' + $engineComponent + '=3'
     Set-MsiExecutableAction 'V7PrepareNativeHostManifests' $engineFile '--prepare-native-host-manifests' $prepareCondition $prepareSequence

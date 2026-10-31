@@ -249,8 +249,7 @@ def main() -> int:
     java_home = os.environ.get("JAVA_HOME")
     if not java_home:
         repo_local = Path(__file__).resolve().parents[2] / ".tool-cache" / "build-cache" / "jdk-21"
-        legacy = Path(r"E:\HLSDownloaderBuildCache\jdk-21")
-        java_home = str(repo_local if (repo_local / "bin" / "java.exe").exists() else legacy)
+        java_home = str(repo_local)
     parser.add_argument("--dll", type=Path, default=Path(java_home) / "bin" / "WindowsAccessBridge-64.dll")
     parser.add_argument("--title", default="HLS Downloader")
     parser.add_argument("--timeout", type=float, default=30.0)

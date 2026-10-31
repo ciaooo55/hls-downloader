@@ -807,8 +807,8 @@ fn connect_or_start_core() -> Result<CoreIpcClient, String> {
     }
     let root = install_root().ok_or_else(|| "找不到应用安装目录".to_string())?;
     spawn_core(&root)?;
-    // A cold start may spend seconds opening the database, migrating legacy
-    // data or being scanned by antivirus software, so wait up to 10 s before
+    // A cold start may spend seconds opening the database or being scanned
+    // by antivirus software, so wait up to 10 s before
     // failing the presenter outright.
     for _ in 0..100 {
         if let Ok(client) = CoreIpcClient::connect() {
