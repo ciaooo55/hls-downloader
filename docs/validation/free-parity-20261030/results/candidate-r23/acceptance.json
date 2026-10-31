@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "finished": true,
+  "scope": "Same bafddff6 candidate; Edge reload fixture diagnosis and targeted protocol followup; no desktop input",
+  "host_product_install_performed": false,
+  "suites": [
+    {
+      "name": "edge-matrix",
+      "exit_code": 0,
+      "passed": true
+    }
+  ],
+  "msi_sha256": "78105372fb19e85aedca2588518db285418d1f162fa2a4cb31ef27fe7d13ecd9",
+  "phase": "uninstall",
+  "source_commit": "bafddff6b2d185be08a9f3522d952bd347f5c285",
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  }
+}

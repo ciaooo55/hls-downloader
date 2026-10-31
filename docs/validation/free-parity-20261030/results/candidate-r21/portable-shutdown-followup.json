@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "finished": true,
+  "checks": [
+    {
+      "name": "lock-refuses-swap",
+      "exit_code": 1
+    },
+    {
+      "name": "running-upgrade",
+      "exit_code": 0
+    },
+    {
+      "name": "running-rollback",
+      "exit_code": 0
+    }
+  ],
+  "scope": "Current portable scripts/native preflight with actual candidate Core in minimal app images; not a packaged-image acceptance",
+  "components": {
+    "upgrade-v7-portable.ps1": "1a4a1d26154fc9c324bbf07395c1758ffd5b9be301794678550658e453134f12",
+    "HLSDownloaderPreflight.exe": "bad9e9485416b71270ff5925e6cae39274b94ea7e2de5c5352ecb8ec7aca869c"
+  },
+  "core_sha256": "3901fff834bbf8a4b27d65d72d3a48cf2f9b2179b7f361c8fe669bcffb6bcf48",
+  "phase": "running-rollback",
+  "after_failed_swap_checkpoint_bytes": 1048576,
+  "after_running_upgrade_checkpoint_bytes": 2097152,
+  "task_id": "task-1",
+  "output_sha256": "e09320c5b00b34bb704802136c599a95b3996332ba84d7c7f21112b6231b6bd0",
+  "helper_sha256": "bad9e9485416b71270ff5925e6cae39274b94ea7e2de5c5352ecb8ec7aca869c"
+}

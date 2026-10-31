@@ -1,0 +1,303 @@
+{
+  "selectedCount": 0,
+  "selectedTaskIds": [],
+  "inputTarget": "",
+  "contextMenuPosition": [],
+  "contextMenuTaskIds": [],
+  "contextMenuActions": [],
+  "activeFilter": "全部",
+  "activeCategory": "",
+  "activeQueueId": "",
+  "controlBounds": {
+    "toolbar.新建": [
+      19,
+      53,
+      95,
+      98
+    ],
+    "toolbar.粘贴链接": [
+      105,
+      53,
+      211,
+      98
+    ],
+    "toolbar.全部开始": [
+      227,
+      53,
+      272,
+      98
+    ],
+    "toolbar.全部暂停": [
+      272,
+      53,
+      317,
+      98
+    ],
+    "toolbar.工具": [
+      318,
+      53,
+      394,
+      98
+    ],
+    "toolbar.设置": [
+      1172,
+      53,
+      1217,
+      98
+    ],
+    "rail.status.全部": [
+      10,
+      122,
+      57,
+      172
+    ],
+    "rail.status.进行中": [
+      10,
+      175,
+      57,
+      225
+    ],
+    "rail.status.排队中": [
+      10,
+      228,
+      57,
+      278
+    ],
+    "rail.status.已暂停": [
+      10,
+      281,
+      57,
+      331
+    ],
+    "rail.status.已完成": [
+      10,
+      334,
+      57,
+      384
+    ],
+    "rail.status.失败": [
+      10,
+      387,
+      57,
+      437
+    ],
+    "rail.queue.默认队列": [
+      10,
+      462,
+      57,
+      512
+    ],
+    "rail.category.媒体": [
+      10,
+      1173,
+      57,
+      1223
+    ],
+    "rail.category.程序": [
+      10,
+      1226,
+      57,
+      1276
+    ],
+    "rail.category.压缩包": [
+      10,
+      1279,
+      57,
+      1329
+    ],
+    "rail.category.其他": [
+      10,
+      1332,
+      57,
+      1382
+    ],
+    "rail.manage": [
+      10,
+      651,
+      60,
+      701
+    ],
+    "content_header.clear_completed": [
+      1024,
+      113,
+      1143,
+      156
+    ],
+    "content_header.refresh": [
+      1143,
+      113,
+      1217,
+      156
+    ],
+    "toolbar.更多操作": [
+      1217,
+      112,
+      1262,
+      157
+    ],
+    "rail.queue.测试队列 01": [
+      10,
+      515,
+      57,
+      565
+    ],
+    "rail.queue.测试队列 02": [
+      10,
+      568,
+      57,
+      618
+    ],
+    "rail.queue.测试队列 03": [
+      10,
+      621,
+      57,
+      671
+    ],
+    "rail.queue.测试队列 04": [
+      10,
+      674,
+      57,
+      724
+    ],
+    "rail.queue.测试队列 05": [
+      10,
+      727,
+      57,
+      777
+    ],
+    "rail.queue.测试队列 06": [
+      10,
+      780,
+      57,
+      830
+    ],
+    "rail.queue.测试队列 07": [
+      10,
+      833,
+      57,
+      883
+    ],
+    "rail.queue.测试队列 08": [
+      10,
+      886,
+      57,
+      936
+    ],
+    "rail.queue.测试队列 09": [
+      10,
+      939,
+      57,
+      989
+    ],
+    "rail.queue.测试队列 10": [
+      10,
+      992,
+      57,
+      1042
+    ],
+    "rail.queue.测试队列 11": [
+      10,
+      1045,
+      57,
+      1095
+    ],
+    "rail.queue.测试队列 12": [
+      10,
+      1098,
+      57,
+      1148
+    ],
+    "taskrow.task-1": [
+      70,
+      206,
+      1271,
+      271
+    ],
+    "taskrow.task-2": [
+      70,
+      271,
+      1271,
+      336
+    ],
+    "taskrow.task-3": [
+      70,
+      336,
+      1271,
+      401
+    ],
+    "taskrow.task-4": [
+      70,
+      401,
+      1271,
+      466
+    ],
+    "task.action.task-4.retry": [
+      1175,
+      412,
+      1218,
+      455
+    ],
+    "taskrow.task-5": [
+      70,
+      466,
+      1271,
+      531
+    ],
+    "task.action.task-5.open_folder": [
+      1175,
+      477,
+      1218,
+      520
+    ],
+    "taskrow.task-6": [
+      70,
+      531,
+      1271,
+      596
+    ],
+    "task.action.task-6.open_folder": [
+      1175,
+      542,
+      1218,
+      585
+    ],
+    "toolbar.浅色模式": [
+      1217,
+      53,
+      1262,
+      98
+    ],
+    "taskrow.task-7": [
+      70,
+      596,
+      1271,
+      661
+    ],
+    "taskrow.task-8": [
+      70,
+      661,
+      1271,
+      726
+    ],
+    "task.action.task-7.open_folder": [
+      1175,
+      607,
+      1218,
+      650
+    ],
+    "task.action.task-8.open_folder": [
+      1175,
+      672,
+      1218,
+      715
+    ]
+  },
+  "engineText": "下载引擎 · 已连接",
+  "noticeHistory": [
+    [
+      "success",
+      "已处理 2 条下载链接",
+      "1793436070266"
+    ]
+  ]
+}

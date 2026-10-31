@@ -6,13 +6,13 @@
 
 | 阶段 | 当前状态 |
 | --- | --- |
-| P0 安装器与证据 | f53019e 候选 r14 同版本运行中升级、故障回滚、64 组件、续传、空闲及运行中卸载通过；完整便携包升级/回滚和活动检查点通过。5 个原生成品卸载后保持哈希。历史 1603 原样保留。 |
-| P1 UI 与原生操作 | r14 真实输入复核普通 URL Enter、空输入禁用、多行 cURL 换行、Esc、批量、导出/独立 URL 文件导入、Ctrl+A/Esc、并发设置保存/Core 读回/工作台重启、浅深主题及 ZIP 滚动。r17 队列编辑/重开，r18 抓站原生确认、暂停/继续/更新、任务拖动及静态引用补测通过；r19 开发 UI 固定创建按钮通过定向验证，尚未进入重建候选。完整 OS DPI、有效最小窗口及主题/控件组合矩阵未完成。 |
-| P2 浏览器交接 | r14 Edge、Firefox 各 11 项及两浏览器初始离线通过。Firefox 重载及重启的清理分别约 748/14 ms；r13 超时保留，不能由一次成功认定延迟彻底消除。DownloadItem 按入口记录。 |
-| P3 分段与恢复 | r14 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧、直连/系统代理活动拆分恢复通过。活动拆分性能不稳定，默认关闭；r16 全产品默认/同连接上限各三轮共 36 样本完成，仍存在性能差距。 |
-| P4 CLI | 已进入安装与便携包。f53019e 的 r14 免费整套 11 组通过，含单 Core、中文路径、生命周期、重启续传、队列启停、导入导出、退出码及显式删文件。 |
-| P5 抓站与同步 | r14 整套通过：循环去重、预览确认、恢复、静态改写、跨域边界、页面/深度限制、ETag/失败保旧/原子替换、关闭队列时间窗零请求、请求上下文及 60 秒自动周期。完整原生 UI 矩阵未完成。 |
-| P6 ZIP 预览 | r14 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过。同包原生中文路径 121 项、滚动/关闭通过；完整主题/缩放组合未完成。 |
+| P0 安装器与证据 | bafddff6 候选 r21 同版本运行中升级、故障回滚、64 组件、续传、空闲及运行中卸载通过；完整便携包升级/回滚和活动检查点通过。r24 运行中卸载返回 0，6 个成品保持哈希。历史 1603 原样保留。 |
+| P1 UI 与原生操作 | bafddff6 的 r21 固定抓站创建、确认、浅深主题和设置保存/Core 读回/工作台重启通过限定检查。r24 在 1024×600 逻辑窗口、实际 125% OS 比例完成新建 Return、设置滚动、抓站固定底栏、中文 ZIP 选择/预览、批量、导入/导出、列表全选/Esc 和队列编辑/重开。用户人工慢拖确认窗口可缩小，回复未绑定包哈希。完整 OS DPI、同包任务拖动、强制最小尺寸边缘拖动及完整主题/控件组合仍开放。 |
+| P2 浏览器交接 | bafddff6 的 r21 Firefox、r23 Edge 各 11 项及 r21 两浏览器初始离线通过。r21 Edge 重载等待失败和 r22 媒体夹具缺失失败保留，不能由补测成功认定每次无延迟。DownloadItem 按入口记录。 |
+| P3 分段与恢复 | bafddff6 的 r21 HTTP 13 项、普通文件/HLS/DASH 成品及解码帧、直连/系统代理活动拆分恢复通过。活动拆分收益不稳定，默认关闭；r16 的 36 个全产品性能样本属于旧 f53019e 包，仍显示性能差距，不冒充新包测量。 |
+| P4 CLI | 已进入安装与便携包。bafddff6 的 r21 免费整套 11 组通过，含单 Core、中文路径、生命周期、重启续传、队列启停、导入导出、退出码及显式删文件。 |
+| P5 抓站与同步 | bafddff6 的 r21 整套通过：循环去重、预览确认、恢复、静态改写、跨域边界、页面/深度限制、ETag/失败保旧/原子替换、队列时间窗、请求上下文及自动周期。r21 原生确认 3 项完成，r24 最小窗口固定底栏可达；完整原生组合矩阵未完成。 |
+| P6 ZIP 预览 | bafddff6 的 r21 本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、非 Range 拒绝、有界读取及条目上限通过；r24 同包原生中文选择、121 项目录、滚动/固定底栏/Esc 通过。完整主题/OS 缩放组合未完成。 |
 
 ## P0 首轮诊断边界
 
@@ -22,7 +22,7 @@
 
 后续同包通过和新增失败见下节。旧候选的 1603 失败保留，不能用多次成功覆盖新的失败。
 
-## 新候选 bafddff6：已生成，安装后验收未开始
+## 新候选 bafddff6：r21 回归、r23 Edge 及 r24 原生补测完成，完整 UI 门槛仍开放
 
 源码 `bafddff6b2d185be08a9f3522d952bd347f5c285` 包含固定抓站创建按钮修复 `948f6595`。新包保存在 `artifacts/v7-productization/candidate-bafddff6/`，原 f53019e 候选目录完整保留。[构建来源](results/candidate-bafddff6/BUILD-PROVENANCE.json)、[交付清单](results/candidate-bafddff6/ARTIFACT-MANIFEST.json)、[64 组件清单](results/candidate-bafddff6/expected-components.json)及[构建结果](results/candidate-bafddff6/build-result.json)已归档。
 
@@ -34,7 +34,30 @@
 
 首次构建因遗漏现有 FFmpeg 缓存路径在依赖检查处停止。补入已核对哈希的缓存后，Gradle 编译与打包成功（5 分 53 秒），安装器后处理和 EXE 内嵌 MSI 核验通过；但最后候选目录交换被仍在运行的 r20 沙盒目录映射锁住，完整构建命令返回 1。保留该失败，直接从已生成输出恢复并核对 EXE/MSI，使用原有 `create-v7-portable.ps1` 重新生成便携包，未重编译或改写构建来源。重新核对源码、工作区、64 组件、Skiko 包装及两浏览器扩展。新生产 JAR 不含临时鼠标事件诊断。
 
-新候选的安装、升级、卸载、浏览器及原生输入验收尚未开始；r21 夹具已准备并沿用修正的 HTML HEAD/GET/Range 响应，不强制 JVM 比例代替 OS DPI。r20 开发诊断沙盒暂留：自动拖动的按下事件被处理时，全局鼠标已到终点，导致框架读到零位移，正等待人工慢拖区分实际缩放行为。完整矩阵和 `release_ready` 仍为未通过。旧包 r14–r18 证据不能代替新包验收。
+r21 新候选同包验收已结束；[主结果](results/candidate-r21/acceptance.json)保留 `passed:false`，原因是 Edge 首轮重载等待失败和完整原生矩阵未完成。原始结果不被后续成功覆盖。[证据清单](results/candidate-r21/evidence-manifest.json)绑定本包 MSI、64 个安装组件和验收材料。旧包 r14–r18 证据不替代新包验收。
+
+- [安装生命周期](results/candidate-r21/lifecycle/lifecycle.json)：从 f53019e 同版本运行中升级返回 0，故障注入预期 1603 后旧任务保留，恢复续传成功，空闲卸载返回 0。[完整便携包](results/candidate-r21/portable/portable.json)升级/回滚保留数据；[活动检查点补测](results/candidate-r21/portable-shutdown-followup.json)在文件锁失败时拒绝交换，保存 1/2 MiB 检查点，续传 32 MiB 哈希正确。便携文化环境仍限定 en-US。
+- [免费功能](results/candidate-r21/free-features.json)整套 11 组、[HTTP](results/candidate-r21/http-boundaries.json)13 项、[拆分恢复](results/candidate-r21/split-recovery.json)及[非录制媒体](results/candidate-r21/media.json)通过。活动拆分保持默认关闭；本轮不重新声称性能领先，也没有用 r16 旧包性能样本冒充本包测量。
+- [Firefox](results/candidate-r21/firefox/firefox.json)11 项及两浏览器[Firefox 离线](results/candidate-r21/firefox/initial-offline/firefox.json)、[Edge 离线](results/candidate-r21/edge/initial-offline/edge.json)通过。[Edge 首轮](results/candidate-r21/edge/edge.json)完成前 9 项，在重载后弹窗运行环境就绪处超时。原夹具只等待任意扩展 worker，可能把尚未退出的旧实例当作重载完成；该轮没有记录返回 worker 身份，不能把此推断当成已证实的产品根因。
+- 修正夹具在重载前记录 worker 身份，并要求新 worker ID，记录弹窗 URL、文档状态及 runtime ID；交接、单请求、源文件保留、任务去重与成品哈希断言不变。[r22 补测](results/candidate-r22/acceptance.json)因漏准备媒体夹具，Node 在读取不存在的 video.m3u8 时退出，尚未到重载阶段；该测试准备错误原样保留。补入仅媒体夹具生成后，[r23 Edge](results/candidate-r23/edge/edge.json)11 项全部通过，确认 worker 已替换、弹窗 runtime ID 可用，扩展及浏览器重启后原交接恢复且无重复任务。[r23 卸载](results/candidate-r23/acceptance.json)返回 0；[证据清单](results/candidate-r23/evidence-manifest.json)绑定相同候选组件。该结果证明修后夹具在本次运行通过，不保证每次无延迟。
+- [r21 原生检查](results/candidate-r21/native-finished.json)实际完成浅色抓站固定底栏空值禁用、有效地址启用、滚动固定和按钮创建，预览访问 2 页、发现 3 资源，确认前 5 个任务、确认后 8 个任务，新增三项全部完成。浅深主题观察到的弹窗、输入框、开关、列表和菜单未见圆角遮挡；深色创建底栏保持可达。Tab 转移焦点、Esc 关闭通过。并发设置从 1 改为 2，保存后 Core 读回、工作台重启后读回及设置重开显示一致，见[重启后设置](results/candidate-r21/native-settings-after-ui-restart.json)。这是工作台重启，不是 Core 重启。
+- r21 运行中卸载返回 0，[4 个成品](results/candidate-r21/output-hashes.json)与卸载前哈希一致。沙盒已关闭；完整原始日志留在项目工作目录。r23 补测沙盒也已关闭。
+
+用户随后直接回复“已拖动，窗口变小”，见[人工确认](results/manual-resize-user-confirmation.json)。此回复未绑定包哈希，不提升为完整同包最小尺寸或 OS DPI 通过；也不再把自动拖动的零位移当作已证实的产品缩放故障。r24 已完成下述同包最小窗口定向检查，OS 比例保持实际 125%，没有强制 JVM 比例冒充系统 DPI。完整矩阵和 `release_ready` 仍未通过。
+
+### bafddff6 的 r24 最小窗口与原生流程补测
+
+[主结果](results/candidate-r24/acceptance.json)和[原生结果](results/candidate-r24/native-finished.json)已归档，共 21 项限定检查通过，完整矩阵仍为 `passed:false`。安装后 64 组件与候选清单一致。窗口以 1024×600 逻辑尺寸启动；初始沙盒工作区较小，框架报告最小高度夹为 567，随后最大化沙盒外框以显示产品全窗口，见[窗口几何](results/candidate-r24/native-window-after-maximized-sandbox.json)。这验证该尺寸下的布局，不冒充拖到强制最小尺寸的验收。
+
+- 浅色新建弹窗空值禁用、有效地址启用，显式聚焦 URL 输入框后 Return 创建 task-6 并完成 32 MiB。设置导航与滚动有效，保存栏固定可达；Esc 关闭。抓站长表单可以滚到底部同源/静态离线开关，创建按钮保持固定可见。
+- 深色 ZIP 经真实文件选择器选择中文路径，显示中文条目和 121 项目录、15,735 字节元数据；列表滚动时底部按钮可达，Esc 关闭。所观察的浅深列表、输入框、开关、菜单及弹窗未见圆角遮挡，不外推至全部控件组合。
+- [批量](results/candidate-r24/native-batch-completed.json)新增 task-7/8，均完成；列表聚焦后 [Ctrl+A 全选 8 项](results/candidate-r24/native-select-all.json)，[Esc 清为 0](results/candidate-r24/native-selection-cleared.json)。真实保存选择器导出[8 项 JSON](results/candidate-r24/native-tasks.json)，独立 URL 文件导入[新增 task-9/10 并完成](results/candidate-r24/native-import-completed.json)。
+- 队列 01 并发从 1 改为 2、移至队列 02 后，保存后 [Core 读回](results/candidate-r24/native-queue-saved.json)和弹窗重开一致。本轮没有重启 Core，不能据此声称全部设置重启持久化通过。
+- 一次自动任务拖动使列表滚动并显示预置资源错误提示，未确认顺序改变；[Core 记录](results/candidate-r24/native-drag-attempt.json)及 [UI 记录](results/candidate-r24/native-drag-ui-state.json)保留，不计通过，也未证实为产品拖动故障。r18 成功属于旧候选，不能替代本包。
+- 键盘首次发给沙盒内已打开的记事本卡片；最小化卡片并显式聚焦产品后 Return 正常。部分 `type_text` 先粘贴旧剪贴板，核对并改正后才保存。这些自动化限制记录于原生结果，没有归为产品错误。
+- 运行中卸载返回 0，[6 个成品](results/candidate-r24/output-hashes.json)保持预期 SHA-256，其中 5 个由本轮原生创建，另 1 个为协议准备夹具。[证据清单](results/candidate-r24/evidence-manifest.json)绑定包和材料；[任务沙盒已关闭](results/candidate-r24/sandbox-cleanup.json)，完整原始日志留在项目工作目录。未重新构建或测量本包性能。
+
+[r20 临时诊断](results/candidate-r20/acceptance.json)已结束：自动拖动按下事件被处理时，全局鼠标已到终点，框架读到零位移，见[事件记录](results/candidate-r20/resize-automated-burst.json)。这只能说明该自动输入时序无效，不能认定真人缩放失效，因此不据此重写产品缩放逻辑。r20 当轮未执行人工拖动；用户后续确认见上文。按用户要求继续自主验收，不再等待用户操作。卸载返回 0、成品保留，沙盒已关闭；[证据清单](results/candidate-r20/evidence-manifest.json)保留开发覆盖范围和原始结果。
 
 ## 旧候选 f53019e
 
@@ -234,6 +257,8 @@ AB 与 IDM 默认连接数通过真实界面观察并保存后分别读回 `thre
 
 ## 当前交付边界
 
-2026-10-31 02:25，r15 同包性能初始化被 Windows 计划关机提示遮挡；重新激活沙盒后提示仍在，已停止原生输入并请用户处理。[中断记录](results/candidate-r15/interruption.json) 保留实际进度：候选安装和 64 组件核验完成，IDM 安装返回 0，AB 配置文件已生成，但 IDM 默认连接设置尚未落盘。未创建开始采样标记，未产生本轮性能样本，默认配置与相同连接上限的三轮对照仍未完成。原始材料保留于项目内 `.tool-cache/free-parity-20261030/candidate-results-r15/performance/`。
+当前交付包为 bafddff6，r21 回归、r23 Edge 及 r24 最小窗口限定验收已结束。完整 OS DPI 100%/150%/200%、完整主题/控件组合、同包任务拖动及强制最小尺寸边缘拖动仍未关闭。当前沙盒无法提供此前查找的显示比例选择入口，不用 JVM 比例替代。实验活动拆分继续默认关闭；性能未证明普遍超过竞品，新包也没有重测。
+
+历史 r15 在 2026-10-31 02:25 被 Windows 计划关机提示中断，[记录](results/candidate-r15/interruption.json)保留，未产生样本；随后 r16 已完成旧 f53019e 包的三轮对照，详见上文。r15 原始材料留在 `.tool-cache/free-parity-20261030/candidate-results-r15/performance/`，不再作为当前正在等待的任务。
 
 功能清单保留逐项状态和限定证据，移除了整体“完成率”百分比；`release_ready` 继续为 `false`。新功能均暂列 `partial`，直到当前候选的必要验证完成。没有产品账号、激活或收费服务新增。使用说明见 [免费版指南](../../free-edition.md)。未推送、发布或签名。

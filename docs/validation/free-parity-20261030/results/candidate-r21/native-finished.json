@@ -1,0 +1,39 @@
+{
+  "passed": false,
+  "scope": "Same bafddff6 candidate; real Sky mouse and keyboard input inside Windows Sandbox; scoped native acceptance",
+  "checks": {
+    "crawl_empty_url_disables_fixed_action": true,
+    "crawl_valid_url_enables_fixed_action": true,
+    "crawl_action_fixed_during_scroll": true,
+    "crawl_created_from_fixed_footer": true,
+    "crawl_two_pages_three_resources": true,
+    "crawl_preview_does_not_create_downloads": true,
+    "crawl_confirm_all_three_completed": true,
+    "light_dark_dialog_corners_and_footer_accessible": true,
+    "dark_settings_field_focus_and_tab": true,
+    "settings_saved_core_value_two": true,
+    "settings_ui_restart_core_value_two": true,
+    "settings_reopened_value_two": true,
+    "escape_closes_dialogs": true
+  },
+  "observations": {
+    "os_scale": 1.25,
+    "window_logical_size": [
+      1400,
+      816
+    ],
+    "minimum_size_reported": [
+      1024,
+      600
+    ],
+    "edge_drag": "No size change with automated burst, even with full Sandbox visible; r20 timing evidence limits interpretation",
+    "alt_space": "Opened focused toolbar menu, no native size menu observed",
+    "rdp_clipboard": "type_text for numeric replacement pasted stale clipboard content; corrected with Ctrl+A and physical numeric key before save; not classified as product failure"
+  },
+  "remaining": [
+    "Effective minimum window layout and resize acceptance",
+    "Windows OS DPI 100/150/200 percent",
+    "Full control/theme/window and native workflow matrix on this candidate"
+  ],
+  "release_ready": false
+}

@@ -1,0 +1,10 @@
+{
+  "sandbox_parent_pid": 8940,
+  "sandbox_client_pid": 14148,
+  "verified_parent_created_local": "2026-10-31 16:17:47",
+  "runner_finished": true,
+  "uninstall_exit_code": 0,
+  "outputs_preserved_before_sandbox_close": true,
+  "sandbox_closed": true,
+  "raw_logs_retained": ".tool-cache/free-parity-20261030/candidate-results-r24/"
+}

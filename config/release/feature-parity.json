@@ -49,7 +49,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "20261031_free_candidate_f53019e_r16_performance_r18_native_followups_r19_development_footer_full_native_incomplete",
+  "audit_state": "20261031_free_candidate_bafddff6_r21_regression_r23_edge_r24_native_scoped_full_matrix_incomplete",
   "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {
@@ -77,7 +77,7 @@
       "compose_entry": "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
       "core_command": "none (rendering architecture)",
       "state_event": "all UI states",
-      "verification": "Material3 direct dependency removed; Compose tests; light/dark 1024x600 125% visual captures 2026-10-31 f53019e 当前包：r14 当前包浅色设置及深色菜单/ZIP 弹窗限定观察无圆角遮挡；完整控件/主题/DPI 矩阵仍未完成。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 r19 为 f53019e 上覆盖开发 UI JAR 的定向验证，固定抓站创建按钮在浅深主题可达、空值禁用、滚动保持可见、真实创建成功；修复源码 948f6595，未重建候选，不计同包完整验收。见 docs/validation/free-parity-20261030/results/candidate-r19/native-finished.json。"
+      "verification": "Material3 direct dependency removed; Compose tests; light/dark 1024x600 125% visual captures 2026-10-31 f53019e 历史包：r14 历史包浅色设置及深色菜单/ZIP 弹窗限定观察无圆角遮挡；完整控件/主题/DPI 矩阵仍未完成。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 r19 为 f53019e 上覆盖开发 UI JAR 的定向验证，固定抓站创建按钮在浅深主题可达、空值禁用、滚动保持可见、真实创建成功；修复源码 948f6595，未重建候选，不计同包完整验收。见 docs/validation/free-parity-20261030/results/candidate-r19/native-finished.json。 bafddff6 同包 r21 浅深主题固定抓站底栏，r24 实际 125% OS 比例、1024×600 逻辑窗口下新建/设置/抓站/深色 ZIP 和菜单限定观察无圆角遮挡；完整组合矩阵未通过。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "tasks.selection_keyboard_queue",
@@ -87,7 +87,7 @@
       "core_command": "task_action/reorder_queue/place_queue",
       "state_event": "task_updated",
       "verification": "Historical evidence (not a current complete native-input certification): desktop_ui SelectionTest; row-wide single click and double-click details; physical left-drag selected four contiguous rows in the 1000-task Compose list; Ctrl/Shift semantic UI API selected 1 then 4 then 5 tasks; right-click selects the target and opens at the pointer; .zip excludes launch/play/cast/TVBox while executable and media tasks retain applicable actions; SelectionTest and SelectionPruningTest; r22 default activation changed to completed media play/file open, otherwise details; targeted key/action/range tests passed. 2026-10-29 ce9a290b candidate native selection/key operations passed in limited scope; theme/search/column followup passed. Native reorder drag reproduced parent gesture interception; Main-pass consumption and DPI row-height source fix compiled with pure selection/key tests. a2a75fe candidate MSI 179c0ea3 native queue up/down one row, JVM1.5 up/down two rows, box select two in both scales, blank clear and column resize/restore passed; exact installed hashes and resumed output SHA passed. See full-audit-20261027/results/convergence-20261029/candidate-queue-fix.",
-      "gap": "历史候选有队列排序与框选手势闭环；f53019e 的 r14 真实 Ctrl+A 选中 9 项、Esc 清为 0。当前完整队列编辑、排序/拖动及键盘组合矩阵仍未完成，不能沿用历史结果称全部通过。"
+      "gap": "bafddff6 同包 r24 聚焦列表后 Ctrl+A 选中 8 项、Esc 清为 0；一次任务拖动未确认顺序改变，不计通过也未证实产品故障。旧 f53019e r18 任务拖动证据保留，不替代本包。完整排序/拖动及键盘组合仍开放。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "tasks.named_queue_profiles",
@@ -96,7 +96,7 @@
       "compose_entry": "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
       "core_command": "assign_queue/get_settings/set_settings_atomic",
       "state_event": "task_updated/structured command result/error",
-      "verification": "Rust queue assignment, queue-scoped reorder, invalid membership, recurring schedule and file-database restart tests; shared aggregate queue token-bucket and task-isolation tests; queue-drained success-only completion action test; Compose queue storage/validation and speed/action controls; live 1400x820 and 1024x600 main/menu/manager/schedule/assign visual inspection; current source keeps start/resume/retry queued when the task schedule is not open and resets the old pause/cancel control only when the scheduler actually claims that queued task; 2026-09-04 focused future-schedule regression passed once on v7.0.1 release source"
+      "verification": "Rust queue assignment, queue-scoped reorder, invalid membership, recurring schedule and file-database restart tests; shared aggregate queue token-bucket and task-isolation tests; queue-drained success-only completion action test; Compose queue storage/validation and speed/action controls; live 1400x820 and 1024x600 main/menu/manager/schedule/assign visual inspection; current source keeps start/resume/retry queued when the task schedule is not open and resets the old pause/cancel control only when the scheduler actually claims that queued task; 2026-09-04 focused future-schedule regression passed once on v7.0.1 release source bafddff6 同包 r24 最小窗口原生队列 01 并发 1→2、移至队列 02 后，保存 Core 读回和重开显示一致；本轮未重启 Core。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "tasks.details_logs_speed_connections",
@@ -123,7 +123,7 @@
       "compose_entry": "NewTaskDialog/ProbeResultDialog/BatchAddDialog/HarvestDialog",
       "core_command": "probe_url/create_task/harvest_page/import_paths",
       "state_event": "probe_result/harvest_result/task_created/error",
-      "verification": "Rust recognize/media/FTP/SFTP/torrent tests; Compose protocol tests 2026-10-31 f53019e 当前包：r14 普通 URL Return 创建并完成 32 MiB，空输入 Return 禁用，多行 cURL Return 保留换行而不创建任务。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
+      "verification": "Rust recognize/media/FTP/SFTP/torrent tests; Compose protocol tests 2026-10-31 f53019e 历史包：r14 普通 URL Return 创建并完成 32 MiB，空输入 Return 禁用，多行 cURL Return 保留换行而不创建任务。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 bafddff6 同包 r24 在 1024×600 窗口真实 Return 创建 task-6、批量添加 task-7/8，三项完成 32 MiB。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "import.file_picker_and_drop",
@@ -132,7 +132,7 @@
       "compose_entry": "ContentHeader import + native desktop drop target",
       "core_command": "import_paths",
       "state_event": "task_created/error",
-      "verification": "desktop_ui DropImportTest; DropImportTest 2026-10-31 f53019e 当前包：r14 真实文件选择器导入独立 URL 文本，任务 9 完成 32 MiB；未执行本包拖放全矩阵。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
+      "verification": "desktop_ui DropImportTest; DropImportTest 2026-10-31 f53019e 历史包：r14 真实文件选择器导入独立 URL 文本，任务 9 完成 32 MiB；未执行本包拖放全矩阵。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 bafddff6 同包 r24 真实文件选择器导入独立 URL 文本，新增 task-9/10 并完成；不计拖放验证。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "export.normalized_task_list",
@@ -141,7 +141,7 @@
       "compose_entry": "ContentHeader export",
       "core_command": "export_tasks",
       "state_event": "task_export",
-      "verification": "task_export unit tests; coordinator_exports_normalized_tasks_through_the_core_event_contract; Compose test 2026-10-31 f53019e 当前包：r14 真实保存选择器导出 8 项 JSON，归档文件可解析。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
+      "verification": "task_export unit tests; coordinator_exports_normalized_tasks_through_the_core_event_contract; Compose test 2026-10-31 f53019e 历史包：r14 真实保存选择器导出 8 项 JSON，归档文件可解析。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 bafddff6 同包 r24 真实保存选择器导出 8 项可解析 JSON，归档于 native-tasks.json。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "import.exported_task_json",
@@ -150,7 +150,7 @@
       "compose_entry": "ContentHeader import / desktop drop target with .json filter",
       "core_command": "import_paths/create_task",
       "state_event": "task_created/error",
-      "verification": "task_export exported_json_imports_task_configuration_without_runtime_state; task_import_rejects_foreign_schema_and_unsafe_urls; coordinator_reimports_its_exported_json_as_new_tasks; Compose ProtocolTest 2026-10-31 f53019e 当前包：r14 重导相同 JSON 任务数仍为 8，并显示重复提示；现有失败夹具按既有规则重试后报错，该项仅作为去重证据。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
+      "verification": "task_export exported_json_imports_task_configuration_without_runtime_state; task_import_rejects_foreign_schema_and_unsafe_urls; coordinator_reimports_its_exported_json_as_new_tasks; Compose ProtocolTest 2026-10-31 f53019e 历史包：r14 重导相同 JSON 任务数仍为 8，并显示重复提示；现有失败夹具按既有规则重试后报错，该项仅作为去重证据。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
     },
     {
       "id": "workbench.automatic_responsive_layout",
@@ -160,7 +160,7 @@
       "core_command": "store_settings(task_column_layout); existing task_action",
       "state_event": "task snapshots",
       "verification": "r22: 62 targeted desktop tests, final focus-indicator JAR build, installed exact 220 component hashes and normal-window light100/dark150 captures; see docs/validation/full-audit-20261027/results/workbench-interaction",
-      "gap": "f53019e r14 当前窗口浅色设置/深色列表、长文件名、ZIP 列表滚动及固定底部按钮有原生观察；拖动未建立有效缩放，最小窗口及 Windows 100/125/150/200% DPI 和完整控件组合仍未验证。历史列宽/框选证据保留。"
+      "gap": "bafddff6 同包 r24 以 1024×600 逻辑窗口、实际 125% OS 比例完成新建、设置滚动/固定保存栏、抓站固定底栏、ZIP、队列、批量及导入导出；初始小工作区使框架报告最小高度 567，不能冒充强制最小尺寸拖动通过。人工慢拖确认未绑定包哈希；100%/150%/200% OS DPI 和完整控件组合仍开放。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "media.hls_transfer_parity",
@@ -232,7 +232,7 @@
       "compose_entry": "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
       "core_command": "get_settings/set_settings_atomic",
       "state_event": "structured command result/error",
-      "verification": "Typed Core round-trip tests; migration aliases; Core-only DPAPI default Cookie; CIDR allowed-host tests; system-proxy default parity with v3; Compose ten-section UI with native folder pickers, visible independent scrollbar and in-settings LAN scan; SettingsV7Test; SettingsV7Test and SettingsV7Test 2026-10-31 f53019e 当前包：r14 默认并发真实键盘 1→2 保存、Core 读回、重开和仅重启工作台后显示一致；不等于当前轮重启 Core 或全部设置项一致。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。"
+      "verification": "Typed Core round-trip tests; migration aliases; Core-only DPAPI default Cookie; CIDR allowed-host tests; system-proxy default parity with v3; Compose ten-section UI with native folder pickers, visible independent scrollbar and in-settings LAN scan; SettingsV7Test; SettingsV7Test and SettingsV7Test 2026-10-31 f53019e 历史包：r14 默认并发真实键盘 1→2 保存、Core 读回、重开和仅重启工作台后显示一致；不等于当前轮重启 Core 或全部设置项一致。 见 docs/validation/free-parity-20261030/results/candidate-r14/native-finished.json。 bafddff6 同包 r21 默认并发保存/Core 读回/工作台重启/重开为 2，未重启 Core；r24 最小窗口设置导航、滚动、固定保存栏和 Esc 通过限定检查。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "updates.confirmed_download",
@@ -259,8 +259,8 @@
       "compose_entry": "ExtensionDialog/HandoffDialog",
       "core_command": "present_handoff/accept_handoff/reject_handoff",
       "state_event": "handoff_offered/handoff_resolved/browser_status",
-      "verification": "Rust Core IPC handoff tests; extension 48 test files/344 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation",
-      "gap": "f53019e 同包 r14 Edge/Firefox 各 11 项和初始 Host 离线通过，含扩展重载/浏览器重启的原身份恢复与源文件保留。仅这两项观察完整持久恢复周期，常规清理仍 20 秒；Firefox 本轮清理 748/14 ms，r13 超时保留，不保证即时清理。DownloadItem 按入口记录；真实站点全覆盖和签名扩展升级尚未完成。见 docs/validation/free-parity-20261030/results/candidate-r14/。"
+      "verification": "Rust Core IPC handoff tests; extension 48 test files/344 test cases; production Edge takeover accept/reject/disconnect fallback smoke with acceptPausedBytes=0 and three 8388608-byte browser recovery paths; production Chromium content-script smoke including hover pointer transition, popup rescan and isolated selected-link panel; current source restores persisted pending offers in Compose on startup/reconnect and ui_show(main), reports failures to the user, and atomically claims a persisted 15-second Presenter lease before show with 5-second renewal; 2026-09-04 both focused Presenter lease regressions passed; release browser evidence additionally exercises candidate Edge 152, Firefox 155 and Presenter crash/restart during confirmation bafddff6 同包 r21 Firefox 11 项及两浏览器初始离线通过；Edge r21 重载文档等待失败保留，r22 媒体夹具缺失失败保留，r23 要求新 worker 身份后 11 项通过。见 docs/validation/free-parity-20261030/README.md。",
+      "gap": "bafddff6 同包 r21 Firefox、r23 Edge 各 11 项及 r21 两浏览器初始离线通过；源文件保留、去重、重启恢复和哈希按入口验证，DownloadItem 创建按入口记录。r21 Edge 重载等待和 r22 缺失媒体夹具的失败保留，不保证每次即时恢复；真实站点全覆盖与签名扩展升级未完成。见 docs/validation/free-parity-20261030/README.md。"
     },
     {
       "id": "browser.media_push_device_selection",
@@ -317,7 +317,7 @@
       "core_command": "engine/native host startup",
       "state_event": "ready/browser_status",
       "verification": "adversarial-2026-10-07/isolated-msi-guard-final/result.json: 9 checks; refuses unprivileged upgrade before old product removal and preserves registered baseline. adversarial-2026-10-07/isolated-msi-admin-final/result.json: 18 checks covering install, forced 1603, registered old-product rollback, preserved pause checkpoint, upgrade, installed Native Host, resumed 32MiB SHA-256 and uninstall. RemoveExistingProducts is after InstallInitialize (1510), never after InstallFinalize because jpackage RemoveFoldersEx removes the new files. Modified packages receive fresh PackageCode. adversarial-2026-10-07/full-app-local-validation-final/installed-app.json: complete isolated app installation, Compose connected window, bundled extension to real installed Host/Core, subtitle default/configuration IPC, 32MiB download SHA-256, completed task rendering, Presenter confirmation/rejection and uninstall. This unsigned isolated package is local validation, not a formal release.; adversarial-2026-10-07/full-app-local-validation-launch-lock/installed-app.json: latest standard-release application passes all 18 installation, browser download, SHA-256, workbench, subtitle configuration, Presenter and uninstall checks.",
-      "gap": "f53019e 候选 r14 同版本运行中升级、故障回滚、64 组件核验、32 MiB 续传、空闲及运行中卸载返回 0；5 个原生成品卸载后保持预期哈希。完整便携包升级/回滚保留数据；新包助手/脚本最小目录补测确认锁失败拒绝交换、1/2 MiB 活动检查点、重启续传及回滚保成品。便携环境限定 en-US，完整发布矩阵未闭合，历史 1603 保留。见 docs/validation/free-parity-20261030/results/candidate-r14/。"
+      "gap": "bafddff6 候选 r21 同版本运行中升级、故障回滚、64 组件、32 MiB 续传及空闲/运行中卸载通过，4 个成品卸载后保持哈希。完整便携及活动检查点补测通过，文化环境限定 en-US；完整 UI 门槛仍开放。历史 1603 与失败证据保留。见 docs/validation/free-parity-20261030/results/candidate-r21/。"
     },
     {
       "id": "free.cli",
@@ -326,7 +326,7 @@
       "compose_entry": "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
       "core_command": "CoreIpcClient versioned Named Pipe; create_task_paused capability",
       "state_event": "TaskCreated/TaskUpdated/TaskExport",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r14/free-features.json：f53019e 同包整套 11 组通过，含无工作台单 Core、中文空格路径、生命周期、重启续传、队列启停、导入导出、退出码、默认留成品、显式删除、标准输入上下文和默认脱敏。完整发布门槛仍未关闭。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r21/free-features.json：bafddff6 同包 11 组通过，含无工作台单 Core、中文路径、生命周期、重启续传、队列、导入导出、退出码、显式删除、标准输入上下文及默认脱敏。完整发布门槛仍开放。"
     },
     {
       "id": "free.crawl_sync",
@@ -335,7 +335,7 @@
       "compose_entry": "工具 / 抓站与同步项目; CLI crawl",
       "core_command": "crawl capability and request; ordinary CreateTask",
       "state_event": "CrawlProject/CrawlResource; SQLite schema 6 to 7",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r14/free-features.json：f53019e 同包整套 11 组通过，含循环去重、确认前无任务、暂停重启恢复、静态引用改写、跨域跳转零请求、页面/深度边界、ETag 无重复 GET、失败保旧和原子替换、队列时间窗零请求、页面/HEAD/文件上下文和 60 秒自动同步。r11 失败和修正原因保留在实施记录；当前完整原生 UI 验收仍未完成。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r21/free-features.json：bafddff6 同包 11 组通过，含循环去重、预览确认、恢复、静态改写、跨域/页面/深度边界、ETag/失败保旧/原子替换、队列时间窗和请求上下文及周期同步。native-finished.json 为固定底栏实际创建、2 页 3 资源确认后完成证据；完整主题/缩放矩阵仍开放。 r24 同包 1024×600 逻辑窗口表单滚动到底部后创建操作仍固定可达。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "free.zip_preview",
@@ -344,7 +344,7 @@
       "compose_entry": "工具 / ZIP 内容预览; CLI zip",
       "core_command": "preview_zip capability and request",
       "state_event": "ZipPreview with metadata_bytes_read",
-      "verification": "docs/validation/free-parity-20261030/results/candidate-r14/free-features.json：f53019e 同包本地/远程、中文、空包、ZIP64、损坏拒绝、资源变化、无 Range 拒绝、有界读取和 2200 项目录通过；同目录 native-finished.json 为当前包真实输入中文路径 121 项、15735 元数据字节、滚动/固定底部按钮及 Esc 关闭证据，完整主题/缩放组合仍未完成。"
+      "verification": "docs/validation/free-parity-20261030/results/candidate-r21/free-features.json：bafddff6 同包本地/远程 ZIP、中文、空包、ZIP64、损坏/身份变化/无 Range 拒绝、有界读取与 2200 条目录通过。r24 同包 1024×600 逻辑窗口原生选择中文路径、121 项目录、15,735 元数据字节、滚动/固定底栏/Esc 通过；完整主题/OS 缩放组合仍开放。见 docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
     },
     {
       "id": "http.active_tail_split",

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "lifecycle_native_guest_r21",
+    "exit_code": 0
+  },
+  {
+    "name": "portable_guest",
+    "exit_code": 0
+  },
+  {
+    "name": "candidate_guest_r21",
+    "exit_code": 0
+  }
+]

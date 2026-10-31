@@ -1,0 +1,43 @@
+{
+  "passed": false,
+  "finished": true,
+  "scope": "Development UI overlay on f53019e candidate; not same-package release acceptance",
+  "host_product_install_performed": false,
+  "suites": [],
+  "msi_sha256": "c46b241618a1b05bb412f367ffb05b31e7c0d1ce4c2dc41d9880db4da5947734",
+  "phase": "uninstall",
+  "development_ui": {
+    "base_head": "1e9039ebd157e242619020982eda2ad816022008",
+    "diff_sha256": "3874897c05d1d25034a382aff53aa92fb6ab5f51f3b28bd1fad76d8f5e829254",
+    "ui_jar_sha256": "994daf985a51a2852b1358f5df8b5e0b95a31a5851c4a3dcbf1069ae8304fd8c",
+    "validation": "offline jar succeeded; temporary pointer event diagnostics; not rebuilt candidate"
+  },
+  "source_commit": "f53019e0968c2d919d4c1ace2aa099f18679c678",
+  "native": {
+    "passed": false,
+    "scope": "Temporary development pointer diagnostic only, not same-package acceptance",
+    "checks": {
+      "automated_edge_press_reached_window": true,
+      "burst_global_pointer_at_endpoint_during_press": true
+    },
+    "observations": {
+      "reason": "Compose reads current global pointer at both press and move; queued input burst produces zero measured delta",
+      "manual_resize": "not tested",
+      "user_requested_autonomous_continuation": true
+    },
+    "remaining": [
+      "Effective edge resize",
+      "Full OS DPI and theme matrix"
+    ]
+  },
+  "comparison": {
+    "executed": false,
+    "reason": "UI workbench inspection; no performance comparison in this run"
+  },
+  "uninstall": {
+    "name": "uninstall",
+    "exit_code": 0,
+    "passed": true
+  },
+  "uninstall_preserves_outputs": true
+}
