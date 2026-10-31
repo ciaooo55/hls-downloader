@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$InstallDir = 'E:\h',
+    [Parameter(Mandatory = $true)]
+    [string]$InstallDir,
     [int]$Port = 19744,
     [string]$Token = 'v7-installed-ui-api-20260824',
     [string]$ReportPath = ''
@@ -9,11 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
-$installRoot = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
 $root = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
-if (-not [String]::Equals($root, $installRoot, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Installed v7 smoke target must be exactly ${installRoot}: $root"
-}
 $executable = Join-Path $root 'HLSDownloader.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "Installed v7 executable is missing: $executable"

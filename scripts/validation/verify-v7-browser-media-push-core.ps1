@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CandidateManifestPath,
     [string]$ExpectedTvboxHost = $env:HLS_V7_TVBOX_EXPECTED_HOST,
-    [string]$InstallDir = 'E:\h',
+    [string]$InstallDir = '',
     [string]$EdgeBinary = $env:HLS_V7_EDGE_BINARY,
     [string]$FirefoxBinary = $env:HLS_V7_FIREFOX_BINARY,
     [string]$EdgeDriver = $env:HLS_V7_EDGE_DRIVER,
@@ -17,7 +17,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7MsiInspection.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
-$expectedInstallDir = [IO.Path]::GetFullPath('E:\h').TrimEnd('\', '/')
+$expectedInstallDir = [IO.Path]::GetFullPath((Join-Path $repo '.tool-cache\test-tmp\browser-media-push')).TrimEnd('\', '/')
+if ([String]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = $expectedInstallDir }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\', '/')
 if (-not [String]::Equals($InstallDir, $expectedInstallDir, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Browser media-push release gate requires the fixed lifecycle directory ${expectedInstallDir}: $InstallDir"

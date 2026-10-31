@@ -4,15 +4,15 @@
 
 On 2026-10-02 the operator explicitly requested unsigned formal Windows packages because no code-signing certificate is available. Signing tools, certificates and timestamp services are not prerequisites for this release. Unsigned packages require manual installation; the automatic updater retains its signature and signer-trust checks and must reject them.
 
-The workflow reads product version and readiness from the canonical feature-parity.json at the frozen dispatched SHA. Candidate provenance and canonical readiness describe different scopes; see [verification status](../validation/v7-verification.md)../validation/v7-verification.md).
+The workflow reads product version and readiness from the canonical feature-parity.json at the frozen dispatched SHA. Candidate provenance and canonical readiness describe different scopes; see [verification status](../validation/v7-verification.md).
 
-The dedicated MSI lifecycle gate uses the immutable v7.0.0 upgrade baseline and requires E:\h. This test constraint does not restrict ordinary MSI installation paths. Browser evidence requires installed Edge/Firefox, an interactive desktop and a real reachable LAN receiver.
+The MSI lifecycle gate checks the actual baseline MSI version and accepts a current-version replacement. Browser media-push uses the workspace-local `.tool-cache/test-tmp/browser-media-push` installation. This test constraint does not restrict ordinary MSI installation paths. Browser evidence requires installed Edge/Firefox, an interactive desktop and a real reachable LAN receiver.
 
 ## Runner contract
 
 The `hls-release` runner must provide:
 
-- Windows x64 and an `E:` volume. The lifecycle gate continues to reject any install root other than `E:\h`.
+- Windows x64. Test installation directories stay under the project workspace `.tool-cache/test-tmp/`; no dedicated drive is required.
 - An **interactive logged-in Windows desktop session** for browser/Compose evidence. Run the GitHub runner agent from the release user's desktop session, not as a Session-0 Windows service. The media-push readiness workflow fails before toolchain/bootstrap work when the runner process is in Session 0, `UserInteractive` is false, or the current session has no Explorer desktop. Keep the release desktop available/unlocked while the real browser + Java Access Bridge gate is running.
 - Git, GitHub CLI (`gh`), Python with PyYAML, and Go on `PATH`.
 - Edge and Firefox. Standard Program Files locations are auto-detected; non-standard installations can be passed as workflow-dispatch inputs or runner environment variables `HLS_V7_EDGE_BINARY` and `HLS_V7_FIREFOX_BINARY`. Optional pinned matching WebDriver paths can be supplied as `HLS_V7_EDGE_DRIVER` and `HLS_V7_FIREFOX_DRIVER`; otherwise Selenium Manager resolves the driver.

@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CandidateManifestPath,
     [string]$ExpectedTvboxHost = $env:HLS_V7_TVBOX_EXPECTED_HOST,
-    [string]$InstallDir = 'E:\h',
+    [string]$InstallDir = '',
     [string]$EdgeBinary = $env:HLS_V7_EDGE_BINARY,
     [string]$FirefoxBinary = $env:HLS_V7_FIREFOX_BINARY,
     [string]$EdgeDriver = $env:HLS_V7_EDGE_DRIVER,
