@@ -1,3 +1,0 @@
-{"phase":"started","metadata":null,"utc":"2026-10-29T06:31:00.8476999Z"}
-{"phase":"forwarded","metadata":{"op":"handoff_status","request_id":"mvt6011g-2"},"utc":"2026-10-29T06:31:01.8865649Z"}
-{"phase":"returned","metadata":{"op":"handoff_status","request_id":"mvt6011g-2"},"utc":"2026-10-29T06:31:01.9054916Z"}

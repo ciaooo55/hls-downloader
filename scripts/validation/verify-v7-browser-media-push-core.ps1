@@ -185,7 +185,6 @@ $previousDataDir = $env:HLS_V7_DATA_DIR
 $previousDownloadDir = $env:HLS_V7_DOWNLOAD_DIR
 $previousTcp = $env:HLS_V7_CORE_TCP
 $previousBind = $env:HLS_V7_CORE_BIND
-$previousMigrate = $env:HLS_V6_SKIP_MIGRATE
 $result = $null
 $primaryFailure = $null
 $cleanupFailures = New-Object 'System.Collections.Generic.List[string]'
@@ -252,7 +251,6 @@ try {
     $env:HLS_V7_DOWNLOAD_DIR = Join-Path $isolatedRoot 'downloads'
     $env:HLS_V7_CORE_TCP = '1'
     $env:HLS_V7_CORE_BIND = "127.0.0.1:$corePort"
-    $env:HLS_V6_SKIP_MIGRATE = '1'
     New-Item -ItemType Directory -Force -Path $env:HLS_V7_DATA_DIR, $env:HLS_V7_DOWNLOAD_DIR | Out-Null
 
     $launcherPath = Join-Path $InstallDir 'HLSDownloader.exe'
@@ -376,13 +374,12 @@ try {
     } catch {
         $cleanupFailures.Add("failed to verify Firefox registration cleanup: $($_.Exception.Message)")
     }
-    foreach ($name in @('HLS_V7_DATA_DIR','HLS_V7_DOWNLOAD_DIR','HLS_V7_CORE_TCP','HLS_V7_CORE_BIND','HLS_V6_SKIP_MIGRATE')) {
+    foreach ($name in @('HLS_V7_DATA_DIR','HLS_V7_DOWNLOAD_DIR','HLS_V7_CORE_TCP','HLS_V7_CORE_BIND')) {
         $previous = switch ($name) {
             'HLS_V7_DATA_DIR' { $previousDataDir }
             'HLS_V7_DOWNLOAD_DIR' { $previousDownloadDir }
             'HLS_V7_CORE_TCP' { $previousTcp }
             'HLS_V7_CORE_BIND' { $previousBind }
-            'HLS_V6_SKIP_MIGRATE' { $previousMigrate }
         }
         if ($null -eq $previous -or [String]::IsNullOrEmpty([string]$previous)) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
         else { Set-Item "Env:$name" $previous }

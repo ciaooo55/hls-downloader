@@ -506,10 +506,6 @@ export default defineContentScript({
       if (pinned) setPinned(false)
       setOpen(false)
     })
-    // Older builds persisted panelPinned/panelPosition across every site.
-    // Clear that migration residue once: visibility and positions now belong
-    // only to the active playback session in this page.
-    void browser.storage.local.remove(['panelPinned', 'panelPosition', 'videoButtonPosition']).catch(() => undefined)
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
       if (!wrap || (event.target as HTMLElement).closest('.close, .pin')) return
       if (event.button !== 0) return

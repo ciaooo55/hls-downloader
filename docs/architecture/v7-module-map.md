@@ -1,6 +1,6 @@
 # HLS Downloader 7.0.3 模块与功能衔接
 
-更新于 2026-10-27。已发布候选为 r18，当前全功能复核与后续候选状态见[本轮记录](../validation/full-audit-20261027/README.md)；验收索引见[验证索引](../validation/v7-verification.md)。历史版本的固定安装路径和独立播放器说明不再描述本版。
+当前四个产品模块的入口与职责如下；本轮修改和验证范围见[收敛记录](../validation/convergence.md)。
 
 | 板块 | 主要实现 | 当前行为 |
 | --- | --- | --- |

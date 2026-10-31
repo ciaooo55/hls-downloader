@@ -52,23 +52,6 @@ pub struct MirrorStatus {
     pub ranges: bool,
 }
 
-fn deserialize_mirror_status<'de, D>(deserializer: D) -> Result<Vec<MirrorStatus>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StoredMirrorStatus {
-        Structured(Vec<MirrorStatus>),
-        Legacy(String),
-    }
-
-    match StoredMirrorStatus::deserialize(deserializer)? {
-        StoredMirrorStatus::Structured(statuses) => Ok(statuses),
-        StoredMirrorStatus::Legacy(_summary) => Ok(Vec::new()),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceOffer {
     pub url: String,
@@ -207,7 +190,7 @@ pub struct TaskSnapshot {
     pub log_tail: Vec<String>,
     #[serde(default)]
     pub speed_history: Vec<u64>,
-    #[serde(default, deserialize_with = "deserialize_mirror_status")]
+    #[serde(default)]
     pub mirror_status: Vec<MirrorStatus>,
     #[serde(default = "default_method")]
     pub request_method: String,
@@ -623,7 +606,6 @@ pub enum CoreCommand {
         delta: i32,
     },
     CheckUpdate {
-        #[serde(default)]
         silent: bool,
     },
     DownloadUpdate,
@@ -658,7 +640,6 @@ pub enum CoreCommand {
         selections: Vec<TorrentFileSelection>,
     },
     DiscoverCastDevices {
-        #[serde(default)]
         mode: String,
     },
     CastToDevice {
@@ -882,23 +863,14 @@ pub enum CoreEvent {
         title: String,
         device: String,
         status: String,
-        #[serde(default)]
         task_id: String,
-        #[serde(default)]
         media_url: String,
-        #[serde(default)]
         device_kind: String,
-        #[serde(default)]
         supported_actions: Vec<String>,
-        #[serde(default)]
         playing: bool,
-        #[serde(default)]
         paused: bool,
-        #[serde(default)]
         position_seconds: u64,
-        #[serde(default)]
         duration_seconds: u64,
-        #[serde(default)]
         position_available: bool,
     },
     PlayerSession {
@@ -1060,21 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_string_mirror_status_remains_readable() {
-        let mut encoded = serde_json::to_value(TaskSnapshot::default()).unwrap();
-        encoded["mirror_status"] = serde_json::Value::String("2 镜像".into());
-        encoded["mirrors"] = serde_json::json!([
-            "https://one.example.test/file.bin",
-            "https://two.example.test/file.bin"
-        ]);
-
-        let snapshot: TaskSnapshot = serde_json::from_value(encoded).unwrap();
-        assert!(snapshot.mirror_status.is_empty());
-        assert_eq!(snapshot.mirrors.len(), 2);
-    }
-
-    #[test]
-    fn cast_session_exposes_lan_url_and_accepts_legacy_events() {
+    fn cast_session_exposes_lan_url() {
         let event = CoreEvent::CastSession {
             active: true,
             title: "video.mp4".into(),
@@ -1094,15 +1052,6 @@ mod tests {
             serde_json::to_value(&event).unwrap()["media_url"],
             "http://192.168.1.8:49152/media/token/video.mp4"
         );
-        let legacy: CoreEvent = serde_json::from_value(serde_json::json!({
-            "kind": "cast_session",
-            "active": true,
-            "title": "legacy",
-            "device": "电视",
-            "status": "PLAYING"
-        }))
-        .unwrap();
-        assert!(matches!(legacy, CoreEvent::CastSession { media_url, .. } if media_url.is_empty()));
     }
 
     #[test]
@@ -1124,9 +1073,6 @@ mod tests {
         assert_eq!(encoded["silent"], true);
         let restored: CoreCommand = serde_json::from_value(encoded).unwrap();
         assert_eq!(restored, CoreCommand::CheckUpdate { silent: true });
-        let compatible: CoreCommand =
-            serde_json::from_value(serde_json::json!({"kind": "check_update"})).unwrap();
-        assert_eq!(compatible, CoreCommand::CheckUpdate { silent: false });
     }
 
     #[test]
@@ -1177,14 +1123,6 @@ mod tests {
         assert_eq!(encoded["kind"], "probe_url");
         let restored: CoreCommand = serde_json::from_value(encoded).unwrap();
         assert!(matches!(restored, CoreCommand::ProbeUrl { .. }));
-        let legacy_discovery: CoreCommand =
-            serde_json::from_value(serde_json::json!({ "kind": "discover_cast_devices" })).unwrap();
-        assert_eq!(
-            legacy_discovery,
-            CoreCommand::DiscoverCastDevices {
-                mode: String::new()
-            }
-        );
         let tvbox_discovery = CoreCommand::DiscoverCastDevices {
             mode: "tvbox".into(),
         };

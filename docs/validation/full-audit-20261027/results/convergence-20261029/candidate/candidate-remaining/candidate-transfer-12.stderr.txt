@@ -1,7 +1,0 @@
-Traceback (most recent call last):
-  File "C:\QACandidateRunners\candidate-transfer-probe.py", line 383, in <module>
-    raise SystemExit(main())
-                     ^^^^^^
-  File "C:\QACandidateRunners\candidate-transfer-probe.py", line 349, in main
-    raise RuntimeError("real transfer performance thresholds failed")
-RuntimeError: real transfer performance thresholds failed

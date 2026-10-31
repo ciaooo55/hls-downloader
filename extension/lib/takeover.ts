@@ -1,3 +1,43 @@
+import type { DownloadClickIntent, MediaResource } from './resources'
+
+export interface EarlyBrowserTakeover {
+  requestId: string
+  startedAt: number
+  urls: string[]
+  tabId: number
+  frameId: number
+  promise: Promise<{ resource: MediaResource, intent?: DownloadClickIntent, bypass?: boolean } | null>
+}
+/**
+ * Locate an early takeover when the request chain is no longer available.
+ * Tab navigation events routinely clear the chain between onHeadersReceived
+ * and downloads.onCreated. Some browsers expose the originating tab on the
+ * DownloadItem; only a unique URL-and-tab identity match is safe to reuse.
+ */
+export function validDownloadIdentity(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0
+}
+
+export function findEarlyBrowserTakeoverByUrl(
+  candidates: Array<string | undefined>,
+  downloadIdentity: { tabId?: unknown, frameId?: unknown },
+  entries: Iterable<EarlyBrowserTakeover>,
+): EarlyBrowserTakeover | undefined {
+  const wanted = candidates.filter((value): value is string => Boolean(value))
+  const tabId = Number(downloadIdentity.tabId)
+  if (!wanted.length || !validDownloadIdentity(tabId)) return undefined
+  const frameId = Number(downloadIdentity.frameId)
+  let match: EarlyBrowserTakeover | undefined
+  for (const entry of entries) {
+    if (entry.tabId !== tabId) continue
+    if (validDownloadIdentity(frameId) && validDownloadIdentity(entry.frameId) && entry.frameId !== frameId) continue
+    if (!entry.urls.some(url => wanted.includes(url))) continue
+    if (match) return undefined
+    match = entry
+  }
+  return match
+}
+
 export type BrowserDownloadState = 'in_progress' | 'interrupted' | 'complete'
 
 export function browserCleanupAction(state: BrowserDownloadState): 'remove-file' | 'cancel' {

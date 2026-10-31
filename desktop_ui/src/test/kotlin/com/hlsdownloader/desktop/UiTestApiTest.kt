@@ -58,7 +58,7 @@ class UiTestApiTest {
     @Test
     fun api_is_explicitly_gated_authenticated_and_loopback_only() {
         val source = File("src/main/kotlin/com/hlsdownloader/desktop/UiTestApi.kt").readText()
-        val main = File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val main = workbenchSources()
         val build = File("build.gradle.kts").readText()
         assertTrue(source.contains("System.getenv(\"HLS_UI_TEST_API\") != \"1\""))
         assertTrue(source.contains("token.length >= 16"))
@@ -124,7 +124,7 @@ class UiTestApiTest {
 
     @Test
     fun product_icon_is_packaged_and_toolbar_does_not_repeat_the_brand() {
-        val main = File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val main = workbenchSources()
         val build = File("build.gradle.kts").readText()
         val toolbar = main.substringAfter("@Composable private fun DesktopToolbar").substringBefore("@Composable private fun ToolbarSearchField")
         assertFalse(toolbar.contains("HLS Downloader"))

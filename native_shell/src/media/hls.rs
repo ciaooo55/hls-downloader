@@ -2609,14 +2609,8 @@ pub(crate) fn resume_segment_path(
     index: usize,
     uri: &str,
 ) -> Option<std::path::PathBuf> {
-    let candidates = [
-        seg_dir.join(format!("{:06}.{}", index, extension(uri))),
-        seg_dir.join(format!("{:06}.seg", index)),
-        seg_dir.join(format!("seg-{index:04}.m4s")),
-    ];
-    candidates
-        .into_iter()
-        .find(|path| path.is_file() && path.metadata().map(|meta| meta.len() > 0).unwrap_or(false))
+    let path = seg_dir.join(format!("{:06}.{}", index, extension(uri)));
+    (path.is_file() && path.metadata().map(|meta| meta.len() > 0).unwrap_or(false)).then_some(path)
 }
 
 fn extension(uri: &str) -> &str {
@@ -3656,16 +3650,6 @@ mod tests {
         );
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn resume_reuses_legacy_segment_files() {
-        let dir = std::env::temp_dir().join(format!("hls-resume-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("000000.seg"), b"seg").unwrap();
-        let path = resume_segment_path(&dir, 0, "https://cdn.test/a.ts").unwrap();
-        assert_eq!(path.file_name().unwrap(), "000000.seg");
         let _ = std::fs::remove_dir_all(dir);
     }
 

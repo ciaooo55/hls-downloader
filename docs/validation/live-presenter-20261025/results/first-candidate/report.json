@@ -1,5 +1,0 @@
-{
-  "passed": false,
-  "samples": [],
-  "error": "RuntimeError: Presenter did not become ready"
-}

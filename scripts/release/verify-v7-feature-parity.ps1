@@ -210,7 +210,7 @@ $canonicalFeatureIds = @(
     'media.tvbox_push',
     'media.cast_and_player_concurrency',
     'torrent.multi_file_selection',
-    'settings.full_migration',
+    'settings.current',
     'updates.confirmed_download',
     'browser.request_context_replay',
     'browser.takeover_and_recovery',

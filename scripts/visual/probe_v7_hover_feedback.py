@@ -175,7 +175,6 @@ def main() -> int:
             "HLS_UI_AUDIT_THEME": args.theme,
             "HLS_UI_AUDIT_WIDTH": str(args.width),
             "HLS_UI_AUDIT_HEIGHT": str(args.height),
-            "HLS_V6_SKIP_MIGRATE": "1",
             "HLS_V7_DATA_DIR": str(out / "profile"),
         }
     )

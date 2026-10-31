@@ -68,7 +68,7 @@ def main():
                 for enabled in ([False,True] if round_number%2==0 else [True,False]):
                     name=f'{round_number}-{mode}-{int(enabled)}';root=args.work/name;root.mkdir()
                     current.update(mode=mode,requests=[])
-                    env=dict(os.environ,HLS_VM_ACCEPTANCE='1',HLS_V6_SKIP_MIGRATE='1',HLS_V7_DATA_DIR=str(root/'data'),
+                    env=dict(os.environ,HLS_VM_ACCEPTANCE='1',HLS_V7_DATA_DIR=str(root/'data'),
                         HLS_V7_DOWNLOAD_DIR=str(root/'downloads'),HLS_V7_CORE_TCP='1',HLS_V7_CORE_BIND='127.0.0.1:18678',
                         HLS_V7_PIPE=rf'\\.\pipe\HLSSplit-{name}',HLS_HTTP_ACTIVE_SPLIT='1' if enabled else '0')
                     with (root/'core.log').open('wb') as log:

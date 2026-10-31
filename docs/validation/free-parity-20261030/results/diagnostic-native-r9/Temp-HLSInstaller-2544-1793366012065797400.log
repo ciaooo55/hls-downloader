@@ -1,9 +1,0 @@
-helper stage=entry install_dir=\\?\C:\QAInstalled
-helper stage=processes count=3
-target pid=3220 name=HLSDownloaderEngine.exe path=\\?\C:\QAInstalled\app\resources\HLSDownloaderEngine.exe
-target pid=4144 name=HLSDownloader.exe path=\\?\C:\QAInstalled\HLSDownloader.exe
-target pid=2108 name=HLSDownloader.exe path=\\?\C:\QAInstalled\HLSDownloader.exe
-helper stage=close-clients
-helper stage=checkpoint-start
-helper stage=checkpoint-finished status=exit code: 0
-helper stage=failed error=读取进程路径失败: 拒绝访问。 (os error 5)

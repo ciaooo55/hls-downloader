@@ -1,1 +1,0 @@
-{"check": "public FTPS Rebex endpoint actual TLS and independent file SHA256", "passed": true, "error": null}

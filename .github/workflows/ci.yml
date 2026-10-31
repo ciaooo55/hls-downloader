@@ -123,7 +123,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            .tool-cache/build-cache/cargo-target
           key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
 
       - name: Test, build and lint Rust Core
@@ -162,7 +162,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            .tool-cache/build-cache/cargo-target
           key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('presenter_ui/Cargo.lock', 'presenter_ui/Cargo.toml', 'native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
 
       - name: Test, build and lint native presenter

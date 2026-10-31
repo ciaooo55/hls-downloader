@@ -17,13 +17,7 @@ import kotlin.test.assertTrue
  * 判据里的"禁用字样"在测试中是运行时拼接的，避免自己违反自己。
  */
 class UiConvergenceGuardTest {
-    private fun sources(): List<String> {
-        val root = File("src/main/kotlin/com/hlsdownloader/desktop")
-        return root.listFiles { file -> file.extension == "kt" }
-            ?.map { it.path.replace('\\', '/') }
-            ?.sorted()
-            ?: emptyList()
-    }
+    private fun sources(): List<String> = workbenchSourceFiles().map { it.path.replace('\\', '/') }
 
     private fun linesOf(path: String): List<String> = File(path).readText().split("\n")
 

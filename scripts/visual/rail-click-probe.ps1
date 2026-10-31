@@ -90,7 +90,6 @@ $env:HLS_UI_AUDIT_SURFACE = $Fixture
 $env:HLS_UI_AUDIT_THEME = $Theme
 $env:HLS_UI_AUDIT_WIDTH = [string]$Width
 $env:HLS_UI_AUDIT_HEIGHT = [string]$Height
-$env:HLS_V6_SKIP_MIGRATE = '1'
 $env:HLS_V7_DATA_DIR = (Join-Path $tmp 'profile')
 
 $runner = $null

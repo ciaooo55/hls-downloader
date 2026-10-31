@@ -22,7 +22,6 @@ pub struct CoreServer {
 impl CoreServer {
     pub fn open_default() -> Result<Self, String> {
         let database_path = default_v7_database_path();
-        crate::v6_migrate::migrate_installed_v6_database(&database_path)?;
         let server = Self::open_path(database_path)?;
         server.restore_install_result();
         Ok(server)
@@ -207,14 +206,6 @@ fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
         "legal_terms_version",
         serde_json::json!(crate::LEGAL_TERMS_VERSION),
     )?;
-    let core = coordinator.core();
-    let mut core = core.lock().map_err(|_| "Core mutex poisoned".to_string())?;
-    if let Err(error) = crate::maybe_migrate_from_5x(&mut core) {
-        if crate::migrate::migration_requested_explicitly() {
-            return Err(error);
-        }
-        eprintln!("legacy migration skipped: {error}");
-    }
     Ok(())
 }
 

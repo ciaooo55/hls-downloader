@@ -1,7 +1,0 @@
-{"phase":"started","metadata":null,"utc":"2026-10-29T06:42:31.1214689Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6etji-1"},"utc":"2026-10-29T06:42:31.9572070Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6etji-1"},"utc":"2026-10-29T06:42:31.9880925Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6etvl-2"},"utc":"2026-10-29T06:42:31.9977127Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6etvl-2"},"utc":"2026-10-29T06:42:32.0218826Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt6etwl-3"},"utc":"2026-10-29T06:42:32.0218826Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt6etwl-3"},"utc":"2026-10-29T06:42:32.0556840Z"}

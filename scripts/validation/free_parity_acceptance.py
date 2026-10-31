@@ -190,7 +190,7 @@ def main():
         for p in owned_cores(): p.kill(); p.wait(timeout=10)
 
     try:
-        os.environ.update(HLS_VM_ACCEPTANCE='1', HLS_V6_SKIP_MIGRATE='1', HLS_V7_DATA_DIR=str(args.work/'data'),
+        os.environ.update(HLS_VM_ACCEPTANCE='1', HLS_V7_DATA_DIR=str(args.work/'data'),
                           HLS_V7_DOWNLOAD_DIR=str(args.work/'downloads'), HLS_V7_CORE_TCP='1', HLS_V7_CORE_BIND='127.0.0.1:18679',
                           HLS_V7_PIPE=r'\\.\pipe\HLSDownloader.FreeParity.QA', TEMP=str(args.work/'tmp'), TMP=str(args.work/'tmp'))
         (args.work/'tmp').mkdir(exist_ok=True)

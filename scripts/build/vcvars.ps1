@@ -1,9 +1,4 @@
 # Load MSVC into this PowerShell process. No-op on CI machines that already have cl/link.
-$local = "E:\VS\vcvars.ps1"
-if (Test-Path -LiteralPath $local) {
-    . $local
-    return
-}
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path -LiteralPath $vswhere) {
     $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

@@ -1,8 +1,0 @@
-download engine listening on 127.0.0.1:49671
-v7 task task-3 failed: HTTP 403
-v7 task task-4 failed: HTTP 404
-v7 task task-5 failed: WinHttpReceiveResponse 12152
-v7 task task-6 failed: 服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试
-v7 task task-7 failed: 服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试
-v7 task task-8 failed: 服务器返回了 HTML 登录页或错误页，未保存为媒体；请登录原网页并重新识别链接后重试
-v7 task task-11 paused: paused

@@ -99,7 +99,6 @@ def main() -> int:
         "HLS_V7_DOWNLOAD_DIR": str(downloads),
         "HLS_V7_CORE_TCP": "1",
         "HLS_V7_CORE_BIND": f"127.0.0.1:{args.core_port}",
-        "HLS_V6_SKIP_MIGRATE": "1",
     })
     engine = subprocess.Popen([str(args.engine)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     output_sha256 = None

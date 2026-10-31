@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { completeBrowserTakeover, findEarlyBrowserTakeoverByUrl, pauseBrowserDownload, refreshedDownload, type EarlyBrowserTakeover } from '../entrypoints/background'
+import { completeBrowserTakeover, pauseBrowserDownload, refreshedDownload } from '../entrypoints/background'
 
 vi.hoisted(() => {
   ;(globalThis as Record<string, unknown>).defineBackground = (main: unknown) => ({ main })
@@ -17,6 +17,8 @@ vi.mock('wxt/browser', () => ({
 }))
 import { browser } from 'wxt/browser'
 import {
+  findEarlyBrowserTakeoverByUrl,
+  type EarlyBrowserTakeover,
   browserCleanupAction,
   canContinueTakeover,
   canResumeBrowserDownload,

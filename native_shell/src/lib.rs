@@ -47,12 +47,9 @@ mod link_file;
 mod local_time;
 #[cfg(feature = "full-core")]
 mod media;
-#[cfg(feature = "full-core")]
 mod media_ext;
 #[cfg(feature = "full-core")]
 mod metalink;
-#[cfg(feature = "full-core")]
-mod migrate;
 #[cfg(feature = "full-core")]
 mod mirrors;
 #[cfg(feature = "full-core")]
@@ -104,8 +101,6 @@ mod tray;
 #[cfg(feature = "full-core")]
 mod updater;
 #[cfg(feature = "full-core")]
-mod v6_migrate;
-#[cfg(feature = "full-core")]
 mod win_reg;
 mod window_util;
 #[cfg(feature = "full-core")]
@@ -156,10 +151,9 @@ pub use harvest::{harvest_html, harvest_html_filtered, HarvestLink};
 #[cfg(feature = "full-core")]
 pub use http_engine::{run_job, run_job_report, EngineError, HttpMirrorReport, HttpRunReport};
 pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
+pub use media_ext::download_category;
 #[cfg(feature = "full-core")]
 pub use metalink::{looks_like_metalink, parse_metalink};
-#[cfg(feature = "full-core")]
-pub use migrate::{maybe_migrate_from_5x, migrate_from_5x};
 #[cfg(feature = "full-core")]
 pub use native_host::run as run_native_host;
 #[cfg(feature = "full-core")]

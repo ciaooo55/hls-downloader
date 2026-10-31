@@ -32,7 +32,7 @@ def main():
     gates = []
     env = dict(os.environ, HLS_V7_PIPE=r'\\.\pipe\HLSPortableUpgradeAcceptance',
                HLS_V7_DATA_DIR=str(target/'data'), HLS_V7_DOWNLOAD_DIR=str(target/'downloads'),
-               HLS_V7_CORE_TCP='1', HLS_V7_CORE_BIND='127.0.0.1:18681', HLS_V6_SKIP_MIGRATE='1')
+               HLS_V7_CORE_TCP='1', HLS_V7_CORE_BIND='127.0.0.1:18681',)
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
     kernel.CreateFileW.restype = ctypes.c_void_p

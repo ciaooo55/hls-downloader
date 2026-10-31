@@ -49,4 +49,4 @@ Windows 正常 IPC 使用带 owner/SYSTEM DACL 的 `\\.\pipe\HLSDownloader.v7` �
 
 候选包与正式包的门禁不同。canonical 功能合同、具体包 provenance 和某次实测报告各自描述不同范围；不能以一个布尔值或旧测试数量代替当前包的证据。见 [验证状态](../validation/v7-verification.md)与 [发布 runner](../releases/v7-release-runner.md)。
 
-当前未发布的 Core、播放服务、消息队列与响应优化见 [资源与性能审查](performance-audit-20261018.md)。最新单任务进度提交已完成 Core 构建、613 项沙盒回归、六种媒体下载播放与清理验收，以及 10/1000 任务共 36 次性能运行，见[本批证据](../validation/validation-single-task-progress-20261018.json)。结果只覆盖记录的哈希及场景，未生成新安装包或发布。
+本轮模块整理和实测范围见[收敛记录](../validation/convergence.md)。历史性能样本保存在 Git，不作为当前源码或安装包的通过证据。

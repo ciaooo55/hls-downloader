@@ -1,7 +1,0 @@
-
-running 2 tests
-test tests::installation_scope_requires_a_directory_boundary ... ok
-test tests::process_names_include_versioned_hosts_but_not_unrelated_apps ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
-

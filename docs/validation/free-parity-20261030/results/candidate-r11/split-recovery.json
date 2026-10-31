@@ -1,8 +1,0 @@
-{
-  "passed": false,
-  "scope": "Experimental active split pause/resume safety on raw HTTP and system transport",
-  "engine_sha256": "162a9883bc7e3f87a280b59085b8062bb86b6c2f108bd31b88b139739ec3bb40",
-  "samples": [],
-  "error": "TimeoutError('resource fixture condition not reached')",
-  "traceback": "Traceback (most recent call last):\n  File \"C:\\QARunners\\split_recovery.py\", line 10, in <module>\n    for proxy in (False,True):result['samples'].append({'proxy':proxy,**transfer(engine,Path(r'C:\\QAWork\\split-recovery')/str(proxy),'slow-last-connection',proxy,True)})\n                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\QAScripts\\compare_v7_range_tail.py\", line 96, in transfer\n    wait(helper_seen.is_set, 20)\n  File \"C:\\QAScripts\\smoke_v7_resource_boundaries.py\", line 30, in wait\n    raise TimeoutError('resource fixture condition not reached')\nTimeoutError: resource fixture condition not reached\n"
-}

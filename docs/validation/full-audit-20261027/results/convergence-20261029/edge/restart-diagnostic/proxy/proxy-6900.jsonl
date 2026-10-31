@@ -1,9 +1,0 @@
-{"phase":"started","metadata":null,"utc":"2026-10-29T07:12:23.2748355Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt7h8ec-1"},"utc":"2026-10-29T07:12:24.3701533Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt7h8ec-1"},"utc":"2026-10-29T07:12:24.4021825Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt7h8ec-2"},"utc":"2026-10-29T07:12:24.4067236Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt7h8ec-2"},"utc":"2026-10-29T07:12:24.4338354Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt7h8jg-3"},"utc":"2026-10-29T07:12:24.4373728Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt7h8jg-3"},"utc":"2026-10-29T07:12:24.4684961Z"}
-{"phase":"forwarded","metadata":{"op":"offer_local_file","request_id":"mvt7hbdo-4"},"utc":"2026-10-29T07:12:26.8464450Z"}
-{"phase":"returned","metadata":{"op":"offer_local_file","request_id":"mvt7hbdo-4"},"utc":"2026-10-29T07:12:26.8924615Z"}

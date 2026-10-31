@@ -188,7 +188,7 @@ def start(product, round_index):
             assert actual == args.connections
             REPORT.setdefault('settings', {})['idm'] = {args.idm_connection_key: actual}
     log = (ROOT / f'{product}-{round_index}.log').open('wb')
-    environment = {**os.environ, 'HLS_V7_DATA_DIR': str(OUT / 'hls-data'), 'HLS_V7_DOWNLOAD_DIR': str(OUT / 'hls'), 'HLS_V6_SKIP_MIGRATE': '1'}
+    environment = {**os.environ, 'HLS_V7_DATA_DIR': str(OUT / 'hls-data'), 'HLS_V7_DOWNLOAD_DIR': str(OUT / 'hls')}
     began = time.perf_counter()
     if product.startswith('hls'):
         subprocess.Popen([str(args.runtime/'app/resources/HLSDownloaderEngine.exe')], env=environment, stdout=log, stderr=log)

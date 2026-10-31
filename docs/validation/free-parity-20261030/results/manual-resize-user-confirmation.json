@@ -1,9 +1,0 @@
-{
-  "authority": "Direct user reply to the slow-drag request",
-  "user_report": "已拖动，窗口变小",
-  "result": "User confirmed that slow native dragging reduces the window size",
-  "candidate_identity": "Not bound to a candidate/component hash by this reply",
-  "minimum_window_verified": false,
-  "os_dpi_matrix_verified": false,
-  "interpretation": "Do not classify the zero-displacement automated drag as a confirmed product resize failure; do not promote this report to full same-package UI acceptance"
-}

@@ -1,9 +1,0 @@
-{
-  "source_commit": "f53019e0968c2d919d4c1ace2aa099f18679c678",
-  "run_interrupted": true,
-  "performance_samples_started": false,
-  "files_sha256": {
-    "performance.json": "0f4ea7272cba0bfe9a54c3a7168da7e5a8f8eea7db32f4923e5e08f06fc34e2c",
-    "initialization-observation.json": "3d32ed0a8062ed5af01d54426a55a87971e9a8a8514eba0fa76216ca2df62a6e"
-  }
-}

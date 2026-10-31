@@ -24,7 +24,7 @@ import kotlin.test.assertTrue
  */
 class ControlBoundsReportingTest {
     private fun api() = File("src/main/kotlin/com/hlsdownloader/desktop/UiTestApi.kt").readText()
-    private fun main() = File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+    private fun main() = workbenchSources()
 
     @Test
     fun the_test_state_has_a_bounds_map_and_the_snapshot_exposes_it() {

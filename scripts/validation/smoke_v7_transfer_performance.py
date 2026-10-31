@@ -186,7 +186,6 @@ def main() -> int:
             "HLS_V7_CORE_TCP": "1",
             "HLS_V7_CORE_BIND": f"127.0.0.1:{core_port}",
             "HLS_V7_PIPE": rf"\\.\pipe\HLSTransferSmoke-{os.getpid()}-{core_port}",
-            "HLS_V6_SKIP_MIGRATE": "1",
         }
     )
     if args.profile_io:

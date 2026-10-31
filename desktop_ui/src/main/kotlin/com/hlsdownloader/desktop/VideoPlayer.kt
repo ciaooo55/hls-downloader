@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -229,7 +230,7 @@ internal fun LocalVideoPlayer(taskId: String, task: TaskDto?, onClose: () -> Uni
             if (pip) panel { delta -> window.setLocation(window.x + (delta.x / density).roundToInt(), window.y + (delta.y / density).roundToInt()) }
     }
     if (!pip) {
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .72f)).clickable(enabled = !closing) {}, contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .72f)).pointerInput(Unit) { detectTapGestures {} }, contentAlignment = Alignment.Center) {
             Box(if (fullscreen) Modifier.fillMaxSize() else Modifier.padding(20.dp).widthIn(max = 960.dp)
                 .fillMaxWidth().fillMaxHeight(.82f)) { panel(null) }
         }

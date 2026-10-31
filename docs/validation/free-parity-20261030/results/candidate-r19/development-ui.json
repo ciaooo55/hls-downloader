@@ -1,6 +1,0 @@
-{
-  "base_head": "1e9039ebd157e242619020982eda2ad816022008",
-  "diff_sha256": "7b9a113647641742c434b899cf373d83c14be5d22ebc378786537be958ee081b",
-  "ui_jar_sha256": "457aed88436d3c567f4f92fb3bd4e20352e6c2bc71e046897cd77328cf871412",
-  "validation": "compileKotlin and jar offline succeeded; development UI overlay, not a rebuilt candidate"
-}

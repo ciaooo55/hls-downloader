@@ -1,16 +1,4 @@
-//! 原子替换一个已存在文件的共享助手。
-//!
-//! 此前 `http_engine.rs::replace_checkpoint_file` 与
-//! `download_worker.rs::replace_torrent_selection_file` 是同一对
-//! `#[cfg(windows)] MoveFileExW` / `#[cfg(not(windows))] fs::rename` 助手跨文件各写
-//! 一遍，而且 Windows 侧已经漂移：前者带 20 次退避重试，后者是单发。
-//!
-//! 丢失重试是真问题：BT 文件选择表就写在 BT 客户端自己持有的目录旁边，
-//! 单发 MoveFileExW 一旦撞上 ERROR_SHARING_VIOLATION 就直接失败。
-//!
-//! 这里把**重试策略**与**平台机制**分开：策略是与平台无关的闭包助手，在所有平台上
-//! 编译并有单测（否则非 Windows 构建只能测到 fs::rename，碰不到最需要测的那段）；
-//! 平台机制仍是各平台各一行。合并后两处都拿到带退避的那份语义。
+//! Atomic file replacement with bounded retries for transient Windows locks.
 
 use std::io;
 use std::thread;

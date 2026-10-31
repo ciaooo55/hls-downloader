@@ -1,2 +1,0 @@
-helper stage=spawn script=C:\Users\WDAGUT~1\AppData\Local\Temp\HLSInstaller-876-1793363968866543300.ps1 install_dir=\\?\C:\QAInstalled
-helper stage=timeout child_pid=480

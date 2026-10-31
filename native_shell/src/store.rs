@@ -56,7 +56,7 @@ impl CoreStore {
         let existing: u32 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| format!("read Core database {}: {error}", path.display()))?;
-        if existing != 0 && existing != 6 && existing != CURRENT_SCHEMA_VERSION {
+        if existing != 0 && existing != CURRENT_SCHEMA_VERSION {
             return Err(format!(
                 "Core database {} has unsupported schema version {existing}, expected {CURRENT_SCHEMA_VERSION}",
                 path.display()
@@ -414,20 +414,13 @@ impl CoreStore {
     }
 
     pub fn setting_string(&self, key: &str, fallback: &str) -> Result<String, String> {
-        let raw = self.setting_json(key)?;
-        match raw {
-            None => Ok(fallback.to_string()),
-            Some(value) => Ok(match serde_json::from_str(&value) {
-                Ok(decoded) => decoded,
-                Err(error) => {
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "Core setting {key} is unreadable, using raw value: {error}"
-                    );
-                    value
-                }
-            }),
-        }
+        // Queue profiles and credential lists are current structured settings;
+        // their consumers parse the JSON text rather than a JSON string value.
+        Ok(match self.setting_or(key, serde_json::Value::Null)? {
+            serde_json::Value::Null => fallback.to_string(),
+            serde_json::Value::String(value) => value,
+            value => value.to_string(),
+        })
     }
 
     pub fn set_setting<T: serde::Serialize>(&mut self, key: &str, value: T) -> Result<(), String> {
@@ -972,25 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_six_migration_preserves_tasks_and_settings() {
-        let mut store = CoreStore::in_memory().unwrap();
-        let mut runtime = CoreRuntime::new();
-        store
-            .apply_events(&runtime.handle(CoreCommand::CreateTask { spec: spec() }))
-            .unwrap();
-        store.set_setting("minimum_bytes", 42u64).unwrap();
-        store
-            .connection
-            .execute_batch("DROP TABLE crawl_projects; PRAGMA user_version=6;")
-            .unwrap();
-        store.initialize(6).unwrap();
-        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
-        assert_eq!(store.load_tasks().unwrap().len(), 1);
-        assert_eq!(store.setting_u64("minimum_bytes", 0).unwrap(), 42);
-        assert!(store.crawl_ids().unwrap().is_empty());
-    }
-
-    #[test]
     fn current_schema_and_task_snapshots_roundtrip() {
         let mut store = CoreStore::in_memory().unwrap();
         assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
@@ -1156,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_preserve_typed_fallbacks_and_legacy_raw_strings() {
+    fn settings_use_typed_fallbacks_for_invalid_values() {
         let mut store = CoreStore::in_memory().unwrap();
         assert!(store.setting_bool("missing", true).unwrap());
         assert_eq!(store.setting_u64("missing", 42).unwrap(), 42);
@@ -1175,7 +1149,7 @@ mod tests {
         assert_eq!(store.setting_u64("invalid", 42).unwrap(), 42);
         assert_eq!(
             store.setting_string("invalid", "default").unwrap(),
-            "not-json"
+            "default"
         );
         store.set_setting("wrong_type", "text").unwrap();
         assert!(!store.setting_bool("wrong_type", false).unwrap());
@@ -1184,6 +1158,8 @@ mod tests {
             store.setting_string("wrong_type", "default").unwrap(),
             "text"
         );
+        store.set_setting("list", vec!["a"]).unwrap();
+        assert_eq!(store.setting_string("list", "").unwrap(), r#"["a"]"#);
     }
 
     #[test]

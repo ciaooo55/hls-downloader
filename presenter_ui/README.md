@@ -1,6 +1,6 @@
 # HLS Downloader 7 native presenter
 
-This crate contains the Windows-native hot-window compatibility surface. It uses Slint for the rendered desktop UI and consumes the shared Rust-side contract exported by `native_shell` through its `presenter-client` feature.
+This crate contains the Windows-native temporary confirmation, progress and completion windows. It uses Slint for the rendered desktop UI and consumes the shared Rust-side contract exported by `native_shell` through its `presenter-client` feature.
 
 The presenter dependency intentionally uses `default-features = false`: it needs the v7 contract/IPC client plus launch, single-instance, profile-path, notification and native-window helpers, but it does not own or compile the resident `CoreRuntime` source path. Transfer execution and SQLite ownership remain in the default `full-core` product binaries.
 

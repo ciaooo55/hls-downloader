@@ -416,37 +416,18 @@ impl PersistentCore {
         Ok(events)
     }
 
-    fn from_store(mut store: CoreStore) -> Result<Self, String> {
+    fn from_store(store: CoreStore) -> Result<Self, String> {
         let snapshots = store.load_tasks()?;
         let specs = store.load_task_specs()?;
         let sequence = store.latest_sequence()?;
         let mut runtime = CoreRuntime::from_state(snapshots, specs, sequence);
-        let mut restored_media_push = false;
         for encoded in store.query_handoffs(None, None, true)? {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&encoded) {
-                if let Ok(mut request) =
+                if let Ok(request) =
                     serde_json::from_value::<crate::MediaPushRequest>(value.clone())
                 {
                     if request.status == "pending" && !request.id.trim().is_empty() {
-                        if restored_media_push {
-                            request.status = "failed".into();
-                            request.message =
-                                "升级恢复时检测到已有更早的投送请求等待设备选择".into();
-                            request.location.clear();
-                            let normalized = serde_json::to_string(&request).map_err(|error| {
-                                format!("encode normalized media push {}: {error}", request.id)
-                            })?;
-                            store.save_handoff(
-                                &request.id,
-                                &normalized,
-                                &request.status,
-                                None,
-                                request.created_at_ms,
-                            )?;
-                        } else {
-                            restored_media_push = true;
-                            runtime.restore_pending_media_push(request);
-                        }
+                        runtime.restore_pending_media_push(request);
                     }
                     continue;
                 }
@@ -458,16 +439,9 @@ impl PersistentCore {
                     continue;
                 }
                 if let Some(offer_value) = value.get("offer") {
-                    if let Ok(mut offer) =
+                    if let Ok(offer) =
                         serde_json::from_value::<crate::ResourceOffer>(offer_value.clone())
                     {
-                        if offer.handoff_id.trim().is_empty() {
-                            offer.handoff_id = value
-                                .get("id")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                        }
                         runtime.restore_pending_handoff(offer);
                     }
                 }
@@ -1246,110 +1220,6 @@ mod tests {
             event.event,
             crate::CoreEvent::MediaPushResolved { ref request } if request.id == "push-restart" && request.status == "done"
         )));
-        // 见 `file_store_restores_tasks_after_core_restart`：先释放 owner 再删除。
-        drop(reopened);
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(path.with_extension("db-wal"));
-        let _ = std::fs::remove_file(path.with_extension("db-shm"));
-    }
-
-    #[test]
-    fn restart_normalizes_legacy_overlapping_media_pushes() {
-        let path = std::env::temp_dir().join(format!(
-            "hls-v7-media-push-normalize-{}-{}.db",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let first = crate::MediaPushRequest {
-            id: "push-legacy-first".into(),
-            push_kind: "cast".into(),
-            url: "https://example.test/legacy-first.mp4".into(),
-            title: "Legacy first".into(),
-            status: "pending".into(),
-            message: String::new(),
-            location: String::new(),
-            created_at_ms: 1,
-        };
-        let second = crate::MediaPushRequest {
-            id: "push-legacy-second".into(),
-            push_kind: "tvbox".into(),
-            url: "https://example.test/legacy-second.mp4".into(),
-            title: "Legacy second".into(),
-            status: "pending".into(),
-            message: String::new(),
-            location: String::new(),
-            created_at_ms: 2,
-        };
-        {
-            let mut core = PersistentCore::open(&path).unwrap();
-            for request in [&first, &second] {
-                let encoded = serde_json::to_string(request).unwrap();
-                core.store_mut()
-                    .save_handoff(
-                        &request.id,
-                        &encoded,
-                        &request.status,
-                        None,
-                        request.created_at_ms,
-                    )
-                    .unwrap();
-            }
-        }
-
-        let mut reopened = PersistentCore::open(&path).unwrap();
-        let rows: Vec<crate::MediaPushRequest> = reopened
-            .store()
-            .load_handoffs()
-            .unwrap()
-            .into_iter()
-            .filter_map(|row| serde_json::from_str(&row).ok())
-            .collect();
-        assert!(rows.iter().any(|request| {
-            request.id == first.id && request.status == "pending" && request.message.is_empty()
-        }));
-        assert!(rows.iter().any(|request| {
-            request.id == second.id
-                && request.status == "failed"
-                && request.message.contains("更早的投送请求")
-        }));
-
-        let resolved = reopened
-            .handle(CoreCommand::ResolveMediaPush {
-                request_id: first.id.clone(),
-                status: "done".into(),
-                message: "ok".into(),
-                location: String::new(),
-            })
-            .unwrap();
-        assert!(resolved.iter().any(|event| matches!(
-            &event.event,
-            crate::CoreEvent::MediaPushResolved { request }
-                if request.id == first.id && request.status == "done"
-        )));
-
-        let next_request = crate::MediaPushRequest {
-            id: "push-after-normalize".into(),
-            push_kind: "cast".into(),
-            url: "https://example.test/after-normalize.mp4".into(),
-            title: "After normalize".into(),
-            status: "pending".into(),
-            message: String::new(),
-            location: String::new(),
-            created_at_ms: 3,
-        };
-        let admitted = reopened
-            .handle(CoreCommand::RequestMediaPush {
-                request: next_request.clone(),
-            })
-            .unwrap();
-        assert!(admitted.iter().any(|event| matches!(
-            &event.event,
-            crate::CoreEvent::MediaPushRequested { request } if request.id == next_request.id
-        )));
-
         // 见 `file_store_restores_tasks_after_core_restart`：先释放 owner 再删除。
         drop(reopened);
         let _ = std::fs::remove_file(&path);

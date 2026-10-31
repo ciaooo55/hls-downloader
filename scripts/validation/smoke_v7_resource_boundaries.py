@@ -42,8 +42,7 @@ class Core:
         env = {**os.environ, 'HLS_V7_DATA_DIR': str(self.root/'data'),
                'HLS_V7_DOWNLOAD_DIR': str(self.root/'downloads'), 'HLS_V7_CORE_TCP': '1',
                'HLS_V7_CORE_BIND': f'127.0.0.1:{self.port}',
-               'HLS_V7_PIPE': rf'\\.\pipe\HLSResource-{uuid.uuid4().hex}',
-               'HLS_V6_SKIP_MIGRATE': '1'}
+               'HLS_V7_PIPE': rf'\\.\pipe\HLSResource-{uuid.uuid4().hex}'}
         self.log = (self.root/'core.log').open('ab')
         self.process = subprocess.Popen([str(self.engine)], env=env,
             stdout=self.log, stderr=self.log, creationflags=subprocess.CREATE_NO_WINDOW)

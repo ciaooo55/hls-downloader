@@ -1,0 +1,210 @@
+{
+  "source_baseline": "27fd2d06b8426356ded1372c31d11265ca4c436f",
+  "status": "in_progress",
+  "historical_evidence": {
+    "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
+    "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
+  },
+  "scope": "当前轮验证；历史结果不作为当前源码或安装包通过依据。",
+  "test_matrix": "artifacts/convergence-20261031/test-matrix.json",
+  "features": [
+    {
+      "id": "architecture.single_core",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "workbench.geometry",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "workbench.foundation_component_architecture",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "tasks.selection_keyboard_queue",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "tasks.named_queue_profiles",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "tasks.details_logs_speed_connections",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "tasks.refresh_signed_url",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "create.protocols_and_recognition",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "import.file_picker_and_drop",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "export.normalized_task_list",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "import.exported_task_json",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "workbench.automatic_responsive_layout",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "media.hls_transfer_parity",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "media.local_player_controls",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "media.cast_dlna_chromecast",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "media.lan_share",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "media.tvbox_push",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "media.cast_and_player_concurrency",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "torrent.multi_file_selection",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "settings.current",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "updates.confirmed_download",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "browser.request_context_replay",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "browser.takeover_and_recovery",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "browser.media_push_device_selection",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "browser.hot_confirmation_process",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "browser.online_subtitle_translation",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "accessibility.automation",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "performance.release_thresholds",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "package.install_upgrade_rollback",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "free.cli",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "free.crawl_sync",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "free.zip_preview",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    },
+    {
+      "id": "http.active_tail_split",
+      "assessment": "pending_current_validation",
+      "evidence": [],
+      "remaining": "当前产物验收结果将在本轮验证后记录。"
+    }
+  ]
+}

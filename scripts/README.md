@@ -9,7 +9,7 @@
 | `bootstrap-v7-toolchain.ps1` | 准备锁定版本的构建工具链 |
 | `build-v7.ps1` | `run`、`test`、`candidate`、`package` 等统一构建入口 |
 | `run-v7-local.ps1` | 使用本仓库工具链启动开发工作台 |
-| `cleanup-v7-build-cache.ps1` | 生成物清理；先阅读参数和预览范围，旧盘符清理需显式启用 |
+| `cleanup-v7-build-cache.ps1` | 默认预览工作区内可重建输出；`-Apply` 执行清理，保留依赖缓存与用户数据 |
 | `configure-qwencloud.ps1` | 个人字幕凭据的加密配置；密钥不进入源码 |
 
 `upgrade-v7-portable.ps1` 和 `V7HashFunctions.ps1` 还会随 Portable 分发，保留在根层以维持包内升级路径。
@@ -21,7 +21,7 @@
 | 目录 | 内容 |
 | --- | --- |
 | [build/](build/) | 媒体工具准备、图标生成、MSI 重打包、Portable 和体积报告 |
-| [install/](install/) | Host 注册、事务安装、停止进程及旧安装清理；`install-v7-local.ps1` 只适用于其硬限定的维护环境 |
+| [install/](install/) | Host 注册、安装进程协调与安装前检查 |
 | [release/](release/) | 版本合同、候选接收、正式门禁、发布资产及可选签名工具；未签名交付不会自动运行签名 |
 | [validation/](validation/) | 下载、浏览器、字幕、播放器、安装与发布合同验收 |
 | [visual/](visual/) | 截图、布局、对比度和视觉验证器的正负对照 |

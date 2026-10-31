@@ -159,7 +159,6 @@ foreach ($size in $Sizes) {
             $env:HLS_UI_AUDIT_THEME = $theme
             $env:HLS_UI_AUDIT_WIDTH = [string]$width
             $env:HLS_UI_AUDIT_HEIGHT = [string]$height
-            $env:HLS_V6_SKIP_MIGRATE = '1'
             $env:HLS_V7_DATA_DIR = $dataDir
 
             $runner = $null

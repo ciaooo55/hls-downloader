@@ -365,7 +365,12 @@ def _evaluate(websocket_url: str, expression: str) -> object:
         while True:
             message = json.loads(connection.recv())
             if message.get("id") == 1:
-                return message.get("result", {}).get("result", {}).get("value")
+                if message.get("error"):
+                    raise RuntimeError(f"Chromium evaluation failed: {message['error']}")
+                result = message.get("result", {})
+                if result.get("exceptionDetails"):
+                    raise RuntimeError(f"Chromium evaluation raised: {result['exceptionDetails']}")
+                return result.get("result", {}).get("value")
     finally:
         connection.close()
 
@@ -538,6 +543,7 @@ def _exercise_chrome(
     page_opened = False
     popup_opened = False
     content_ready = False
+    media_hovered = False
     selection_checked = False
     selection_details: object = None
     try:
@@ -574,6 +580,12 @@ def _exercise_chrome(
                         websocket_url,
                         "[...document.querySelectorAll('*')].flatMap(e=>[...(e.shadowRoot?.querySelectorAll('.video-download')||[])].map(b=>b.textContent))",
                     )
+                    if marker == "1":
+                        _evaluate(websocket_url, OVERLAY_EXPRESSION)
+                        if not media_hovered:
+                            rect = _evaluate(websocket_url, "(() => {const r=document.querySelector('video').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()")
+                            _dispatch_mouse_move(websocket_url, float(rect["x"]), float(rect["y"]))
+                            media_hovered = True
                     if marker == "1" and _evaluate(websocket_url, OVERLAY_EXPRESSION) is True:
                         details = _evaluate(websocket_url, HOVER_EXPRESSION)
                         diagnostics["hover"] = details
@@ -770,6 +782,7 @@ def _exercise_firefox(
         driver.execute_script(f"return {OVERLAY_EXPRESSION}")
         driver.find_element("id", "play-smoke").click()
         _wait_for_playback_started(driver, "Firefox")
+        ActionChains(driver).move_to_element(driver.find_element("tag name", "video")).perform()
         _wait_for_media_overlay(driver, "Firefox")
         _assert_hover_surface(driver, "Firefox")
         _assert_pointer_transition(driver, "Firefox")

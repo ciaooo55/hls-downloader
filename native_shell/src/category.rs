@@ -1,33 +1,6 @@
 //! IDM-style category folders for newly created tasks.
 
-pub fn download_category(filename: &str, url: &str, kind: crate::ResourceKind) -> &'static str {
-    if matches!(
-        kind,
-        crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
-    ) {
-        return "media";
-    }
-    let name = if filename.trim().is_empty() {
-        url
-    } else {
-        filename
-    };
-    let ext = extension(name).to_ascii_lowercase();
-    // 两张扩展名表都在 media_ext.rs：folder 表定"归哪个文件夹"，与 completed_actions
-    // 的 playable 表**有意不同**（图片算媒体但没有播放语义），三张表由那里的守卫测试钉住。
-    if crate::media_ext::MEDIA_FOLDER_EXTENSIONS.contains(&ext.as_str()) {
-        "media"
-    } else if crate::media_ext::EXECUTABLE_EXTENSIONS.contains(&ext.as_str()) {
-        "program"
-    } else if matches!(
-        ext.as_str(),
-        "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso"
-    ) {
-        "archive"
-    } else {
-        "other"
-    }
-}
+pub use crate::media_ext::download_category;
 
 pub fn category_label(category: &str) -> &'static str {
     match category {
@@ -140,12 +113,6 @@ pub fn resolve_category_dir(
     root.join(category_label(chosen))
         .to_string_lossy()
         .into_owned()
-}
-
-fn extension(path: &str) -> &str {
-    let name = path.split(['?', '#']).next().unwrap_or(path);
-    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    file.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
 }
 
 #[cfg(test)]

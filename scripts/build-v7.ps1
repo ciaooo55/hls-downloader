@@ -12,10 +12,6 @@ $contractSource = Get-Content -LiteralPath (Join-Path $repo 'native_shell\src\co
 if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader-v7-core"') {
     throw 'v7 build refused: Rust v7 protocol contract is missing.'
 }
-$extensionProtocolSource = Get-Content -LiteralPath (Join-Path $repo 'extension\lib\nativeBridge.ts') -Raw -Encoding UTF8
-if ($extensionProtocolSource -notmatch "V7_CORE_PROTOCOL\s*=\s*'hls-downloader-v7-core'") {
-    throw 'v7 build refused: browser extension v7 Core protocol contract is missing.'
-}
 $featureParity = Join-Path $repo 'config\release\feature-parity.json'
 $productVersion = [string](Get-Content -LiteralPath $featureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $composeBuildSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\build.gradle.kts') -Raw -Encoding UTF8
@@ -251,20 +247,13 @@ function Assert-ExtensionManifest($Manifest, [string]$Browser, [string]$Path) {
 }
 
 function Build-Extension([string]$Resources, [switch]$TestOnly) {
-    # HLS_V7_PNPM overrides; otherwise PATH, then the repository-local Node
-    # tools directory that bootstrap provisions.
+    # Use an explicitly selected pnpm executable or PATH.
     $pnpmPath = $env:HLS_V7_PNPM
     if (-not $pnpmPath) {
         $pnpmCommand = Get-Command pnpm.cmd -ErrorAction SilentlyContinue
-        $pnpmPath = if ($pnpmCommand) { $pnpmCommand.Source } else { Join-Path $repo '.tool-cache\node-v22.14.0-win-x64\pnpm.cmd' }
+        if ($pnpmCommand) { $pnpmPath = $pnpmCommand.Source }
     }
-    if (-not (Test-Path -LiteralPath $pnpmPath)) { throw 'pnpm.cmd is required to build the production browser extension.' }
-    # npm scripts spawn node/wxt directly, so the repository-local Node tools
-    # must be on PATH when they exist.
-    $nodeTools = Get-ChildItem -LiteralPath (Join-Path $repo '.tool-cache') -Directory -Filter 'node-v*' -ErrorAction SilentlyContinue |
-        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'node.exe') -PathType Leaf } |
-        Select-Object -First 1
-    if ($nodeTools) { $env:PATH = "$($nodeTools.FullName);$env:PATH" }
+    if (-not $pnpmPath -or -not (Test-Path -LiteralPath $pnpmPath)) { throw 'pnpm.cmd is required to build the production browser extension.' }
     $package = Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($package.version -ne $productVersion) { throw "Browser extension package version must be ${productVersion}: $($package.version)" }
     $previousCi = $env:CI
@@ -324,13 +313,7 @@ if ($Task -eq 'test') {
     Build-Extension -TestOnly
 }
 $engineTarget = if ($isPackage) { 'release' } else { 'debug' }
-& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-engine
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderNativeHost
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderUpdater
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $cargo build --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin HLSDownloaderCli
+& $cargo build --locked --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bins
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

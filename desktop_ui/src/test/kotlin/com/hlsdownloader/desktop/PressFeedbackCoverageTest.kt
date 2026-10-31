@@ -20,11 +20,7 @@ import kotlin.test.assertTrue
  * 将来谁再手写一个既不读按下态、也不是遮罩的可点面，这条会直接失败。
  */
 class PressFeedbackCoverageTest {
-    private fun sources(): List<String> = listOf(
-        "src/main/kotlin/com/hlsdownloader/desktop/Main.kt",
-        "src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt",
-        "src/main/kotlin/com/hlsdownloader/desktop/SettingsV7.kt",
-    )
+    private fun sources(): List<String> = workbenchSourceFiles().map { it.path }
 
     private fun callSites(): List<Triple<String, Int, String>> {
         val out = mutableListOf<Triple<String, Int, String>>()
@@ -59,6 +55,9 @@ class PressFeedbackCoverageTest {
         assertTrue(sites.size >= 15, "expected at least 15 clickable-family call sites, found ${sites.size}")
         val violations = mutableListOf<String>()
         for ((path, line, segment) in sites) {
+            // The native video HWND covers this input plane. Playback state supplies
+            // its visible response; Compose cannot draw a pressed tint over the HWND.
+            if (File(path).name == "VideoPlayer.kt" && segment.contains("reportControlBounds(\"video.surface\")")) continue
             val source = Regex("interactionSource\\s*=\\s*([A-Za-z0-9_.{}() ]+?)[,)]")
                 .find(segment)?.groupValues?.get(1)?.trim()
             if (source == null) {

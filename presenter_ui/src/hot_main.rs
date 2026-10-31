@@ -7,9 +7,10 @@ slint::include_modules!();
 
 use hls_native_shell::{
     activate_window_by_title, center_window_by_title, claim_v7_presenter_instance,
-    completion_sound, hide_window_from_taskbar_by_title, install_root, is_already_running_error,
-    os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand, CoreEvent, CoreIpcClient,
-    CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
+    completion_sound, download_category, hide_window_from_taskbar_by_title, install_root,
+    is_already_running_error, os_reduce_motion, spawn_core, spawn_desktop_ui, CoreCommand,
+    CoreEvent, CoreIpcClient, CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer,
+    TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -1197,7 +1198,7 @@ fn show_next_offer(
     } else {
         offer.filename.clone()
     };
-    let category = download_category(&filename, offer.resource_kind);
+    let category = download_category(&filename, "", offer.resource_kind);
     let download_dir = presenter_settings
         .lock()
         .map(|settings| settings.directory_for(category))
@@ -1922,48 +1923,6 @@ fn url_host(value: &str) -> String {
         .to_string()
 }
 
-fn download_category(filename: &str, kind: ResourceKind) -> &'static str {
-    if matches!(
-        kind,
-        ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
-    ) {
-        return "media";
-    }
-    let extension = file_extension(filename);
-    if matches!(
-        extension.as_str(),
-        "mp4"
-            | "mkv"
-            | "webm"
-            | "mov"
-            | "avi"
-            | "m4v"
-            | "ts"
-            | "mp3"
-            | "m4a"
-            | "flac"
-            | "wav"
-            | "jpg"
-            | "png"
-            | "gif"
-            | "webp"
-    ) {
-        "media"
-    } else if matches!(
-        extension.as_str(),
-        "exe" | "msi" | "msix" | "appx" | "bat" | "cmd"
-    ) {
-        "program"
-    } else if matches!(
-        extension.as_str(),
-        "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "iso"
-    ) {
-        "archive"
-    } else {
-        "other"
-    }
-}
-
 fn file_extension(filename: &str) -> String {
     filename
         .split(['?', '#'])
@@ -2266,7 +2225,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            download_category("movie.m3u8", offer.resource_kind),
+            download_category("movie.m3u8", "", offer.resource_kind),
             "media"
         );
         assert_eq!(file_extension("movie.M3U8?token=secret"), "m3u8");
@@ -2279,11 +2238,11 @@ mod tests {
             "请求方式：GET · 内容类型：application/vnd.apple.mpegurl"
         );
         assert_eq!(
-            download_category("setup.exe", ResourceKind::File),
+            download_category("setup.exe", "", ResourceKind::File),
             "program"
         );
         assert_eq!(
-            download_category("bundle.7z", ResourceKind::File),
+            download_category("bundle.7z", "", ResourceKind::File),
             "archive"
         );
     }

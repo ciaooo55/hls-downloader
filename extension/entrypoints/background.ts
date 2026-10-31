@@ -1,3 +1,4 @@
+import { findEarlyBrowserTakeoverByUrl, validDownloadIdentity, type EarlyBrowserTakeover } from '../lib/takeover'
 import { browser } from 'wxt/browser'
 import { downloadSelectionKey, localDownloadIntentUrl } from '../lib/resources'
 import { mediaPushRequestId } from '../lib/mediaPush'
@@ -263,48 +264,10 @@ async function continueLocalDownloadHandoffs(): Promise<void> {
  * resolve ownership in onCreated: preserve ordinary response bytes for local
  * import, or pause an adaptive manifest before offering it to the media engine.
  */
-export interface EarlyBrowserTakeover {
-  requestId: string
-  startedAt: number
-  urls: string[]
-  tabId: number
-  frameId: number
-  promise: Promise<{ resource: MediaResource, intent?: DownloadClickIntent, bypass?: boolean } | null>
-}
 const earlyBrowserTakeovers = new Map<string, EarlyBrowserTakeover>()
 const activeDownloadOffers = new Map<string, Promise<any>>()
 const DIRECT_OFFERS_STORAGE_KEY = 'pending-direct-offers-v1'
 const directOfferStore = new SessionListStore<{ key: string, tabId?: number, clientRequestId: string }>(browser.storage.local)
-
-/**
- * Locate an early takeover when the request chain is no longer available.
- * Tab navigation events routinely clear the chain between onHeadersReceived
- * and downloads.onCreated. Some browsers expose the originating tab on the
- * DownloadItem; only a unique URL-and-tab identity match is safe to reuse.
- */
-function validIdentity(value: unknown): value is number {
-  return Number.isInteger(value) && Number(value) >= 0
-}
-
-export function findEarlyBrowserTakeoverByUrl(
-  candidates: Array<string | undefined>,
-  downloadIdentity: { tabId?: unknown, frameId?: unknown },
-  entries: Iterable<EarlyBrowserTakeover> = earlyBrowserTakeovers.values(),
-): EarlyBrowserTakeover | undefined {
-  const wanted = candidates.filter((value): value is string => Boolean(value))
-  const tabId = Number(downloadIdentity.tabId)
-  if (!wanted.length || !validIdentity(tabId)) return undefined
-  const frameId = Number(downloadIdentity.frameId)
-  let match: EarlyBrowserTakeover | undefined
-  for (const entry of entries) {
-    if (entry.tabId !== tabId) continue
-    if (validIdentity(frameId) && validIdentity(entry.frameId) && entry.frameId !== frameId) continue
-    if (!entry.urls.some(url => wanted.includes(url))) continue
-    if (match) return undefined
-    match = entry
-  }
-  return match
-}
 
 function downloadIdentity(item: Browser.downloads.DownloadItem): { tabId?: number, frameId?: number } {
   // Chrome's DownloadItem type has no tab/frame fields, but some browsers expose
@@ -313,8 +276,8 @@ function downloadIdentity(item: Browser.downloads.DownloadItem): { tabId?: numbe
   const tabId = Number(runtimeItem.tabId)
   const frameId = Number(runtimeItem.frameId)
   return {
-    ...(validIdentity(tabId) ? { tabId } : {}),
-    ...(validIdentity(frameId) ? { frameId } : {}),
+    ...(validDownloadIdentity(tabId) ? { tabId } : {}),
+    ...(validDownloadIdentity(frameId) ? { frameId } : {}),
   }
 }
 const requestChains = new RequestChainStore()
@@ -355,13 +318,7 @@ let lastDesktopPingAt = 0
 // Paused downloads survive browser restarts, so their Core ownership records
 // must outlive storage.session as well. The alarm rehydrates this local queue.
 const pausedFollowUpStore = new PausedHandoffFollowUpStore({
-  async get(key) {
-    const local = await browser.storage.local.get(key)
-    if (local[key] !== undefined) return local
-    const legacy = await browser.storage.session.get(key)
-    if (legacy[key] !== undefined) await browser.storage.local.set({ [key]: legacy[key] })
-    return legacy
-  },
+  get: key => browser.storage.local.get(key),
   set: items => browser.storage.local.set(items),
 }, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY)
 const pausedFollowUpsInFlight = new Set<string>()
@@ -472,7 +429,7 @@ async function hydrateHandoffTracker(): Promise<void> {
       id,
       resourceId: String(item.resourceId || ''),
       selectionKey: typeof item.selectionKey === 'string' ? item.selectionKey : undefined,
-      tabId: validIdentity(item.tabId) ? item.tabId : undefined,
+      tabId: validDownloadIdentity(item.tabId) ? item.tabId : undefined,
       browserRequestId: typeof item.browserRequestId === 'string' ? item.browserRequestId : undefined,
       status: String(item.status || 'pending'),
       checkedAt: Number(item.checkedAt || 0),
@@ -546,7 +503,7 @@ async function trackHandoff(handoffId: string, resourceId = '', tabId?: number, 
   if (current) {
     if (resourceId && !current.resourceId) current.resourceId = resourceId
     if (selectionKey) current.selectionKey = selectionKey
-    if (validIdentity(tabId)) current.tabId = tabId
+    if (validDownloadIdentity(tabId)) current.tabId = tabId
     scheduleHandoffPoll()
     return current
   }
@@ -1167,7 +1124,7 @@ async function requestDownload(
   chain?: RequestChain,
   options: { allowUnverified?: boolean } = {},
 ) {
-  if (validIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`)
+  if (validDownloadIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`)
   await hydrateHandoffTracker()
   const selectionKey = downloadSelectionKey(resource)
   const pending = [...trackedHandoffs.values()].find(item => item.tabId === resource.tabId
@@ -1330,7 +1287,7 @@ async function retainUncertainBrowserDownload(item: Browser.downloads.DownloadIt
 }
 
 async function reportDownloadError(tabId: number | undefined, reason: unknown): Promise<void> {
-  if (!validIdentity(tabId)) return
+  if (!validDownloadIdentity(tabId)) return
   const error = reason instanceof Error ? reason.message : String(reason || '下载请求失败，请重试')
   // 受限页面无法注入提示时，下一次打开工具栏弹窗仍能看到失败原因。
   await browser.storage.session.set({ [`download-error:${tabId}`]: error }).catch(() => undefined)
@@ -1891,6 +1848,7 @@ export default defineBackground(() => {
         ?? findEarlyBrowserTakeoverByUrl(
           [(item as any).finalUrl, item.url, originalRequest.url],
           downloadIdentity(item),
+          earlyBrowserTakeovers.values(),
         )
       // 原请求可跨过 Firefox 后台重载。按浏览器 requestId 恢复已有接管，
       // 不能在用户已拒绝后仅凭相同 URL 再弹一次确认。
@@ -2123,7 +2081,7 @@ export default defineBackground(() => {
       const tabId = sender.tab?.id
       void (async () => {
         const config = await settings()
-        if (!validIdentity(tabId) || config.minimumBytes > 0
+        if (!validDownloadIdentity(tabId) || config.minimumBytes > 0
           || !isDirectDownloadLink(href, pageUrl, Boolean(message.downloadAttribute))
           || !shouldTakeover({ url: href, sourcePageUrl: pageUrl, ...config, explicitClick: true })
           || isHandoffSuppressed(config.suppressions, pageUrl, 'file')) {

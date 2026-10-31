@@ -4,7 +4,7 @@
 
 On 2026-10-02 the operator explicitly requested unsigned formal Windows packages because no code-signing certificate is available. Signing tools, certificates and timestamp services are not prerequisites for this release. Unsigned packages require manual installation; the automatic updater retains its signature and signer-trust checks and must reject them.
 
-The workflow reads product version and readiness from the canonical feature-parity.json at the frozen dispatched SHA. The latest public revision is unsigned prerelease r12; its package provenance and canonical readiness describe different scopes, documented in [verification status](../validation/v7-verification.md).
+The workflow reads product version and readiness from the canonical feature-parity.json at the frozen dispatched SHA. Candidate provenance and canonical readiness describe different scopes; see [verification status](../validation/v7-verification.md)../validation/v7-verification.md).
 
 The dedicated MSI lifecycle gate uses the immutable v7.0.0 upgrade baseline and requires E:\h. This test constraint does not restrict ordinary MSI installation paths. Browser evidence requires installed Edge/Firefox, an interactive desktop and a real reachable LAN receiver.
 

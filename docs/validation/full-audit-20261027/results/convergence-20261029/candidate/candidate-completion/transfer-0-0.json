@@ -1,9 +1,0 @@
-{
-  "schema": 1,
-  "kind": "sequential durable storage baseline",
-  "stage_volume": "C:",
-  "payload_bytes": 268435456,
-  "elapsed_ms": 3405.52,
-  "throughput_mib_s": 75.17,
-  "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0"
-}

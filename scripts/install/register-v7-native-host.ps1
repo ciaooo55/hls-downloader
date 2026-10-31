@@ -1,18 +1,12 @@
 [CmdletBinding()]
 param(
     [string]$EngineExecutable = '',
-    # Retained for compatibility with older local-install invocations. The
-    # registration implementation itself is owned by the sibling Engine.
-    [string]$HostExecutable = '',
     [switch]$Unregister
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
-if ([String]::IsNullOrWhiteSpace($EngineExecutable) -and -not [String]::IsNullOrWhiteSpace($HostExecutable)) {
-    $EngineExecutable = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($HostExecutable))) 'HLSDownloaderEngine.exe'
-}
 if ([String]::IsNullOrWhiteSpace($EngineExecutable)) {
     $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $root '.tool-cache\build-cache' }
     $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $cacheRoot 'cargo-target' }

@@ -126,14 +126,15 @@ class TransparentButtonFeedbackTest {
                 "segmentBackground 提供选中色，默认铺底会在悬停时把选中态盖掉",
         )
         assertTrue(
-            body.contains("colors = ButtonDefaults.buttonColors(Color.Transparent"),
+            body.contains("containerColor: Color = Color.Transparent") &&
+                body.contains("colors = ButtonDefaults.buttonColors(containerColor,"),
             "TextButton 的默认底色仍然必须是透明，改了这个就动了所有文字按钮的观感",
         )
     }
 
     @Test
     fun text_button_passes_its_hover_and_press_step() {
-        val src = File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val src = workbenchSources()
         val body = src.substringAfter("internal fun DialogSecondary(").substringBefore("\n")
         assertTrue(
             body.contains("hoverColor = surface3"),

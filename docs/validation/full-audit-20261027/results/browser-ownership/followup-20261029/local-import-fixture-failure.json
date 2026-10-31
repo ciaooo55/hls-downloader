@@ -1,7 +1,0 @@
-{
-  "passed": false,
-  "finished": true,
-  "scope": "Built background scripts; browser APIs and Native Host simulated; no real browser or UI acceptance",
-  "checks": [],
-  "error": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n1 !== 0\n\n    at check (file:///C:/QAFollowupRunners/paused-followup-bundle-guest.mjs:150:12)\n    at async file:///C:/QAFollowupRunners/paused-followup-bundle-guest.mjs:193:58"
-}

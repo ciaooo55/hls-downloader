@@ -1,9 +1,0 @@
-{
-  "passed": false,
-  "finished": true,
-  "scope": "No native keyboard or mouse acceptance completed in r13",
-  "reason": "Computer Use selected the unique current Sandbox window, but two captures returned host browser pixels. No product UI input was sent. Foreground coordination was requested; no reply arrived before this stage ended.",
-  "enter_fix_verified": false,
-  "os_dpi_matrix_verified": false,
-  "minimum_window_verified": false
-}

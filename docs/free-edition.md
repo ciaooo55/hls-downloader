@@ -92,4 +92,4 @@ Get-Content -Raw -Encoding UTF8 '.\request-context.json' | & $cli --json add --c
 
 ## 验证状态
 
-实现、编译通过与候选包验收是不同状态。当前证据及未完成门槛见 [实施记录](validation/free-parity-20261030/README.md)。活动慢尾段拆分仍由实验开关控制，未取得重复正确性及收益证据前不进入默认行为。
+实现、编译通过与候选包验收是不同状态。当前证据及未完成门槛见 [当前记录](validation/convergence.md)。活动慢尾段拆分仍由实验开关控制，未取得重复正确性及收益证据前不进入默认行为。

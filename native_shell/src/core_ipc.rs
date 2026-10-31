@@ -2,8 +2,7 @@
 //!
 //! Native Messaging, Compose UI and native presenter must not open SQLite independently in the
 //! final product. They connect to this service using a bounded little-endian
-//! length frame carrying JSON so protocol traces remain inspectable during the
-//! migration. The payload is versioned separately from the legacy shell frame.
+//! length frame carrying versioned JSON.
 
 use crate::{CoreCommand, EventEnvelope, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
@@ -24,8 +23,8 @@ const V7_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);
 // 报完协议违规后收连接前，等对端把残留输入收尾的最长时间。见 linger_close。
 const V7_LINGER_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
-// 每连接一线程模型下的并发连接上限。超限的新连接直接关闭，客户端按连接失败
-// 自行重试。桌面 UI、原生宿主与 presenter 的常驻连接总量远小于该值。
+// 每连接一线程模型下的并发连接上限。命名管道在接收前等待槽位，
+// TCP 对超限连接立即关闭；客户端连接过程受自身超时约束。
 pub const MAX_IPC_CONNECTIONS: usize = 64;
 
 // 声明一个连接线程槽位；Drop 保证 panic 路径也不泄漏计数。
@@ -645,33 +644,7 @@ impl NamedPipeServer {
         stop: Arc<AtomicBool>,
         handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
     ) -> Result<(), String> {
-        wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
-        let active = Arc::new(AtomicUsize::new(0));
-        while !stop.load(Ordering::SeqCst) {
-            match self.accept() {
-                Ok(stream) => {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let Some(slot) = ConnectionSlot::claim(&active) else {
-                        continue;
-                    };
-                    let handler = Arc::clone(&handler);
-                    thread::spawn(move || {
-                        let _slot = slot;
-                        handle_pipe_stream(stream, handler.as_ref());
-                    });
-                }
-                Err(error) => {
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    eprintln!("Core named pipe accept: {error}");
-                    thread::sleep(Duration::from_millis(40));
-                }
-            }
-        }
-        Ok(())
+        self.serve_loop_inner(stop, handler, None)
     }
 
     pub fn serve_loop_with_ready(
@@ -680,35 +653,42 @@ impl NamedPipeServer {
         handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
         ready: std::sync::mpsc::SyncSender<Result<(), String>>,
     ) -> Result<(), String> {
+        self.serve_loop_inner(stop, handler, Some(ready))
+    }
+
+    fn serve_loop_inner(
+        &self,
+        stop: Arc<AtomicBool>,
+        handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
+        mut ready: Option<std::sync::mpsc::SyncSender<Result<(), String>>>,
+    ) -> Result<(), String> {
         if stop.load(Ordering::SeqCst) {
             let error = "named pipe startup canceled before ready".to_string();
-            let _ = ready.send(Err(error.clone()));
+            if let Some(ready) = ready {
+                let _ = ready.send(Err(error.clone()));
+            }
             return Err(error);
         }
         wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
-        let first = self.serve_once_inner(Some(&ready))?;
-        if stop.load(Ordering::SeqCst) {
-            return Ok(());
-        }
         let active = Arc::new(AtomicUsize::new(0));
-        let Some(first_slot) = ConnectionSlot::claim(&active) else {
-            // 槽位耗尽时丢弃首连接：ready 已通知，客户端会重连重试
-            return Ok(());
-        };
-        let handler_for_first = Arc::clone(&handler);
-        thread::spawn(move || {
-            let _slot = first_slot;
-            handle_pipe_stream(first, handler_for_first.as_ref());
-        });
         while !stop.load(Ordering::SeqCst) {
-            match self.accept() {
+            // Reserve capacity before accepting. Recently closed clients may still
+            // occupy reader threads; accepting then dropping loses valid requests.
+            let slot = loop {
+                if stop.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                if let Some(slot) = ConnectionSlot::claim(&active) {
+                    break slot;
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            let first_ready = ready.take();
+            match self.serve_once_inner(first_ready.as_ref()) {
                 Ok(stream) => {
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
-                    let Some(slot) = ConnectionSlot::claim(&active) else {
-                        continue;
-                    };
                     let handler = Arc::clone(&handler);
                     thread::spawn(move || {
                         let _slot = slot;
@@ -716,6 +696,9 @@ impl NamedPipeServer {
                     });
                 }
                 Err(error) => {
+                    if first_ready.is_some() {
+                        return Err(error);
+                    }
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
@@ -725,10 +708,6 @@ impl NamedPipeServer {
             }
         }
         Ok(())
-    }
-
-    fn accept(&self) -> Result<std::fs::File, String> {
-        self.serve_once_inner(None)
     }
 
     fn serve_once_inner(

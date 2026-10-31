@@ -1,6 +1,6 @@
 # 安装、升级与用户目录
 
-当前源码产品版本由 `config/release/feature-parity.json` 决定；最近公开包为 7.0.3-r12 未签名预发布。包的身份和实测范围见 [r12 说明](../releases/release-v7-r12.md)，不由本机是否安装决定。
+当前源码产品版本由 `config/release/feature-parity.json` 决定。包的身份和实测范围见[验证状态](../validation/v7-verification.md)。
 
 ## 普通 MSI 安装
 
@@ -18,16 +18,12 @@
 
 使用 Windows 正常卸载流程移除产品。卸载程序与删除下载成品是不同操作；不应清空“下载”文件夹、共享浏览器配置、工具链缓存或浏览器注册表父键。清理 Native Messaging 时只处理确属本产品且已失效的叶子登记。
 
-## 专用维护脚本
-
-`scripts/install/install-v7-local.ps1` 是发布维护环境的事务安装脚本，**硬限定 `E:\h`**；这不是普通 MSI 的默认路径或用户安装限制，也不用于描述当前电脑的安装状态。
-
-该脚本读取候选/正式 manifest，校验版本、来源及哈希，暂存完整镜像后切换并注册 Host；失败时恢复旧镜像。它会读取 [升级提示](../releases/v7-desktop-upgrade-note.md)，因此该文件必须保留。执行前应阅读脚本的路径、权限和状态备份要求，不直接套用于其他安装目录。
+## 构建与验收
 
 候选构建用于收集证据；正式构建另有 canonical completeness、readiness、同提交证据和干净工作树门禁，见 [发布 runner](../releases/v7-release-runner.md)。构建成功不能替代安装验收。
 
 ## 历史数据
 
-首次创建普通 v7 数据库时，Core 可对精确识别的 v6 数据库建立 SQLite 一致快照并校验后迁移；已有 v7 数据库、Portable 或显式数据目录不触发整库覆盖。迁移失败保留源数据。
+Core 只打开当前版本数据库，不自动导入旧版本设置、任务或缓存。旧数据不会被覆盖或删除。
 
 旧版行为通过同一仓库的 Git 历史查看，无需另存源码或创建 worktree。

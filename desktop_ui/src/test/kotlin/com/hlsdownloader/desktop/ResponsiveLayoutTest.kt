@@ -148,7 +148,7 @@ class ResponsiveLayoutTest {
 
     @Test
     fun the_sidebar_collapse_and_fixture_origin_stay_wired_up() {
-        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val source = workbenchSources()
         // 折叠态与展开态共用同一套选中/回调，别让两套导航状态各走各的。
         assertTrue(source.contains("if (compact) {"))
         assertTrue(source.contains("SidebarRail(selected, selectedCategory, selectedQueueId, profiles, counts"))
@@ -216,7 +216,7 @@ class ResponsiveLayoutTest {
 
     @Test
     fun desktop_shortcut_dispatcher_reads_the_latest_dialog_state() {
-        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val source = workbenchSources()
         assertTrue(source.contains("rememberUpdatedState<(String?) -> Boolean>"))
         assertTrue(source.contains("currentShortcutHandler.value("))
         assertTrue(source.contains("KeyboardFocusManager.getCurrentKeyboardFocusManager()"))
@@ -224,7 +224,7 @@ class ResponsiveLayoutTest {
 
     @Test
     fun desktop_runtime_uses_the_real_compose_accessibility_contract() {
-        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val source = workbenchSources()
         val components = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/WorkbenchComponents.kt").readText()
         val build = java.io.File("build.gradle.kts").readText()
         assertTrue(source.contains("compose.accessibility.enable"))
@@ -253,7 +253,7 @@ class ResponsiveLayoutTest {
 
     @Test
     fun task_row_press_state_has_its_own_feedback_step() {
-        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val source = workbenchSources()
         // 任务行是自己手写 interaction 的（要同时吃 hover / 双击 / 右键 / 拖动），没走
         // rememberPressFeedback，所以"按下"这一态必须在这里显式收。原先只有 collectIsHoveredAsState：
         // hover 换底色，按下和抬起之间肉眼一模一样——表格里最高频的手势偏偏没有反馈。
@@ -273,7 +273,7 @@ class ResponsiveLayoutTest {
 
     @Test
     fun startup_retries_without_raw_pipe_text_and_modals_hide_the_workbench_tree() {
-        val source = java.io.File("src/main/kotlin/com/hlsdownloader/desktop/Main.kt").readText()
+        val source = workbenchSources()
         assertTrue(source.contains("while (!snapshotReady)"))
         assertTrue(source.contains("ENGINE_RECONNECTING_NOTICE"))
         assertTrue(source.contains("EnginePipeClient.ensurePresenterStarted()"))

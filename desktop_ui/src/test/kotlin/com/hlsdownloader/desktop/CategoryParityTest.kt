@@ -26,7 +26,7 @@ class CategoryParityTest {
         File("../native_shell/src/media_ext.rs").readText()
 
     private fun categorySource(): String =
-        File("../native_shell/src/category.rs").readText()
+        mediaExtSource()
 
     private fun recognizeSource(): String =
         File("../native_shell/src/recognize.rs").readText()

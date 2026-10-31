@@ -1,5 +1,0 @@
-{"phase":"started","metadata":null,"utc":"2026-10-29T06:25:40.7338267Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt5t5qh-1"},"utc":"2026-10-29T06:25:41.9190100Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt5t5qh-1"},"utc":"2026-10-29T06:25:41.9641572Z"}
-{"phase":"forwarded","metadata":{"op":"ping","request_id":"mvt5ufyd-2"},"utc":"2026-10-29T06:26:40.0709830Z"}
-{"phase":"returned","metadata":{"op":"ping","request_id":"mvt5ufyd-2"},"utc":"2026-10-29T06:26:40.1124803Z"}

@@ -1,7 +1,0 @@
-C:\QALifecycle\portable-source\HLSDownloader\scripts\upgrade-v7-portable.ps1 : The 'Expand-Archive' command was found 
-in the module 'Microsoft.PowerShell.Archive', but the module could not be loaded. For more information, run 
-'Import-Module Microsoft.PowerShell.Archive'.
-    + CategoryInfo          : ObjectNotFound: (Expand-Archive:String) [upgrade-v7-portable.ps1], CommandNotFoundExcept 
-   ion
-    + FullyQualifiedErrorId : CouldNotAutoloadMatchingModule,upgrade-v7-portable.ps1
- 

@@ -41,7 +41,6 @@ $env:HLS_UI_AUDIT_SURFACE = 'tasks_1000'
 $env:HLS_UI_AUDIT_WIDTH = [string]$Width
 $env:HLS_UI_AUDIT_HEIGHT = [string]$Height
 $env:HLS_UI_FRAME_REPORT = $ReportPath
-$env:HLS_V6_SKIP_MIGRATE = '1'
 $previousDataDir = $env:HLS_V7_DATA_DIR
 $frameDataRoot = Join-Path $repo ('.tool-cache\test-tmp\compose-frame-' + [guid]::NewGuid().ToString('N'))
 $env:HLS_V7_DATA_DIR = Join-Path $frameDataRoot 'data'

@@ -1,8 +1,0 @@
-﻿{
-    "passed":  false,
-    "finished":  true,
-    "phase":  "extract-unchanged-presenter",
-    "host_install_performed":  false,
-    "error":  "You cannot call a method on a null-valued expression.",
-    "position":  "At C:\\QACurrentRunners\\current-browser-guest.ps1:16 char:5\r\n+     $result.presenter_source_msi_sha256 = (Get-FileHash -LiteralPath  ...\r\n+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-}
