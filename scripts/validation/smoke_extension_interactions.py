@@ -31,7 +31,7 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.common.exceptions import StaleElementReferenceException
 
-from smoke_extension_media import _find_firefox, _find_edge, _fit_browser_window
+from smoke_extension_media import _find_firefox, _find_edge, _fit_browser_window, _hover_video
 from smoke_v7_portable_app import Pipe, wait
 from smoke_v7_browser_download_confirmation import click_download_confirmation
 
@@ -322,6 +322,18 @@ def run(args):
                 if attempt == 2:
                     raise
 
+    def move_neutral(context, release=False):
+        actions = ActionChains(driver)
+        if context.startswith('public video'):
+            actions.move_to_element(driver.find_element(By.TAG_NAME, 'video'))
+        elif context.startswith('expanded overlay'):
+            actions.move_to_element(overlay('.hover-title'))
+        else:
+            actions.w3c_actions.pointer_action.move_to_location(2, 2)
+        if release:
+            actions.release()
+        actions.perform()
+
     def measure(element, context):
         if not element.is_displayed():
             return
@@ -329,9 +341,7 @@ def run(args):
         time.sleep(.15)
         ActionChains(driver).move_by_offset(0, 0).perform()
         driver.execute_script("document.activeElement?.blur()")
-        neutral = ActionChains(driver)
-        neutral.w3c_actions.pointer_action.move_to_location(2, 2)
-        neutral.perform()
+        move_neutral(context)
         driver.get_screenshot_as_png()
         diagnostic = driver.execute_script("return {hover:arguments[0].matches(':hover'),animations:arguments[0].getAnimations().map(a=>({state:a.playState,time:a.currentTime,type:a.constructor.name})),title:arguments[0].title}",element)
         if diagnostic["hover"]:
@@ -352,9 +362,7 @@ def run(args):
         ActionChains(driver).click_and_hold(element).perform()
         time.sleep(.18)
         press = styles(element)
-        neutral = ActionChains(driver)
-        neutral.w3c_actions.pointer_action.move_to_location(2, 2)
-        neutral.release().perform()
+        move_neutral(context, release=True)
         wait(lambda:not driver.execute_script("return arguments[0].closest('.video-action-group')?.classList.contains('dragging')",element),
             'Pointer release left the video controls dragging',5)
         fields = ("background", "color", "transform", "border", "shadow", "outline")
@@ -371,11 +379,10 @@ def run(args):
         # 播放器初始化和资源扫描完成时允许一次 DOM 换代，重新定位后测同一按钮。
         for attempt in range(3):
             try:
-                return measure(locator(), context)
+                move_neutral(context)
+                return measure(wait(locator, 'Missing control: ' + context, 10), context)
             except StaleElementReferenceException:
-                neutral = ActionChains(driver)
-                neutral.w3c_actions.pointer_action.move_to_location(2, 2)
-                neutral.release().perform()
+                move_neutral(context, release=True)
                 if attempt == 2:
                     raise
 
@@ -813,6 +820,8 @@ def run(args):
                 })
 
             if not args.popup_only:
+                _hover_video(driver, driver.find_element(By.TAG_NAME, 'video'))
+                wait(lambda: overlay('.video-download'), 'Public video control did not return after closing the panel', 10)
                 measure_stable(lambda: overlay(".video-download"), "public video download")
                 measure_stable(lambda: overlay(".video-more"), "public video more")
                 ActionChains(driver).move_to_element(overlay(".video-download")).perform()

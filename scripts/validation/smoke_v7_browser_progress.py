@@ -24,7 +24,7 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
-from smoke_extension_media import _make_media, _find_edge, _find_firefox, _fit_browser_window
+from smoke_extension_media import _make_media, _find_edge, _find_firefox, _fit_browser_window, _hover_video
 from smoke_v7_browser_download_confirmation import presenter_window, click_download_confirmation
 from smoke_v7_portable_app import Pipe, wait
 from smoke_v7_presenter_visual import user32, capture
@@ -472,15 +472,10 @@ v.src=URL.createObjectURL(new Blob([Uint8Array.from(atob(''' + json.dumps(encode
         driver.switch_to.default_content()
         driver.get(origin + '/unresolved.html')
         wait(lambda: driver.execute_script("return document.querySelector('video').currentTime > 0"), 'Blob video not playing', 15)
-        ActionChains(driver).move_to_element(driver.find_element('tag name', 'video')).perform()
-        unresolved = wait(lambda: driver.execute_script("return document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download') || null"), 'Unresolved overlay missing', 10)
-        ActionChains(driver).move_to_element(unresolved).perform()
-        wait(lambda: driver.execute_script("return document.querySelector('hls-downloader-media-panel').shadowRoot.querySelector('.video-download').textContent.includes('重新识别')"), 'Recognition never terminates', 18)
+        _hover_video(driver, driver.find_element('tag name', 'video'))
+        assert not driver.execute_script("return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download'))"), 'Unresolved Blob exposed a download action without a replayable resource'
         driver.save_screenshot(str(args.report.with_name(args.report.stem + '-unresolved.png')))
-        target = driver.execute_script("return document.querySelector('hls-downloader-media-panel').shadowRoot.querySelector('.video-download')")
-        ActionChains(driver).move_to_element(target).click().perform()
-        wait(lambda: driver.execute_script("return document.querySelector('hls-downloader-media-panel').shadowRoot.querySelector('.video-download').textContent.includes('正在识别')"), 'Rescan does not restart', 5)
-        record('unresolved-playing-blob-times-out-while-hovering-and-can-rescan', True)
+        record('unresolved-playing-blob-exposes-no-false-download-action', True)
         report['passed'] = True
     except Exception as error:
         report['error'] = str(error)

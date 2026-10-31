@@ -877,11 +877,6 @@ def run_real(args) -> dict[str, Any]:
         result['checks'].append({'name':name,'actual':actual})
         args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         print(json.dumps({'check':name}),flush=True)
-    def assert_no_firefox_download(suffix):
-        items = [item for item in _download_items(driver, inspector) if suffix in item.get('url', '')]
-        events = driver.execute_script('return (window.takeoverDownloadEvents || []).filter(item=>item.url.includes(arguments[0]))', suffix)
-        assert not items and not events, {'items': items, 'created_events': events}
-        return {'items': items, 'created_events': events}
     # 真实浏览器配置放本地临时目录，隔离沙盒映射盘对 Native Messaging 启动的影响。
     temp_root = test_tmp()
     with tempfile.TemporaryDirectory(prefix='real-takeover-',dir=temp_root) as temporary:
@@ -969,9 +964,8 @@ def run_real(args) -> dict[str, Any]:
                 popup_url = f'moz-extension://{uuids[addon_id]}/popup.html'
             driver.switch_to.new_window('tab'); inspector=driver.current_window_handle
             driver.get(popup_url)
-            if args.browser == 'firefox':
-                driver.execute_script('window.takeoverDownloadEvents=[]; chrome.downloads.onCreated.addListener('
-                                      'item=>window.takeoverDownloadEvents.push({id:item.id,url:item.url}));')
+            driver.execute_script('window.takeoverDownloadEvents=[]; chrome.downloads.onCreated.addListener('
+                                  'item=>window.takeoverDownloadEvents.push({id:item.id,url:item.url}));')
             def message(value):
                 driver.switch_to.window(inspector)
                 return _extension_call(driver,'chrome.runtime.sendMessage(arguments[0]).then(done,e=>done({ok:false,error:String(e)}))',value)
@@ -987,24 +981,33 @@ def run_real(args) -> dict[str, Any]:
                 r=message({'type':'set-takeover-settings','enabled':value,'minimumBytes':1024*1024})
                 assert r.get('ok'), r
 
-            def accepted_case(name, path=None, size=None, expected_bytes=None, no_content_length=False, filename=None):
+            def accepted_case(name, path=None, size=None, expected_bytes=None, no_content_length=False, filename=None, expect_url_failure=False):
                 output_name=filename or Path(path or name + '.bin').name
                 before={t['task_id'] for t in tasks()}
                 _click_download(driver,page,name)
                 wait(lambda:presenter_window(runtime=runtime),f'{name} confirmation missing',20)
+                pending = [json.loads(item) for item in core({'type':'load_handoffs','request_id':7})['items']]
+                pending = [item for item in pending if item['status'] == 'pending']
+                assert len(pending) == 1, pending
+                url_failure = expect_url_failure and not pending[0]['offer'].get('local_source_path')
                 click_download_confirmation(evidence_path=args.report.with_name(f'{name}-click.json'), runtime=runtime)
                 def completed():
-                    found=[t for t in tasks() if t['task_id'] not in before
-                        and (f'/{path or name + ".bin"}' in t['url'] if path else
-                            t.get('filename') == output_name or Path(t.get('output_path','')).name == output_name)]
+                    found=[t for t in tasks() if t['task_id'] not in before]
                     created.update(t['task_id'] for t in found)
                     if len(found)>1:
                         raise AssertionError(f'{name} created duplicate desktop tasks: {found}')
-                    if found and found[-1]['status']=='failed':
+                    if found and found[-1]['status']=='failed' and not url_failure:
                         raise AssertionError(found[-1])
-                    return found[-1] if found and found[-1]['status']=='completed' else None
+                    return found[-1] if found and found[-1]['status'] in ('completed','failed') else None
                 task=wait(completed,f'{name} desktop task did not complete',60)
+                if url_failure:
+                    assert task['status'] == 'failed' and task.get('error_message'), task
+                    single_resolved_handoff(name, task['task_id'])
+                    _assert_browser_absent(driver, inspector, name+'.bin')
+                    record(name+'-Core-visible-failure-without-browser-replay', task['error_message'])
+                    return task
                 file_path=Path(task['output_path'])
+                assert file_path.name == output_name, (name, file_path)
                 payload=expected_bytes if expected_bytes is not None else _fixture_bytes(size or SMALL_SIZE)
                 expected=hashlib.sha256(payload).hexdigest()
                 assert file_path.is_file() and file_path.stat().st_size==len(payload), (name,file_path)
@@ -1235,24 +1238,50 @@ def run_real(args) -> dict[str, Any]:
                     })
                 finally:
                     _extension_call(driver,"chrome.storage.local.set({excludedHosts:[]}).then(()=>done(true))")
+            def rejected_case(name, interrupt_host=False):
+                before_tasks = {task['task_id'] for task in tasks()}
+                before_handoffs = {json.loads(item)['id'] for item in core({'type':'load_handoffs','request_id':7})['items']}
+                _click_download(driver, page, name)
+                wait(lambda: presenter_window(runtime=runtime), name+' confirmation missing', 20)
+                offers = [json.loads(item) for item in core({'type':'load_handoffs','request_id':7})['items']]
+                offers = [item for item in offers if item['id'] not in before_handoffs]
+                assert len(offers) == 1 and offers[0]['status'] == 'pending', offers
+                handoff = offers[0]
+                source = Path(handoff['offer']['local_source_path']) if handoff['offer'].get('local_source_path') else None
+                original_bytes = source.read_bytes() if source else None
+                if interrupt_host:
+                    owned = []
+                    for process in psutil.process_iter(['exe']):
+                        if process.info['exe'] and Path(process.info['exe']).resolve() == runtime/'app/resources/HLSDownloaderNativeHost.exe':
+                            with contextlib.suppress(psutil.NoSuchProcess):
+                                process.terminate()
+                                owned.append(process)
+                    assert owned, 'No isolated Native Host to interrupt'
+                    _, alive = psutil.wait_procs(owned, timeout=5)
+                    assert not alive, 'Isolated Native Host did not stop'
+                click_download_confirmation(accept=False, runtime=runtime)
+                decisions = [json.loads(item) for item in core({'type':'load_handoffs','request_id':7})['items']]
+                assert next(item for item in decisions if item['id'] == handoff['id'])['status'] == 'rejected'
+                assert before_tasks == {task['task_id'] for task in tasks()}, 'Rejected handoff created a task'
+                if source:
+                    assert source.read_bytes() == original_bytes == _fixture_bytes(FILE_SIZE)
+                    items = _download_items(driver, inspector)
+                    item = next(item for item in items if Path(item['filename']).is_file() and Path(item['filename']).samefile(source))
+                    assert item['state'] == 'complete', item
+                    record(name+'-rejection-preserves-original-response', {'bytes': len(original_bytes), 'interrupted_host': interrupt_host})
+                    _extension_call(driver, 'chrome.downloads.removeFile(arguments[0]).then(()=>chrome.downloads.erase({id:arguments[0]})).then(done)', item['id'])
+                else:
+                    record(name+'-rejection-keeps-browser-idle', _assert_browser_absent(driver, inspector, name+'.bin'))
+                if interrupt_host:
+                    assert message({'type':'ping'}).get('ok'), 'Native Host did not reconnect'
+
             if args.real_scenario != 'all':
                 enabled(True)
-                name = 'reject' if args.real_scenario == 'rejection' else 'fallback'
-                _click_download(driver,page,name)
-                wait(lambda:presenter_window(runtime=runtime),'Targeted confirmation missing',20)
-                click_download_confirmation(accept=name=='fallback', evidence_path=args.report.with_name(name+'-click.json'), runtime=runtime)
-                if name == 'fallback':
-                    def targeted_failure():
-                        found=[t for t in tasks() if t['task_id'] not in initial and name+'.bin' in t['url']]
-                        created.update(t['task_id'] for t in found)
-                        return found[-1] if found and found[-1]['status']=='failed' else None
-                    record('targeted-desktop-http-failure', wait(targeted_failure,'Targeted failure task missing',20))
-                if args.browser == 'firefox':
-                    record('targeted-Firefox-decision-keeps-browser-idle', assert_no_firefox_download(name+'.bin'))
+                if args.real_scenario == 'rejection':
+                    rejected_case('reject')
                 else:
-                    record('targeted-desktop-ownership-keeps-browser-idle',_assert_browser_absent(driver,inspector,name+'.bin'))
-                single_resolved_handoff(name)
-                result['passed']=True
+                    accepted_case('fallback', size=FILE_SIZE, expect_url_failure=True)
+                result['passed'] = True
                 return result
             enabled(False)
             _click_download(driver,page,'disabled')
@@ -1264,86 +1293,10 @@ def run_real(args) -> dict[str, Any]:
             record('site-excluded-browser-complete-sha256',_assert_browser_completed(driver,inspector,'excluded.bin'))
             assert initial | created == {t['task_id'] for t in tasks()}
             _extension_call(driver,"chrome.storage.local.set({excludedHosts:[]}).then(()=>done(true))")
-            before={t['task_id'] for t in tasks()}
-            _click_download(driver,page,'accept')
-            wait(lambda:presenter_window(runtime=runtime),'Takeover confirmation missing',20)
-            paused=_item_for(driver,inspector,'accept.bin')
-            if args.browser == 'firefox':
-                assert_no_firefox_download('accept.bin')
-            else:
-                _assert_browser_absent(driver,inspector,'accept.bin')
-            assert before=={t['task_id'] for t in tasks()}, 'Task began before confirmation'
-            record('real-takeover-blocks-before-desktop-confirmation' if args.browser=='firefox' else 'real-takeover-removes-browser-copy-before-confirmation',paused)
-            click_download_confirmation(evidence_path=args.report.with_name('accept-click.json'), runtime=runtime)
-            def completed():
-                found=[t for t in tasks() if t['task_id'] not in before and 'accept.bin' in t['url']]
-                created.update(t['task_id'] for t in found)
-                if found and found[-1]['status']=='failed': raise AssertionError(found[-1])
-                return found[-1] if found and found[-1]['status']=='completed' else None
-            task=wait(completed,'Real takeover task did not complete',60)
-            expected=hashlib.sha256(FILE_CHUNK*(FILE_SIZE//len(FILE_CHUNK))).hexdigest()
-            path=Path(task['output_path'])
-            assert path.stat().st_size==FILE_SIZE and hashlib.sha256(path.read_bytes()).hexdigest()==expected
-            wait(lambda:_item_for(driver,inspector,'accept.bin') is None,'Browser copy remained after accepted takeover',20)
-            assert not list(downloads.glob('accept*')), 'Duplicate browser output'
-            record('real-takeover-accepted-single-complete-file-sha256',expected)
-            single_resolved_handoff('accept')
-            _click_download(driver,page,'reject')
-            wait(lambda:presenter_window(runtime=runtime),'Reject confirmation missing',20)
-            result['reject_before_confirmation'] = _download_items(driver, inspector)
-            args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf8')
-            click_download_confirmation(accept=False, evidence_path=args.report.with_name('reject-click.json'), runtime=runtime)
-            if args.browser == 'firefox':
-                record('real-desktop-rejection-cancels-without-Firefox-download', assert_no_firefox_download('reject.bin'))
-            else:
-                record('real-desktop-rejection-keeps-browser-idle',_assert_browser_absent(driver,inspector,'reject.bin'))
-            single_resolved_handoff('reject')
-            assert len(created)==len([t for t in tasks() if t['task_id'] not in initial]), 'Rejected takeover created another task'
-            _click_download(driver,page,'fallback')
-            wait(lambda:presenter_window(runtime=runtime),'Fallback confirmation missing',20)
-            result['fallback_before_confirmation'] = _download_items(driver, inspector)
-            args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf8')
-            click_download_confirmation(evidence_path=args.report.with_name('fallback-click.json'), runtime=runtime)
-            def failed():
-                found=[t for t in tasks() if t['task_id'] not in initial and 'fallback.bin' in t['url']]
-                created.update(t['task_id'] for t in found)
-                return found[-1] if found and found[-1]['status']=='failed' else None
-            failure=wait(failed,'Accepted desktop HTTP failure was not reported',60)
-            assert failure.get('error_message'),failure
-            if args.browser == 'firefox':
-                record('real-accepted-desktop-failure-keeps-Firefox-idle', assert_no_firefox_download('fallback.bin'))
-            else:
-                record('real-accepted-desktop-failure-keeps-browser-idle',_assert_browser_absent(driver,inspector,'fallback.bin'))
-            single_resolved_handoff('fallback')
-            _click_download(driver,page,'disconnect')
-            wait(lambda:presenter_window(runtime=runtime),'Disconnect confirmation missing',20)
-            result['disconnect_before_host_stop'] = _download_items(driver, inspector)
-            owned=[]
-            for process in psutil.process_iter(['name','exe']):
-                if process.info['name']!='HLSDownloaderNativeHost.exe' or not process.info['exe']:continue
-                if Path(process.info['exe']).resolve()!=runtime/'app/resources/HLSDownloaderNativeHost.exe':continue
-                with contextlib.suppress(psutil.NoSuchProcess,psutil.AccessDenied):
-                    if any(parent.pid==driver.service.process.pid for parent in process.parents()):owned.append(process)
-            assert owned,'Could not identify this isolated browser Native Host'
-            stopped=[]
-            for process in owned:
-                try:
-                    process.terminate();process.wait(5)
-                    stopped.append(process.pid)
-                except psutil.NoSuchProcess:
-                    # 同一浏览器可能有多个旧通信端口；枚举后自行退出不等于产品失败。
-                    pass
-            assert stopped, 'No live browser Native Host was interrupted'
-            result['interrupted_host_pids']=stopped
-            result['disconnect_after_host_stop'] = _download_items(driver, inspector)
-            click_download_confirmation(accept=False, runtime=runtime)
-            result['disconnect_after_reject'] = _download_items(driver, inspector)
-            args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
-            if args.browser == 'firefox':
-                record('actual-native-host-disconnect-keeps-Firefox-idle', assert_no_firefox_download('disconnect.bin'))
-            else:
-                record('actual-native-host-disconnect-after-receipt-keeps-browser-idle',_assert_browser_absent(driver,inspector,'disconnect.bin'))
-            assert message({'type':'ping'}).get('ok'),'Native Host did not reconnect'
+            accepted_case('accept', size=FILE_SIZE)
+            rejected_case('reject')
+            accepted_case('fallback', size=FILE_SIZE, expect_url_failure=True)
+            rejected_case('disconnect', interrupt_host=True)
             result['passed']=True
         except Exception as error:
             result['error']=str(error);result['traceback']=traceback.format_exc()
@@ -1384,7 +1337,11 @@ def run_real(args) -> dict[str, Any]:
                 result['diagnostic_error'] = str(diagnostic_error)
             args.report.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
         finally:
-            if driver: driver.quit()
+            if driver:
+                with contextlib.suppress(Exception):
+                    driver.switch_to.window(inspector)
+                    result['browser_created_events'] = driver.execute_script('return window.takeoverDownloadEvents')
+                driver.quit()
             try:
                 if server:
                     marker=f'http://127.0.0.1:{server.server_port}/'

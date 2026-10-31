@@ -15,12 +15,11 @@ import uuid
 import zipfile
 
 from selenium import webdriver
-from selenium.webdriver import ActionChains
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 from selenium.common.exceptions import StaleElementReferenceException
 
-from smoke_extension_media import _find_firefox
+from smoke_extension_media import _find_firefox, _hover_video
 from smoke_v7_portable_app import Pipe, wait
 from smoke_v7_browser_download_confirmation import click_download_confirmation
 
@@ -90,7 +89,7 @@ def run(args):
                 driver.get(url)
                 wait(lambda: driver.execute_script("return document.querySelector('video').currentTime>0"),
                      "Fixture video did not play", 30)
-                ActionChains(driver).move_to_element(driver.find_element("tag name", "video")).perform()
+                _hover_video(driver, driver.find_element("tag name", "video"))
                 wait(lambda: driver.execute_script(
                     "return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot"
                     "?.querySelector('.video-download:not(.identifying)'))"),

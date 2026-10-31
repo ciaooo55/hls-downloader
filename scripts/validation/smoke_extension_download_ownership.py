@@ -274,8 +274,22 @@ def run(args):
                     assert offered['offer'].get('local_source_path') or offered['offer']['url'] == url+export, offered
                     assert requests['/stale.zip'] == requests['/stale-delegated.zip'] == 0, requests
                 if offered['offer'].get('local_source_path'):
-                    assert name not in ('cancel', 'github'), 'Explicit cancellation unexpectedly downloaded a file'
-                    accept_completed_response(name, offered, before_tasks, events()[prior_events:])
+                    if name in ('cancel', 'github'):
+                        source = Path(offered['offer']['local_source_path'])
+                        original = source.read_bytes()
+                        assert original and (name == 'github' or original == PAYLOAD)
+                        command({'kind': 'reject_handoff', 'handoff_id': offered['id'], 'suppress_site_kind': False})
+                        assert before_tasks == {t['task_id'] for t in core({'type':'snapshot','request_id':3})['tasks']}
+                        assert source.read_bytes() == original
+                        items = _download_items(driver, inspector)
+                        item = next(item for item in items if Path(item['filename']).is_file() and Path(item['filename']).samefile(source))
+                        assert item['state'] == 'complete', item
+                        record(f'{name}: rejected import preserves the original response', {
+                            'created_events': events()[prior_events:], 'bytes': len(original),
+                            'sha256': hashlib.sha256(original).hexdigest()})
+                        _extension_call(driver, 'chrome.downloads.removeFile(arguments[0]).then(()=>chrome.downloads.erase({id:arguments[0]})).then(done)', item['id'])
+                    else:
+                        accept_completed_response(name, offered, before_tasks, events()[prior_events:])
                     continue
                 wait(absent, 'Browser copy remained while confirmation pending', 15)
                 delta = events()[prior_events:]
@@ -330,8 +344,6 @@ def run(args):
                     driver.execute_cdp_cmd('Page.navigate', {'url':target}) if args.browser == 'edge' else driver.execute_script('location.assign(arguments[0])', target)
                 offered = pending(before)
                 delta = events()[prior_events:]
-                if args.browser == 'firefox':
-                    assert not delta, delta
                 if offered['offer'].get('local_source_path'):
                     accept_completed_response(name, offered, before_tasks, delta)
                     if name == 'newtab-attachment':

@@ -206,7 +206,8 @@ def run(args):
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         activated = native_message(host, {"op": "activate"})
         reopened = wait(ready, "Browser activation did not restore the hidden workbench", 15)
-        check("native-host-restores-hidden-workbench", activated.get("ok") is True, reopened)
+        check("native-host-restores-hidden-workbench", activated.get("ok") is True,
+              {"response": activated, **reopened})
         host.stdin.close()
         host.wait(timeout=5)
         host = None

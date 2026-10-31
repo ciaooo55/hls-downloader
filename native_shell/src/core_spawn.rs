@@ -77,12 +77,10 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn spawn_desktop_ui(root: &Path) -> bool {
-    if crate::window_handle_by_title("HLS Downloader").is_some() {
-        return crate::activate_window_by_title("HLS Downloader");
-    }
     let Some(executable) = locate_desktop_executable(root) else {
         return false;
     };
+    // 工作台的单实例入口负责恢复自身窗口，避免跨进程焦点限制被误报成启动失败。
     let mut command = Command::new(&executable);
     command.current_dir(root);
     command.stdin(std::process::Stdio::null());

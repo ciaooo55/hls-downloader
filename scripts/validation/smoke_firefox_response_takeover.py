@@ -1,4 +1,4 @@
-"""Verify Firefox response blocking and Chromium download-item cleanup.
+"""Verify response ownership and completed-file import in real browsers.
 
 Run only in a disposable Windows Sandbox. Decisions use the real Core protocol;
 this is not a test of clicking the desktop confirmation buttons.
@@ -143,7 +143,7 @@ def run(args):
                 driver.switch_to.new_window('tab')
                 inspector = driver.current_window_handle
                 driver.get(popup_url)
-                # The event log survives erase(), so cancelling/erasing a browser item cannot pass.
+                # 保留原始创建事件，不能把事后清除记录算成从未创建。
                 driver.execute_script('window.downloadEvents=[]; chrome.downloads.onCreated.addListener('
                                       'item=>window.downloadEvents.push({id:item.id,url:item.url}));')
 
@@ -171,11 +171,9 @@ def run(args):
                     wait(lambda: not list(downloads.iterdir()), name + ': browser file not removed', 15)
                     panel = None
                     if args.browser == 'firefox':
-                        assert not state['events'], state
                         driver.set_context('chrome')
                         panel = driver.execute_script("return {state:window.DownloadsPanel?.panel?.state || 'closed'}")
                         driver.set_context('content')
-                        assert panel['state'] == 'closed', panel
                     record(name, {'items': state['items'], 'created_events': state['events'], 'panel': panel})
 
                 def click(name, alt=False):
@@ -199,24 +197,34 @@ def run(args):
                     offered.add(handoff['id'])
                     assert handoff['status'] == 'pending', handoff
                     assert before == {task['task_id'] for task in tasks()}
-                    assert_no_browser_download(name + '-before-decision')
+                    source = Path(handoff['offer']['local_source_path']) if handoff['offer'].get('local_source_path') else None
+                    source_bytes = source.read_bytes() if source else None
+                    if source:
+                        record(name + '-original-response-retained', {'bytes': len(source_bytes), 'created_events': browser_state()['events']})
+                    else:
+                        assert_no_browser_download(name + '-before-decision')
                     command({'kind': 'reject_handoff' if reject else 'accept_handoff',
                              'handoff_id': handoff['id'], 'filename': suffix,
                              'download_dir': '', 'trusted_ui': True,
                              'suppress_site_kind': False})
                     if reject:
-                        time.sleep(1)
                         assert before == {task['task_id'] for task in tasks()}
+                        if source:
+                            assert source.read_bytes() == source_bytes
+                            item = next(item for item in browser_state()['items'] if Path(item['filename']).is_file() and Path(item['filename']).samefile(source))
+                            assert item['state'] == 'complete', item
+                            record(name + '-rejection-preserves-source', {'sha256': hashlib.sha256(source_bytes).hexdigest()})
+                            extension('chrome.downloads.removeFile(arguments[0]).then(()=>chrome.downloads.erase({id:arguments[0]})).then(done)', item['id'])
                     else:
                         def completed():
                             found = [task for task in tasks() if task['task_id'] not in before]
                             created.update(task['task_id'] for task in found)
                             assert len(found) <= 1, found
-                            if found and found[0]['status'] == 'failed' and not expect_failed:
+                            if found and found[0]['status'] == 'failed' and not (expect_failed and source is None):
                                 raise AssertionError(found[0])
                             return found[0] if found and found[0]['status'] in ['completed', 'failed'] else None
                         task = wait(completed, f'{name}: Core did not complete', 180)
-                        if expect_failed:
+                        if expect_failed and source is None:
                             assert task['status'] == 'failed' and task.get('error_message'), task
                             record(name + '-Core-visible-failure', task['error_message'])
                             assert_no_browser_download(name + '-after-failure')

@@ -310,6 +310,10 @@ def run(args):
             capture('fullscreen')
             action('key', key='ESCAPE')
             bounds('全屏')
+            wait(lambda: (w := ui('window'))['width'] == report['window']['width']
+                         and w['height'] == report['window']['height'],
+                 'Fullscreen did not restore the original window size', 10)
+            check_video_rect('restored-main')
             record('main fullscreen enters and Escape restores the overlay')
             click('画中画')
             active_port = pip_port
@@ -326,9 +330,10 @@ def run(args):
             assert player()['paused'] and abs(player()['position_seconds']-before) < .2
             window = ui('window')
             left, top, right, bottom = bounds('header')
-            action('drag', x=left+30, y=(top+bottom)//2, to_x=left+90, to_y=(top+bottom)//2+30)
+            action('drag', x=left+90, y=(top+bottom)//2, to_x=left+30, to_y=(top+bottom)//2)
             moved = ui('window')
             assert (window['x'], window['y']) != (moved['x'], moved['y']), (window, moved)
+            check_video_rect('moved-pip')
             click('播放')
             wait(lambda: not player()['paused'], 'PiP resume failed')
             click('暂停')

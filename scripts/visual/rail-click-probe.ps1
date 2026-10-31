@@ -48,7 +48,8 @@ $productProcessNames = @('HLSDownloader.exe', 'HLSDownloaderEngine.exe', 'HLSDow
 $initialProductIds = @(Get-CimInstance Win32_Process |
     Where-Object { $_.Name -in $productProcessNames } |
     ForEach-Object { $_.ProcessId })
-$tmp = Join-Path $env:TEMP 'rail-click-probe'
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+$tmp = Join-Path (Join-Path $repo '.tool-cache\test-tmp') ('rail-click-probe-' + [guid]::NewGuid().ToString('n'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 function Wait-Health {

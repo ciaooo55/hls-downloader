@@ -387,6 +387,15 @@ def _media_videos(driver):
     """)
 
 
+def _hover_video(driver, video):
+    deadline = time.monotonic() + 10
+    while not driver.execute_script("return Boolean(document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.wrap'))"):
+        if time.monotonic() >= deadline:
+            raise AssertionError('Extension player UI did not initialize')
+        time.sleep(.1)
+    ActionChains(driver).move_to_element_with_offset(video, 1, 1).move_to_element(video).perform()
+
+
 def _current_frame_overlay_state(driver) -> dict:
     return driver.execute_script(
         """
@@ -599,7 +608,7 @@ def run(
                     for index in frame['framePath']:
                         driver.switch_to.frame(driver.find_elements(By.TAG_NAME, 'iframe')[index])
                     for video in _media_videos(driver):
-                        ActionChains(driver).move_to_element(video).perform()
+                        _hover_video(driver, video)
                         hover_deadline = time.monotonic() + 10
                         while True:
                             sample = _current_frame_overlay_state(driver)

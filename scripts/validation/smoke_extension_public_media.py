@@ -24,6 +24,7 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 
 from smoke_extension_media import _find_edge, _find_firefox, _overlay_state, _resource_id, _fit_browser_window
+from validation_workspace import test_tmp
 
 
 HLS = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
@@ -97,6 +98,10 @@ def _browser_console_errors(driver) -> list[dict]:
 
 def play_frames(driver):
     driver.execute_script("document.querySelectorAll('video').forEach(v=>{v.muted=true;v.play().catch(()=>{});})")
+    for video in driver.find_elements(By.TAG_NAME, 'video'):
+        if video.is_displayed():
+            driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", video)
+            ActionChains(driver).move_to_element(video).perform()
     for frame in driver.find_elements(By.TAG_NAME, "iframe"):
         try:
             driver.switch_to.frame(frame)
@@ -109,8 +114,7 @@ def run(args):
     extension = args.extension.resolve()
     if not (extension / "manifest.json").is_file():
         raise ValueError("Build the extension before testing public players")
-    temp_root = Path(__file__).resolve().parents[2] / ".tool-cache" / "test-tmp"
-    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_root = test_tmp()
     args.report.parent.mkdir(parents=True, exist_ok=True)
     result = {"browser": args.browser, "without_extension": args.without_extension,
               "passed": False, "cases": [], "extension_sha256": {
@@ -179,12 +183,6 @@ def run(args):
                                     clicked_play = True
                                     break
                         play_frames(driver)
-                        # 小屏幕沙盒中 HLS demo 的播放器位于首屏下方；入口只随可见播放器显示。
-                        driver.execute_script("document.querySelector('video')?.scrollIntoView({block:'center',inline:'nearest'})")
-                        for video in driver.find_elements(By.TAG_NAME, 'video'):
-                            if video.is_displayed():
-                                ActionChains(driver).move_to_element(video).perform()
-                                break
                         state = _overlay_state(driver)
                         record["state"] = state
                         # The button must point at the requested manifest/media, not merely any detected URL.
