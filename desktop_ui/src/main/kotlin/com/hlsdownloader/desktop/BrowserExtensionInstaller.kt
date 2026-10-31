@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.Locale
 import java.util.zip.ZipInputStream
 import javax.swing.filechooser.FileSystemView
 
@@ -92,16 +93,42 @@ private fun chromiumArchives(): List<Path> {
 
 internal fun unpackChromiumExtension(archive: Path, destination: Path) {
     val root = destination.toAbsolutePath().normalize()
+    val maxBytes = 32L * 1024 * 1024
+    var expandedBytes = 0L
+    var entries = 0
+    val paths = mutableSetOf<String>()
+    val buffer = ByteArray(8192)
+    val deviceName = Regex("(?i)(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])")
     ZipInputStream(Files.newInputStream(archive)).use { zip ->
         while (true) {
             val entry = zip.nextEntry ?: break
-            val target = root.resolve(entry.name.replace('\\', '/')).normalize()
+            require(++entries <= 2048) { "插件包条目数量超过限制" }
+            val name = entry.name.replace('\\', '/').let { if (entry.isDirectory) it.removeSuffix("/") else it }
+            require(name.split('/').all { part ->
+                part.isNotEmpty() && part != "." && part != ".." &&
+                    !part.endsWith(' ') && !part.endsWith('.') &&
+                    part.none { it.isISOControl() || it in "<>:\"|?*" } &&
+                    !deviceName.matches(part.substringBefore('.'))
+            }) { "插件包包含无效路径：${entry.name}" }
+            require(paths.add(name.lowercase(Locale.ROOT))) { "插件包包含重复路径：${entry.name}" }
+            require(entry.size <= maxBytes - expandedBytes) { "插件包解压大小超过限制" }
+            val target = root.resolve(name).normalize()
             require(target.startsWith(root)) { "插件包包含越界路径：${entry.name}" }
             if (entry.isDirectory) {
                 Files.createDirectories(target)
             } else {
                 target.parent?.let(Files::createDirectories)
-                Files.copy(zip, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+            val output = if (entry.isDirectory) null else Files.newOutputStream(target)
+            output.use { stream ->
+                // Count actual bytes, including directory bodies; ZIP sizes may be unknown or forged.
+                while (true) {
+                    val count = zip.read(buffer, 0, minOf(buffer.size.toLong(), maxBytes - expandedBytes + 1).toInt())
+                    if (count < 0) break
+                    expandedBytes += count
+                    require(expandedBytes <= maxBytes) { "插件包解压大小超过限制" }
+                    stream?.write(buffer, 0, count)
+                }
             }
             zip.closeEntry()
         }

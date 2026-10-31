@@ -925,9 +925,11 @@ object EnginePipeClient {
         val url = value.trim()
         require(url.isNotEmpty()) { "下载链接不能为空" }
         require(url.none(Char::isISOControl)) { "下载链接包含无效控制字符" }
-        val localTorrent = url.substringBefore('?').substringBefore('#').endsWith(".torrent", true)
-        require(url.startsWith("http://", true) || url.startsWith("https://", true) || url.startsWith("ftp://", true) || url.startsWith("ftps://", true) || url.startsWith("sftp://", true) || url.startsWith("magnet:", true) || localTorrent) { "不支持的下载链接格式" }
-        if (!url.startsWith("magnet:", true) && !localTorrent) {
+        val remote = listOf("http://", "https://", "ftp://", "ftps://", "sftp://").any { url.startsWith(it, true) }
+        val localTorrent = File(url).isAbsolute && url.endsWith(".torrent", true) &&
+            !url.startsWith("\\\\.\\") && !url.startsWith("\\\\?\\")
+        require(remote || url.startsWith("magnet:", true) || localTorrent) { "不支持的下载链接格式" }
+        if (remote) {
             require(runCatching { URI(url) }.getOrNull()?.host?.isNotBlank() == true) { "下载链接缺少有效主机名" }
         }
         return url

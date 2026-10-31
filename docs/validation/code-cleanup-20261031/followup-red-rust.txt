@@ -1,0 +1,24 @@
+   Compiling hls-native-shell v7.0.3 (A:\Ubuntu\测试\hls-downloader\native_shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.51s
+     Running unittests src\lib.rs (.tool-cache\build-cache\cargo-target\debug\deps\hls_native_shell-100fa787ddcb0e38.exe)
+
+running 1 test
+test media::merge::tests::concat_failure_preserves_existing_output_and_inputs ... FAILED
+
+failures:
+
+---- media::merge::tests::concat_failure_preserves_existing_output_and_inputs stdout ----
+
+thread 'media::merge::tests::concat_failure_preserves_existing_output_and_inputs' (20880) panicked at src\media\merge.rs:387:9:
+assertion `left == right` failed
+  left: [105, 110, 112, 117, 116]
+ right: [111, 108, 100, 45, 111, 117, 116, 112, 117, 116]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    media::merge::tests::concat_failure_preserves_existing_output_and_inputs
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 686 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

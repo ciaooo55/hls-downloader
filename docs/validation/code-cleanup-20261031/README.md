@@ -6,6 +6,8 @@
 
 第四轮的恶意输入、路径越界、资源上限、BT 文件发布与扩大行为验证见 [对抗检查与修复](adversarial-audit.md)。
 
+第五轮的媒体拼接原子替换、工作台 URL 校验与扩展 ZIP 有界解压见 [对抗检查补充](adversarial-followup.md)。
+
 ## 范围与结论
 
 本轮从 `7a1111c699894b12f1a942d3188e38db34e77486` 开始，起始工作区干净。检查范围包括 Rust Core、Native Host、CLI、Presenter、Compose 工作台、浏览器扩展，以及构建、安装、发布和验证脚本。

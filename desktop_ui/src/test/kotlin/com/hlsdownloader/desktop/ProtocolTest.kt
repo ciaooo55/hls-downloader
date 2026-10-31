@@ -129,6 +129,11 @@ class ProtocolTest {
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeDownloadUrl("https://") }
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeHttpUrl("file:///C:/Windows") }
         assertFailsWith<IllegalArgumentException> { EnginePipeClient.normalizeHttpUrl("https:///missing-host") }
+        for (url in listOf("javascript:payload.torrent", "file:///C:/payload.torrent", "https:///missing-host.torrent", "blob:https://site.test/payload.torrent", "relative.torrent", "\\\\.\\payload.torrent", "\\\\?\\C:\\payload.torrent")) {
+            assertFailsWith<IllegalArgumentException>(url) { EnginePipeClient.normalizeDownloadUrl(url) }
+        }
+        assertEquals("C:\\下载\\文件.torrent", EnginePipeClient.normalizeDownloadUrl("C:\\下载\\文件.torrent"))
+        assertEquals("https://site.test/file.torrent?token=1", EnginePipeClient.normalizeDownloadUrl("https://site.test/file.torrent?token=1"))
     }
     @Test fun resourceRecognitionUsesUrlPathBeforeQuery() {
         assertEquals("hls", EnginePipeClient.recognizeResourceKind("https://cdn.test/live.M3U8?token=abc#v"))

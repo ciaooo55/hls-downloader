@@ -1,0 +1,55 @@
+Picked up JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Djava.io.tmpdir=A:/Ubuntu/����/hls-downloader/.tool-cache/adversarial-followup-20261031/runtime
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build
+Calculating task graph as no cached configuration is available for tasks: test --tests com.hlsdownloader.desktop.BrowserExtensionInstallerTest --tests com.hlsdownloader.desktop.ProtocolTest
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :generateComposeResClass SKIPPED
+> Task :convertXmlValueResourcesForMain NO-SOURCE
+> Task :copyNonXmlValueResourcesForTest NO-SOURCE
+> Task :convertXmlValueResourcesForTest NO-SOURCE
+> Task :copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForTest NO-SOURCE
+> Task :generateResourceAccessorsForMain SKIPPED
+> Task :generateResourceAccessorsForTest SKIPPED
+> Task :generateActualResourceCollectorsForMain SKIPPED
+> Task :assembleMainResources UP-TO-DATE
+> Task :assembleTestResources UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :compileKotlin UP-TO-DATE
+> Task :compileJava NO-SOURCE
+> Task :classes UP-TO-DATE
+> Task :jar UP-TO-DATE
+> Task :compileTestKotlin
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+
+> Task :test
+Picked up JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Djava.io.tmpdir=A:/Ubuntu/����/hls-downloader/.tool-cache/adversarial-followup-20261031/runtime
+
+BrowserExtensionInstallerTest > unpack_rejects_an_unbounded_expanded_body() FAILED
+    org.opentest4j.AssertionFailedError at BrowserExtensionInstallerTest.kt:23
+
+BrowserExtensionInstallerTest > unpack_rejects_excessive_entries_and_windows_aliases() FAILED
+    org.opentest4j.AssertionFailedError at BrowserExtensionInstallerTest.kt:40
+
+ProtocolTest > urlNormalizationTrimsAndRejectsUnsafeInput() FAILED
+    org.opentest4j.AssertionFailedError at ProtocolTest.kt:133
+
+29 tests completed, 3 failed
+
+> Task :test FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///A:/Ubuntu/%E6%B5%8B%E8%AF%95/hls-downloader/.tool-cache/build-cache/compose-build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+
+BUILD FAILED in 1m 51s
+8 actionable tasks: 2 executed, 6 up-to-date
+Configuration cache entry stored.

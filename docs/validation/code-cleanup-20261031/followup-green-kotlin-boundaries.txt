@@ -1,0 +1,33 @@
+Picked up JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Djava.io.tmpdir=A:/Ubuntu/����/hls-downloader/.tool-cache/adversarial-followup-20261031/runtime
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build
+Reusing configuration cache.
+> Task :generateComposeResClass SKIPPED
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :copyNonXmlValueResourcesForTest NO-SOURCE
+> Task :convertXmlValueResourcesForMain NO-SOURCE
+> Task :convertXmlValueResourcesForTest NO-SOURCE
+> Task :copyNonXmlValueResourcesForMain NO-SOURCE
+> Task :prepareComposeResourcesTaskForTest NO-SOURCE
+> Task :prepareComposeResourcesTaskForMain NO-SOURCE
+> Task :generateResourceAccessorsForTest SKIPPED
+> Task :generateResourceAccessorsForMain SKIPPED
+> Task :generateActualResourceCollectorsForMain SKIPPED
+> Task :assembleMainResources UP-TO-DATE
+> Task :assembleTestResources UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :compileKotlin UP-TO-DATE
+> Task :compileJava NO-SOURCE
+> Task :classes UP-TO-DATE
+> Task :jar UP-TO-DATE
+> Task :compileTestKotlin
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+
+> Task :test
+Picked up JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Djava.io.tmpdir=A:/Ubuntu/����/hls-downloader/.tool-cache/adversarial-followup-20261031/runtime
+
+BUILD SUCCESSFUL in 27s
+8 actionable tasks: 2 executed, 6 up-to-date
+Configuration cache entry reused.

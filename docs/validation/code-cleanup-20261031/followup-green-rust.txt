@@ -1,0 +1,15 @@
+   Compiling hls-native-shell v7.0.3 (A:\Ubuntu\测试\hls-downloader\native_shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.76s
+     Running unittests src\lib.rs (.tool-cache\build-cache\cargo-target\debug\deps\hls_native_shell-100fa787ddcb0e38.exe)
+
+running 8 tests
+test media::merge::tests::concat_failure_preserves_existing_output_and_inputs ... ok
+test media::merge::tests::concat_preserves_bytes ... ok
+test media::merge::tests::concat_reads_the_previous_output_without_growing_its_own_input ... ok
+test media::merge::tests::merging_pause_and_cancel_stop_the_running_child ... ok
+test media::merge::tests::mux_maps_every_selected_track ... ok
+test media::merge::tests::mux_without_extra_tracks_copies_video ... ok
+test media::merge::tests::real_ffmpeg_pause_and_cancel_reap_the_child ... ignored, requires the packaged FFmpeg; run explicitly in Windows Sandbox
+test media::merge::tests::verbose_merge_log_is_bounded_and_retains_the_final_error ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 680 filtered out; finished in 1.55s

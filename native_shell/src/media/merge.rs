@@ -7,12 +7,26 @@ pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
     if inputs.is_empty() {
         return Err("no segments to concatenate".into());
     }
-    let mut dest = fs::File::create(output).map_err(|error| error.to_string())?;
-    for input in inputs {
-        let mut source = fs::File::open(input).map_err(|error| error.to_string())?;
-        std::io::copy(&mut source, &mut dest).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let staged = output.with_file_name(format!(".hls-concat-{}-{stamp}.tmp", std::process::id()));
+    let mut dest = fs::File::create_new(&staged).map_err(|error| error.to_string())?;
+    let result = (|| {
+        for input in inputs {
+            let mut source = fs::File::open(input).map_err(|error| error.to_string())?;
+            std::io::copy(&mut source, &mut dest).map_err(|error| error.to_string())?;
+        }
+        dest.sync_all().map_err(|error| error.to_string())?;
+        drop(dest);
+        // Keep the old output and any aliased input intact until every copy succeeds.
+        crate::atomic_replace::replace_file(&staged, output).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(staged);
     }
-    dest.flush().map_err(|error| error.to_string())
+    result
 }
 
 pub fn locate_ffmpeg() -> Option<PathBuf> {
@@ -369,6 +383,44 @@ mod tests {
             assert!(ready, "merge fixture did not start");
             assert_eq!(result.unwrap_err(), expected);
         }
+    }
+
+    #[test]
+    fn concat_reads_the_previous_output_without_growing_its_own_input() {
+        let root = std::env::temp_dir().join(format!("hls-concat-alias-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("input.ts");
+        let output = root.join("output.ts");
+        fs::write(&input, b"input").unwrap();
+        fs::write(&output, b"old-output").unwrap();
+        let result = concat_files(&[input.clone(), output.clone()], &output);
+        let saved_input = fs::read(&input).unwrap();
+        let combined = fs::read(&output).unwrap();
+        let files = fs::read_dir(&root).unwrap().count();
+        fs::remove_dir_all(root).unwrap();
+        result.unwrap();
+        assert_eq!(combined, b"inputold-output");
+        assert_eq!(saved_input, b"input");
+        assert_eq!(files, 2);
+    }
+
+    #[test]
+    fn concat_failure_preserves_existing_output_and_inputs() {
+        let root = std::env::temp_dir().join(format!("hls-concat-failure-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("input.ts");
+        let output = root.join("output.ts");
+        fs::write(&input, b"input").unwrap();
+        fs::write(&output, b"old-output").unwrap();
+        let failure = concat_files(&[input.clone(), root.join("missing.ts")], &output);
+        let saved_output = fs::read(&output).unwrap();
+        let saved_input = fs::read(&input).unwrap();
+        let files = fs::read_dir(&root).unwrap().count();
+        fs::remove_dir_all(root).unwrap();
+        assert!(failure.is_err());
+        assert_eq!(saved_output, b"old-output");
+        assert_eq!(saved_input, b"input");
+        assert_eq!(files, 2);
     }
 
     #[test]
