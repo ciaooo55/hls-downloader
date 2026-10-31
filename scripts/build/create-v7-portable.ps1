@@ -3,6 +3,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
+. (Join-Path $PSScriptRoot '..\V7ExtensionArchive.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $composeBuild = if ($env:HLS_COMPOSE_BUILD_DIR) { $env:HLS_COMPOSE_BUILD_DIR } else { Join-Path $repo '.tool-cache\build-cache\compose-build' }
 $appImage = Join-Path $composeBuild 'compose\binaries\main\app\HLSDownloader'
@@ -45,31 +46,6 @@ $expectedFirefoxId = ([regex]::Match($identitySource, "FIREFOX_EXTENSION_ID = '(
 if ([String]::IsNullOrWhiteSpace($expectedChromiumKey) -or [String]::IsNullOrWhiteSpace($expectedFirefoxId)) {
     throw 'Extension store identity constants are missing.'
 }
-function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
-    $check = Join-Path $stage ('.extension-check-' + $Browser)
-    try {
-        Expand-Archive -LiteralPath $Archive -DestinationPath $check -Force
-        $manifestPath = Join-Path $check 'manifest.json'
-        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-            throw "$Browser extension archive is missing manifest.json."
-        }
-        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($manifest.version -ne $productVersion) {
-            throw "$Browser extension manifest version is not ${productVersion}: $($manifest.version)"
-        }
-        if ([int]$manifest.manifest_version -ne 3) {
-            throw "$Browser extension is not Manifest V3."
-        }
-        if ($Browser -eq 'Chromium' -and [string]$manifest.key -ne $expectedChromiumKey) {
-            throw 'Chromium extension key does not match store identity.'
-        }
-        if ($Browser -eq 'Firefox' -and [string]$manifest.browser_specific_settings.gecko.id -ne $expectedFirefoxId) {
-            throw 'Firefox extension id does not match store identity.'
-        }
-    } finally {
-        Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
 try {
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item -LiteralPath $appImage -Destination $stage -Recurse -Force
@@ -93,7 +69,7 @@ try {
         if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
             throw "Packaged $($item.Browser) extension archive is missing from the App-Image: $archive"
         }
-        Assert-ExtensionArchive $archive $item.Browser
+        Assert-V7ExtensionArchive -Archive $archive -Browser $item.Browser -Version $productVersion -ChromiumKey $expectedChromiumKey -FirefoxId $expectedFirefoxId
         Copy-Item -LiteralPath $archive -Destination (Join-Path $portableExtensions $item.Name) -Force
     }
     $readme = "HLS Downloader $productVersion Portable`r`n`r`nRun HLSDownloader.exe. Runtime data stays in data; completed files and resumable task state stay in downloads. Browser Native Messaging registration is repaired automatically on startup. The extensions folder contains the matching Chromium and Firefox MV3 packages. Use scripts\upgrade-v7-portable.ps1 to atomically upgrade another v7 portable folder while preserving data and downloads; use -Rollback to restore the previous program image.`r`n"

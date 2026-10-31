@@ -351,59 +351,44 @@ impl CoreStore {
             .map_err(|error| format!("commit Core event transaction: {error}"))
     }
 
-    fn logged_fallback<T>(key: &str, error: serde_json::Error, fallback: T) -> T {
-        // Core 可跨启动器退出继续运行，诊断管道关闭不能使持锁线程 panic。
-        let _ = writeln!(
-            std::io::stderr(),
-            "Core setting {key} is unreadable, using fallback: {error}"
-        );
-        fallback
+    fn setting_json(&self, key: &str) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT value_json FROM settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("read Core setting {key}: {error}"))
+    }
+
+    fn setting_or<T: serde::de::DeserializeOwned>(&self, key: &str, fallback: T) -> Result<T, String> {
+        let Some(raw) = self.setting_json(key)? else {
+            return Ok(fallback);
+        };
+        Ok(match serde_json::from_str(&raw) {
+            Ok(value) => value,
+            Err(error) => {
+                // Core 可跨启动器退出继续运行，诊断管道关闭不能使持锁线程 panic。
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "Core setting {key} is unreadable, using fallback: {error}"
+                );
+                fallback
+            }
+        })
     }
 
     pub fn setting_bool(&self, key: &str, fallback: bool) -> Result<bool, String> {
-        let raw: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT value_json FROM settings WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| format!("read Core setting {key}: {error}"))?;
-        raw.map(|value| match serde_json::from_str(&value) {
-            Ok(decoded) => decoded,
-            Err(error) => Self::logged_fallback(key, error, fallback),
-        })
-        .map_or(Ok(fallback), Ok)
+        self.setting_or(key, fallback)
     }
 
     pub fn setting_u64(&self, key: &str, fallback: u64) -> Result<u64, String> {
-        let raw: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT value_json FROM settings WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| format!("read Core setting {key}: {error}"))?;
-        raw.map(|value| match serde_json::from_str(&value) {
-            Ok(decoded) => decoded,
-            Err(error) => Self::logged_fallback(key, error, fallback),
-        })
-        .map_or(Ok(fallback), Ok)
+        self.setting_or(key, fallback)
     }
 
     pub fn setting_string(&self, key: &str, fallback: &str) -> Result<String, String> {
-        let raw: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT value_json FROM settings WHERE key = ?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| format!("read Core setting {key}: {error}"))?;
+        let raw = self.setting_json(key)?;
         match raw {
             None => Ok(fallback.to_string()),
             Some(value) => Ok(match serde_json::from_str(&value) {
@@ -1078,6 +1063,24 @@ mod tests {
         assert_eq!(next, None);
         store.save_handoff("too-large", &"x".repeat(crate::core_ipc::V7_PIPE_MAX_FRAME), "pending", None, 3).unwrap();
         assert!(store.query_handoffs_page(Some("too-large"), None, true, None).unwrap_err().contains("单帧"));
+    }
+
+    #[test]
+    fn settings_preserve_typed_fallbacks_and_legacy_raw_strings() {
+        let mut store = CoreStore::in_memory().unwrap();
+        assert!(store.setting_bool("missing", true).unwrap());
+        assert_eq!(store.setting_u64("missing", 42).unwrap(), 42);
+        assert_eq!(store.setting_string("missing", "default").unwrap(), "default");
+        store.connection.execute(
+            "INSERT INTO settings(key, value_json) VALUES ('invalid', 'not-json')", [],
+        ).unwrap();
+        assert!(store.setting_bool("invalid", true).unwrap());
+        assert_eq!(store.setting_u64("invalid", 42).unwrap(), 42);
+        assert_eq!(store.setting_string("invalid", "default").unwrap(), "not-json");
+        store.set_setting("wrong_type", "text").unwrap();
+        assert!(!store.setting_bool("wrong_type", false).unwrap());
+        assert_eq!(store.setting_u64("wrong_type", 42).unwrap(), 42);
+        assert_eq!(store.setting_string("wrong_type", "default").unwrap(), "text");
     }
 
     #[test]

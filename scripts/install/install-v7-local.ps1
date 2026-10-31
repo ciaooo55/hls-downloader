@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
+. (Join-Path $PSScriptRoot '..\V7ExtensionArchive.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
@@ -105,35 +106,6 @@ if ([String]::IsNullOrWhiteSpace($expectedChromiumKey) -or [String]::IsNullOrWhi
     throw 'Extension store identity constants are missing.'
 }
 
-function Assert-ExtensionArchive([string]$Archive, [string]$Browser) {
-    if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) {
-        throw "Packaged $Browser extension archive is missing: $Archive"
-    }
-    $check = Join-Path $installSourceStage (".extension-check-" + [guid]::NewGuid().ToString('n'))
-    try {
-        Expand-Archive -LiteralPath $Archive -DestinationPath $check -Force
-        $manifestPath = Join-Path $check 'manifest.json'
-        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-            throw "Packaged $Browser extension archive is missing manifest.json."
-        }
-        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($manifest.version -ne $productVersion) {
-            throw "Packaged $Browser extension version is not ${productVersion}: $($manifest.version)"
-        }
-        if ([int]$manifest.manifest_version -ne 3) {
-            throw "Packaged $Browser extension is not Manifest V3."
-        }
-        if ($Browser -eq 'Chromium' -and [string]$manifest.key -ne $expectedChromiumKey) {
-            throw 'Packaged Chromium extension key does not match store identity.'
-        }
-        if ($Browser -eq 'Firefox' -and [string]$manifest.browser_specific_settings.gecko.id -ne $expectedFirefoxId) {
-            throw 'Packaged Firefox extension id does not match store identity.'
-        }
-    } finally {
-        Remove-Item -LiteralPath $check -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
 $sourceRoot = [IO.Path]::GetFullPath($source).TrimEnd('\', '/')
 $extensionArchivePaths = @{}
 foreach ($browser in @('Chromium', 'Firefox')) {
@@ -151,7 +123,7 @@ foreach ($browser in @('Chromium', 'Firefox')) {
     if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne ([string]$entry.sha256).ToLowerInvariant()) {
         throw "v7 $browser extension SHA-256 does not match ARTIFACT-MANIFEST.json."
     }
-    Assert-ExtensionArchive $archive $browser
+    Assert-V7ExtensionArchive -Archive $archive -Browser $browser -Version $productVersion -ChromiumKey $expectedChromiumKey -FirefoxId $expectedFirefoxId
     $extensionArchivePaths[$browser] = $archive
 }
 $note = if ([String]::IsNullOrWhiteSpace($UpgradeNote)) {

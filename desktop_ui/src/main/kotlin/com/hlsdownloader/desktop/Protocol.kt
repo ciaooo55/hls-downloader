@@ -10,7 +10,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -470,7 +469,6 @@ object EnginePipeClient {
      * 不存在则回 Error{code:"task_not_found"}。
      */
     fun getTask(taskId: String) = command(commandOf("get_task", "task_id" to taskId))
-    fun openMain() = command(commandOf("open_main"))
     fun refreshTaskRequest(taskId: String, url: String, cookie: String = "", autoResume: Boolean = true) = command(buildJsonObject {
         put("kind", "refresh_task_request")
         put("task_id", requireId(taskId))

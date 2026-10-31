@@ -13,6 +13,13 @@ pub const V7_PROTOCOL_VERSION: u32 = 1;
 pub const LEGAL_TERMS_VERSION: &str = "2026-08-06-cn-1";
 pub const DEFAULT_QUEUE_ID: &str = "default";
 
+/// Sequenced event shared by the resident Core and IPC-only clients.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventEnvelope {
+    pub sequence: u64,
+    pub event: CoreEvent,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceKind {

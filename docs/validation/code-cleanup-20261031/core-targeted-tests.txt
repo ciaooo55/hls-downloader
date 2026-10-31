@@ -1,0 +1,47 @@
+
+running 38 tests
+test checksum::tests::empty_checksum_remains_optional ... ok
+test checksum::tests::malformed_non_empty_checksum_fails_closed ... ok
+test checksum::tests::md5_empty_matches_known_vector ... ok
+test checksum::tests::mismatch_fails_closed ... ok
+test checksum::tests::parses_prefixed_and_bare_digests ... ok
+test checksum::tests::rejects_prefixed_digests_with_wrong_lengths ... ok
+test checksum::tests::sha1_file_hash_streams_across_read_boundaries ... ok
+test checksum::tests::verifies_empty_sha256_file ... ok
+test contract::tests::cast_session_exposes_lan_url_and_accepts_legacy_events ... ok
+test contract::tests::check_update_command_roundtrips ... ok
+test contract::tests::default_method_is_get ... ok
+test contract::tests::event_payload_does_not_invent_secret_fields ... ok
+test contract::tests::install_update_command_keeps_the_workbench_process_identity ... ok
+test contract::tests::legacy_string_mirror_status_remains_readable ... ok
+test contract::tests::offer_roundtrip_keeps_bounded_metadata ... ok
+test contract::tests::present_handoff_command_roundtrips ... ok
+test contract::tests::probe_and_cast_commands_roundtrip ... ok
+test contract::tests::request_refresh_roundtrips_without_putting_credentials_in_task_events ... ok
+test contract::tests::share_media_command_roundtrips_without_losing_source ... ok
+test contract::tests::torrent_probe_and_selection_contract_roundtrip ... ok
+test core_runtime::tests::assign_queue_updates_snapshot_and_spec_then_reorders_inside_destination ... ok
+test core_runtime::tests::blank_queue_assignment_is_rejected_without_mutating_tasks ... ok
+test core_runtime::tests::place_queue_moves_to_top_and_bottom ... ok
+test core_runtime::tests::reorder_swaps_adjacent_queue_index ... ok
+test crypto_lite::tests::sha1_empty_matches_known_vector ... ok
+test crypto_lite::tests::sha1_matches_known_answers_across_block_boundaries ... ok
+test curl_import::tests::data_raw_keeps_a_leading_at_sign_literal ... ok
+test curl_import::tests::ignores_plain_text ... ok
+test curl_import::tests::joins_repeated_data_options_like_curl ... ok
+test curl_import::tests::parses_long_options_with_inline_values ... ok
+test curl_import::tests::parses_post_with_headers ... ok
+test curl_import::tests::rejects_cookie_files_instead_of_sending_filename_as_cookie ... ok
+test curl_import::tests::rejects_crlf_in_url ... ok
+test curl_import::tests::rejects_data_urlencode_instead_of_sending_wrong_body ... ok
+test curl_import::tests::rejects_proxy_options_instead_of_misrouting ... ok
+test curl_import::tests::rejects_user_without_noninteractive_password ... ok
+test store::tests::settings_are_typed_and_persistent ... ok
+Core setting invalid is unreadable, using fallback: expected ident at line 1 column 2
+Core setting invalid is unreadable, using fallback: expected ident at line 1 column 2
+Core setting invalid is unreadable, using raw value: expected ident at line 1 column 2
+Core setting wrong_type is unreadable, using fallback: invalid type: string "text", expected a boolean at line 1 column 6
+Core setting wrong_type is unreadable, using fallback: invalid type: string "text", expected u64 at line 1 column 6
+test store::tests::settings_preserve_typed_fallbacks_and_legacy_raw_strings ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 636 filtered out; finished in 1.18s

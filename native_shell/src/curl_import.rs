@@ -1,5 +1,6 @@
 //! Import a desktop download from a copied cURL command.
 
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,31 +171,7 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
 }
 
 fn basic_auth(value: &str) -> String {
-    format!("Basic {}", base64_encode(value.as_bytes()))
-}
-
-pub(crate) fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let a = chunk[0] as u32;
-        let b = chunk.get(1).copied().unwrap_or(0) as u32;
-        let c = chunk.get(2).copied().unwrap_or(0) as u32;
-        let triple = (a << 16) | (b << 8) | c;
-        out.push(TABLE[((triple >> 18) & 63) as usize] as char);
-        out.push(TABLE[((triple >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[((triple >> 6) & 63) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[(triple & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    out
+    format!("Basic {}", STANDARD.encode(value.as_bytes()))
 }
 
 fn tokenize(command: &str) -> Result<Vec<String>, String> {

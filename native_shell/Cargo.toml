@@ -7,24 +7,27 @@ publish = false
 
 [features]
 default = ["full-core"]
-full-core = []
+full-core = [
+    "dep:rusqlite", "dep:tokio", "dep:tokio-tungstenite", "dep:rustls",
+    "dep:futures-util", "dep:base64", "dep:russh", "dep:russh-sftp", "dep:schannel",
+]
 presenter-client = []
 
 [dependencies]
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"], optional = true }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"], optional = true }
 # WebSocket 的 rustls 默认关闭加密提供者，必须显式启用，否则 wss 握手会 panic。
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-futures-util = { version = "0.3", features = ["sink"] }
-base64 = "0.23"
-russh = { version = "0.63", default-features = false, features = ["flate2", "ring", "rsa"] }
-russh-sftp = "3.0"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+futures-util = { version = "0.3", features = ["sink"], optional = true }
+base64 = { version = "0.23", optional = true }
+russh = { version = "0.63", default-features = false, features = ["flate2", "ring", "rsa"], optional = true }
+russh-sftp = { version = "3.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-schannel = "0.1"
+schannel = { version = "0.1", optional = true }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

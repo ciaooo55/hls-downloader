@@ -1,23 +1,14 @@
 //! Small, deterministic state machine shared by v7 Core clients.
 //!
-//! The protocol workers attach to this state machine instead of inventing
-//! their own task/status model. Persistence and the HTTP runner can be added
-//! behind the same commands without changing the UI or extension contract.
+//! Persistence and transfer workers attach to this state machine; clients
+//! exchange the shared contract instead of owning separate task state.
 
 use crate::contract::{
-    AvScanStatus, CoreCommand, CoreEvent, MediaPushRequest, MirrorStatus, ResourceKind,
+    AvScanStatus, CoreCommand, CoreEvent, EventEnvelope, MediaPushRequest, MirrorStatus, ResourceKind,
     ResourceOffer, TaskFailure, TaskSnapshot, TaskSpec,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
-use std::io::Write;
 use std::sync::Arc;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EventEnvelope {
-    pub sequence: u64,
-    pub event: CoreEvent,
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct CoreRuntime {
@@ -200,11 +191,11 @@ impl CoreRuntime {
                     },
                 });
             }
-            CoreCommand::CheckUpdate { silent } => self.check_update(silent),
             CoreCommand::SetSetting { key, .. } => {
                 self.publish(CoreEvent::SettingsChanged { keys: vec![key] });
             }
             CoreCommand::ImportCurl { .. }
+            | CoreCommand::CheckUpdate { .. }
             | CoreCommand::PlayTask { .. }
             | CoreCommand::CastTask { .. }
             | CoreCommand::PlayerControl { .. }
@@ -535,19 +526,7 @@ impl CoreRuntime {
     }
 
     fn place(&mut self, task_id: &str, before_id: &str) {
-        let Some(queue_id) = self.tasks.get(task_id).map(|task| task.queue_id.clone()) else {
-            return;
-        };
-        let mut ordered: Vec<String> = {
-            let mut tasks: Vec<_> = self
-                .tasks
-                .values()
-                .filter(|task| task.queue_id == queue_id)
-                .cloned()
-                .collect();
-            tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
-            tasks.into_iter().map(|item| item.task_id.clone()).collect()
-        };
+        let mut ordered = self.queue_task_ids(task_id);
         let Some(index) = ordered.iter().position(|id| id == task_id) else {
             return;
         };
@@ -563,6 +542,26 @@ impl CoreRuntime {
                 .unwrap_or(ordered.len())
         };
         ordered.insert(dest.min(ordered.len()), task_id.to_string());
+        self.apply_queue_order(&ordered);
+    }
+
+    fn queue_task_ids(&self, task_id: &str) -> Vec<String> {
+        let Some(task) = self.tasks.get(task_id) else {
+            return Vec::new();
+        };
+        let mut tasks: Vec<_> = self
+            .tasks
+            .values()
+            .filter(|item| item.queue_id == task.queue_id)
+            .collect();
+        tasks.sort_by(|a, b| {
+            a.queue_index.cmp(&b.queue_index)
+                .then_with(|| a.task_id.cmp(&b.task_id))
+        });
+        tasks.into_iter().map(|item| item.task_id.clone()).collect()
+    }
+
+    fn apply_queue_order(&mut self, ordered: &[String]) {
         for (position, id) in ordered.iter().enumerate() {
             if let Some(snapshot) = self.tasks.get_mut(id).map(Arc::make_mut) {
                 snapshot.queue_index = (position as i64) + 1;
@@ -588,32 +587,14 @@ impl CoreRuntime {
         if delta == 0 {
             return;
         }
-        let Some(queue_id) = self.tasks.get(task_id).map(|task| task.queue_id.clone()) else {
-            return;
-        };
-        let mut ordered: Vec<String> = {
-            let mut tasks: Vec<_> = self
-                .tasks
-                .values()
-                .filter(|task| task.queue_id == queue_id)
-                .cloned()
-                .collect();
-            tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
-            tasks.into_iter().map(|item| item.task_id.clone()).collect()
-        };
+        let mut ordered = self.queue_task_ids(task_id);
         let Some(index) = ordered.iter().position(|id| id == task_id) else {
             return;
         };
         let item = ordered.remove(index);
-        let dest = (index as i32 + delta).clamp(0, ordered.len() as i32) as usize;
+        let dest = (index as i64 + i64::from(delta)).clamp(0, ordered.len() as i64) as usize;
         ordered.insert(dest, item);
-        for (position, id) in ordered.iter().enumerate() {
-            if let Some(snapshot) = self.tasks.get_mut(id).map(Arc::make_mut) {
-                snapshot.queue_index = (position as i64) + 1;
-                let updated = snapshot.clone();
-                self.publish(CoreEvent::TaskUpdated { snapshot: updated });
-            }
-        }
+        self.apply_queue_order(&ordered);
     }
 
     fn assign_queue(&mut self, task_ids: &[String], queue_id: &str) {
@@ -647,31 +628,6 @@ impl CoreRuntime {
         }
         for snapshot in updates {
             self.publish(CoreEvent::TaskUpdated { snapshot });
-        }
-    }
-
-    fn check_update(&mut self, silent: bool) {
-        match crate::updater::check_for_update(crate::updater::CURRENT_VERSION) {
-            Ok(info) if info.newer => self.publish(CoreEvent::UpdateAvailable {
-                current: info.current,
-                latest: info.latest,
-                notes: info.notes,
-                release_url: info.html_url,
-                installer_name: info.installer_name,
-                installer_size: info.installer_size,
-                sha256_verified: !info.expected_sha256.is_empty(),
-            }),
-            Ok(info) if !silent => self.publish(CoreEvent::UpdateCurrent {
-                current: info.current,
-            }),
-            Ok(_) => {}
-            Err(error) if !silent => self.publish(CoreEvent::Error {
-                code: "update_failed".into(),
-                message: error,
-            }),
-            Err(error) => {
-                let _ = writeln!(std::io::stderr(), "silent update check failed: {error}");
-            }
         }
     }
 
@@ -1392,6 +1348,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["task-1", "task-3", "task-2"]
         );
+        for (delta, expected) in [(i32::MAX, "task-1"), (i32::MIN, "task-3")] {
+            runtime.handle(CoreCommand::ReorderQueue {
+                task_id: "task-3".into(), delta,
+            });
+            assert_eq!(runtime.list_tasks()[0].task_id, expected);
+        }
     }
 
     #[test]

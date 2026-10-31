@@ -49,7 +49,7 @@
       "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
     }
   ],
-  "audit_state": "20261031_free_candidate_bafddff6_r21_regression_r23_edge_r24_native_scoped_full_matrix_incomplete",
+  "audit_state": "v7_0_3_20261031_free_candidate_bafddff6_r21_regression_r23_edge_r24_native_scoped_full_matrix_incomplete",
   "current_evidence_table": "docs/validation/full-audit-20261027/current-evidence.json",
   "features": [
     {

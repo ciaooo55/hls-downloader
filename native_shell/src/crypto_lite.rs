@@ -116,64 +116,118 @@ impl Sha256Hasher {
     }
 }
 
+pub struct Sha1Hasher {
+    state: [u32; 5],
+    buffer: [u8; 64],
+    filled: usize,
+    total_bytes: u64,
+}
+
+impl Sha1Hasher {
+    pub fn new() -> Self {
+        Self {
+            state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0],
+            buffer: [0; 64],
+            filled: 0,
+            total_bytes: 0,
+        }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.total_bytes += data.len() as u64;
+        if self.filled > 0 {
+            let take = (64 - self.filled).min(data.len());
+            self.buffer[self.filled..self.filled + take].copy_from_slice(&data[..take]);
+            self.filled += take;
+            data = &data[take..];
+            if self.filled == 64 {
+                sha1_compress(&mut self.state, &self.buffer);
+                self.filled = 0;
+            }
+        }
+        while data.len() >= 64 {
+            let mut block = [0u8; 64];
+            block.copy_from_slice(&data[..64]);
+            sha1_compress(&mut self.state, &block);
+            data = &data[64..];
+        }
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.filled = data.len();
+        }
+    }
+
+    pub fn finish(mut self) -> [u8; 20] {
+        let bit_len = self.total_bytes * 8;
+        self.buffer[self.filled] = 0x80;
+        self.filled += 1;
+        if self.filled > 56 {
+            for slot in self.buffer.iter_mut().skip(self.filled) {
+                *slot = 0;
+            }
+            sha1_compress(&mut self.state, &self.buffer);
+            self.filled = 0;
+        }
+        for slot in self.buffer.iter_mut().take(56).skip(self.filled) {
+            *slot = 0;
+        }
+        self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
+        sha1_compress(&mut self.state, &self.buffer);
+        let mut out = [0u8; 20];
+        for (index, word) in self.state.iter().enumerate() {
+            out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+
+    pub fn finish_hex(self) -> String {
+        self.finish().iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
+fn sha1_compress(state: &mut [u32; 5], chunk: &[u8; 64]) {
+    let mut w = [0u32; 80];
+    for (index, part) in chunk.as_chunks::<4>().0.iter().enumerate() {
+        w[index] = u32::from_be_bytes(*part);
+    }
+    for index in 16..80 {
+        w[index] = (w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16]).rotate_left(1);
+    }
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
+    let mut e = state[4];
+    for (index, word) in w.iter().enumerate() {
+        let (f, k) = match index {
+            0..=19 => ((b & c) | ((!b) & d), 0x5a827999),
+            20..=39 => (b ^ c ^ d, 0x6ed9eba1),
+            40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
+            _ => (b ^ c ^ d, 0xca62c1d6),
+        };
+        let temp = a
+            .rotate_left(5)
+            .wrapping_add(f)
+            .wrapping_add(e)
+            .wrapping_add(k)
+            .wrapping_add(*word);
+        e = d;
+        d = c;
+        c = b.rotate_left(30);
+        b = a;
+        a = temp;
+    }
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+    state[4] = state[4].wrapping_add(e);
+}
+
 pub fn sha1(data: &[u8]) -> [u8; 20] {
-    let mut h = [
-        0x67452301u32,
-        0xEFCDAB89,
-        0x98BADCFE,
-        0x10325476,
-        0xC3D2E1F0,
-    ];
-    let bit_len = (data.len() as u64) * 8;
-    let mut padded = data.to_vec();
-    padded.push(0x80);
-    while padded.len() % 64 != 56 {
-        padded.push(0);
-    }
-    padded.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in padded.as_chunks::<64>().0 {
-        let mut w = [0u32; 80];
-        for (index, part) in chunk.as_chunks::<4>().0.iter().enumerate() {
-            w[index] = u32::from_be_bytes(*part);
-        }
-        for index in 16..80 {
-            w[index] = (w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16]).rotate_left(1);
-        }
-        let mut a = h[0];
-        let mut b = h[1];
-        let mut c = h[2];
-        let mut d = h[3];
-        let mut e = h[4];
-        for (index, word) in w.iter().enumerate() {
-            let (f, k) = match index {
-                0..=19 => ((b & c) | ((!b) & d), 0x5A827999),
-                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
-                _ => (b ^ c ^ d, 0xCA62C1D6),
-            };
-            let temp = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(*word);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = temp;
-        }
-        h[0] = h[0].wrapping_add(a);
-        h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c);
-        h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e);
-    }
-    let mut out = [0u8; 20];
-    for (index, word) in h.iter().enumerate() {
-        out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
-    }
-    out
+    let mut hasher = Sha1Hasher::new();
+    hasher.update(data);
+    hasher.finish()
 }
 
 pub fn sha1_hex(bytes: &[u8]) -> String {
@@ -636,7 +690,15 @@ mod tests {
     fn sha1_matches_known_answers_across_block_boundaries() {
         // SHA-1 是 BT piece 校验与 info-hash 的唯一实现，错一块整包就废了。
         for (length, expected) in SHA1_ONE_SHOT {
-            assert_eq!(sha1_hex(&pattern(*length)), *expected, "length {length}");
+            let data = pattern(*length);
+            assert_eq!(sha1_hex(&data), *expected, "length {length}");
+            for chunk in [1, 7, 63, 64, 65, 129] {
+                let mut hasher = Sha1Hasher::new();
+                for piece in data.chunks(chunk) {
+                    hasher.update(piece);
+                }
+                assert_eq!(hasher.finish_hex(), *expected, "length {length} chunk {chunk}");
+            }
         }
     }
 

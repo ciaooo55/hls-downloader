@@ -8,8 +8,6 @@ pub mod cast;
 mod category;
 #[cfg(feature = "full-core")]
 mod checksum;
-#[cfg(not(feature = "full-core"))]
-mod client_event;
 #[cfg(feature = "full-core")]
 mod clipboard;
 #[cfg(feature = "full-core")]
@@ -113,8 +111,6 @@ mod window_util;
 #[cfg(feature = "full-core")]
 mod zip_preview;
 
-#[cfg(not(feature = "full-core"))]
-pub use client_event::EventEnvelope;
 #[cfg(feature = "full-core")]
 pub use clipboard::{
     all_urls as clipboard_all_urls, first_url as clipboard_first_url, looks_like_download_url,
@@ -126,7 +122,7 @@ pub use connection_parts::{
     active_worker_count, paint_file_map, paint_from_progress, summarize as summarize_parts,
 };
 pub use contract::{
-    AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, HarvestCandidate,
+    AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, EventEnvelope, HarvestCandidate,
     MediaPushRequest, MirrorStatus, PlayerTrack, QueueProfile, ResourceKind, ResourceOffer,
     StreamVariant, TaskFailure, TaskSnapshot, TaskSpec, TorrentFileEntry, TorrentFileSelection,
     DEFAULT_QUEUE_ID, LEGAL_TERMS_VERSION, V7_PROTOCOL_NAME, V7_PROTOCOL_VERSION,
@@ -140,7 +136,7 @@ pub use core_ipc::{
 #[cfg(windows)]
 pub use core_ipc::{NamedPipeClient, NamedPipeServer};
 #[cfg(feature = "full-core")]
-pub use core_runtime::{CoreRuntime, EventEnvelope};
+pub use core_runtime::CoreRuntime;
 #[cfg(feature = "full-core")]
 pub use core_server::CoreServer;
 #[cfg(feature = "full-core")]

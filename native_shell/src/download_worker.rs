@@ -6,6 +6,7 @@ use crate::{
     TaskSpec, TorrentSession,
 };
 use crate::http_engine::extract_http_status;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
@@ -1749,7 +1750,7 @@ impl CoreCoordinator {
         if !parsed.body.is_empty() {
             replay.insert(
                 "request_body".into(),
-                Value::String(crate::curl_import::base64_encode(parsed.body.as_bytes())),
+                Value::String(STANDARD.encode(parsed.body.as_bytes())),
             );
         }
         let referer = take_header(&mut request_headers, "referer")
@@ -1964,6 +1965,9 @@ impl CoreCoordinator {
         }
         if let CoreCommand::DiscoverCastDevices { mode } = command {
             return discover_cast(self, &mode);
+        }
+        if let CoreCommand::CheckUpdate { silent } = command {
+            return check_update(self, silent);
         }
         if let CoreCommand::DownloadUpdate = command {
             return download_update(self);
@@ -5626,6 +5630,29 @@ fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventE
         message,
     })?);
     Ok(events)
+}
+
+fn check_update(coordinator: &CoreCoordinator, silent: bool) -> Result<Vec<EventEnvelope>, String> {
+    // 网络请求完成后再获取任务/数据库共享锁，避免阻塞进度写入和其他客户端。
+    let event = match crate::updater::check_for_update(crate::updater::CURRENT_VERSION) {
+        Ok(info) if info.newer => CoreEvent::UpdateAvailable {
+            current: info.current,
+            latest: info.latest,
+            notes: info.notes,
+            release_url: info.html_url,
+            installer_name: info.installer_name,
+            installer_size: info.installer_size,
+            sha256_verified: !info.expected_sha256.is_empty(),
+        },
+        Ok(info) if !silent => CoreEvent::UpdateCurrent { current: info.current },
+        Ok(_) => return Ok(Vec::new()),
+        Err(error) if !silent => CoreEvent::Error { code: "update_failed".into(), message: error },
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "silent update check failed: {error}");
+            return Ok(Vec::new());
+        }
+    };
+    coordinator.lock()?.emit(event)
 }
 
 fn download_update(coordinator: &CoreCoordinator) -> Result<Vec<EventEnvelope>, String> {
