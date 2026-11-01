@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -50,6 +51,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -309,10 +311,15 @@ internal class PressFeedback(
     val scale: Float,
 )
 
-/** 缩放包含背景与圆角裁切；点击语义仍由调用方提供。 */
+// 只缩放绘制；graphicsLayer 会一起缩小命中区，边缘按下后轻微移动就会取消点击。
+private fun Modifier.pressScale(feedback: PressFeedback): Modifier = drawWithContent {
+    scale(feedback.scale, feedback.scale) { this@drawWithContent.drawContent() }
+}
+
+/** 缩放包含背景与圆角裁切，命中区保持不变；点击语义仍由调用方提供。 */
 internal fun Modifier.pressFeedback(feedback: PressFeedback, shape: Shape = RectangleShape): Modifier =
     this
-        .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+        .pressScale(feedback)
         .clip(shape)
         .background(feedback.background)
         .hoverable(feedback.interaction)
@@ -401,7 +408,7 @@ internal fun Button(
     Row(
         modifier
             .defaultMinSize(minHeight = 34.dp)
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .pressScale(feedback)
             .background(feedback.background, shape)
             .border(2.dp, blue.copy(alpha = focusAlpha), shape)
             .then(if (!(focused && enabled) && border != null) Modifier.border(border, shape) else Modifier)
@@ -475,7 +482,7 @@ internal fun IconButton(
     Box(
         modifier
             .defaultMinSize(34.dp, 34.dp)
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .pressScale(feedback)
             .background(feedback.background, RoundedCornerShape(Radius.sm))
             .border(2.dp, blue.copy(alpha = focusAlpha), RoundedCornerShape(Radius.sm))
             .clip(RoundedCornerShape(Radius.sm))
@@ -518,7 +525,7 @@ internal fun Checkbox(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modi
     Box(
         modifier
             .defaultMinSize(18.dp, 18.dp)
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .pressScale(feedback)
             .background(feedback.background, shape)
             .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) ink else animatedBorder, shape)
             .clip(shape)
@@ -583,7 +590,7 @@ internal fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modif
     Box(
         modifier
             .defaultMinSize(18.dp, 18.dp)
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .pressScale(feedback)
             .background(feedback.background, CircleShape)
             .border(if (focused && enabled) 2.dp else 1.dp, if (focused && enabled) ink else if (selected) blue else border, CircleShape)
             .clip(CircleShape)
@@ -633,7 +640,7 @@ internal fun Switch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifi
         modifier
             .width(36.dp)
             .height(20.dp)
-            .graphicsLayer { scaleX = feedback.scale; scaleY = feedback.scale }
+            .pressScale(feedback)
             .background(feedback.background, CircleShape)
             .border(if (focused) 2.dp else 1.dp, if (focused) ink else animatedBorder, CircleShape)
             .clip(CircleShape)
@@ -1005,9 +1012,10 @@ internal fun WorkbenchTooltip(text: String, besideControl: Boolean = false, cont
     // 自绘 Popup 会把指针留在旧提示层，遮住相邻行的按钮；交给框架处理离开与关闭。
     TooltipArea(
         delayMillis = 450,
+        // CursorPoint 默认零偏移，提示层会覆盖鼠标并拦截底下控件的首次点击。
         tooltipPlacement = if (besideControl) TooltipPlacement.ComponentRect(
             anchor = Alignment.CenterStart, alignment = Alignment.CenterStart, offset = DpOffset((-6).dp, 0.dp),
-        ) else TooltipPlacement.CursorPoint(),
+        ) else TooltipPlacement.CursorPoint(offset = DpOffset(0.dp, 16.dp)),
         tooltip = {
             Surface(shape = RoundedCornerShape(Radius.sm), color = tooltipSurface, shadowElevation = Elevation.e2) {
                 Text(text, Modifier.padding(horizontal = 8.dp, vertical = 5.dp), color = Color.White, fontSize = TypeScale.micro)

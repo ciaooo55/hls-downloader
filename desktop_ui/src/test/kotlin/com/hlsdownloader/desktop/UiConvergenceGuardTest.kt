@@ -22,7 +22,7 @@ class UiConvergenceGuardTest {
     private fun linesOf(path: String): List<String> = File(path).readText().split("\n")
 
     private val feedbackChain: List<String> = listOf(
-        "graphicsLayer { scaleX = feedback." + "scale; scaleY = feedback.scale }",
+        "pressScale(" + "feedback)",
         ".background(feedback." + "background)",
         ".hoverable(feedback." + "interaction)",
     )
