@@ -13,6 +13,11 @@ function Assert-V7ExtensionArchive {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($Archive))
     try {
+        foreach ($file in $zip.Entries) {
+            if ($file.FullName.Contains('\')) {
+                throw "Packaged $Browser extension ZIP path must use forward slashes: $($file.FullName)"
+            }
+        }
         $entry = $zip.GetEntry('manifest.json')
         if ($null -eq $entry) { throw "Packaged $Browser extension archive is missing manifest.json." }
         $reader = New-Object IO.StreamReader($entry.Open())

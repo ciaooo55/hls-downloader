@@ -2,6 +2,7 @@
 param([ValidateSet('run','test','candidate','package','adversarial')][string]$Task='run')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
+. (Join-Path $PSScriptRoot 'V7ExtensionArchive.ps1')
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
 $protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
 if ($protocolSource -notmatch 'CORE_PROTOCOL\s*=\s*"hls-downloader-v7-core"' -or
@@ -290,7 +291,22 @@ function Build-Extension([string]$Resources, [switch]$TestOnly) {
         $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($manifest.version -ne $productVersion) { throw "Built $($item.Source) manifest version is not ${productVersion}: $($manifest.version)" }
         Assert-ExtensionManifest $manifest $(if ($item.Source -eq 'chrome-mv3') { 'Chromium' } else { 'Firefox' }) $manifestPath
-        Compress-Archive -Path (Join-Path $source '*') -DestinationPath (Join-Path (Join-Path $Resources 'extensions') $item.Name) -CompressionLevel Optimal -Force
+        # Windows PowerShell Compress-Archive writes backslashes in ZIP entry
+        # names. Firefox cannot load nested scripts from those archives.
+        Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+        $destination = Join-Path (Join-Path $Resources 'extensions') $item.Name
+        $stream = [IO.File]::Create($destination)
+        $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($file in Get-ChildItem -LiteralPath $source -Recurse -File | Sort-Object FullName) {
+                $entry = $file.FullName.Substring($source.Length + 1).Replace('\', '/')
+                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        } finally {
+            $archive.Dispose()
+            $stream.Dispose()
+        }
+        Assert-V7ExtensionArchive -Archive $destination -Browser $(if ($item.Source -eq 'chrome-mv3') { 'Chromium' } else { 'Firefox' }) -Version $productVersion -ChromiumKey $expectedChromiumKey -FirefoxId $expectedFirefoxId
     }
 }
 

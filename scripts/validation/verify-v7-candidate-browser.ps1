@@ -51,7 +51,7 @@ foreach ($name in $helperProcessNames) {
 }
 try {
     Invoke-Smoke 'scripts\validation\smoke_v7_presenter.py' @('--presenter',(Join-Path $resources 'HLSDownloaderPresenter.exe'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--recovery-only')
-    Invoke-Smoke 'scripts\validation\smoke_extension_browsers.py' (@('--extension-output',$extensions,'--browser','both','--chrome-binary',$EdgeBinary,'--firefox-binary',$FirefoxBinary) + $firefoxBrowserDriverArgs)
+    Invoke-Smoke 'scripts\validation\smoke_extension_browsers.py' (@('--extension-output',$extensions,'--browser','both','--chrome-binary',$EdgeBinary,'--firefox-binary',$FirefoxBinary,'--chromium-archive',(Join-Path $root ([string]$manifest.extensions.Chromium.path)),'--firefox-archive',(Join-Path $root ([string]$manifest.extensions.Firefox.path))) + $firefoxBrowserDriverArgs)
     Invoke-Smoke 'scripts\validation\smoke_extension_media.py' (@('--browser','edge','--extension',(Join-Path $extensions 'chrome-mv3'),'--browser-binary',$EdgeBinary,'--ffmpeg',$Ffmpeg) + $edgeDriverArgs)
     Invoke-Smoke 'scripts\validation\smoke_extension_media.py' (@('--browser','firefox','--extension',(Join-Path $extensions 'firefox-mv3'),'--browser-binary',$FirefoxBinary,'--ffmpeg',$Ffmpeg) + $firefoxDriverArgs)
     Invoke-Smoke 'scripts\validation\smoke_extension_takeover.py' (@('--extension',(Join-Path $extensions 'chrome-mv3'),'--browser','edge','--browser-binary',$EdgeBinary,'--go',$Go) + $edgeDriverArgs)

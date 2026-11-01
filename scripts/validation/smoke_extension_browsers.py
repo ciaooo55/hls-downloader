@@ -569,7 +569,7 @@ def _exercise_chrome(
                     websocket_url = str(page["webSocketDebuggerUrl"])
                     marker = _evaluate(
                         websocket_url,
-                        f"document.documentElement.getAttribute('{MARKER}')",
+                        f"document.documentElement?.getAttribute('{MARKER}')",
                     )
                     diagnostics["marker"] = marker
                     diagnostics["playback"] = _evaluate(
@@ -753,9 +753,12 @@ def _exercise_firefox(
     driver_path: str | None,
     temp_root: Path,
     log: Path | None = None,
+    archive: Path | None = None,
 ) -> None:
-    addon = temp_root / "hls-downloader-smoke.xpi"
-    _zip_firefox_extension(extension_dir, addon)
+    addon = archive
+    if addon is None:
+        addon = temp_root / "hls-downloader-smoke.xpi"
+        _zip_firefox_extension(extension_dir, addon)
     options = FirefoxOptions()
     options.add_argument("-headless")
     options.set_preference("datareporting.policy.dataSubmissionEnabled", False)
@@ -769,10 +772,15 @@ def _exercise_firefox(
     if log:
         log.parent.mkdir(parents=True, exist_ok=True)
     service = FirefoxService(executable_path=driver_path,
-        service_args=["--profile-root", str(temp_root), "--log", "debug"],
+        service_args=["--profile-root", str(temp_root), "--log", "debug", "--allow-system-access"],
         log_output=str(log) if log else subprocess.DEVNULL)
     with webdriver.Firefox(service=service, options=options) as driver:
-        driver.install_addon(str(addon), temporary=True)
+        addon_id = driver.install_addon(str(addon), temporary=True)
+        driver.set_context("chrome")
+        addon_uuids = json.loads(driver.execute_script(
+            "return Services.prefs.getStringPref('extensions.webextensions.uuids', '{}')"
+        ))
+        driver.set_context("content")
         driver.set_page_load_timeout(20)
         driver.get(page_url)
         _wait_for_content_script(driver, "Firefox")
@@ -786,6 +794,45 @@ def _exercise_firefox(
         _wait_for_media_overlay(driver, "Firefox")
         _assert_hover_surface(driver, "Firefox")
         _assert_pointer_transition(driver, "Firefox")
+        driver.switch_to.new_window("tab")
+        driver.get(f"moz-extension://{addon_uuids[addon_id]}/popup.html")
+        deadline = time.monotonic() + 10
+        details = None
+        while time.monotonic() < deadline:
+            details = driver.execute_script(
+                "return {ready:document.documentElement.dataset.popupReady || 'bootstrap',"
+                "text:document.body.innerText, resources:document.querySelectorAll('article').length,"
+                "scanEnabled:document.querySelector('.scan-button')?.disabled === false}"
+            )
+            if details["ready"] == "error":
+                break
+            if details["ready"] == "ready" and details["resources"] > 0 and details["scanEnabled"]:
+                print("Firefox production popup initialized with detected resources.", flush=True)
+                return
+            time.sleep(0.1)
+        raise RuntimeError(f"Firefox production popup did not initialize: {details}")
+
+
+def _require_archive_matches_build(archive: Path, build: Path) -> Path:
+    archive = archive.resolve()
+    with zipfile.ZipFile(archive) as package:
+        names = set()
+        for entry in package.infolist():
+            # On Windows zipfile normalizes entry.filename; orig_filename is
+            # the actual ZIP path that Firefox uses to resolve module URLs.
+            name = entry.orig_filename
+            if "\\" in name or name.startswith("/") or ".." in name.split("/"):
+                raise RuntimeError(f"Non-portable extension ZIP path: {archive}: {name!r}")
+            if entry.is_dir():
+                continue
+            if name in names:
+                raise RuntimeError(f"Duplicate extension ZIP path: {archive}: {name!r}")
+            names.add(name)
+            if package.read(entry) != (build / name).read_bytes():
+                raise RuntimeError(f"Extension ZIP/build mismatch: {archive}: {name!r}")
+        if names != {path.relative_to(build).as_posix() for path in build.rglob("*") if path.is_file()}:
+            raise RuntimeError(f"Extension ZIP/build file set mismatch: {archive}")
+    return archive
 
 
 def _require_build(path: Path, browser_name: str) -> Path:
@@ -803,12 +850,20 @@ def main() -> int:
     parser.add_argument("--firefox-binary")
     parser.add_argument("--firefox-driver")
     parser.add_argument("--firefox-log", type=Path)
+    parser.add_argument("--chromium-archive", type=Path)
+    parser.add_argument("--firefox-archive", type=Path)
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
 
     output = args.extension_output.resolve()
     chrome = _require_build(output / "chrome-mv3", "Chrome")
     firefox = _require_build(output / "firefox-mv3", "Firefox")
+    if args.chromium_archive:
+        _require_archive_matches_build(args.chromium_archive, chrome)
+    firefox_archive = (
+        _require_archive_matches_build(args.firefox_archive, firefox)
+        if args.firefox_archive else None
+    )
     staging = Path(__file__).resolve().parents[2] / ".tool-cache" / "test-tmp"
     staging.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="hls-downloader-extension-smoke-", dir=staging) as temp_dir:
@@ -833,6 +888,7 @@ def main() -> int:
                         args.firefox_driver,
                         temp_root,
                         args.firefox_log.resolve() if args.firefox_log else None,
+                        firefox_archive,
                     )
         finally:
             # Selenium normally removes profiles itself. This also handles a
