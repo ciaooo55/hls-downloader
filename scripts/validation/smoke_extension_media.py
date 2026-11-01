@@ -12,6 +12,7 @@ import contextlib
 import functools
 import http.server
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -526,7 +527,6 @@ def run(
     with tempfile.TemporaryDirectory(prefix="hls-extension-smoke-", dir=temp_root) as temporary:
         root = Path(temporary)
         media_root = root / "site"
-        profile = root / "profile"
         media_root.mkdir()
         _make_media(media_root, ffmpeg)
         resolved_addon = addon
@@ -546,7 +546,6 @@ def run(
             if browser_name == "edge":
                 options = EdgeOptions()
                 options.binary_location = str(binary_path or _find_edge())
-                options.add_argument(f"--user-data-dir={profile}")
                 options.add_argument("--disable-features=DisableLoadExtensionCommandLineSwitch")
                 options.add_argument(f"--disable-extensions-except={extension}")
                 options.add_argument(f"--load-extension={extension}")
@@ -557,7 +556,8 @@ def run(
                 options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
                 if not headed:
                     options.add_argument("--headless=new")
-                service = EdgeService(executable_path=str(driver_path)) if driver_path else EdgeService()
+                service_env = {**os.environ, 'TEMP': str(root), 'TMP': str(root)}
+                service = EdgeService(executable_path=str(driver_path) if driver_path else None, env=service_env)
                 driver = webdriver.Edge(service=service, options=options)
             else:
                 options = FirefoxOptions()

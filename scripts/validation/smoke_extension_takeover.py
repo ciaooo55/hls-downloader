@@ -15,6 +15,7 @@ from email.parser import BytesParser
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -515,7 +516,6 @@ def _create_driver(
         driver.install_addon(str(addon), temporary=True)
         return driver
     common = [
-        f"--user-data-dir={profile}",
         "--disable-features=DisableLoadExtensionCommandLineSwitch",
         f"--disable-extensions-except={extension}",
         f"--load-extension={extension}",
@@ -531,20 +531,23 @@ def _create_driver(
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
     }
+    # WebDriver owns and removes its fresh profile; keep its temporary files
+    # beside the fixture instead of overriding the browser's startup profile.
+    service_env = {**os.environ, 'TEMP': str(profile.parent), 'TMP': str(profile.parent)}
     if browser_family == "chrome":
         options = ChromeOptions()
         options.binary_location = str(binary)
         for argument in common:
             options.add_argument(argument)
         options.add_experimental_option("prefs", preferences)
-        service = ChromeService(executable_path=str(driver_path)) if driver_path else ChromeService()
+        service = ChromeService(executable_path=str(driver_path) if driver_path else None, env=service_env)
         return webdriver.Chrome(service=service, options=options)
     options = EdgeOptions()
     options.binary_location = str(binary)
     for argument in common:
         options.add_argument(argument)
     options.add_experimental_option("prefs", preferences)
-    service = EdgeService(executable_path=str(driver_path)) if driver_path else EdgeService()
+    service = EdgeService(executable_path=str(driver_path) if driver_path else None, env=service_env)
     return webdriver.Edge(service=service, options=options)
 
 
