@@ -15,7 +15,6 @@ from urllib.parse import urlencode
 import zipfile
 
 from selenium import webdriver
-from selenium.webdriver import ActionChains
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
@@ -23,7 +22,7 @@ from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 
-from smoke_extension_media import _find_edge, _find_firefox, _overlay_state, _resource_id, _fit_browser_window
+from smoke_extension_media import _find_edge, _find_firefox, _overlay_state, _resource_id, _fit_browser_window, _hover_video
 from validation_workspace import test_tmp
 
 
@@ -96,16 +95,17 @@ def _browser_console_errors(driver) -> list[dict]:
     ][:100]
 
 
-def play_frames(driver):
+def play_frames(driver, with_extension: bool):
     driver.execute_script("document.querySelectorAll('video').forEach(v=>{v.muted=true;v.play().catch(()=>{});})")
     for video in driver.find_elements(By.TAG_NAME, 'video'):
         if video.is_displayed():
             driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest'})", video)
-            ActionChains(driver).move_to_element(video).perform()
+            if with_extension:
+                _hover_video(driver, video)
     for frame in driver.find_elements(By.TAG_NAME, "iframe"):
         try:
             driver.switch_to.frame(frame)
-            play_frames(driver)
+            play_frames(driver, with_extension)
         finally:
             driver.switch_to.parent_frame()
 
@@ -182,7 +182,7 @@ def run(args):
                                     button.click()
                                     clicked_play = True
                                     break
-                        play_frames(driver)
+                        play_frames(driver, not args.without_extension)
                         state = _overlay_state(driver)
                         record["state"] = state
                         # The button must point at the requested manifest/media, not merely any detected URL.

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 from validation_workspace import test_tmp
 import threading
@@ -39,9 +40,6 @@ class Handler(RangeHandler):
 
 def run(args):
     root = args.runtime.resolve()
-    extension = root / "extensions/Firefox"
-    manifest = json.loads((extension / "manifest.json").read_text(encoding="utf-8"))
-    eid = manifest["browser_specific_settings"]["gecko"]["id"]
     report = {"passed": False, "runtime": str(root), "steps": []}
     args.report.parent.mkdir(parents=True, exist_ok=True)
     environment = {k: v for k, v in os.environ.items() if not k.startswith("HLS_")}
@@ -60,15 +58,17 @@ def run(args):
     with tempfile.TemporaryDirectory(prefix="portable-browser-", dir=test_tmp()) as temporary:
         stage = Path(temporary)
         try:
+            provenance = json.loads((root / "app/resources/BUILD-PROVENANCE.json").read_text(encoding="utf-8-sig"))
+            extension = root / "extensions" / f"HLSDownloader-{provenance['product_version']}-Firefox.zip"
+            addon = stage / "extension.xpi"
+            shutil.copyfile(extension, addon)
+            with zipfile.ZipFile(addon) as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+            eid = manifest["browser_specific_settings"]["gecko"]["id"]
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Mozilla\NativeMessagingHosts\com.ciaooo55.hls_downloader") as key:
                 host_path = Path(winreg.QueryValueEx(key, "")[0])
             registration = json.loads(host_path.read_text(encoding="utf-8-sig"))
             check("real-native-host-registration", Path(registration["path"]) == root / "app/resources/HLSDownloaderNativeHost.exe" and eid in registration["allowed_extensions"], registration)
-            addon = stage / "extension.xpi"
-            with zipfile.ZipFile(addon, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-                for p in sorted(extension.rglob("*")):
-                    if p.is_file():
-                        archive.write(p, p.relative_to(extension).as_posix())
             options = Options()
             options.binary_location = str(_find_firefox())
             options.add_argument("-headless")
