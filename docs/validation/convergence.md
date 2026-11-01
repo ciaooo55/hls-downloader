@@ -103,3 +103,17 @@
 新版安装包已新增至 `C:\Users\lee\Desktop\HLSDownloader\HLSDownloader-7.0.3-20261102-未签名.msi`，复制后哈希匹配。没有覆盖安装或操作用户运行中的 `E:\hsl` 程序。桌面扩展覆盖及旧 MSI 删除被自动审批拒绝，仅返回 `blocked by policy`；因此旧 `HLSDownloader-7.0.3-20261101-未签名.msi` 仍保留，桌面目前共 5 个文件，不能称为只保留最新交付。
 
 本轮临时展开目录清理也被自动审批拒绝，返回相同原因，未改用其他工具重试。仍保留 `artifacts/desktop-click-20261102/msi-inspection/`、`previous-extensions/`、`verify-package.py` 和 `.tool-cache/test-tmp/desktop-click-package/`，上述三个目录中的生成文件合计约 479 MB；更早被拒绝的清理记录仍见 `artifacts/popup-bootstrap-20261101/cleanup.json`。这些残留不属于源码，也未提交。验证、交付、哈希及阻塞位置见本轮目录下的 `package-integrity.json`、`delivery.json`、`SHA256SUMS.txt`、`cleanup.json` 和 `final-validation-summary.json`。
+
+## 用户手工清理入口（2026-11-02）
+
+按用户要求提供 `scripts/cleanup-v7-validation.ps1`，默认只预览，添加 `-Apply` 才删除。固定清单为 `artifacts/desktop-click-20261102/cleanup-plan.json`，覆盖已核实的校验临时文件、重复扩展构建输出及桌面旧 MSI：12 个目标、329 个文件，共 692382796 字节（660.31 MiB）。每个文件记录大小和 SHA-256，目标清单被修改、待删文件变化、保留包哈希不符、路径包含链接或进程占用时停止；删除前还检查文件锁，不终止进程。
+
+新版 MSI、两种扩展包及插件源码包、源码、工具链、依赖缓存、验证报告和失败证据均保留。`extension/.wxt` 被 `extension/tsconfig.json` 引用，继续保留；用户下载、数据库、凭据和恢复资料不在清单中。脚本没有覆盖扩展包，两种桌面扩展的成员内容已与当前候选包核对。
+
+从任意目录运行以下命令可执行清理，去掉 `-Apply` 可先预览：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "A:\Ubuntu\测试\hls-downloader\scripts\cleanup-v7-validation.ps1" -Apply
+```
+
+实际验证了 PowerShell 5.1/7 语法、Windows PowerShell 5.1 的完整预览，以及三种拒绝场景：保留文件哈希变化、加入非允许目标、待删文件哈希变化。清单在测试后按原字节恢复。未执行删除模式，验证记录见同目录 `cleanup-script-validation.json`。用户执行后的逐项结果写入 `cleanup-result.json`；此前的 `cleanup.json` 和交付记录保留为当时的历史状态。
