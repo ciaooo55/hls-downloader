@@ -3,9 +3,15 @@ param([switch]$Apply)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
-$evidence = Join-Path $repo 'artifacts\desktop-click-20261102'
-$plan = Get-Content -LiteralPath (Join-Path $evidence 'cleanup-plan.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$evidence = Join-Path $repo 'artifacts\review-20261102'
+$planPath = Join-Path $evidence 'cleanup-plan.json'
+$expectedPlanHash = 'c0fad6be4f35272704a97924ae653a9cc7b071a91baf6b65136b8c4fcd5332e6'
+if ((Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedPlanHash) {
+    throw 'Cleanup plan changed; nothing will be deleted.'
+}
+$plan = Get-Content -LiteralPath $planPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'HLSDownloader'
 if ($plan.schema -ne 1 -or $plan.workspace -ne $repo -or $plan.desktop_directory -ne $desktop) {
     throw 'Cleanup plan belongs to a different workspace or desktop directory.'
@@ -57,21 +63,34 @@ function Get-Entries([string]$Path) {
     $entries | Sort-Object path
 }
 
+function Assert-Entries([string]$Path, [object[]]$Expected) {
+    $entries = @(Get-Entries $Path)
+    $expectedEntries = @($Expected | Sort-Object path)
+    if ($entries.Count -ne $expectedEntries.Count) { throw "Target entries changed: $Path" }
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        foreach ($property in @('path', 'kind', 'bytes', 'sha256')) {
+            if ($entries[$i].$property -cne $expectedEntries[$i].$property) {
+                throw "Target changed; nothing further will be deleted: $Path [$($entries[$i].path), $property]"
+            }
+        }
+    }
+    $entries
+}
+
 # Only these inspected leftovers are eligible; the plan cannot add other targets.
 $allowed = @(
-    'artifacts\desktop-click-20261102\msi-inspection',
-    'artifacts\desktop-click-20261102\previous-extensions',
-    '.tool-cache\test-tmp\desktop-click-package',
-    'artifacts\popup-bootstrap-20261101\original',
-    'artifacts\popup-bootstrap-20261101\fixed',
-    'artifacts\popup-bootstrap-20261101\powershell-5',
-    'artifacts\popup-bootstrap-20261101\powershell-7',
-    'artifacts\popup-bootstrap-20261101\repack-input',
-    '.tool-cache\test-tmp\popup-bootstrap-build',
+    '.tool-cache\test-tmp\hls-downloader-extension-smoke-n61k5jzg',
+    '.tool-cache\test-tmp\review-edge-start-lx3wksfn',
+    '.tool-cache\test-tmp\review-20261102',
+    '.tool-cache\test-tmp\review-extension-20261102',
+    '.tool-cache\test-tmp\review-package-20261103',
     'extension\.output',
-    'artifacts\desktop-click-20261102\verify-package.py'
+    '.tool-cache\convergence-20261029\packaged-deps',
+    '.tool-cache\free-parity-20261030\component-resources',
+    '.tool-cache\handoff-admission-20261029\input',
+    '.tool-cache\paused-followup-20261029\input'
 )
-$oldMsiName = 'HLSDownloader-7.0.3-20261101-' + [char]0x672A + [char]0x7B7E + [char]0x540D + '.msi'
+$oldMsiName = 'HLSDownloader-7.0.3-20261102-' + [char]0x672A + [char]0x7B7E + [char]0x540D + '.msi'
 $expectedTargets = @($allowed | ForEach-Object { 'workspace:' + $_ }) + @('desktop:' + $oldMsiName)
 $actualTargets = @($plan.targets | ForEach-Object { $_.root + ':' + $_.path })
 if (@(Compare-Object $expectedTargets $actualTargets).Count -ne 0 -or $actualTargets.Count -ne $expectedTargets.Count) {
@@ -100,16 +119,7 @@ foreach ($target in $plan.targets) {
         continue
     }
     Assert-SafePath $path $rootPath
-    $entries = @(Get-Entries $path)
-    $expected = @($target.entries | Sort-Object path)
-    if ($entries.Count -ne $expected.Count) { throw "Target entries changed: $path" }
-    for ($i = 0; $i -lt $entries.Count; $i++) {
-        foreach ($property in @('path', 'kind', 'bytes', 'sha256')) {
-            if ($entries[$i].$property -cne $expected[$i].$property) {
-                throw "Target changed; nothing will be deleted: $path [$($entries[$i].path), $property]"
-            }
-        }
-    }
+    $entries = @(Assert-Entries $path $target.entries)
     $running = @($processes | Where-Object {
         $_.ProcessId -ne $PID -and (
             ($_.ExecutablePath -and ($_.ExecutablePath -eq $path -or $_.ExecutablePath.StartsWith($path + '\', [StringComparison]::OrdinalIgnoreCase))) -or
@@ -144,14 +154,30 @@ try {
     foreach ($target in $checked) {
         if ($target.status -eq 'already absent') { continue }
         if ($PSCmdlet.ShouldProcess($target.path, 'Delete inspected validation leftovers')) {
-            Assert-SafePath $target.path $(if ($target.path.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) { $repo } else { $desktop })
-            Remove-Item -LiteralPath $target.path -Recurse -Force
+            $rootPath = if ($target.path.StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) { $repo } else { $desktop }
+            Assert-SafePath $target.path $rootPath
+            $entries = @(Assert-Entries $target.path $target.entries)
+            $target.status = 'removing'
+            # Delete only inventoried files; a newly created file prevents directory removal.
+            foreach ($entry in $entries) {
+                if ($entry.kind -ne 'file') { continue }
+                Assert-SafePath $entry.full_path $rootPath
+                Remove-Item -LiteralPath $entry.full_path -Force
+            }
+            foreach ($entry in @($entries | Where-Object { $_.kind -eq 'directory' } | Sort-Object { $_.full_path.Length } -Descending)) {
+                Assert-SafePath $entry.full_path $rootPath
+                [IO.Directory]::Delete($entry.full_path, $false)
+            }
             $target.status = 'removed'
         }
         else { $target.status = 'not removed' }
     }
 }
-catch { $failure = $_.Exception.Message; throw }
+catch {
+    $failure = $_.Exception.Message
+    $target.status = 'failed'
+    throw
+}
 finally {
     if (-not $WhatIfPreference) {
         [ordered]@{

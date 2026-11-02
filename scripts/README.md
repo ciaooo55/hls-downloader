@@ -10,9 +10,12 @@
 | `build-v7.ps1` | `run`、`test`、`candidate`、`package` 等统一构建入口 |
 | `run-v7-local.ps1` | 使用本仓库工具链启动开发工作台 |
 | `cleanup-v7-build-cache.ps1` | 默认预览工作区内可重建输出；`-Apply` 执行清理，保留依赖缓存与用户数据 |
+| `cleanup-v7-validation.ps1` | 默认预览已核实的验收残留；`-Apply` 按固定清单及哈希删除，保留最新交付和失败证据 |
 | `configure-qwencloud.ps1` | 个人字幕凭据的加密配置；密钥不进入源码 |
 
 `upgrade-v7-portable.ps1` 和 `V7HashFunctions.ps1` 还会随 Portable 分发，保留在根层以维持包内升级路径。
+
+验收残留清理脚本绑定 `artifacts/review-20261102/cleanup-plan.json`，不能用来批量清空任意目录。清单、待删文件或保留包发生变化时会停止；不终止进程，不删除下载、凭据和恢复数据。执行结果写入同目录 `cleanup-result.json`。历史清理结果继续保留在各轮验收目录。
 
 播放器依赖锁定为既有版本。libmpv 的上游日构建归档可能过期；可将同版本发布包里的 `libmpv-2.dll` 放入构建缓存的 `libmpv-20260814` 目录，构建脚本会核对源码中固定的 SHA-256 后复用。摘要不匹配会终止，不接受任意播放库，也不会自动升级引擎。
 

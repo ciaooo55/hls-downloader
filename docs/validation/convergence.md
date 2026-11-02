@@ -155,3 +155,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "A:\Ubuntu\测试\hls-do
 清理仍未完全完成：自动审批拒绝删除旧 `HLSDownloader-7.0.3-20261102-未签名.msi` 和两处本轮临时浏览器 profile（`hls-downloader-extension-smoke-n61k5jzg`、`review-edge-start-lx3wksfn`，共 16534733 字节），只返回 `blocked by policy`，未换工具重试。桌面因此仍有 5 个文件。测试数据目录 `review-20261102` 含首次 Rust 失败状态，扩展测试缓存、打包临时输出及 `.output` 保留在工作区；必要工具链、缓存和失败证据继续保留。已核查本轮浏览器、Core、编译/测试进程退出，构建用临时盘符映射已解除。
 
 本轮实际结果、产物哈希和残留分别见 `artifacts/review-20261102/validation-summary.json`、`package-integrity.json`、`desktop-delivery.json`、`extension-source-integrity.json`、`cleanup-status.json`。当前是本轮整改和候选包交付，不能视为所有产品验收已通过或清理已全部完成。
+
+### 验收残留清理完成（2026-11-03）
+
+用户再次明确要求清理后，更新并执行现有 `scripts/cleanup-v7-validation.ps1`。固定清单改为 `artifacts/review-20261102/cleanup-plan.json`：11 个目标、690 个文件、719826434 字节（686.48 MiB）均已删除，执行记录无错误。此前本轮清理受阻的描述为历史状态；最新结果见同目录 `cleanup-result.json` 和 `cleanup-status.json`。
+
+删除范围为隔离浏览器 profile、测试及打包临时输出、扩展 `.output`、重复 FFmpeg/libmpv、旧验收复制的测试组件/运行时和桌面旧 MSI。FFmpeg/libmpv 与保留的构建缓存逐字节哈希一致。本轮失败 HTTP 重试夹具、测试数据库及历史测试组件身份文件共 7 项，先保存到 `failure-state/cleanup-preserved-state.zip` 并逐项校验大小与 SHA-256，再清理临时原件；清单和保留归档均有哈希保护。
+
+脚本固定校验清单自身哈希，复用现有哈希工具以支持当前 Windows PowerShell 5.1 环境。预检和实际删除前均核对文件条目；逐项删除已核实的文件，再仅删除空目录，不递归删除清单外的新文件。保留原有路径边界、链接拒绝、进程及文件锁检查，不终止进程。PowerShell 5.1/7 解析、5.1 完整预览、7 的 `-Apply -WhatIf` 及清单篡改、保留文件变化、待删文件变化、新增文件四种拒绝场景均通过，测试改动全部恢复。实际删除完成后再核对保留哈希和全部目标缺失，记录见 `cleanup-script-validation.json`。
+
+桌面 `C:\Users\lee\Desktop\HLSDownloader` 现仅有最新 MSI、Chromium ZIP、Firefox ZIP 和扩展源码 ZIP 四件，保留哈希与本轮交付记录一致。源码、用户备份及凭据、下载/恢复状态、`.wxt`、必要工具链和依赖缓存均不在删除范围。历史失败日志、截图、对照工具和仍被安装/回滚验收引用的旧基线包继续保留，不能将未闭环的诊断资料按垃圾删除。
+
+本次只调整清理工具和说明，没有修改产品源码、重打包或重跑产品全套测试，现有安装包身份与尚未闭环的产品验收结论保持不变。未控制用户桌面窗口，未创建分支/worktree，未推送。
