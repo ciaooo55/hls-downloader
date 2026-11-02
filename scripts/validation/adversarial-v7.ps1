@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('native', 'browser', 'transfer')]
-    [string[]]$Scope = @('native')
+    [string[]]$Scope = @('native', 'browser', 'transfer')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,15 +69,11 @@ function Assert-ArchitectureBoundary {
 Push-Location $repo
 try {
     Assert-ArchitectureBoundary
-    Invoke-Gate 'Rust Core protocol and state invariants' {
-        & $cargo test --locked --manifest-path native_shell\Cargo.toml --lib --no-default-features --quiet -- --test-threads=1
+    Invoke-Gate 'Rust Core all-target invariants' {
+        & $cargo test --locked --manifest-path native_shell\Cargo.toml --all-targets --quiet -- --test-threads=1
     }
-    Invoke-Gate 'v7 Rust transfer worker contract' {
-        # Transfer worker tests live behind the default `full-core` feature. Running this
-        # filter on the reduced `--no-default-features` surface matches zero tests, and a
-        # zero-match cargo filter exits 0, so the gate would pass without testing anything.
-        & $cargo test --locked --manifest-path native_shell\Cargo.toml --lib http_engine --quiet -- --test-threads=1
-        if ($LASTEXITCODE -ne 0) { throw "v7 Rust transfer worker tests failed (exit $LASTEXITCODE)" }
+    Invoke-Gate 'Rust presenter-client IPC contract' {
+        & $cargo test --locked --manifest-path native_shell\Cargo.toml --no-default-features --features presenter-client --all-targets --quiet -- --test-threads=1
     }
     Invoke-Gate 'Native UI task model invariants' {
         & $cargo test --locked --manifest-path presenter_ui\Cargo.toml --quiet
@@ -113,24 +109,21 @@ try {
             --report "$repo\artifacts\v7-productization\performance\native-host-cold-start.json"
     }
 
-    Invoke-Gate 'Real Engine Range throughput, memory and publication boundary' {
-        & $cargo build --locked --release --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --quiet
-        if ($LASTEXITCODE -ne 0) { throw "v7 release Engine build failed (exit $LASTEXITCODE)" }
-        & $pythonExe scripts\validation\smoke_v7_transfer_performance.py `
-            --engine "$env:CARGO_TARGET_DIR\release\hls-downloader-engine.exe" `
-            --report "$repo\artifacts\v7-productization\performance\real-transfer-latest.json"
+    if ($Scope -contains 'transfer') {
+        Invoke-Gate 'Real Engine Range throughput, memory and publication boundary' {
+            & $cargo build --locked --release --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --quiet
+            if ($LASTEXITCODE -ne 0) { throw "v7 release Engine build failed (exit $LASTEXITCODE)" }
+            & $pythonExe scripts\validation\smoke_v7_transfer_performance.py `
+                --engine "$env:CARGO_TARGET_DIR\release\hls-downloader-engine.exe" `
+                --report "$repo\artifacts\v7-productization\performance\real-transfer-latest.json"
+        }
     }
 
     if ($Scope -contains 'browser') {
         Invoke-Gate 'Browser extension Native Messaging contract' {
+            $pnpm = if ($env:HLS_V7_PNPM) { $env:HLS_V7_PNPM } else { 'pnpm' }
             Push-Location extension
-            try { & pnpm test } finally { Pop-Location }
-        }
-    }
-    if ($Scope -contains 'transfer') {
-        Invoke-Gate 'Rust transfer recovery and media harness' {
-            & $cargo test --locked --manifest-path native_shell\Cargo.toml --lib media::harness --quiet -- --test-threads=1
-            if ($LASTEXITCODE -ne 0) { throw "media harness tests failed (exit $LASTEXITCODE)" }
+            try { & $pnpm test } finally { Pop-Location }
         }
     }
     $result = 'passed'

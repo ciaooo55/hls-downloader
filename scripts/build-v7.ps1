@@ -446,7 +446,7 @@ $env:HLS_ENGINE_PATH = $engine
         # 于是 packageDistributionForCurrentOS 的 runtimeImage 输入缺失、jpackage 直接失败。
         # 把 createRuntimeImage 显式拉进同一次任务图并强制重跑，只重跑本次显式请求的任务，依赖仍可命中增量缓存。
         { $_ -in 'candidate', 'package' } { & .\gradlew.bat --no-daemon clean createRuntimeImage --rerun createDistributable packageDistributionForCurrentOS }
-        'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\validation\adversarial-v7.ps1" -Scope native }
+        'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\validation\adversarial-v7.ps1" }
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {

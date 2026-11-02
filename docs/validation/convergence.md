@@ -141,3 +141,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "A:\Ubuntu\测试\hls-do
 - 实际 Debug Core 的 HTTP 13 项检查通过，含重定向与请求上下文、POST、403/404、断网重试、HTML 伪媒体拒绝、保存目录错误后继续下载、暂停后重启恢复及成品 SHA-256。Debug Native Host 两帧协议与隔离 Core 可用，但首响应 2557.25ms 超过 1500ms 门槛，性能检查失败；不调整门槛，也不将其视为 Release 包性能结论。
 
 本轮未执行真实窗口、安装覆盖/回滚/卸载、真实接收端、云凭据等验收，前文未闭环事项继续有效。新包必须另行基于明确提交重建，旧桌面包不包含本轮源码修复；签名与正式发布门禁保持原状。
+
+### 本轮构建、交付及最终复审
+
+候选包已从干净提交 `12b4eeadc4486ec7b0b90e2724cc07f75f2e040e`、源码树 `1aa91d1c887564d62d6c1172127e5159e2e1196d` 完整重建成功，`release_ready=false`、签名 `NotSigned`。MSI SHA-256：`0c8442651b7a5cc2cf942c8ec55c763c035fb57ee7f65c463447ddb8ab868729`。构建入口通过了 MSI 生命周期结构及 EXE 内嵌 MSI 哈希检查；另核对候选清单、便携包五个原生组件、当前工作台 JAR、classpath、构建身份和两种扩展各 17 个成员。没有展开整个 MSI 生成另一套载荷副本，也未将结构检查算作安装/回滚/卸载通过。
+
+实际 Release Native Host 首响应为 3855.18ms，仍超过 1500ms 门槛。启动计时包括 Host 进入前约 0.90 秒、Core 进程创建约 1.40 秒、首次 SQLite 初始化约 1.46 秒。现有初始化已将 schema 放在单事务中并使用既定同步策略；没有放宽持久化或超时来取得通过结果。计时绑定的 Engine/Native Host 哈希与新包内组件一致，详情见 `native-host-release.json`。
+
+最终差异复审补齐了对抗入口覆盖：直接调用 Core 全目标和 presenter-client 全目标，HTTP/media 测试随全套执行，不再单独重复；默认 scope 包含 native/browser/transfer，浏览器测试沿用总构建入口已有的 `HLS_V7_PNPM` 配置。完整 wrapper 因包含原生窗口没有在宿主执行；两个 PowerShell 版本的解析、隔离拒绝检查，以及对应组件命令的实际结果分别记录。此后只有维护入口和文档变化，四个产品模块与打包提交没有差异，包内身份仍准确指向 `12b4eead`。
+
+桌面 `C:\Users\lee\Desktop\HLSDownloader` 已更新新 MSI（`20261103`）、Chromium ZIP、Firefox ZIP 和扩展源码 ZIP，复制后哈希均匹配。扩展源码包 125 个文件与打包提交的 Git blob 逐项一致，SHA-256 为 `e435ce7fdb207fba03efd05a68605a7e86491d2e0fab5141bca643df2660b6d2`。没有操作运行中的安装程序或用户桌面窗口，没有推送。
+
+清理仍未完全完成：自动审批拒绝删除旧 `HLSDownloader-7.0.3-20261102-未签名.msi` 和两处本轮临时浏览器 profile（`hls-downloader-extension-smoke-n61k5jzg`、`review-edge-start-lx3wksfn`，共 16534733 字节），只返回 `blocked by policy`，未换工具重试。桌面因此仍有 5 个文件。测试数据目录 `review-20261102` 含首次 Rust 失败状态，扩展测试缓存、打包临时输出及 `.output` 保留在工作区；必要工具链、缓存和失败证据继续保留。已核查本轮浏览器、Core、编译/测试进程退出，构建用临时盘符映射已解除。
+
+本轮实际结果、产物哈希和残留分别见 `artifacts/review-20261102/validation-summary.json`、`package-integrity.json`、`desktop-delivery.json`、`extension-source-integrity.json`、`cleanup-status.json`。当前是本轮整改和候选包交付，不能视为所有产品验收已通过或清理已全部完成。
