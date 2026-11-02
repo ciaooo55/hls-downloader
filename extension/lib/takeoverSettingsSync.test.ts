@@ -30,6 +30,30 @@ class DelayedRemoveStorage extends MemoryStorage {
 }
 
 describe('offline-safe takeover settings', () => {
+  it('keeps a queued choice retryable when a background storage read fails', async () => {
+    const storage = new MemoryStorage()
+    const read = storage.get.bind(storage)
+    let unavailable = true
+    vi.spyOn(storage, 'get').mockImplementation(async keys => {
+      if (!Array.isArray(keys) && unavailable) throw new Error('storage unavailable')
+      return read(keys)
+    })
+    const desktop = vi.fn().mockResolvedValue({ ok: true, takeover_enabled: false })
+    const sync = new TakeoverSettingsSync(storage, desktop, () => 'stored-choice')
+
+    await sync.queue({ enabled: false })
+    await expect(sync.sync()).rejects.toThrow('storage unavailable')
+    // Allow the background request's rejection to reach the event loop as well.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toMatchObject({ id: 'stored-choice', enabled: false })
+    expect(desktop).not.toHaveBeenCalled()
+
+    unavailable = false
+    await sync.sync()
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toBeUndefined()
+    expect(storage.values.enabled).toBe(false)
+  })
+
   it('applies a popup choice immediately and retries it after reconnect', async () => {
     const storage = new MemoryStorage()
     const desktop = vi.fn().mockRejectedValue(new Error('native host offline'))

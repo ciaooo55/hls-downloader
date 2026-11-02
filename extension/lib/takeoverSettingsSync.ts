@@ -121,7 +121,7 @@ export class TakeoverSettingsSync {
       if (!this.syncRequested) return
       this.syncRequested = false
       this.triggerSync()
-    })
+    }).catch(() => undefined) // The durable choice remains pending until the next ping.
   }
 
   private async syncLoop(): Promise<void> {

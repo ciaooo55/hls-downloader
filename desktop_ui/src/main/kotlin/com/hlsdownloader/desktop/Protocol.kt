@@ -17,7 +17,6 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.FileNotFoundException
-import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.InetSocketAddress
 import java.net.Socket

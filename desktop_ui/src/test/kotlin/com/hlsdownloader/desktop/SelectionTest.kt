@@ -69,6 +69,15 @@ class SelectionTest {
         assertTrue(batchTaskMenuActions(emptyList()).isEmpty())
     }
 
+    @Test fun missingCoreActionsDoNotInventTaskCommands() {
+        for (status in listOf("downloading", "unknown")) {
+            val task = TaskDto(id = "no-actions", filename = "archive.zip", status = status)
+            assertTrue(taskMenuActions(task).isEmpty())
+            assertTrue(selectedTaskActionTargets(listOf(task), "delete").isEmpty())
+            assertTrue(selectedTaskActionTargets(listOf(task), "pause").isEmpty())
+        }
+    }
+
     @Test fun batchMenuKeepsOnlyCommonBatchSafeActions() {
         val first = TaskDto(
             id = "first",

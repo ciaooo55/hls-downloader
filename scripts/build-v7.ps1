@@ -322,16 +322,17 @@ if ($isPackage) {
 $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 if ($Task -eq 'test') {
-    & $cargo test --manifest-path "$repo\native_shell\Cargo.toml" --lib
+    # Player fixtures change process-wide backend state, as in the CI serial gate.
+    & $cargo test --locked --manifest-path "$repo\native_shell\Cargo.toml" --lib -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $cargo test --manifest-path "$repo\presenter_ui\Cargo.toml"
+    & $cargo test --locked --manifest-path "$repo\presenter_ui\Cargo.toml"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Build-Extension -TestOnly
 }
 $engineTarget = if ($isPackage) { 'release' } else { 'debug' }
 & $cargo build --locked --manifest-path "$repo\native_shell\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bins
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $cargo build --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
+& $cargo build --locked --manifest-path "$repo\presenter_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $engine = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-engine.exe"
 if (!(Test-Path -LiteralPath $engine)) { throw "Rust engine was not produced: $engine" }

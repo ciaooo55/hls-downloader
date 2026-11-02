@@ -26,6 +26,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 import zipfile
 
+import psutil
 import websocket
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
@@ -289,7 +290,6 @@ def _find_chromium_binary(configured: str | None) -> Path:
 
 def _stop_process_tree(process: subprocess.Popen[object] | None, profile: Path | None = None) -> None:
     if profile is not None:
-        import psutil
         # Edge 可重启自身并退出启动进程；只按本次独立 profile 清理，避免留下浏览器和文件锁。
         profile_argument = f"--user-data-dir={profile.resolve()}"
         isolated = []
@@ -549,8 +549,11 @@ def _exercise_chrome(
     try:
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError(f"Chromium exited before extension verification ({process.returncode})")
+            # Edge can exit its launcher after starting the actual browser.
+            # Only DevTools can establish readiness after that successful exit.
+            exit_code = process.poll()
+            if exit_code not in (None, 0):
+                raise RuntimeError(f"Chromium exited before extension verification ({exit_code})")
             try:
                 targets = _read_debug_targets(port)
                 extension_ready = any(
@@ -891,8 +894,9 @@ def main() -> int:
                         firefox_archive,
                     )
         finally:
-            # Selenium normally removes profiles itself. This also handles a
-            # driver crash without ever targeting a real browser profile.
+            # A failed WebDriver constructor never enters its context manager.
+            # Stop only browsers using this run's profiles before removing them.
+            _stop_process_tree(None, temp_root)
             shutil.rmtree(temp_root, ignore_errors=True)
 
     print(f"Production extension browser smoke passed: {args.browser}.")

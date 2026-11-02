@@ -5,6 +5,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($env:HLS_VM_ACCEPTANCE -ne '1') {
+    throw 'Full adversarial validation opens native windows and requires the isolated acceptance environment (HLS_VM_ACCEPTANCE=1).'
+}
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
 $presenterManifest = Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\Cargo.toml') -Raw -Encoding UTF8
 $presenterSource = Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\src\hot_main.rs') -Raw -Encoding UTF8
@@ -67,39 +70,31 @@ Push-Location $repo
 try {
     Assert-ArchitectureBoundary
     Invoke-Gate 'Rust Core protocol and state invariants' {
-        & $cargo test --manifest-path native_shell\Cargo.toml --lib --no-default-features --quiet
+        & $cargo test --locked --manifest-path native_shell\Cargo.toml --lib --no-default-features --quiet -- --test-threads=1
     }
     Invoke-Gate 'v7 Rust transfer worker contract' {
         # Transfer worker tests live behind the default `full-core` feature. Running this
         # filter on the reduced `--no-default-features` surface matches zero tests, and a
         # zero-match cargo filter exits 0, so the gate would pass without testing anything.
-        & $cargo test --manifest-path native_shell\Cargo.toml --lib http_engine --quiet
+        & $cargo test --locked --manifest-path native_shell\Cargo.toml --lib http_engine --quiet -- --test-threads=1
         if ($LASTEXITCODE -ne 0) { throw "v7 Rust transfer worker tests failed (exit $LASTEXITCODE)" }
     }
     Invoke-Gate 'Native UI task model invariants' {
-        & $cargo test --manifest-path presenter_ui\Cargo.toml --quiet
+        & $cargo test --locked --manifest-path presenter_ui\Cargo.toml --quiet
         if ($LASTEXITCODE -ne 0) { throw "Native UI tests failed (exit $LASTEXITCODE)" }
         $presenter = Join-Path $env:CARGO_TARGET_DIR 'debug\hls-downloader-presenter.exe'
-        if (-not (Test-Path -LiteralPath $presenter)) {
-            & $cargo build --manifest-path presenter_ui\Cargo.toml --bin hls-downloader-presenter --quiet
-            if ($LASTEXITCODE -ne 0) { throw "v7 presenter build failed (exit $LASTEXITCODE)" }
-        }
+        & $cargo build --locked --manifest-path presenter_ui\Cargo.toml --bin hls-downloader-presenter --quiet
+        if ($LASTEXITCODE -ne 0) { throw "v7 presenter build failed (exit $LASTEXITCODE)" }
         if (-not (Test-Path -LiteralPath $presenter)) { throw "v7 presenter missing after build: $presenter" }
         $selfTest = & $presenter --self-test 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0 -or $selfTest -notmatch 'hls-v7-presenter/1 ok') {
             throw "v7 presenter self-test failed: $selfTest"
         }
         $engine = Join-Path $env:CARGO_TARGET_DIR 'debug\hls-downloader-engine.exe'
-        if (-not (Test-Path -LiteralPath $engine)) {
-            & $cargo build --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --quiet
-            if ($LASTEXITCODE -ne 0) { throw "v7 engine build failed (exit $LASTEXITCODE)" }
-        }
+        & $cargo build --locked --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --bin HLSDownloaderNativeHost --quiet
+        if ($LASTEXITCODE -ne 0) { throw "v7 engine/Native Host build failed (exit $LASTEXITCODE)" }
         if (-not (Test-Path -LiteralPath $engine)) { throw "v7 engine missing after build: $engine" }
         $nativeHost = Join-Path $env:CARGO_TARGET_DIR 'debug\HLSDownloaderNativeHost.exe'
-        if (-not (Test-Path -LiteralPath $nativeHost)) {
-            & $cargo build --manifest-path native_shell\Cargo.toml --bin HLSDownloaderNativeHost --quiet
-            if ($LASTEXITCODE -ne 0) { throw "v7 Native Host build failed (exit $LASTEXITCODE)" }
-        }
         if (-not (Test-Path -LiteralPath $nativeHost)) { throw "v7 Native Host missing after build: $nativeHost" }
         & $pythonExe scripts\validation\smoke_v7_presenter.py `
             --presenter $presenter --host $nativeHost --engine $engine
@@ -108,7 +103,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "v7 player process smoke failed (exit $LASTEXITCODE)" }
     }
     Invoke-Gate 'Compose protocol and hostile-input invariants' {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build-v7.ps1 -Task test
+        Push-Location desktop_ui
+        try { & .\gradlew.bat test --no-daemon } finally { Pop-Location }
     }
     Invoke-Gate 'Native Host cold-start and framed-message boundary' {
         & $pythonExe scripts\validation\smoke_v7_native_host.py `
@@ -118,7 +114,7 @@ try {
     }
 
     Invoke-Gate 'Real Engine Range throughput, memory and publication boundary' {
-        & $cargo build --release --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --quiet
+        & $cargo build --locked --release --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --quiet
         if ($LASTEXITCODE -ne 0) { throw "v7 release Engine build failed (exit $LASTEXITCODE)" }
         & $pythonExe scripts\validation\smoke_v7_transfer_performance.py `
             --engine "$env:CARGO_TARGET_DIR\release\hls-downloader-engine.exe" `
@@ -133,9 +129,7 @@ try {
     }
     if ($Scope -contains 'transfer') {
         Invoke-Gate 'Rust transfer recovery and media harness' {
-            & $cargo test --manifest-path native_shell\Cargo.toml --lib http_engine --quiet
-            if ($LASTEXITCODE -ne 0) { throw "HTTP transfer tests failed (exit $LASTEXITCODE)" }
-            & $cargo test --manifest-path native_shell\Cargo.toml --lib media::harness --quiet
+            & $cargo test --locked --manifest-path native_shell\Cargo.toml --lib media::harness --quiet -- --test-threads=1
             if ($LASTEXITCODE -ne 0) { throw "media harness tests failed (exit $LASTEXITCODE)" }
         }
     }

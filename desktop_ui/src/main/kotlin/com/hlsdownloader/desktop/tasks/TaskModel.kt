@@ -43,7 +43,7 @@ internal fun toolbarTaskTargets(all: List<DownloadTask>, visible: List<DownloadT
     if (selected.isEmpty()) all else visible.filter { it.id in selected }
 internal fun taskMenuActions(task: TaskDto): List<String> {
     val mediaCapable = taskSupportsMediaActions(task)
-    val base = task.availableActions.ifEmpty { listOf("start", "pause", "resume", "retry", "open", "delete") }
+    val base = task.availableActions
         .filterNot { it == "details" || (!mediaCapable && it in setOf("play", "cast", "push_tvbox")) }
         .filterNot { it in setOf("launch", "run") && taskFileExtension(task) !in executableFileExtensions }
     val media = if (mediaCapable && task.playbackReady) listOf("play", "cast", "push_tvbox") else emptyList()
