@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
+import { pageResourceKey } from './resources'
 
 const mocks = vi.hoisted(() => {
   ;(globalThis as Record<string, unknown>).defineBackground = (main: unknown) => ({ main })
@@ -75,6 +76,27 @@ describe('browser download ownership through registered event listeners', () => 
     vi.useRealTimers()
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
+  })
+
+  it.each(['navigation', 'close'])('keeps other tabs resource caches during tab %s cleanup', async action => {
+    const oldPage = pageResourceKey(1, 'https://site.test/old')
+    const nextPage = pageResourceKey(1, 'https://site.test/next')
+    const unscoped = pageResourceKey(1)
+    const otherTabs = [pageResourceKey(10, 'https://site.test/old'), pageResourceKey(11), pageResourceKey(100)]
+    for (const key of [oldPage, nextPage, unscoped, ...otherTabs]) session[key] = ['retained resource']
+    mocks.browser.storage.session.remove.mockClear()
+
+    if (action === 'navigation') listener(mocks.browser.tabs.onUpdated)(1, { url: 'https://site.test/next' })
+    else listener(mocks.browser.tabs.onRemoved)(1)
+    await flush()
+
+    const removed = mocks.browser.storage.session.remove.mock.calls
+      .flatMap(([keys]) => typeof keys === 'string' ? [keys] : keys as string[])
+    expect(removed).toContain(oldPage)
+    expect(removed).toContain(unscoped)
+    for (const key of otherTabs) expect(removed).not.toContain(key)
+    if (action === 'navigation') expect(removed).not.toContain(nextPage)
+    else expect(removed).toContain(nextPage)
   })
 
   function response(early = false, method = 'GET') {

@@ -388,8 +388,12 @@ async function settings() {
   }
 }
 
-function storageKey(tabId: number, pageUrl = '') {
-  return pageResourceKey(tabId, pageUrl)
+async function clearTabResources(tabId: number, keep?: string): Promise<void> {
+  const values = await browser.storage.session.get(null)
+  const prefix = pageResourceKey(tabId)
+  const keys = Object.keys(values).filter(key => key !== keep
+    && (key === prefix || key.startsWith(`${prefix}:page:`)))
+  if (keys.length) await browser.storage.session.remove(keys)
 }
 
 const responseFilename = contentDispositionFilename
@@ -703,7 +707,7 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     // becoming the incorrectly advertised source page.
     pageUrl = await topLevelPageUrl(tabId, pageUrl)
   }
-  const key = storageKey(tabId, pageUrl)
+  const key = pageResourceKey(tabId, pageUrl)
   const merged = await resourceSessionStore.update(key, resources => mergeResources(
     resources,
     { ...resource, pageUrl, kind, id: resourceId(resource.url), seenAt: Date.now() },
@@ -735,7 +739,7 @@ async function refreshTabBadge(tabId: number): Promise<void> {
     await setResourceBadge(tabId, [])
     return
   }
-  const key = storageKey(tabId, pageUrl)
+  const key = pageResourceKey(tabId, pageUrl)
   const resources = await resourceSessionStore.update(
     key,
     current => compactResources(pruneExpiredResources(current), 100, true),
@@ -1671,12 +1675,7 @@ export default defineBackground(() => {
       inspectedAdaptive.releasePrefix(`${tabId}:`)
       void browser.action.setBadgeText({ tabId, text: '' }).catch(() => undefined)
       if (changeInfo.url) {
-        const keep = storageKey(tabId, changeInfo.url)
-        void browser.storage.session.get(null).then(values => {
-          const prefix = `resources:tab:${tabId}`
-          const keys = Object.keys(values).filter(key => key.startsWith(prefix) && key !== keep)
-          if (keys.length) return browser.storage.session.remove(keys)
-        }).catch(() => undefined)
+        void clearTabResources(tabId, pageResourceKey(tabId, changeInfo.url)).catch(() => undefined)
       }
     }
   })
@@ -1690,10 +1689,7 @@ export default defineBackground(() => {
     requestChains.clearTab(tabId)
     blobSources.clearTab(tabId)
     inspectedAdaptive.releasePrefix(`${tabId}:`)
-    void browser.storage.session.get(null).then(values => {
-      const keys = Object.keys(values).filter(key => key.startsWith(`resources:tab:${tabId}`))
-      if (keys.length) return browser.storage.session.remove(keys)
-    }).catch(() => undefined)
+    void clearTabResources(tabId).catch(() => undefined)
   })
   nativeBridge = new NativeBridge(
     () => browser.runtime.connectNative(HOST) as unknown as NativePortLike,
@@ -1709,7 +1705,7 @@ export default defineBackground(() => {
     .request({ op: 'subtitle', request, client_id: await browserClientId() }),
     async (tabId, frameId, selection) => {
       const pageUrl = await topLevelPageUrl(tabId)
-      const key = storageKey(tabId, pageUrl)
+      const key = pageResourceKey(tabId, pageUrl)
       const values = await resourceSessionStore.update(key, raw => compactResources(pruneExpiredResources(raw), 40, true))
       let resource = values.find(value => value.id === selection.resourceId && resourceBelongsToFrame(value, frameId))
       if (!resource || !['hls', 'dash', 'media'].includes(resource.kind) || resource.isLive === true) {
@@ -2217,7 +2213,7 @@ export default defineBackground(() => {
         : -1
       const aggregateTab = shouldAggregateTabMedia(message.scope, senderFrameId)
       void topLevelPageUrl(tabId, String(message.pageUrl || ''))
-        .then(pageUrl => storageKey(tabId, pageUrl))
+        .then(pageUrl => pageResourceKey(tabId, pageUrl))
         .then(key => resourceSessionStore.update(key, raw => compactResources(pruneExpiredResources(raw), 40, true)).then(async cleaned => {
           // Never write the frame-filtered view back to the page cache: doing
           // so would erase sibling iframe resources just because one frame
