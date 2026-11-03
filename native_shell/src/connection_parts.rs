@@ -1,5 +1,4 @@
-//! HTTP Range connection map. Mirrors 5.x `connection_parts.py` without
-//! inventing extra downloads.
+//! HTTP Range connection map and worker count from the same progress sample.
 
 use crate::ConnectionPart;
 use serde_json::Value;
@@ -7,11 +6,7 @@ use std::path::Path;
 
 const PARTS_LIMIT: usize = 64;
 
-pub fn paint_file_map(
-    total: u64,
-    done: &[(u64, u64)],
-    active: &[(u64, u64)],
-) -> Vec<ConnectionPart> {
+fn paint_file_map(total: u64, done: &[(u64, u64)], active: &[(u64, u64)]) -> Vec<ConnectionPart> {
     if total == 0 {
         return Vec::new();
     }
@@ -57,15 +52,15 @@ pub fn paint_file_map(
     parts
 }
 
-pub fn paint_from_progress(
+pub(crate) fn paint_from_progress(
     progress_path: &Path,
     downloaded: u64,
     total: u64,
     downloading: bool,
-) -> Vec<ConnectionPart> {
+) -> (Vec<ConnectionPart>, u32) {
     // 成品发布后检查点会清理，完整字节计数仍能证明所有区间已完成。
     if !downloading && total > 0 && downloaded >= total {
-        return paint_file_map(downloaded, &[(0, downloaded)], &[]);
+        return (paint_file_map(downloaded, &[(0, downloaded)], &[]), 0);
     }
     let total = total.max(downloaded);
     let ranges = load_completed_ranges(progress_path).unwrap_or_default();
@@ -74,6 +69,8 @@ pub fn paint_from_progress(
     } else {
         Vec::new()
     };
+    // 相邻连接绘制时会合并，连接数仍须取合并前的同一份活动检查点。
+    let workers = active.len().min(u32::MAX as usize) as u32;
     if downloading && active.is_empty() {
         if let Some((_, end)) = ranges.last() {
             if *end < total {
@@ -84,32 +81,10 @@ pub fn paint_from_progress(
             active.push((downloaded.saturating_sub(1), downloaded.min(total)));
         }
     }
-    let parts = paint_file_map(total, &ranges, &active);
-    if parts.is_empty() && total > 0 {
-        return vec![ConnectionPart {
-            start: 0,
-            end: total.saturating_sub(1),
-            done: downloaded.min(total),
-            state: if downloading {
-                "active"
-            } else if downloaded >= total && total > 0 {
-                "done"
-            } else {
-                "queued"
-            }
-            .into(),
-        }];
-    }
-    parts
+    (paint_file_map(total, &ranges, &active), workers)
 }
 
-pub fn active_worker_count(progress_path: &Path) -> u32 {
-    load_active_ranges(progress_path)
-        .map(|ranges| ranges.len().min(u32::MAX as usize) as u32)
-        .unwrap_or(0)
-}
-
-pub fn summarize(parts: &[ConnectionPart]) -> (u32, u64, u64, String) {
+pub(crate) fn summarize(parts: &[ConnectionPart]) -> (u32, u64, u64, String) {
     let mut done = 0u64;
     let mut active = 0u32;
     for part in parts {
@@ -137,16 +112,7 @@ pub fn summarize(parts: &[ConnectionPart]) -> (u32, u64, u64, String) {
         })
         .collect::<Vec<_>>()
         .join(" · ");
-    (
-        active.max(if parts.iter().any(|part| part.state == "active") {
-            1
-        } else {
-            0
-        }),
-        done,
-        parts.len() as u64,
-        hint,
-    )
+    (active, done, parts.len() as u64, hint)
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -281,11 +247,13 @@ mod tests {
         let progress = root.join("progress.json");
         let ranges = progress.with_file_name("native-engine.ranges.json");
         std::fs::write(&ranges, r#"{"ranges":[[0,3]]}"#).unwrap();
-        let parts = paint_from_progress(&progress, 4, 8, true);
+        let (parts, workers) = paint_from_progress(&progress, 4, 8, true);
+        assert_eq!(workers, 0);
         let active = parts.iter().find(|part| part.state == "active").unwrap();
         assert_eq!((active.start, active.end), (4, 4));
         std::fs::write(&ranges, format!(r#"{{"ranges":[[0,{}]]}}"#, u64::MAX)).unwrap();
         assert!(paint_from_progress(&progress, 4, 8, true)
+            .0
             .iter()
             .all(|part| part.state == "done"));
         std::fs::remove_dir_all(root).unwrap();
@@ -304,16 +272,20 @@ mod tests {
     #[test]
     fn completed_file_remains_done_after_range_checkpoint_cleanup() {
         // 成品发布会移除分段检查点；连接图仍须反映已完成字节，而非排队。
-        let parts = paint_from_progress(Path::new("absent-task/progress.json"), 1024, 1024, false);
+        let (parts, workers) =
+            paint_from_progress(Path::new("absent-task/progress.json"), 1024, 1024, false);
+        assert_eq!(workers, 0);
         let (workers, completed, total, hint) = summarize(&parts);
         assert_eq!((workers, completed, total), (0, 1, 1));
         assert_eq!(parts[0].done, 1024);
         assert_eq!(parts[0].state, "done");
         assert!(!hint.contains("排队"));
 
-        let partial = paint_from_progress(Path::new("absent-task/progress.json"), 512, 1024, false);
+        let (partial, _) =
+            paint_from_progress(Path::new("absent-task/progress.json"), 512, 1024, false);
         assert_ne!(partial[0].state, "done");
-        let unknown = paint_from_progress(Path::new("absent-task/progress.json"), 512, 0, false);
+        let (unknown, _) =
+            paint_from_progress(Path::new("absent-task/progress.json"), 512, 0, false);
         assert_ne!(unknown[0].state, "done");
     }
 
@@ -328,8 +300,13 @@ mod tests {
             r#"{"ranges":[[0,4],[4,8]]}"#,
         )
         .unwrap();
-        assert_eq!(active_worker_count(&progress), 2);
-        assert_eq!(paint_from_progress(&progress, 0, 8, true).len(), 1);
+        let (parts, workers) = paint_from_progress(&progress, 0, 8, true);
+        assert_eq!(workers, 2);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].state, "active");
+        let (paused, workers) = paint_from_progress(&progress, 0, 8, false);
+        assert_eq!(workers, 0);
+        assert!(paused.iter().all(|part| part.state != "active"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

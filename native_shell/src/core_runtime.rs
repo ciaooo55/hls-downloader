@@ -3,6 +3,7 @@
 //! Persistence and transfer workers attach to this state machine; clients
 //! exchange the shared contract instead of owning separate task state.
 
+use crate::connection_parts::{paint_from_progress, summarize};
 use crate::contract::{
     AvScanStatus, CoreCommand, CoreEvent, EventEnvelope, MediaPushRequest, MirrorStatus,
     ResourceKind, ResourceOffer, TaskFailure, TaskSnapshot, TaskSpec,
@@ -655,6 +656,9 @@ impl CoreRuntime {
                     message: format!("unknown task {task_id}"),
                 };
             };
+            let paths = spec
+                .as_ref()
+                .and_then(|spec| crate::TaskPaths::for_task(task_id, spec).ok());
             let stale_active_progress =
                 matches!(
                     snapshot.status.as_str(),
@@ -696,13 +700,10 @@ impl CoreRuntime {
             snapshot.playback_ready = (matches!(effective_status.as_str(), "completed" | "done")
                 && !snapshot.output_missing)
                 || spec.as_ref().is_some_and(|spec| {
-                    crate::download_worker::TaskPaths::for_task(task_id, spec)
-                        .ok()
-                        .is_some_and(|paths| {
-                            crate::download_worker::playable_task_playlist(&paths).is_some()
-                                || crate::download_worker::playable_http_total(&paths, spec)
-                                    .is_some()
-                        })
+                    paths.as_ref().is_some_and(|paths| {
+                        crate::download_worker::playable_task_playlist(paths).is_some()
+                            || crate::download_worker::playable_http_total(paths, spec).is_some()
+                    })
                 });
             snapshot.completed_ranges =
                 if snapshot.total_ranges > 0 && snapshot.total_bytes.unwrap_or(0) > 0 {
@@ -716,18 +717,9 @@ impl CoreRuntime {
                     0
                 };
             let spec = spec.as_ref();
-            if let Some(spec) = spec {
-                let root = if spec.download_dir.trim().is_empty() {
-                    std::path::PathBuf::from("downloads")
-                } else {
-                    std::path::PathBuf::from(&spec.download_dir)
-                };
-                let progress = crate::TaskPaths::for_task(task_id, spec)
-                    .map(|paths| paths.progress)
-                    .unwrap_or_else(|_| {
-                        root.join(".hls-tasks").join(task_id).join("progress.json")
-                    });
-                let media_counts = std::fs::read_to_string(&progress)
+            if let (Some(spec), Some(paths)) = (spec, paths.as_ref()) {
+                let progress = &paths.progress;
+                let media_counts = std::fs::read_to_string(progress)
                     .ok()
                     .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
                     .and_then(|value| {
@@ -748,19 +740,15 @@ impl CoreRuntime {
                 {
                     let downloading =
                         matches!(effective_status.as_str(), "downloading" | "recording");
-                    let parts = crate::paint_from_progress(
-                        &progress,
+                    let (parts, active_workers) = paint_from_progress(
+                        progress,
                         snapshot.downloaded_bytes,
                         snapshot.total_bytes.unwrap_or(0),
                         downloading,
                     );
                     if !parts.is_empty() {
-                        let (workers, completed, total, hint) = crate::summarize_parts(&parts);
-                        snapshot.active_workers = if downloading {
-                            crate::active_worker_count(&progress).max(workers)
-                        } else {
-                            workers
-                        };
+                        let (workers, completed, total, hint) = summarize(&parts);
+                        snapshot.active_workers = active_workers.max(workers);
                         snapshot.completed_ranges = completed;
                         snapshot.total_ranges = total.max(1);
                         snapshot.connection_hint = hint;
@@ -1148,6 +1136,47 @@ mod tests {
             action: "pause".into(),
         });
         assert_eq!(runtime.snapshot(&task_id).unwrap().status, "paused");
+    }
+
+    #[test]
+    fn progress_uses_work_directory_and_keeps_worker_count_separate_from_painted_parts() {
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-runtime-progress-{}", std::process::id()));
+        let spec = TaskSpec {
+            download_dir: root.join("downloads").to_string_lossy().into_owned(),
+            work_dir: root.join("staging").to_string_lossy().into_owned(),
+            ..task()
+        };
+        let paths = crate::TaskPaths::for_task("task-1", &spec).unwrap();
+        paths.prepare().unwrap();
+        std::fs::write(
+            paths.progress.with_file_name("native-engine.ranges.json"),
+            r#"{"ranges":[[0,3]]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            paths.progress.with_file_name("native-engine.active.json"),
+            r#"{"ranges":[[4,6],[6,8]]}"#,
+        )
+        .unwrap();
+        let mut runtime = CoreRuntime::new();
+        runtime.handle(CoreCommand::CreateTask { spec });
+        runtime.handle(CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 4,
+            total_bytes: Some(16),
+            speed_bytes_per_sec: 1,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        });
+        let snapshot = runtime.snapshot("task-1").unwrap();
+        assert_eq!(snapshot.active_workers, 2);
+        assert_eq!(snapshot.completed_ranges, 1);
+        assert_eq!(snapshot.total_ranges, 3);
+        assert_eq!(snapshot.connection_parts[1].state, "active");
+        assert_eq!(snapshot.connection_parts[1].start, 4);
+        assert_eq!(snapshot.connection_parts[1].end, 7);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

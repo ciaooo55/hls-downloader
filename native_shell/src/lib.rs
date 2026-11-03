@@ -112,10 +112,6 @@ pub use clipboard::{
     read_text as read_clipboard, write_files as write_clipboard_files,
     write_text as write_clipboard,
 };
-#[cfg(feature = "full-core")]
-pub use connection_parts::{
-    active_worker_count, paint_file_map, paint_from_progress, summarize as summarize_parts,
-};
 pub use contract::{
     AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, EventEnvelope,
     HarvestCandidate, MediaPushRequest, MirrorStatus, PlayerTrack, QueueProfile, ResourceKind,
