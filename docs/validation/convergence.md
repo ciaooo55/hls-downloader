@@ -167,3 +167,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "A:\Ubuntu\测试\hls-do
 桌面 `C:\Users\lee\Desktop\HLSDownloader` 现仅有最新 MSI、Chromium ZIP、Firefox ZIP 和扩展源码 ZIP 四件，保留哈希与本轮交付记录一致。源码、用户备份及凭据、下载/恢复状态、`.wxt`、必要工具链和依赖缓存均不在删除范围。历史失败日志、截图、对照工具和仍被安装/回滚验收引用的旧基线包继续保留，不能将未闭环的诊断资料按垃圾删除。
 
 本次只调整清理工具和说明，没有修改产品源码、重打包或重跑产品全套测试，现有安装包身份与尚未闭环的产品验收结论保持不变。未控制用户桌面窗口，未创建分支/worktree，未推送。
+
+## 进度采样与插件标签页清理收敛（2026-11-03）
+
+Core 在同次进度更新中共用一次任务路径解析与活动分段检查点读取，同时返回绘制数据和合并前的真实连接数；删除重复扫描、无消费者的导出、不可达的连接图回退及自行拼接下载目录的回退。工作目录及连接数由现有运行态测试保护，没有新增兼容接口。
+
+扩展导航和关闭标签页时，原先按 `resources:tab:1` 前缀清理会误删标签页 10、11、100 的资源。两处清理收敛为同一私有函数，仅匹配该标签页根键或带 `:page:` 分隔符的键；删除仅转发参数的 `storageKey` 包装。实际注册事件监听器的两项回归修复前失败，修复后通过。
+
+本轮实际验证：连接图 4 项、Core runtime 16 项、扩展 52 个文件的 472 项测试及 TypeScript 检查通过；Rust 全目标 Clippy 按仓库现有 CI 参数、rustfmt 和差异空白检查通过。额外仅启用 `-D warnings` 的严格 Clippy 在未修改的 HLS `download_prepared_segments` 八参数函数处失败；保留失败日志，没有新增豁免或为了告警拆出抽象。新编译 Release Engine 的实际 HTTP 边界检查 13 项通过，含暂停后重启恢复与成品 SHA-256，受测 Engine 与包内组件哈希一致。
+
+候选包从干净产品提交 `46dc1da3a5eac53cf672b44376c2c4bb933bd89b`、源码树 `4b8c4ceb2d228ade75a7be92759825b3de669b39` 完整重建。MSI SHA-256 为 `91f29400dcb25625213bdf7a02eb36d19d20bb4a002ec782348dd5af94892147`，签名仍为 `NotSigned`，`release_ready=false`。候选清单、五个原生组件、便携包构建身份、两种扩展各 17 个文件与构建输出、内置及独立扩展 ZIP 均核对一致。ZIP 路径为正斜杠；MSI 升级结构及 EXE 内嵌 MSI 哈希检查通过，WiX 警告集合与上一轮一致。这些检查不替代实际安装生命周期验收。
+
+桌面 `C:\Users\lee\Desktop\HLSDownloader` 已更新并逐件校验，仅保留本轮 MSI、Chromium ZIP、Firefox ZIP 和扩展源码 ZIP 四件。扩展源码包 125 个文件与产品提交 Git blob 逐字节一致，源码包 SHA-256 为 `338329924d7e172262e9c16bb58614279f8b7b77f7d2b14913c86acfab13abd6`。维护记录提交不改变包内产品构建身份。
+
+现有清理脚本固定清单收缩为本轮 `extension/.output` 和 `.tool-cache/test-tmp/optimization-20261103`。实际删除 206 个文件、10255417 字节（9.78 MiB），执行无错误；删除后两个目标均不存在，默认预览再次核对九个保留文件哈希通过。PowerShell 5.1/7 解析及 5.1 预览通过；删除算法和既有路径、链接、文件锁及进程检查保持不变。本轮未遗留测试进程或临时盘符映射，必要缓存、用户数据与失败证据保留。
+
+记录位于 `artifacts/optimization-20261103/`，包括 `validation-summary.json`、`package-integrity.json`、`desktop-delivery.json`、`extension-source-integrity.json` 及 `cleanup-result.json`。本轮未重新执行真实窗口、浏览器自动化、安装/覆盖/回滚/卸载、播放器、投屏设备或云凭据验收；此前 Chromium DevTools 启动及 Native Host 首响应性能等未闭环结果继续保留，不能视为已修复或通过。唯一 `main` 和一个 worktree 保持不变，未操作用户桌面窗口，未推送或公开发布。

@@ -5,9 +5,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\')
-$evidence = Join-Path $repo 'artifacts\review-20261102'
+$evidence = Join-Path $repo 'artifacts\optimization-20261103'
 $planPath = Join-Path $evidence 'cleanup-plan.json'
-$expectedPlanHash = 'c0fad6be4f35272704a97924ae653a9cc7b071a91baf6b65136b8c4fcd5332e6'
+$expectedPlanHash = 'cf84f523f43c444f6e348cc4036bd7833fcbbb4e3cfedff992bd01b181c8063a'
 if ((Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedPlanHash) {
     throw 'Cleanup plan changed; nothing will be deleted.'
 }
@@ -79,19 +79,10 @@ function Assert-Entries([string]$Path, [object[]]$Expected) {
 
 # Only these inspected leftovers are eligible; the plan cannot add other targets.
 $allowed = @(
-    '.tool-cache\test-tmp\hls-downloader-extension-smoke-n61k5jzg',
-    '.tool-cache\test-tmp\review-edge-start-lx3wksfn',
-    '.tool-cache\test-tmp\review-20261102',
-    '.tool-cache\test-tmp\review-extension-20261102',
-    '.tool-cache\test-tmp\review-package-20261103',
     'extension\.output',
-    '.tool-cache\convergence-20261029\packaged-deps',
-    '.tool-cache\free-parity-20261030\component-resources',
-    '.tool-cache\handoff-admission-20261029\input',
-    '.tool-cache\paused-followup-20261029\input'
+    '.tool-cache\test-tmp\optimization-20261103'
 )
-$oldMsiName = 'HLSDownloader-7.0.3-20261102-' + [char]0x672A + [char]0x7B7E + [char]0x540D + '.msi'
-$expectedTargets = @($allowed | ForEach-Object { 'workspace:' + $_ }) + @('desktop:' + $oldMsiName)
+$expectedTargets = @($allowed | ForEach-Object { 'workspace:' + $_ })
 $actualTargets = @($plan.targets | ForEach-Object { $_.root + ':' + $_.path })
 if (@(Compare-Object $expectedTargets $actualTargets).Count -ne 0 -or $actualTargets.Count -ne $expectedTargets.Count) {
     throw 'Cleanup plan does not match the fixed target list.'
