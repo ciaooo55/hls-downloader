@@ -1,7 +1,35 @@
 import { describe, expect, it } from 'vitest'
-import { InspectionCache } from './inspectionCache'
+import { adaptiveInspectionKey, InspectionCache } from './inspectionCache'
 
 describe('HLS inspection cache', () => {
+  it('isolates request credentials, responses and frame owners at the same URL', async () => {
+    const resource = {
+      url: 'https://cdn.test/media.m3u8?token=signed-secret', kind: 'hls' as const,
+      pageUrl: 'https://site.test/watch#position', frameId: 1,
+      replayContext: { request_id: 'request-1' },
+      requestHeaders: { Authorization: 'Bearer first-secret', Cookie: 'sid=first' },
+      responseIdentity: { etag: 'version-1' },
+    }
+    const key = await adaptiveInspectionKey(resource, 1)
+    const cache = new InspectionCache()
+    expect(cache.claim(key)).toBe(true)
+    expect(cache.claim(await adaptiveInspectionKey({ ...resource,
+      pageUrl: 'https://site.test/watch#other',
+      requestHeaders: { cookie: 'sid=first', authorization: 'Bearer first-secret' },
+    }, 1))).toBe(false)
+    for (const different of [
+      { ...resource, requestHeaders: { ...resource.requestHeaders, Authorization: 'Bearer second-secret' } },
+      { ...resource, responseIdentity: { etag: 'version-2' } },
+      { ...resource, replayContext: { request_id: 'request-2' } },
+      { ...resource, frameId: 2 },
+      { ...resource, url: resource.url.replace('signed-secret', 'renewed-secret') },
+    ]) expect(cache.claim(await adaptiveInspectionKey(different, 1))).toBe(true)
+    expect(key).not.toContain('secret')
+    expect(key).not.toContain('sid=')
+    cache.releasePrefix('1:')
+    expect(cache.claim(key)).toBe(true)
+  })
+
   it('deduplicates recent inspection but permits retry after expiry or failure', () => {
     const cache = new InspectionCache(100, 10)
     expect(cache.claim('resource', 1_000)).toBe(true)

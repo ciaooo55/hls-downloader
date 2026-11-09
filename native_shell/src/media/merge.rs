@@ -74,9 +74,13 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Resu
             "-i",
         ])
         .arg(&input)
-        .args(["-c", "copy", "-movflags", "+faststart"])
-        .arg(output);
-    run_ffmpeg(&mut command, &task_dir.join("ffmpeg-merge.log"), control)
+        .args(["-c", "copy", "-movflags", "+faststart"]);
+    run_ffmpeg_to_output(
+        &mut command,
+        output,
+        &task_dir.join("ffmpeg-merge.log"),
+        control,
+    )
 }
 
 pub fn mux_av(
@@ -88,7 +92,7 @@ pub fn mux_av(
 ) -> Result<(), String> {
     if audio.is_none() && subtitles.is_empty() {
         if video != output {
-            fs::copy(video, output).map_err(|error| error.to_string())?;
+            concat_files(&[video.to_path_buf()], output)?;
         }
         return Ok(());
     }
@@ -118,8 +122,54 @@ pub fn mux_av(
     if !subtitles.is_empty() {
         command.args(["-c:s", "mov_text"]);
     }
-    command.args(["-movflags", "+faststart"]).arg(output);
-    run_ffmpeg(&mut command, &output.with_extension("ffmpeg.log"), control)
+    command.args(["-movflags", "+faststart"]);
+    run_ffmpeg_to_output(
+        &mut command,
+        output,
+        &output.with_extension("ffmpeg.log"),
+        control,
+    )
+}
+
+fn run_ffmpeg_to_output(
+    command: &mut Command,
+    output: &Path,
+    log_path: &Path,
+    control: &Path,
+) -> Result<(), String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut name = std::ffi::OsString::from(format!(".hls-mux-{}-{stamp}", std::process::id()));
+    // FFmpeg 根据后缀选择封装格式，暂存文件必须保留原输出后缀。
+    if let Some(extension) = output.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    let staged = output.with_file_name(name);
+    drop(fs::File::create_new(&staged).map_err(|error| error.to_string())?);
+    let result = (|| {
+        run_ffmpeg(command.arg(&staged), log_path, control)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&staged)
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        drop(file);
+        let action = fs::read_to_string(control).unwrap_or_default();
+        match action.trim() {
+            "pause" => return Err("paused".into()),
+            "cancel" => return Err("canceled".into()),
+            _ => {}
+        }
+        // 子进程已退出且暂存文件已关闭，成功前不覆盖旧成品或源轨道。
+        crate::atomic_replace::replace_file(&staged, output).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(staged);
+    }
+    result
 }
 
 fn run_ffmpeg(command: &mut Command, log_path: &Path, control: &Path) -> Result<(), String> {
@@ -284,14 +334,18 @@ mod tests {
             fs::create_dir_all(&root).unwrap();
             let control = root.join("control");
             let log = root.join("merge.log");
+            let output = root.join("已有成品.mp4");
             fs::write(&control, "run").unwrap();
+            fs::write(&output, b"previous completed media").unwrap();
             let worker_control = control.clone();
             let worker_log = log.clone();
+            let worker_output = output.clone();
             let ffmpeg = ffmpeg.clone();
             let worker = std::thread::spawn(move || {
                 use std::os::windows::process::CommandExt;
                 let mut command = Command::new(ffmpeg);
                 command.creation_flags(0x08000000).args([
+                    "-y",
                     "-nostdin",
                     "-v",
                     "error",
@@ -306,11 +360,10 @@ mod tests {
                     "pipe:2",
                     "-stats_period",
                     "0.1",
-                    "-f",
-                    "null",
-                    "NUL",
+                    "-c:a",
+                    "aac",
                 ]);
-                run_ffmpeg(&mut command, &worker_log, &worker_control)
+                run_ffmpeg_to_output(&mut command, &worker_output, &worker_log, &worker_control)
             });
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let ready = loop {
@@ -328,11 +381,83 @@ mod tests {
             let started = std::time::Instant::now();
             fs::write(&control, action).unwrap();
             let result = worker.join().unwrap();
+            let elapsed = started.elapsed();
+            let saved_output = fs::read(&output).unwrap();
+            let files = fs::read_dir(&root).unwrap().count();
             fs::remove_dir_all(root).unwrap();
             assert!(ready, "FFmpeg did not begin processing");
             assert_eq!(result.unwrap_err(), expected);
-            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+            assert!(elapsed < std::time::Duration::from_secs(3));
+            assert_eq!(saved_output, b"previous completed media");
+            assert_eq!(files, 3, "staged output must be removed");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires the packaged FFmpeg; configure HLS_FFMPEG and run explicitly"]
+    fn real_ffmpeg_replaces_output_only_after_success_and_supports_in_place_mux() {
+        use std::os::windows::process::CommandExt;
+
+        let ffmpeg = locate_ffmpeg().expect("configure HLS_FFMPEG to the packaged binary");
+        let root = std::env::temp_dir().join(format!(
+            "hls-real-publish-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("已有成品.mp4");
+        let log = output.with_extension("ffmpeg.log");
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        for fail in [true, false] {
+            fs::write(&output, b"previous completed media").unwrap();
+            let mut command = Command::new(&ffmpeg);
+            command.creation_flags(0x08000000).args([
+                "-y",
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=8000",
+                "-t",
+                "0.1",
+            ]);
+            if fail {
+                command.args(["-c:a", "pcm_s16le", "-f", "webm"]);
+            } else {
+                command.args(["-c:a", "aac"]);
+            }
+            let result = run_ffmpeg_to_output(&mut command, &output, &log, &control);
+            if fail {
+                assert!(result.unwrap_err().contains("ffmpeg 合流失败"));
+                assert_eq!(fs::read(&output).unwrap(), b"previous completed media");
+                assert!(!fs::read(&log).unwrap().is_empty());
+            } else {
+                result.unwrap();
+                // 两个输入与输出是同一路径，旧文件必须一直可读到 FFmpeg 退出。
+                mux_av(&output, Some(&output), &[], &output, &control).unwrap();
+                let decoded = Command::new(&ffmpeg)
+                    .creation_flags(0x08000000)
+                    .args(["-nostdin", "-v", "error", "-i"])
+                    .arg(&output)
+                    .args(["-f", "null", "-"])
+                    .output()
+                    .unwrap();
+                assert!(
+                    decoded.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&decoded.stderr)
+                );
+            }
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 3);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
@@ -464,6 +589,21 @@ mod tests {
         mux_av(&video, None, &[], &output, &dir.join("control")).unwrap();
         assert_eq!(fs::read(&output).unwrap(), b"VIDEO");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mux_without_extra_tracks_preserves_an_aliased_input() {
+        let root = std::env::temp_dir().join(format!("hls-mux-alias-{}", std::process::id()));
+        fs::create_dir_all(root.join("tracks")).unwrap();
+        let video = root.join("video.bin");
+        let output = root.join("tracks").join("..").join("video.bin");
+        fs::write(&video, b"VIDEO").unwrap();
+        mux_av(&video, None, &[], &output, &root.join("control")).unwrap();
+        let saved = fs::read(&video).unwrap();
+        let files = fs::read_dir(&root).unwrap().count();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(saved, b"VIDEO");
+        assert_eq!(files, 2);
     }
 
     #[test]

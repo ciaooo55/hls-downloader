@@ -1,6 +1,6 @@
 [package]
 name = "hls-native-shell"
-version = "7.0.3"
+version = "7.0.4"
 edition = "2021"
 description = "HLS Downloader 7 Rust Core, download engines, IPC, and Native Messaging"
 publish = false
@@ -9,14 +9,16 @@ publish = false
 default = ["full-core"]
 full-core = [
     "dep:rusqlite", "dep:tokio", "dep:tokio-tungstenite", "dep:rustls",
-    "dep:futures-util", "dep:base64", "dep:russh", "dep:russh-sftp", "dep:schannel",
+    "dep:futures-util", "dep:base64", "dep:russh", "dep:russh-sftp", "dep:schannel", "dep:roxmltree",
 ]
-presenter-client = []
 
 [dependencies]
+hls-client = { path = "../crates/client" }
+hls-protocol = { path = "../crates/protocol" }
 rusqlite = { version = "0.40", features = ["bundled", "backup"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+roxmltree = { version = "0.21.2", optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time", "sync"], optional = true }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"], optional = true }
 # WebSocket 的 rustls 默认关闭加密提供者，必须显式启用，否则 wss 握手会 panic。
@@ -65,20 +67,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "hls-downloader-engine"
 path = "src/bin/hls_downloader_engine.rs"
-required-features = ["full-core"]
-
-[[bin]]
-name = "HLSDownloaderCli"
-path = "src/bin/hls_downloader_cli.rs"
-
-[[bin]]
-name = "HLSDownloaderNativeHost"
-path = "src/bin/hls_downloader_native_host.rs"
-required-features = ["full-core"]
-
-[[bin]]
-name = "HLSDownloaderUpdater"
-path = "src/bin/hls_downloader_updater.rs"
 required-features = ["full-core"]
 
 [[test]]

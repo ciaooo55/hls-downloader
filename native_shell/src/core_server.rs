@@ -2,7 +2,7 @@
 
 use crate::{
     default_core_bind, default_v7_database_path, serve_tcp_listener, CoreCommand, CoreCoordinator,
-    CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, PersistentCore, V7_PROTOCOL_NAME,
+    CoreEvent, CorePipeRequest, CorePipeResponse, PersistentCore, V7_PROTOCOL_NAME,
     V7_PROTOCOL_VERSION,
 };
 use std::net::TcpListener;
@@ -217,6 +217,40 @@ fn dispatch(
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
+        CorePipeRequest::CastControl {
+            request_id,
+            session_generation,
+            action,
+        } => match coordinator.cast_control(session_generation, &action) {
+            Ok(events) => CorePipeResponse::Events { request_id, events },
+            Err(message) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "cast_control_failed".into(),
+                message,
+            },
+        },
+        CorePipeRequest::PlayerControl {
+            request_id,
+            session_generation,
+            action,
+        } => match coordinator.player_control(session_generation, &action) {
+            Ok(events) => CorePipeResponse::Events { request_id, events },
+            Err(message) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "player_control_failed".into(),
+                message,
+            },
+        },
+        CorePipeRequest::PlayerEmbed { request_id, embed } => {
+            match coordinator.player_embed(embed) {
+                Ok(events) => CorePipeResponse::Events { request_id, events },
+                Err(message) => CorePipeResponse::Error {
+                    request_id: Some(request_id),
+                    code: "player_embed_failed".into(),
+                    message,
+                },
+            }
+        }
         CorePipeRequest::Crawl {
             request_id,
             request,
@@ -350,6 +384,30 @@ fn dispatch(
                 },
             }
         }
+        CorePipeRequest::ListTasks {
+            request_id,
+            after_task_id,
+            limit,
+        } => match coordinator.task_page(after_task_id.as_deref(), limit) {
+            Ok(page) => CorePipeResponse::TaskPage { request_id, page },
+            Err(message) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "task_page_failed".into(),
+                message,
+            },
+        },
+        CorePipeRequest::WaitEventBatch {
+            request_id,
+            after_sequence,
+            timeout_ms,
+        } => match wait_events(coordinator, notify, stop, after_sequence, timeout_ms) {
+            Ok(batch) => CorePipeResponse::EventBatch { request_id, batch },
+            Err(message) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "events_failed".into(),
+                message,
+            },
+        },
         CorePipeRequest::Snapshot { request_id } => match coordinator.lock() {
             Ok(core) => CorePipeResponse::Snapshot {
                 request_id,
@@ -368,6 +426,10 @@ fn dispatch(
             product_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: V7_PROTOCOL_VERSION,
             commands: vec![
+                "list_tasks_paged",
+                "event_batch_resync",
+                "player_embed_generation",
+                "player_control_generation",
                 "preview_zip",
                 "crawl_projects",
                 "create_task_paused",
@@ -394,6 +456,7 @@ fn dispatch(
                 "select_torrent_files",
                 "discover_cast_devices",
                 "cast_to_device",
+                "cast_control_generation",
                 "share_media",
                 "request_media_push",
                 "resolve_media_push",
@@ -431,10 +494,22 @@ fn dispatch(
             request_id,
             after_sequence,
             timeout_ms,
-        } => {
-            let events = wait_events(coordinator, notify, stop, after_sequence, timeout_ms);
-            CorePipeResponse::Events { request_id, events }
-        }
+        } => match wait_events(coordinator, notify, stop, after_sequence, timeout_ms) {
+            Ok(batch) if batch.resync_required => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "resync_required".into(),
+                message: "事件历史已变化，请重新读取任务快照".into(),
+            },
+            Ok(batch) => CorePipeResponse::Events {
+                request_id,
+                events: batch.events,
+            },
+            Err(message) => CorePipeResponse::Error {
+                request_id: Some(request_id),
+                code: "events_failed".into(),
+                message,
+            },
+        },
         CorePipeRequest::StoreSetting {
             request_id,
             key,
@@ -695,29 +770,28 @@ fn wait_events(
     stop: &AtomicBool,
     after_sequence: u64,
     timeout_ms: u64,
-) -> Vec<EventEnvelope> {
+) -> Result<hls_protocol::EventBatch, String> {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.clamp(1, 60_000));
     loop {
         // 不能持有通知锁读取 Core：提交事件的锁顺序是 Core → 通知锁。
         let observed = match notify.0.lock() {
             Ok(sequence) => *sequence,
-            Err(_) => return Vec::new(),
+            Err(_) => return Err("事件通知锁不可用".into()),
         };
-        if let Ok(events) = coordinator.events_after(after_sequence, 256) {
-            if !events.is_empty() {
-                return events;
-            }
+        let batch = coordinator.lock()?.event_batch_after(after_sequence)?;
+        if batch.resync_required || !batch.events.is_empty() {
+            return Ok(batch);
         }
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
-            return Vec::new();
+            return Ok(batch);
         }
         let (lock, condvar) = notify.as_ref();
         let Ok(guard) = lock.lock() else {
-            return Vec::new();
+            return Ok(batch);
         };
         if stop.load(Ordering::SeqCst) {
-            return Vec::new();
+            return Ok(batch);
         }
         // 查询和等待之间若有提交，直接重查，避免丢失唤醒。
         if *guard != observed {
@@ -834,6 +908,8 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
         while !stop.load(Ordering::SeqCst) {
             let settings = coordinator.settings().ok();
             if let Some(settings) = settings {
+                // 每秒复用暂停控制，保存独立任务和定时队列失去窗口时的断点。
+                let _ = coordinator.pause_tasks_outside_schedule();
                 let stamp = crate::net_policy::local_hhmm();
                 if settings.queue_auto_stop_enabled
                     && !settings.queue_auto_stop_time.is_empty()

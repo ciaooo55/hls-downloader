@@ -1,0 +1,267 @@
+import "../fonts/NotoSansCJKsc-Regular.otf";
+import { Palette, LineEdit, CheckBox } from "std-widgets.slint";
+
+export global Tokens {
+    in-out property <bool> dark: false;
+    public function apply-theme(value: bool) {
+        self.dark = value;
+        Palette.color-scheme = value ? ColorScheme.dark : ColorScheme.light;
+    }
+    in-out property <bool> reduce-motion: false;
+    out property <duration> motion: reduce-motion ? 1ms : 150ms;
+    out property <duration> motion-fast: reduce-motion ? 1ms : 90ms;
+    out property <string> type-face: "Noto Sans CJK SC";
+    out property <length> control-height: 36px;
+    out property <length> control-radius: 8px;
+    out property <length> panel-radius: 12px;
+    out property <length> control-gap: 8px;
+    out property <color> surface: dark ? #22262a : #fcfdfe;
+    out property <color> surface-2: dark ? #23272b : #f5f7fa;
+    out property <color> surface-3: dark ? #2b3035 : #e8edf3;
+    out property <color> control-hover: dark ? #30363d : #eef3fa;
+    out property <color> control-pressed: dark ? #39424d : #e2eaf5;
+    out property <color> canvas: dark ? #151719 : #eef2f6;
+    out property <color> rail: dark ? #1c1f23 : #ffffff;
+    out property <color> faint: dark ? #969ca4 : #64748b;
+    out property <color> selected: dark ? #25364b : #e7f0ff;
+    out property <color> hairline: dark ? #2e3339 : #edf1f5;
+    out property <color> shadow: dark ? #00000026 : #192d4f0a;
+    out property <color> success-surface: dark ? #1f3a2c : #eaf8ef;
+    out property <color> warn-surface: dark ? #39301c : #fff7e8;
+    out property <color> fail-surface: dark ? #3b2422 : #fff3f2;
+    out property <color> ink: dark ? #f4f5f6 : #0f172a;
+    out property <color> muted: dark ? #c5c9cf : #475569;
+    out property <color> accent: dark ? #5ea2f3 : #2563eb;
+    out property <color> accent-hover: dark ? #7eb7f6 : #1d4ed8;
+    out property <color> on-accent: dark ? #151719 : #ffffff;
+    // 状态色按主题取值：原来是与主题无关的固定值，在浅色底上 done/warn 只有 3.1–3.2:1，
+    // 深色底上 fail 只有 3.4:1，都达不到 WCAG AA 的 4.5:1。
+    out property <color> done: dark ? #22c55e : #15803d;
+    out property <color> warn: dark ? #f59e0b : #b45309;
+    out property <color> fail: dark ? #f87171 : #dc2626;
+    out property <color> line: dark ? #383d43 : #d8e0ea;
+}
+
+// Existing toolbar artwork is shared with the desktop UI. The remaining
+// outline symbols use the same 24-unit grid and follow the active palette.
+export component WorkbenchIcon inherits Rectangle {
+    in property <string> name;
+    in property <color> ink: Tokens.muted;
+    width: 18px; height: 18px;
+    private property <bool> artwork: name == "paste" || name == "play" || name == "pause" || name == "refresh" || name == "retry" || name == "settings" || name == "theme" || name == "batch" || name == "harvest" || name == "extension";
+    if root.artwork: Image {
+        width: parent.width; height: parent.height; colorize: root.ink; image-fit: contain;
+        source: root.name == "paste" ? @image-url("../../assets/toolbar-paste.svg") : root.name == "play" ? @image-url("../../assets/toolbar-play.svg") : root.name == "pause" ? @image-url("../../assets/toolbar-pause.svg") : root.name == "refresh" ? @image-url("../../assets/toolbar-refresh.svg") : root.name == "retry" ? @image-url("../../assets/toolbar-retry.svg") : root.name == "settings" ? @image-url("../../assets/toolbar-settings.svg") : root.name == "theme" ? @image-url("../../assets/toolbar-theme.svg") : root.name == "batch" ? @image-url("../../assets/toolbar-batch.svg") : root.name == "harvest" ? @image-url("../../assets/toolbar-harvest.svg") : @image-url("../../assets/toolbar-extension.svg");
+    }
+    if !root.artwork: Path {
+        width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        fill: transparent; stroke: root.ink; stroke-width: 1.7px; stroke-line-cap: round; stroke-line-join: round;
+        commands: root.name == "new" ? "M12 5V19 M5 12H19" :
+            root.name == "more" ? "M4 12H5 M11.5 12H12.5 M19 12H20" :
+            root.name == "search" ? "M20 20L16 16 M17 10A7 7 0 1 1 3 10A7 7 0 1 1 17 10Z" :
+            root.name == "close" ? "M6 6L18 18 M6 18L18 6" :
+            root.name == "sun" ? "M12 2V4 M12 20V22 M2 12H4 M20 12H22 M5 5L6.5 6.5 M17.5 17.5L19 19 M5 19L6.5 17.5 M17.5 6.5L19 5 M16 12A4 4 0 1 1 8 12A4 4 0 1 1 16 12Z" :
+            root.name == "network" ? "M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z M3 12H21 M12 3C7 8 7 16 12 21C17 16 17 8 12 3Z" :
+            root.name == "security" ? "M12 3L20 6V12C20 17 16 20 12 22C8 20 4 17 4 12V6Z M8 12L11 15L16 10" :
+            root.name == "subtitle" ? "M3 5H21V19H3Z M6 9H10 M14 9H18 M6 14H8 M11 14H18" :
+            root.name == "torrent" ? "M12 8V3 M9 3H15 M12 8L6 16 M12 8L18 16 M8 18A3 3 0 1 1 2 18A3 3 0 1 1 8 18Z M22 18A3 3 0 1 1 16 18A3 3 0 1 1 22 18Z" :
+            root.name == "notices" ? "M5 17H19L17 14V9A5 5 0 0 0 7 9V14Z M10 21H14 M12 2V4" :
+            root.name == "info" ? "M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z M12 11V17 M12 7V7.2" :
+            root.name == "save" ? "M4 3H17L21 7V21H3V3Z M7 3V9H16V3 M7 21V14H17V21" :
+            root.name == "check" ? "M4 12L9 17L20 6" :
+            root.name == "stop" ? "M5 5H19V19H5Z" :
+            root.name == "volume" ? "M3 9H7L12 5V19L7 15H3Z M16 8A6 6 0 0 1 16 16 M19 5A10 10 0 0 1 19 19" :
+            root.name == "muted" ? "M3 9H7L12 5V19L7 15H3Z M16 9L22 15 M16 15L22 9" :
+            root.name == "back" ? "M11 6L5 12L11 18 M19 6L13 12L19 18" :
+            root.name == "forward" ? "M5 6L11 12L5 18 M13 6L19 12L13 18" :
+            root.name == "pip" ? "M3 4H21V20H3Z M12 12H18V17H12Z" :
+            root.name == "dock" ? "M3 4H21V20H3Z M3 14H21 M8 8L12 11L16 8" :
+            root.name == "fullscreen" ? "M3 9V3H9 M15 3H21V9 M21 15V21H15 M9 21H3V15" :
+            root.name == "restore" ? "M9 3V9H3 M21 9H15V3 M15 21V15H21 M3 15H9V21" :
+            root.name == "down" ? "M7 9L12 14L17 9" :
+            root.name == "up" ? "M7 14L12 9L17 14" :
+            root.name == "running" ? "M12 3V14 M8 10L12 14L16 10 M5 16V20H19V16" :
+            root.name == "queued" ? "M12 6V12L16 14 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
+            root.name == "paused" ? "M9 8V16 M15 8V16 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
+            root.name == "completed" ? "M7 12L10.5 15.5L17 9 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
+            root.name == "failed" ? "M12 7V12 M12 16V16.2 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
+            root.name == "media" ? "M3 5H21V19H3Z M3 16L9 10L14 15L17 12L21 16 M16 8H16.2" :
+            root.name == "program" ? "M4 4H10V10H4Z M14 4H20V10H14Z M4 14H10V20H4Z M14 14H20V20H14Z" :
+            root.name == "archive" ? "M3 6H10L12 8H21V20H3Z M15 8V10H17V12H15V14H17V17H15V19" :
+            root.name == "file" ? "M5 3H14L19 8V21H5Z M14 3V8H19" :
+            root.name == "queue" ? "M4 6H15 M4 11H15 M4 16H11 M17 12L22 16L17 20Z" :
+            root.name == "cast" ? "M3 5H21V19H14 M3 12A7 7 0 0 1 10 19 M3 16A3 3 0 0 1 6 19 M3 19H3.2" :
+            root.name == "tvbox" ? "M3 6H21V19H3Z M8 3L12 6L16 3 M8 22H16" :
+            root.name == "import" ? "M4 4H14 M4 4V20H20V11 M20 3L12 11 M12 5V11H18" :
+            root.name == "export" ? "M4 4H14 M4 4V20H20V11 M12 11L20 3 M14 3H20V9" :
+            root.name == "delete" ? "M4 6H20 M9 6V3H15V6 M6 6L7 21H17L18 6 M10 10V17 M14 10V17" :
+            root.name == "drag" ? "M5 9H19 M5 15H19" :
+            root.name == "details" ? "M4 4H20V20H4Z M8 8H16 M8 12H16 M8 16H13" :
+            root.name == "folder" ? "M3 6H10L12 8H21V20H3Z" :
+            "M5 3H14L19 8V21H5Z M14 3V8H19";
+    }
+}
+
+export component HotButton inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    forward-focus: key-focus;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    min-width: max(72px, content.min-width);
+    preferred-width: content.min-width;
+    horizontal-stretch: 0;
+    height: Tokens.control-height;
+    border-radius: Tokens.control-radius;
+    opacity: enabled ? (touch.pressed ? 0.8 : 1) : 0.48;
+    animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
+    background: primary ? (touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : (touch.pressed && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.control-hover : Tokens.surface);
+    border-width: 1px;
+    border-color: key-focus.has-focus ? Tokens.accent : (danger ? Tokens.fail : primary ? Tokens.accent : Tokens.line);
+    drop-shadow-offset-y: primary ? 2px : 1px;
+    drop-shadow-blur: primary ? 5px : 2px;
+    drop-shadow-color: enabled ? Tokens.shadow : transparent;
+    animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    content := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 6px;
+        alignment: center;
+        if root.icon != "": WorkbenchIcon {
+            name: root.icon;
+            ink: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : Tokens.muted;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.label;
+            color: primary ? Tokens.on-accent : (danger ? Tokens.fail : Tokens.ink);
+            font-size: 13px;
+            font-weight: primary ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    key-focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { key-focus.focus(); root.clicked(); } }
+}
+
+export component HotCloseButton inherits Rectangle {
+    in property <bool> enabled: true;
+    in property <string> accessible-name: "关闭";
+    callback clicked;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    opacity: enabled ? 1 : 0.45;
+    background: touch.has-hover && enabled ? Tokens.surface-3 : transparent;
+    animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    WorkbenchIcon {
+        name: "close"; ink: Tokens.muted;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+    }
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        accessible-role: button;
+        accessible-label: root.accessible-name;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+}
+
+export component ChoiceButton inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: Tokens.control-height;
+    border-radius: Tokens.control-radius;
+    border-width: 1px;
+    border-color: selected ? Tokens.accent : Tokens.line;
+    background: selected ? Tokens.selected : (touch.has-hover ? Tokens.control-hover : Tokens.surface-2);
+    animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; spacing: 6px; alignment: center;
+        if root.icon != "": WorkbenchIcon { name: root.icon; ink: root.selected ? Tokens.accent : Tokens.muted; y: (parent.height - self.height) / 2; }
+        Text {
+            text: root.label;
+            color: root.selected ? Tokens.accent : Tokens.ink;
+            font-size: 12px;
+            font-weight: root.selected ? 600 : 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    opacity: enabled ? 1 : 0.48;
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; }
+    }
+    Rectangle { width: parent.width; height: parent.height; border-radius: Tokens.control-radius; border-width: focus.has-focus ? 2px : 0px; border-color: Tokens.accent; }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; accessible-role: button; accessible-label: root.label; clicked => { focus.focus(); root.clicked(); } }
+}
+
+export component FieldLabel inherits Text {
+    in property <string> label;
+    text: label;
+    color: Tokens.muted;
+    font-size: 12px;
+    font-weight: 500;
+    vertical-alignment: center;
+}
+
+export component HotLineEdit inherits LineEdit {
+    height: Tokens.control-height;
+    font-size: 13px;
+}
+
+export component CheckRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+    height: 30px;
+    forward-focus: checkbox;
+    checkbox := CheckBox {
+        width: parent.width; height: parent.height;
+        text: root.label;
+        checked <=> root.checked;
+        enabled: root.enabled;
+        font-size: 11px;
+        toggled => { root.toggled(self.checked); }
+    }
+}
+
+export component Panel inherits Rectangle {
+    border-radius: Tokens.panel-radius;
+    background: Tokens.surface;
+    border-width: 1px;
+    border-color: Tokens.line;
+    @children
+}
+
+export component WindowDragArea inherits TouchArea {
+    callback drag(float, float);
+    min-height: 24px;
+    mouse-cursor: move;
+    moved => {
+        root.drag((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
+    }
+}

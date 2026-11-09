@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `extension/` | WXT MV3 浏览器扩展 | v7 唯一浏览器入口 |
 | `native_shell/` | Rust Core、协议、下载引擎、数据库 | v7 唯一核心 |
-| `presenter_ui/` | Slint 热窗口 presenter | v7 低延迟临时窗口，不是主工作台 |
+| `native_ui/` | Slint 热窗口 presenter | v7 低延迟临时窗口，不是主工作台 |
 | `desktop_ui/` | Kotlin Compose 工作台 | v7 唯一主工作台 |
 | `scripts/` | 构建、安装、发布、功能验收和视觉验收工具 | [维护入口](../../scripts/README.md) |
 | `config/` | 受版本管理的产品合同 | 非用户运行配置、非生成物 |
@@ -43,6 +43,6 @@ git log v3.0.39..v6.0.1 --oneline
 - v3.0.39：通过 Git tag 查看 React 页面、任务入口和交互参考。
 - v5.0.13：通过 Git tag 查看 Python/React/Tauri 功能和异常处理参考。
 - v6.0.1：通过 Git tag 查看 Rust Core/Slint 发布参考。
-- v7：当前工作树只保留 `desktop_ui/` + `native_shell/` + `presenter_ui/` + `extension/`；旧活动目录已经移除。
+- v7：当前工作树只保留 `desktop_ui/` + `native_shell/` + `native_ui/` + `extension/`；旧活动目录已经移除。
 
 源码完整性包括构建脚本、锁文件、测试、许可和维护文档，不要求保留第三方依赖缓存、编译输出、安装包或源码 ZIP。需要时在仓库内重建；受跟踪的 wrapper、资源和许可继续保留。

@@ -61,7 +61,7 @@ private const val CORE_CONNECT_TIMEOUT_MS = 2000
 private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
-    const val version = "7.0.3"
+    const val version = "7.0.4"
     const val engineStarting = "下载引擎 · 启动中"
     const val engineConnected = "下载引擎 · 已连接"
     const val engineReconnecting = "下载引擎 · 重连中"
@@ -493,8 +493,9 @@ object EnginePipeClient {
     }
     fun discoverCastDevices(mode: String = "") = command(commandOf("discover_cast_devices", "mode" to mode.trim().lowercase()))
     fun castToDevice(taskId: String, deviceId: String) = command(commandOf("cast_to_device", "task_id" to taskId, "device_id" to deviceId))
-    fun shareMedia(path: String, url: String, title: String, deviceId: String) = command(commandOf(
+    fun shareMedia(path: String, url: String, title: String, deviceId: String, requestId: String = "") = command(commandOf(
         "share_media", "path" to path.trim(), "url" to url.trim(), "title" to title.trim(), "device_id" to deviceId.trim(),
+        "request_id" to requestId,
     ))
     fun controlCast(action: String, seconds: Long = 0) = command(commandOf(
         "control_cast",

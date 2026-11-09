@@ -1,210 +1,281 @@
 {
-  "source_baseline": "27fd2d06b8426356ded1372c31d11265ca4c436f",
-  "status": "in_progress",
+  "source_baseline": "412f1f984b645375f7a8e0acb8585113e2a6cc9e",
+  "status": "native_candidate_in_progress",
   "historical_evidence": {
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
   },
-  "scope": "当前轮验证；历史结果不作为当前源码或安装包通过依据。",
-  "test_matrix": "artifacts/convergence-20261031/test-matrix.json",
+  "scope": "7.0.4 原生候选；本表只列当前验证边界。历史 Compose 记录不作为原生发布门禁。最终包源码身份以 ARTIFACT-MANIFEST.json 为准。",
+  "test_matrix": "artifacts/release-native-20261110/workspace-results.json",
   "features": [
     {
       "id": "architecture.single_core",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "workbench.geometry",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "workbench.foundation_component_architecture",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "tasks.selection_keyboard_queue",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "tasks.named_queue_profiles",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "tasks.details_logs_speed_connections",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "tasks.refresh_signed_url",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "create.protocols_and_recognition",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "import.file_picker_and_drop",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "export.normalized_task_list",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "import.exported_task_json",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "workbench.automatic_responsive_layout",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "media.hls_transfer_parity",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "media.local_player_controls",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "media.cast_dlna_chromecast",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "media.lan_share",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "media.tvbox_push",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "media.cast_and_player_concurrency",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "torrent.multi_file_selection",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "settings.current",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "updates.confirmed_download",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "browser.request_context_replay",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "browser.takeover_and_recovery",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "browser.media_push_device_selection",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "browser.hot_confirmation_process",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "browser.online_subtitle_translation",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "accessibility.automation",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "performance.release_thresholds",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "package.install_upgrade_rollback",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "free.cli",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "free.crawl_sync",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "free.zip_preview",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
     },
     {
       "id": "http.active_tail_split",
-      "assessment": "pending_current_validation",
+      "assessment": "pending_native_release_acceptance",
       "evidence": [],
-      "remaining": "当前产物验收结果将在本轮验证后记录。"
+      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
+    },
+    {
+      "id": "http.coordinated_range_stop",
+      "assessment": "pending_native_release_acceptance",
+      "evidence": [],
+      "remaining": "工作区 HTTP 回归通过；完整组合和 curl 专用停止分支验收见原生功能映射。"
     }
-  ]
+  ],
+  "native_candidate": {
+    "product_version": "7.0.4",
+    "ui_runtime": "native",
+    "release_ready": false,
+    "implementation_record": "docs/validation/native-migration-progress.md",
+    "feature_mapping": "docs/validation/native-feature-mapping.md",
+    "workspace_tests": {
+      "passed": 756,
+      "failed": 0,
+      "ignored": 14,
+      "log": "artifacts/release-native-20261110/workspace-serial-tests.log"
+    },
+    "extension_tests": {
+      "files": 54,
+      "passed": 592,
+      "typecheck": "passed",
+      "log": "artifacts/release-native-20261110/extension-tests.log"
+    },
+    "installer_structure": {
+      "status": "passed",
+      "scope": "WiX 3.14.1 fixture authoring only; no installation",
+      "log": "artifacts/release-native-20261110/installer-authoring-migration.log"
+    },
+    "pending": [
+      "native candidate binaries and package integration",
+      "real desktop/DPI/accessibility roundtrips",
+      "real browser handoff/credentials/receipt recovery matrix",
+      "real MSI install/upgrade/failure rollback",
+      "extended workload and long-duration testing"
+    ],
+    "user_constraints": [
+      "禁止使用电脑：未运行桌面或浏览器自动化",
+      "真实投屏设备和付费云字幕质量按既有排除保留"
+    ],
+    "ffmpeg_player_subtitle_test": {
+      "status": "passed",
+      "log": "artifacts/release-native-20261110/player-subtitle-audio.log"
+    },
+    "ffmpeg_atomic_publish_test": {
+      "status": "passed",
+      "log": "artifacts/release-native-20261110/ffmpeg-publish.log"
+    },
+    "clippy": {
+      "status": "passed",
+      "scope": "workspace --all-targets with the existing structural lint allowances",
+      "log": "artifacts/release-native-20261110/clippy-verified.log"
+    },
+    "post_suite_changes": "工作区全量测试后只做等价 match 条件整理、测试初始化/模块位置整理、HLS 测试服务端完整读取请求头及文件末尾空行清理；最终 Clippy 对全部目标通过，受影响客户端/HLS 用例另行记录。",
+    "client_strict_clippy": {
+      "status": "passed",
+      "scope": "protocol/client/native-clients --all-targets -D warnings, no allowances",
+      "log": "artifacts/release-native-20261110/client-strict-clippy.log"
+    },
+    "post_cleanup_client_tests": {
+      "passed": 48,
+      "failed": 0,
+      "ignored": 1,
+      "log": "artifacts/release-native-20261110/client-final-tests.log"
+    },
+    "post_cleanup_hls_test": {
+      "passed": 1,
+      "failed": 0,
+      "log": "artifacts/release-native-20261110/hls-init-map-final.log"
+    }
+  }
 }

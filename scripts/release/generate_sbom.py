@@ -61,11 +61,10 @@ def compose_components() -> list[dict]:
     ]
 
 
-def build_sbom(version: str) -> dict:
+def build_sbom(version: str, ui_runtime: str = "native") -> dict:
     values = [
-        *cargo_components(ROOT / "native_shell" / "Cargo.lock"),
-        *cargo_components(ROOT / "presenter_ui" / "Cargo.lock"),
-        *compose_components(),
+        *cargo_components(ROOT / "Cargo.lock"),
+        *(compose_components() if ui_runtime == "compose" else []),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
         component("application", "generic", "ffmpeg", "9.0.2"),
         component("library", "generic", "libmpv", "20260814-git-7b8915bc1d"),
@@ -92,8 +91,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--ui-runtime", choices=("native", "compose"), default="native")
     args = parser.parse_args()
-    payload = build_sbom(str(args.version).strip().lstrip("v"))
+    payload = build_sbom(str(args.version).strip().lstrip("v"), args.ui_runtime)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

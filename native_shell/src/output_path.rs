@@ -555,6 +555,7 @@ mod tests {
         let _ = fs::remove_dir(&junction);
         let ok = Command::new("cmd")
             .args([
+                "/D",
                 "/C",
                 "mklink",
                 "/J",

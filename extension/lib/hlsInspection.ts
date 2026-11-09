@@ -1,6 +1,6 @@
 import { parseHlsManifest, resourceQuality, type HlsVariant } from './hlsManifest'
 import { type MediaResource, type MediaAudioTrack } from './resources'
-import { createManifestFetcher, estimatedManifestBytes, type ManifestFetcher } from './manifestInspection'
+import { createManifestFetcher, estimatedManifestBytes, type ManifestFetcher, type ManifestRequestContext } from './manifestInspection'
 import { readBoundedResponseText } from './boundedResponse'
 
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -24,10 +24,7 @@ export interface HlsInspectionResult {
   quality?: string
 }
 
-type InspectionResource = Pick<MediaResource, 'url' | 'requestHeaders' | 'width' | 'height' | 'bandwidth' | 'estimatedSize'> & {
-  /** Context headers are supplied by the background page only after a user/page association exists. */
-  inspectionHeaders?: Record<string, string>
-}
+type InspectionResource = Pick<MediaResource, 'width' | 'height' | 'bandwidth' | 'estimatedSize'> & ManifestRequestContext
 
 async function hlsManifestText(response: Response): Promise<string | null> {
   const text = await readBoundedResponseText(response, MAX_MANIFEST_BYTES)

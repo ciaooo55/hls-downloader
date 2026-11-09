@@ -1,150 +1,5 @@
-//! Windows DPAPI-backed credential blobs for browser replay contexts.
-
-const PREFIX: &str = "dpapi:";
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CredentialVault;
-
-impl CredentialVault {
-    /// DPAPI on Windows; other platforms refuse so credential-bearing flows
-    /// fail closed instead of storing plaintext.
-    pub fn protect(&self, value: &str) -> Result<String, String> {
-        if value.is_empty() {
-            return Ok(String::new());
-        }
-        if value.starts_with(PREFIX) {
-            return Ok(value.to_string());
-        }
-        #[cfg(windows)]
-        {
-            protect_windows(value.as_bytes())
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = value;
-            Err("DPAPI credentials require Windows".into())
-        }
-    }
-
-    pub fn unprotect(&self, value: &str) -> Result<String, String> {
-        if value.is_empty() || !value.starts_with(PREFIX) {
-            return Ok(value.to_string());
-        }
-        #[cfg(windows)]
-        {
-            unprotect_windows(&decode_hex(&value[PREFIX.len()..])?)
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = value;
-            Err("DPAPI credentials require Windows".into())
-        }
-    }
-}
-
-#[cfg(windows)]
-fn protect_windows(value: &[u8]) -> Result<String, String> {
-    use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-    };
-    let mut input = value.to_vec();
-    let source = CRYPT_INTEGER_BLOB {
-        cbData: input.len() as u32,
-        pbData: input.as_mut_ptr(),
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    let ok = unsafe {
-        CryptProtectData(
-            &source,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(format!("CryptProtectData failed: {}", unsafe {
-            GetLastError()
-        }));
-    }
-    let encrypted = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) };
-    let encoded = format!("{PREFIX}{}", encode_hex(encrypted));
-    unsafe {
-        LocalFree(output.pbData.cast());
-    }
-    Ok(encoded)
-}
-
-#[cfg(windows)]
-fn unprotect_windows(value: &[u8]) -> Result<String, String> {
-    use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-    };
-    let mut input = value.to_vec();
-    let source = CRYPT_INTEGER_BLOB {
-        cbData: input.len() as u32,
-        pbData: input.as_mut_ptr(),
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    let ok = unsafe {
-        CryptUnprotectData(
-            &source,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(format!("CryptUnprotectData failed: {}", unsafe {
-            GetLastError()
-        }));
-    }
-    let plaintext = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) };
-    let value = String::from_utf8(plaintext.to_vec())
-        .map_err(|error| format!("DPAPI credential is not UTF-8: {error}"))?;
-    unsafe {
-        LocalFree(output.pbData.cast());
-    }
-    Ok(value)
-}
-
-fn encode_hex(value: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut result = String::with_capacity(value.len() * 2);
-    for byte in value {
-        result.push(HEX[(byte >> 4) as usize] as char);
-        result.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    result
-}
-
-fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
-    if !value.len().is_multiple_of(2) {
-        return Err("DPAPI credential hex has odd length".into());
-    }
-    let mut bytes = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().as_chunks::<2>().0 {
-        let high =
-            hex_digit(pair[0]).ok_or_else(|| "DPAPI credential hex is invalid".to_string())?;
-        let low =
-            hex_digit(pair[1]).ok_or_else(|| "DPAPI credential hex is invalid".to_string())?;
-        bytes.push((high << 4) | low);
-    }
-    Ok(bytes)
-}
+//! Credential replay scopes owned by the Core.
+pub use hls_client::CredentialVault;
 
 thread_local! {
     static REPLAY_JSON: std::cell::RefCell<String> =
@@ -173,6 +28,8 @@ pub fn apply_replay_json(headers: &mut std::collections::BTreeMap<String, String
 /// Cookie and Authorization stay out of TaskSpec until this runs at download time.
 /// `request_url` selects `request_contexts[origin]` so CDN cookies are not replaced
 /// by page cookies, matching 5.x `build_task_headers`.
+/// Within that origin, exact URLs (query included, fragment excluded) override
+/// directory identities so audio and video can retain separate request headers.
 pub fn apply_replay_json_for(
     headers: &mut std::collections::BTreeMap<String, String>,
     json: &str,
@@ -243,9 +100,11 @@ fn replay_request_header_names(json: &str) -> Vec<String> {
     {
         for scoped in contexts.values() {
             merge_header_map(&mut headers, scoped.get("request_headers"));
-            if let Some(paths) = scoped.get("path_contexts").and_then(|v| v.as_object()) {
-                for path in paths.values() {
-                    merge_header_map(&mut headers, path.get("request_headers"));
+            for kind in ["path_contexts", "url_contexts"] {
+                if let Some(contexts) = scoped.get(kind).and_then(|v| v.as_object()) {
+                    for context in contexts.values() {
+                        merge_header_map(&mut headers, context.get("request_headers"));
+                    }
                 }
             }
         }
@@ -301,6 +160,10 @@ fn apply_scoped_request_context_inner(
     else {
         return;
     };
+    let exact_url = request_url.trim().split('#').next().unwrap_or("");
+    let url_context = scoped
+        .get("url_contexts")
+        .and_then(|contexts| contexts.get(exact_url));
     let request_path = replay_request_path(request_url);
     let path_context = scoped
         .get("path_contexts")
@@ -316,13 +179,14 @@ fn apply_scoped_request_context_inner(
                 .max_by_key(|(path, _)| path.len())
                 .map(|(_, context)| context)
         });
-    if path_context.is_some() {
-        // 音轨、密钥和分片可能使用不同 Token；切换目录时替换浏览器请求头。
+    let request_context = url_context.or(path_context);
+    if request_context.is_some() {
+        // 同目录的音视频也可能使用不同 Token，精确请求身份优先于目录身份。
         for name in replay_request_header_names(json) {
             remove_header(headers, &name);
         }
     }
-    let identity = path_context.unwrap_or(scoped);
+    let identity = request_context.unwrap_or(scoped);
     merge_header_map(headers, identity.get("request_headers"));
     replace_header(headers, "Referer", identity.get("referer"));
     replace_header(headers, "Origin", identity.get("origin"));
@@ -539,15 +403,6 @@ fn canonical_header_name(name: &str) -> String {
     }
 }
 
-fn hex_digit(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,17 +505,76 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_plain_values_are_stable() {
-        let vault = CredentialVault;
-        assert_eq!(vault.protect("").unwrap(), "");
-        #[cfg(not(windows))]
-        assert!(vault.protect("secret").is_err());
-    }
-
-    #[test]
-    fn hex_codec_roundtrips() {
-        let value = b"credential\0blob";
-        assert_eq!(decode_hex(&encode_hex(value)).unwrap(), value);
+    fn replay_preserves_exact_media_identity_before_directory_defaults() {
+        let json = bind_replay_source_url(
+            r#"{"request_headers":{"Authorization":"Bearer manifest","X-Manifest":"private"},
+                "request_contexts":{"https://cdn.test":{
+                    "cookies":[],"request_headers":{"Authorization":"Bearer origin"},
+                    "path_contexts":{"/media/":{"request_headers":{"Authorization":"Bearer directory"}}},
+                    "url_contexts":{
+                        "https://cdn.test/media/main.m3u8":{"request_headers":{"Authorization":"Bearer video","X-Video":"video"}},
+                        "https://cdn.test/media/audio.m3u8":{"request_headers":{"Authorization":"Bearer audio","X-Audio":"audio"}},
+                        "https://cdn.test/media/videoplayback?track=video":{"request_headers":{"Authorization":"Bearer video","X-Video":"video"}},
+                        "https://cdn.test/media/videoplayback?track=audio":{"request_headers":{"Authorization":"Bearer audio","X-Audio":"audio"}}
+                    }
+                }}}"#,
+            "https://cdn.test/media/main.m3u8",
+        );
+        let mut headers = std::collections::BTreeMap::new();
+        for (url, authorization, video, audio) in [
+            (
+                "https://cdn.test/media/main.m3u8#player",
+                "Bearer video",
+                true,
+                false,
+            ),
+            (
+                "https://cdn.test/media/audio.m3u8",
+                "Bearer audio",
+                false,
+                true,
+            ),
+            (
+                "https://cdn.test/media/videoplayback?track=video",
+                "Bearer video",
+                true,
+                false,
+            ),
+            (
+                "https://cdn.test/media/videoplayback?track=audio",
+                "Bearer audio",
+                false,
+                true,
+            ),
+            (
+                "https://cdn.test/media/segment.m4s",
+                "Bearer directory",
+                false,
+                false,
+            ),
+        ] {
+            apply_replay_json_for(&mut headers, &json, url);
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some(authorization)
+            );
+            assert_eq!(headers.contains_key("X-Video"), video);
+            assert_eq!(headers.contains_key("X-Audio"), audio);
+            assert!(!headers.contains_key("X-Manifest"));
+        }
+        apply_replay_json_for(
+            &mut headers,
+            &json,
+            "https://cdn.test/media/videoplayback?track=audio",
+        );
+        apply_replay_json_for(
+            &mut headers,
+            &json,
+            "https://other.test/media/videoplayback?track=audio",
+        );
+        for name in ["Authorization", "X-Video", "X-Audio", "X-Manifest"] {
+            assert!(!headers.contains_key(name));
+        }
     }
 
     #[test]
@@ -976,14 +890,5 @@ mod tests {
             assert_eq!(scoped_replay_json(), "outer");
         });
         assert!(scoped_replay_json().is_empty());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn dpapi_roundtrip_is_user_bound() {
-        let vault = CredentialVault;
-        let protected = vault.protect("session=secret").unwrap();
-        assert!(protected.starts_with(PREFIX));
-        assert_eq!(vault.unprotect(&protected).unwrap(), "session=secret");
     }
 }

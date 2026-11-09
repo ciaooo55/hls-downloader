@@ -23,25 +23,12 @@ updates:
           - patch
 
   - package-ecosystem: cargo
-    directory: /native_shell
+    directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
     groups:
-      rust-core:
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: cargo
-    directory: /presenter_ui
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 0
-    groups:
-      rust-presenter:
+      rust-workspace:
         patterns:
           - "*"
         update-types:

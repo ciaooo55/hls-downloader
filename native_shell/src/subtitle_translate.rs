@@ -5,6 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
@@ -57,6 +58,15 @@ struct Session {
     stop: Arc<Notify>,
     state: Arc<Mutex<State>>,
     audio_source: Option<Value>,
+    player_generation: Option<u64>,
+    decode_active: Arc<AtomicBool>,
+}
+
+struct AudioDecodeSlot(Arc<AtomicBool>);
+impl Drop for AudioDecodeSlot {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 enum Input {
@@ -235,7 +245,17 @@ impl SubtitleService {
             if let Some(source) = &audio_source {
                 crate::subtitle_audio_source::validate(source)?;
             }
-            let manual = audio_source.is_some();
+            let player_generation = request
+                .get("player_generation")
+                .map(|value| value.as_u64().ok_or("播放器会话代数无效"))
+                .transpose()?;
+            if let Some(generation) = player_generation {
+                if audio_source.is_some() {
+                    return Err("播放器字幕不能指定外部音轨".into());
+                }
+                core.validate_subtitle_player(generation)?;
+            }
+            let manual = audio_source.is_some() || player_generation.is_some();
             let state = Arc::new(Mutex::new(State {
                 status: "connecting",
                 error: String::new(),
@@ -254,6 +274,8 @@ impl SubtitleService {
                     stop: stop.clone(),
                     state: state.clone(),
                     audio_source,
+                    player_generation,
+                    decode_active: Arc::new(AtomicBool::new(false)),
                 },
             );
             let source = source.to_string();
@@ -303,10 +325,11 @@ impl SubtitleService {
             .last_seen = Instant::now();
         match string(request, "action") {
             "prepare_audio" => {
-                let source = session
-                    .audio_source
-                    .clone()
-                    .ok_or("当前会话使用播放器实时采集")?;
+                let source = session.audio_source.clone();
+                let player_generation = session.player_generation;
+                if source.is_none() && player_generation.is_none() {
+                    return Err("当前会话使用播放器实时采集".into());
+                }
                 let position = request["position"]
                     .as_f64()
                     .filter(|v| v.is_finite() && *v >= 0.0)
@@ -316,17 +339,35 @@ impl SubtitleService {
                     .filter(|v| v.is_finite() && *v > 0.0 && *v <= 12.0)
                     .ok_or("音轨预取窗口必须在 12 秒以内")?;
                 let epoch = request["epoch"].as_u64().ok_or("字幕时间轴无效")?;
+                if session.state.lock().map_err(|_| "字幕状态不可用")?.epoch != epoch {
+                    return Err("字幕音频请求已过期".into());
+                }
+                session
+                    .decode_active
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .map_err(|_| "当前字幕会话正在解码音频")?;
+                let _decode = AudioDecodeSlot(session.decode_active.clone());
                 let state = session.state.clone();
                 drop(sessions);
-                crate::subtitle_audio_source::decode(&source, position, seconds, || {
+                let cancelled = || {
                     let state = state.lock().unwrap();
                     state.epoch != epoch
                         || matches!(state.status, "stopping" | "stopped" | "failed")
                         || state.last_seen.elapsed() > Duration::from_secs(35)
-                })
+                };
+                if let Some(generation) = player_generation {
+                    core.player_subtitle_audio(generation, position, seconds, cancelled)
+                } else {
+                    crate::subtitle_audio_source::decode(
+                        &source.unwrap(),
+                        position,
+                        seconds,
+                        cancelled,
+                    )
+                }
             }
             "commit" => {
-                if session.audio_source.is_none() {
+                if session.audio_source.is_none() && session.player_generation.is_none() {
                     return Err("实时采集由服务端断句".into());
                 }
                 let start = request["start"]
@@ -1235,6 +1276,8 @@ mod tests {
                 stop: stop.clone(),
                 state: state.clone(),
                 audio_source: None,
+                player_generation: None,
+                decode_active: Arc::new(AtomicBool::new(false)),
             },
         );
         for action in ["audio", "reset", "poll", "stop"] {
@@ -1338,6 +1381,8 @@ mod tests {
                 stop: Arc::new(Notify::new()),
                 state: Arc::new(Mutex::new(state)),
                 audio_source: None,
+                player_generation: None,
+                decode_active: Arc::new(AtomicBool::new(false)),
             },
         );
         let mut after = 0;

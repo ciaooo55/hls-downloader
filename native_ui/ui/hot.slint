@@ -1,0 +1,396 @@
+import { ScrollView } from "std-widgets.slint";
+import { Tokens, WorkbenchIcon, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea } from "theme.slint";
+export { Tokens } from "theme.slint";
+export { WorkbenchWindow, TaskRow, NavigationRow, TaskMenuRow, TaskColumn, ToolbarItem } from "workbench.slint";
+export { TaskEditorWindow } from "task_editor.slint";
+export { DetailsWindow } from "details.slint";
+export { SettingsWindow, SettingField, SiteRuleRow } from "settings.slint";
+export { QueueWindow } from "queues.slint";
+export { ResourceToolsWindow, ResourceRow } from "resource_tools.slint";
+export { PlayerWindow, MediaView } from "media.slint";
+export { SystemWindow, DecisionWindow } from "system.slint";
+export { ServiceSettingsWindow } from "service_settings.slint";
+export { CastWindow } from "cast_tools.slint";
+
+export component ConfirmWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: root.window_title;
+    default-font-family: Tokens.type-face;
+    default-font-size: 12px;
+    always-on-top: true;
+    no-frame: true;
+    min-width: 360px;
+    min-height: 200px;
+    preferred-width: 520px;
+    preferred-height: 400px;
+    // An opaque window surface is intentional.  The previous transparent
+    // top-level window could be presented by Windows before its child panel
+    // had a backing surface, producing a completely white/blank hot popup.
+    background: Tokens.surface;
+    in property <string> window_title;
+    in-out property <string> filename;
+    in-out property <string> download_dir;
+    in-out property <string> url;
+    in-out property <string> source_url;
+    in-out property <string> source_host;
+    in-out property <string> download_host;
+    in-out property <string> resource_meta;
+    in-out property <string> request_context;
+    in-out property <string> request_details;
+    in-out property <string> category: "other";
+    in-out property <bool> remember_directory: true;
+    in-out property <bool> suppress_site_kind: false;
+    in-out property <bool> busy: false;
+    in-out property <string> error_text;
+    in-out property <string> duplicate_text;
+    in-out property <string> remaining;
+    in-out property <bool> details_expanded: false;
+    callback core-events-ready();
+    callback core-resynced(string);
+    callback open-workbench(bool);
+    callback command(string);
+    callback move-window(float, float);
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Return) {
+                if (!root.busy && root.filename != "") { root.command("accept"); }
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                if (!root.busy) { root.command("reject"); }
+                return accept;
+            }
+            return reject;
+        }
+        Panel {
+            width: parent.width;
+            height: parent.height;
+            border-radius: 14px;
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            HorizontalLayout {
+                height: 30px;
+                spacing: 8px;
+                WindowDragArea {
+                    horizontal-stretch: 1;
+                    drag(dx, dy) => { root.move-window(dx, dy); }
+                    HorizontalLayout {
+                        alignment: center;
+                        Text { text: "确认下载"; color: Tokens.ink; font-size: 17px; font-weight: 700; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: root.remaining; color: Tokens.muted; font-size: 11px; visible: root.remaining != ""; vertical-alignment: center; }
+                    }
+                }
+                HotCloseButton {
+                    enabled: !root.busy;
+                    accessible-name: "关闭并保留浏览器下载";
+                    clicked => { root.command("reject"); }
+                }
+            }
+
+            // 显式绑定正文高度，展开详情时不能沿用折叠状态的滚动范围。
+            detail_scroll := ScrollView {
+                min-height: 0px;
+                vertical-stretch: 1;
+                viewport-height: detail_content.min-height;
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                changed viewport-height => {
+                    if (root.details_expanded) {
+                        self.viewport-y = min(0px, self.visible-height - self.viewport-height);
+                    }
+                }
+                detail_content := VerticalLayout {
+                    height: self.min-height;
+                    padding: 0px;
+                    spacing: 10px;
+                    Rectangle {
+                        height: 100px;
+                        border-radius: 12px;
+                        background: Tokens.surface-2;
+                        HorizontalLayout {
+                            padding: 12px;
+                            spacing: 12px;
+                            Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                border-radius: 12px;
+                                background: Tokens.dark ? #263c58 : #e7f0fd;
+                                WorkbenchIcon { name: "running"; ink: Tokens.accent; width: 24px; height: 24px; x: 8px; y: 8px; }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 4px;
+                                FieldLabel { label: "文件名"; font-size: 10px; }
+                                HotLineEdit { text <=> root.filename; enabled: !root.busy; }
+                                Text { text: root.resource_meta; color: Tokens.muted; font-size: 11px; overflow: elide; }
+                            }
+                        }
+                    }
+
+                    if root.duplicate_text != "" : Rectangle {
+                        height: 40px;
+                        border-radius: 7px;
+                        background: Tokens.dark ? #3a3021 : #fff7e8;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            WorkbenchIcon { name: "failed"; ink: Tokens.warn; y: (parent.height - self.height) / 2; }
+                            Text { text: root.duplicate_text; color: Tokens.ink; font-size: 11px; overflow: elide; vertical-alignment: center; }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        height: 36px;
+                        spacing: 8px;
+                        FieldLabel { label: "保存到"; width: 40px; }
+                        HotLineEdit { text <=> root.download_dir; enabled: !root.busy; horizontal-stretch: 1; height: 36px; }
+                        HotButton { label: "选择"; icon: "folder"; min-width: 60px; height: 36px; enabled: !root.busy; clicked => { root.command("browse"); } }
+                    }
+
+                    HorizontalLayout {
+                        height: 28px;
+                        spacing: 6px;
+                        FieldLabel { label: "分类"; width: 42px; }
+                        ChoiceButton { label: "媒体"; height: 28px; enabled: !root.busy; selected: root.category == "media"; clicked => { root.category = "media"; root.command("category:media"); } }
+                        ChoiceButton { label: "程序"; height: 28px; enabled: !root.busy; selected: root.category == "program"; clicked => { root.category = "program"; root.command("category:program"); } }
+                        ChoiceButton { label: "压缩包"; height: 28px; enabled: !root.busy; selected: root.category == "archive"; clicked => { root.category = "archive"; root.command("category:archive"); } }
+                        ChoiceButton { label: "其他"; height: 28px; enabled: !root.busy; selected: root.category == "other"; clicked => { root.category = "other"; root.command("category:other"); } }
+                    }
+
+                    CheckRow { height: 26px; label: "记住此分类的保存位置"; enabled: !root.busy; checked <=> root.remember_directory; toggled(value) => { root.remember_directory = value; } }
+
+                    Rectangle {
+                        height: 28px;
+                        border-radius: 6px;
+                        background: detail_toggle.has-hover ? Tokens.surface-2 : transparent;
+                        HorizontalLayout {
+                            padding-left: 4px;
+                            padding-right: 4px;
+                            spacing: 8px;
+                            WorkbenchIcon { name: root.details_expanded ? "up" : "down"; ink: Tokens.muted; y: (parent.height - self.height) / 2; }
+                            Text { text: "下载详情"; color: Tokens.muted; font-size: 11px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text { text: root.source_host != "" ? root.source_host : root.download_host; color: Tokens.muted; font-size: 10px; overflow: elide; vertical-alignment: center; }
+                        }
+                        detail_toggle := TouchArea {
+                            enabled: !root.busy;
+                            mouse-cursor: pointer;
+                            accessible-role: button;
+                            accessible-label: root.details_expanded ? "收起下载详情" : "展开下载详情";
+                            clicked => {
+                                root.details_expanded = !root.details_expanded;
+                                detail_scroll.viewport-y = root.details_expanded ? min(0px, detail_scroll.height - detail_scroll.viewport-height) : 0px;
+                            }
+                        }
+                    }
+
+                    if root.details_expanded : Rectangle {
+                        height: 116px;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Tokens.line;
+                        background: Tokens.surface;
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 5px;
+                            HorizontalLayout {
+                                Text { text: "来源与请求"; color: Tokens.ink; font-size: 11px; font-weight: 600; }
+                                Rectangle { horizontal-stretch: 1; }
+                                Text { text: root.request_context; color: Tokens.muted; font-size: 10px; }
+                            }
+                            if root.source_host != "" : Text { text: "来源网页  " + root.source_host; color: Tokens.muted; font-size: 11px; overflow: elide; }
+                            if root.source_url != "" : Text { text: root.source_url; color: Tokens.muted; font-size: 10px; overflow: elide; }
+                            Text { text: "下载地址  " + root.url; color: Tokens.muted; font-size: 10px; overflow: elide; }
+                            Text { text: root.request_details; color: Tokens.muted; font-size: 10px; overflow: elide; }
+                        }
+                    }
+
+                    if root.details_expanded && root.source_host != "" : CheckRow {
+                        label: "以后不再自动提示此网站的同类资源";
+                        enabled: !root.busy;
+                        checked <=> root.suppress_site_kind;
+                        toggled(value) => { root.suppress_site_kind = value; }
+                    }
+
+                    if root.error_text != "" : Text { text: root.error_text; color: Tokens.fail; font-size: 11px; wrap: word-wrap; }
+                }
+            }
+            Rectangle { height: 1px; background: Tokens.line; }
+            HorizontalLayout {
+                height: 36px;
+                spacing: 8px;
+                HotButton { label: "更多设置"; icon: "settings"; enabled: !root.busy; clicked => { root.command("more"); } }
+                Rectangle { horizontal-stretch: 1; }
+                HotButton { label: "取消"; enabled: !root.busy; clicked => { root.command("reject"); } }
+                HotButton { label: root.busy ? "处理中…" : "开始下载"; height: 36px; min-width: 100px; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
+            }
+        }
+    }
+    }
+}
+
+export component ProgressWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: headline;
+    default-font-family: Tokens.type-face;
+    default-font-size: 12px;
+    min-width: 330px;
+    min-height: 224px;
+    preferred-width: 330px;
+    preferred-height: 224px;
+    background: Tokens.surface;
+    always-on-top: true;
+    no-frame: true;
+    in-out property <string> headline: "下载进度";
+    in-out property <string> filename;
+    in-out property <string> speed;
+    in-out property <string> stage_label;
+    in-out property <float> progress;
+    in-out property <string> transferred;
+    in-out property <string> remaining;
+    in-out property <bool> processing: false;
+    in-out property <bool> progress_known;
+    in-out property <bool> hidden_by_user: false;
+    in-out property <bool> action_busy: false;
+    in-out property <bool> action_error: false;
+    in-out property <string> action_text;
+    callback command(string);
+    callback move-window(float, float);
+    Panel {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 10px;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            HorizontalLayout {
+                height: 24px;
+                WindowDragArea {
+                    horizontal-stretch: 1;
+                    drag(dx, dy) => { root.move-window(dx, dy); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { width: 8px; background: transparent;
+                            Rectangle { width: 8px; height: 8px; y: (parent.height - self.height) / 2; border-radius: 4px; background: Tokens.accent; }
+                        }
+                        Text { text: root.headline; color: Tokens.ink; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                HotCloseButton { width: 24px; height: 24px; accessible-name: "关闭进度窗口，下载继续"; clicked => { root.command("hide_progress"); } }
+            }
+            Text { text: root.filename; color: Tokens.ink; font-size: 14px; font-weight: 600; overflow: elide; }
+            Rectangle {
+                background: Tokens.surface-2;
+                border-radius: 8px;
+                min-height: 78px;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        Text { text: root.speed; color: Tokens.ink; font-size: root.processing ? 16px : 20px; font-weight: 600; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: root.progress_known ? "\{Math.round(root.progress * 100)}%" : "大小未知"; color: Tokens.accent; font-size: 14px; font-weight: 600; vertical-alignment: bottom; }
+                    }
+                    Rectangle {
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Tokens.surface-3;
+                        clip: true;
+                        Rectangle {
+                            width: root.progress_known ? parent.width * Math.clamp(root.progress, 0, 1) : parent.width * 0.3;
+                            x: root.progress_known ? 0px : Tokens.reduce-motion ? parent.width * 0.35 : (parent.width + self.width) * Math.mod(animation-tick() / 1800ms, 1) - self.width;
+                            height: parent.height;
+                            border-radius: 3px;
+                            background: Tokens.accent;
+                            animate width { duration: Tokens.motion; easing: ease-out; }
+                        }
+                    }
+                    Text { text: root.transferred; color: Tokens.muted; font-size: 10px; overflow: elide; }
+                }
+            }
+            HorizontalLayout {
+                Text { text: root.stage_label; color: Tokens.muted; font-size: 11px; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.remaining; color: Tokens.muted; font-size: 11px; }
+            }
+            Rectangle { vertical-stretch: 1; min-height: 0px; }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: root.action_text; color: root.action_error ? Tokens.fail : Tokens.muted; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                HotButton { min-width: 60px; height: 28px; label: root.action_busy ? "处理中…" : "暂停"; enabled: !root.action_busy && !root.processing; clicked => { root.command("pause"); } }
+                HotButton { min-width: 60px; height: 28px; label: "取消"; danger: true; enabled: !root.action_busy; clicked => { root.command("cancel"); } }
+            }
+        }
+    }
+}
+
+export component CompleteWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: root.window_title;
+    default-font-family: Tokens.type-face;
+    default-font-size: 12px;
+    always-on-top: true;
+    no-frame: true;
+    min-width: 330px;
+    min-height: 200px;
+    preferred-width: 330px;
+    preferred-height: 200px;
+    background: Tokens.surface;
+    in property <string> window_title;
+    in-out property <string> filename;
+    in-out property <string> details;
+    in-out property <string> power_hint;
+    in-out property <string> task_id;
+    in-out property <bool> action_busy;
+    in-out property <string> action_text;
+    callback command(string);
+    callback move-window(float, float);
+    Panel {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 10px;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+            HorizontalLayout {
+                height: 24px;
+                WindowDragArea {
+                    horizontal-stretch: 1;
+                    drag(dx, dy) => { root.move-window(dx, dy); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { width: 20px; height: 20px; border-radius: 10px; background: Tokens.done;
+                            WorkbenchIcon { name: "check"; ink: Tokens.surface; width: 14px; height: 14px; x: 3px; y: 3px; }
+                        }
+                        Text { text: "下载完成"; color: Tokens.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                HotCloseButton { width: 24px; height: 24px; accessible-name: "关闭下载完成窗口"; clicked => { root.command("hide_complete"); } }
+            }
+            Text { text: root.filename; color: Tokens.ink; font-size: 14px; font-weight: 600; overflow: elide; }
+            Rectangle { height: 6px; border-radius: 3px; background: Tokens.done; }
+            HorizontalLayout {
+                Text { text: root.details; color: Tokens.muted; font-size: 11px; overflow: elide; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "100%"; color: Tokens.done; font-size: 11px; font-weight: 600; }
+            }
+            if root.power_hint != "" : Text { text: root.power_hint; color: Tokens.warn; font-size: 11px; wrap: word-wrap; }
+            if root.action_text != "" : Text { text: root.action_text; color: Tokens.fail; font-size: 11px; wrap: word-wrap; }
+            Rectangle { vertical-stretch: 1; min-height: 0px; }
+            HorizontalLayout {
+                spacing: 8px;
+                HotButton { height: 28px; label: root.action_busy ? "处理中…" : "打开文件"; enabled: !root.action_busy; primary: true; clicked => { root.command("open_file"); } }
+                HotButton { height: 28px; label: "打开目录"; enabled: !root.action_busy; clicked => { root.command("open_folder"); } }
+                Rectangle { horizontal-stretch: 1; }
+                if root.power_hint != "" : HotButton { height: 28px; label: "取消操作"; enabled: !root.action_busy; danger: true; clicked => { root.command("cancel_power"); } }
+            }
+        }
+    }
+}

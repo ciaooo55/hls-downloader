@@ -1,4 +1,4 @@
-"""Sandbox-only acceptance for the free CLI, crawl/sync and bounded ZIP preview.
+"""Isolated acceptance for the free CLI, crawl/sync and bounded ZIP preview.
 
 Uses local origins only. This is a development component check, not a claim that
 the installer, browser or native workbench matrices passed for these binaries.
@@ -12,16 +12,20 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+import uuid
 from urllib.parse import urlsplit
 import zipfile
 
-from v7_core_ipc import connect, send_frame as send
+from v7_core_ipc import connect, free_port, send_frame as send
+from validation_workspace import test_tmp
 
 
 class Origin(ThreadingHTTPServer):
@@ -45,15 +49,7 @@ def zip64_empty():
     return record + locator + end
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--resources', type=Path, required=True)
-    parser.add_argument('--work', type=Path, required=True)
-    parser.add_argument('--report', type=Path, required=True)
-    parser.add_argument('--unit-tests', type=Path)
-    args = parser.parse_args()
-    assert os.environ.get('USERNAME') == 'WDAGUtilityAccount', 'Windows Sandbox only'
-    sys.path.insert(0, r'C:\QADeps')
+def run(args):
     import psutil
     args.work.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +67,8 @@ def main():
     gated_request = threading.Event()
     periodic_get = threading.Event()
     origins = []
-    base = 'http://127.0.0.1:18672'
+    core_port, origin_port, outside_port = free_port(), free_port(), free_port()
+    base = f'http://127.0.0.1:{origin_port}'
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
@@ -92,10 +89,10 @@ def main():
                 gated_request.set()
             if path == '/gated/asset.bin' and include and state['version'] == 2:
                 periodic_get.set()
-            if self.server.server_port == 18673:
+            if self.server.server_port == outside_port:
                 state['outside'] += 1
             if path == '/cross':
-                self.send_response(302); self.send_header('Location', 'http://127.0.0.1:18673/outside'); self.send_header('Content-Length', '0'); self.end_headers(); return
+                self.send_response(302); self.send_header('Location', f'http://127.0.0.1:{outside_port}/outside'); self.send_header('Content-Length', '0'); self.end_headers(); return
             bodies = {
                 '/site/index.html': b'<base href="/site/"><a href="next.html">next</a><a href="./a/../index.html#loop">loop</a><link href="style.css"><img src="image.bin">',
                 '/site/next.html': b'<a href="index.html">back</a><img src="image.bin">',
@@ -162,12 +159,12 @@ def main():
             result['checks'].append({'name': name, 'passed': False, 'error': repr(e), 'traceback': traceback.format_exc()})
         save()
     def invoke(*arguments, code=0, input_text=None):
-        (args.report.parent/'invocation.json').write_text(json.dumps({'arguments':list(map(str,arguments)),'started':time.time()}),encoding='utf-8')
+        args.report.with_suffix('.invocation.json').write_text(json.dumps({'arguments':list(map(str,arguments)),'started':time.time()}),encoding='utf-8')
         proc = subprocess.run([str(cli), '--json', *map(str, arguments)], input=input_text.encode('utf-8') if input_text is not None else None, capture_output=True, timeout=40)
         assert proc.returncode == code, (arguments, proc.returncode, proc.stdout.decode('utf-8', 'replace'), proc.stderr.decode('utf-8', 'replace'))
         return json.loads((proc.stdout if code == 0 else proc.stderr).decode('utf-8'))
     def ipc(message):
-        with connect(18679) as channel:
+        with connect(core_port) as channel:
             return send(channel, message)
     def until(fn, predicate, seconds=40):
         deadline = time.monotonic() + seconds
@@ -191,10 +188,10 @@ def main():
 
     try:
         os.environ.update(HLS_VM_ACCEPTANCE='1', HLS_V7_DATA_DIR=str(args.work/'data'),
-                          HLS_V7_DOWNLOAD_DIR=str(args.work/'downloads'), HLS_V7_CORE_TCP='1', HLS_V7_CORE_BIND='127.0.0.1:18679',
-                          HLS_V7_PIPE=r'\\.\pipe\HLSDownloader.FreeParity.QA', TEMP=str(args.work/'tmp'), TMP=str(args.work/'tmp'))
+                          HLS_V7_DOWNLOAD_DIR=str(args.work/'downloads'), HLS_V7_CORE_TCP='1', HLS_V7_CORE_BIND=f'127.0.0.1:{core_port}',
+                          HLS_V7_PIPE=rf'\\.\pipe\HLSDownloader.FreeParity.{uuid.uuid4().hex}', TEMP=str(args.work/'tmp'), TMP=str(args.work/'tmp'))
         (args.work/'tmp').mkdir(exist_ok=True)
-        for port in [18672, 18673]:
+        for port in [origin_port, outside_port]:
             origin = Origin(('127.0.0.1', port), Handler); origins.append(origin)
             threading.Thread(target=origin.serve_forever, daemon=True).start()
 
@@ -420,6 +417,54 @@ def main():
         for origin in origins: origin.shutdown(); origin.server_close()
         result['requests']=requests; result['finished']=True; save()
     return 0 if result['passed'] else 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--resources', type=Path)
+    parser.add_argument('--work', type=Path)
+    parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--unit-tests', type=Path)
+    parser.add_argument('--isolated-engine', type=Path)
+    parser.add_argument('--isolated-cli', type=Path)
+    args = parser.parse_args()
+    args.report = args.report.resolve()
+    if args.unit_tests:
+        args.unit_tests = args.unit_tests.resolve()
+    if args.isolated_engine or args.isolated_cli:
+        if not all((args.isolated_engine, args.isolated_cli)) or args.resources or args.work:
+            parser.error('Use both isolated components, or Sandbox resources/work, exclusively')
+        workspace = Path(__file__).resolve().parents[2]
+        if not args.report.is_relative_to(workspace):
+            parser.error('Isolated report must stay in the project workspace')
+        sources = {name: source.resolve() for name, source in (
+            ('HLSDownloaderEngine.exe', args.isolated_engine), ('HLSDownloaderCli.exe', args.isolated_cli))}
+        if any(not source.is_file() for source in sources.values()):
+            parser.error('An isolated component is missing')
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory(prefix='hls-free-parity-', dir=test_tmp()) as temporary:
+            directory = Path(temporary)
+            args.resources, args.work = directory/'resources', directory/'work'
+            args.resources.mkdir()
+            for name, source in sources.items():
+                shutil.copy2(source, args.resources/name)
+            runtime = args.isolated_engine.resolve().parent/'vcruntime140.dll'
+            if runtime.is_file():
+                shutil.copy2(runtime, args.resources/runtime.name)
+            try:
+                code = run(args)
+            finally:
+                os.chdir(previous)
+        report = json.loads(args.report.read_text(encoding='utf-8'))
+        report['isolated_runtime_cleaned'] = not directory.exists()
+        args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+        return code
+    if not args.resources or not args.work:
+        parser.error('Sandbox resources/work or both isolated components are required')
+    assert os.environ.get('USERNAME') == 'WDAGUtilityAccount', 'Existing resources/work is Windows Sandbox only'
+    sys.path.insert(0, r'C:\QADeps')
+    args.resources, args.work = args.resources.resolve(), args.work.resolve()
+    return run(args)
 
 
 if __name__ == '__main__':

@@ -8,8 +8,8 @@ param(
     [string]$CandidateManifestPath,
 
     [string]$OldMsiPath = '',
-    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.0/HLSDownloader-7.0.0-Windows-x64.msi',
-    [string]$OldMsiSha256 = 'ec5d26ea9fbb698ebdccb0b1bdfb9058c386883698e925f2fa2a7de74007d9d9',
+    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.3-r22/HLSDownloader-7.0.3-r22-Windows-x64-unsigned.msi',
+    [string]$OldMsiSha256 = '8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8',
     [string]$InstallDir = '',
     [string]$CheckpointPath = '',
     [string]$ReportPath = ''
@@ -184,13 +184,13 @@ try {
     $originPort = Get-FreeTcpPort
     $manifestPath = (Resolve-Path -LiteralPath $CandidateManifestPath).Path
     $manifest = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion '7.0.0'
+    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion '7.0.3'
     $candidate = Resolve-FullPath ([string]$manifest.artifacts.msi.path) (Split-Path $manifestPath -Parent)
     Add-Step 'candidate-msi-exists' (Test-Path -LiteralPath $candidate -PathType Leaf) $candidate
     $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'candidate-manifest-sha256' ($candidateHash -eq ([string]$manifest.artifacts.msi.sha256).ToLowerInvariant()) $candidateHash
 
-    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.0-Windows-x64.msi' }
+    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.3-r22-Windows-x64-unsigned.msi' }
     if (-not (Test-Path -LiteralPath $old -PathType Leaf)) { Invoke-WebRequest -Uri $OldMsiUrl -OutFile $old -UseBasicParsing }
     if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
     $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -239,7 +239,8 @@ try {
         Add-Step 'checkpointed-process-shutdown' ($LASTEXITCODE -eq 0) $LASTEXITCODE
         Add-Step 'old-engine-process-ended' ($null -eq (Get-Process -Id $beforeProcess.engine_pid -ErrorAction SilentlyContinue)) $beforeProcess.engine_pid
         Add-Step 'old-presenter-process-ended' ($null -eq (Get-Process -Id $beforeProcess.presenter_pid -ErrorAction SilentlyContinue)) $beforeProcess.presenter_pid
-        $exit = Invoke-V7Msi @('/i', $candidate, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'upgrade-candidate.log')
+        # Do not supply INSTALLDIR: upgrading must recover the old custom path.
+        $exit = Invoke-V7Msi @('/i', $candidate, '/qn') (Join-Path $artifacts 'upgrade-candidate.log')
         Add-Step 'upgrade-exit' ($exit -in @(0, 3010, 1641)) $exit
         $afterProduct = Get-V7InstalledProduct $upgradeCode
         if ($afterProduct.product_code -eq $candidateProductCode) {
@@ -270,7 +271,7 @@ try {
         Copy-Item -LiteralPath $candidate -Destination $rollbackMsi -Force
         Add-DeferredFailure $rollbackMsi
         Add-Step 'candidate-original-unchanged' (((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $candidateHash) $candidateHash
-        $exit = Invoke-V7Msi @('/i', $rollbackMsi, '/qn', "INSTALLDIR=$InstallDir") (Join-Path $artifacts 'failure-rollback.log')
+        $exit = Invoke-V7Msi @('/i', $rollbackMsi, '/qn') (Join-Path $artifacts 'failure-rollback.log')
         Add-Step 'forced-failure-exit' ($exit -eq 1603) $exit
         $afterProduct = Get-V7InstalledProduct $upgradeCode
         Add-Step 'old-product-code-preserved' ($afterProduct.product_code -eq $oldProduct.product_code) $afterProduct.product_code

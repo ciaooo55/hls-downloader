@@ -63,7 +63,7 @@ $productVersion = [string]$json.product_version
 $composeBuildSource = [IO.File]::ReadAllText((Join-Path $repo 'desktop_ui\build.gradle.kts'), $utf8NoBom)
 $moduleVersions = @(
     ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'native_shell\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'presenter_ui\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'native_ui\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
     [string]([IO.File]::ReadAllText((Join-Path $repo 'extension\package.json'), $utf8NoBom) | ConvertFrom-Json).version,
     ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt'), $utf8NoBom), 'const val version\s*=\s*"([^"]+)"')).Groups[1].Value,
     ([regex]::Match($composeBuildSource, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
@@ -99,8 +99,10 @@ foreach ($feature in $features) {
 # therefore required to resolve against the source tree.
 $citedEvidenceRoots = @(
     (Join-Path $repo 'native_shell\src'),
+    (Join-Path $repo 'crates'),
+    (Join-Path $repo 'native_clients\src'),
     (Join-Path $repo 'desktop_ui\src'),
-    (Join-Path $repo 'presenter_ui\src'),
+    (Join-Path $repo 'native_ui\src'),
     (Join-Path $repo 'extension\entrypoints'),
     (Join-Path $repo 'extension\lib'),
     (Join-Path $repo 'scripts')

@@ -1884,7 +1884,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch {
                 val outcome = runCatching { withContext(Dispatchers.IO) {
                     if (taskId != null) EnginePipeClient.castTask(taskId)
-                    else EnginePipeClient.shareMedia(media!!.path, media.url, media.title, "")
+                    else EnginePipeClient.shareMedia(media!!.path, media.url, media.title, "", requestId.orEmpty())
                 } }
                 outcome.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                 if (outcome.isSuccess) {
@@ -1914,7 +1914,7 @@ fun AppShell(maximized: Boolean = false, appIcon: ImageBitmap? = null, presenter
             scope.launch {
                 val outcome = runCatching { withContext(Dispatchers.IO) {
                     if (taskId != null) EnginePipeClient.castToDevice(taskId, device.id)
-                    else EnginePipeClient.shareMedia(media!!.path, media.url, media.title, device.id)
+                    else EnginePipeClient.shareMedia(media!!.path, media.url, media.title, device.id, requestId.orEmpty())
                 } }
                 outcome.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                 if (outcome.isSuccess) {

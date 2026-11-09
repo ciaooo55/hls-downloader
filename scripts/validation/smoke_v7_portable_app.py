@@ -24,7 +24,8 @@ from v7_core_ipc import free_port
 
 
 class Pipe:
-    def __init__(self, pipe_name=r"\\.\pipe\HLSDownloader.v7"):
+    def __init__(self, pipe_name=None):
+        pipe_name = pipe_name or os.environ.get('HLS_V7_PIPE') or r"\\.\pipe\HLSDownloader.v7"
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
                                            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]

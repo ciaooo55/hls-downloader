@@ -1,6 +1,6 @@
 # 文档索引
 
-当前源码版本为 7.0.3；本轮代码收敛、验证和交付状态见[当前记录](validation/convergence.md)。历史记录通过 Git 查看，历史通过不能代替当前源码验收。
+当前源码版本为 7.0.4；原生实现、验证和交付状态见[原生迁移记录](validation/native-migration-progress.md)和[功能映射](validation/native-feature-mapping.md)。历史记录通过 Git 查看，历史通过不能代替当前源码验收。
 
 目录按用途划分：`guides/` 为使用说明，`architecture/` 为架构与维护约束，`releases/` 为发布说明和流程，`validation/` 为当前验收范围和证据索引，`images/` 为项目介绍图片。维护入口见 [脚本索引](../scripts/README.md)，产品合同见 [配置说明](../config/README.md)。
 
@@ -26,7 +26,7 @@
 | [字幕配置](guides/qwencloud-subtitles.md) | 服务配置、音频预取、等待行为及历史实测边界 |
 | [安装与升级](guides/v7-local-upgrade.md) | 普通 MSI 安装、用户目录、手动升级和当前数据边界 |
 | [包体积](guides/package-slimming.md) | 保留哪些运行依赖、哪些开发工具不进生产包 |
-| [桌面模块](../desktop_ui/README.md)、[Core](../native_shell/README.md)、[Presenter](../presenter_ui/README.md) | 各模块职责和开发入口 |
+| [桌面模块](../desktop_ui/README.md)、[Core](../native_shell/README.md)、[Presenter](../native_ui/README.md) | 各模块职责和开发入口 |
 | [插件](../extension/README.md)、[Firefox 审核构建](../extension/AMO-BUILD.md)、[插件隐私](../extension/PRIVACY.md) | 插件源码、打包审核和数据流说明 |
 
 ## 验收与发布维护
@@ -34,6 +34,8 @@
 | 文件 | 说明 |
 | --- | --- |
 | [验证状态](validation/v7-verification.md) | 当前证据索引、未覆盖范围和发布合同区别 |
+| [浏览器插件参考与功能补齐](validation/browser-reference-completion.md) | 参考插件机制、本次源码修复、定向检查与尚未闭环项 |
+| [IDM 源码与完整性复核](validation/idm-source-audit.md) | 全量导出清点、原版工作链、119 C 模块与重建插件的独立核验及采用边界 |
 | [正式发布 runner](releases/v7-release-runner.md)、[运行手册](releases/v7-release-runbook-local.md) | 专用发布环境和按提交绑定的门禁；不是本机当前安装状态 |
 | [发布就绪边界](architecture/formal-release-readiness.md) | 功能合同、包 provenance、发布授权的区别 |
 | [浏览器媒体推送门禁](architecture/browser-media-push-release-gate.md) | 真实浏览器到设备的证据要求 |

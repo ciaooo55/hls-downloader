@@ -33,11 +33,11 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
-安装包、Chromium/Firefox 插件及插件源码见[发布页](https://github.com/ciaooo55/hls-downloader/releases)。发布页保留各主要版本的最后一版，v7 只保留一个未签名预发布；历史源码标签仍可使用。`main` 和桌面候选可能包含尚未发布的修复，具体受测版本、场景及限制以对应发布说明和验收记录为准。
+安装包、Chromium/Firefox 插件及插件源码见[发布页](https://github.com/ciaooo55/hls-downloader/releases)。原生候选与历史 Compose 预发布通过名称和说明区分；历史源码标签仍可使用。`main` 和桌面候选可能包含尚未发布的修复，具体受测版本、场景及限制以对应发布说明和验收记录为准。
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 
-当前代码收敛、验证范围和交付状态见[本轮记录](docs/validation/convergence.md)。`release_ready=false`，正式发布仍须通过既有门禁。
+当前原生实现、验证范围与组件构建状态见[原生迁移记录](docs/validation/native-migration-progress.md)，剩余验收见[功能映射](docs/validation/native-feature-mapping.md)。[历史交付记录](docs/validation/convergence.md)不代表当前源码或组件版本。`release_ready=false`，正式发布仍须通过既有门禁。
 
 ### 系统要求
 
@@ -45,13 +45,13 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 | --- | --- |
 | 操作系统 | Windows 10 或 Windows 11（x64） |
 | 处理器架构 | **仅 x64**。播放与部分抓取依赖随包的 x64 原生库（libmpv、curl-impersonate），ARM64 Windows 无法运行 |
-| 运行时 | 无需预装 Java——安装包内置裁剪过的 JRE |
+| 运行时 | 原生候选无需 Java，包内不含 JRE；历史 Compose 版本自带 JRE |
 | 权限 | MSI 安装或覆盖升级需要管理员权限；便携包以对应发布说明为准 |
 | 浏览器 | Chromium 系（Chrome / Edge）或 Firefox，用于下载接管 |
 | 显示器 | 最低 1024×600；界面跟随系统 DPI 缩放 |
 
 > [!NOTE]
-> 当前 `main` 是 **7.0.3** 源码开发线。公开安装包以 Releases 页面为准；带 `candidate` / `pre-release` 标记的版本应按测试版使用。
+> 当前 `main` 是 **7.0.4** 源码开发线。公开安装包以 Releases 页面为准；带 `candidate` / `pre-release` 标记的版本应按测试版使用。
 
 网页在线字幕的服务、API Key、全局开关、语言、同步模式、原文显示和默认偏移统一在主程序“设置 → 字幕翻译”中配置；Key 由 Core 加密保存。插件仅提供网页开关、播放器选择和开始/停止，默认自动识别到中文。播放器支持本页字幕时间微调、跳到下一句，并对可独立读取的点播音轨最多提前翻译 30 秒。[QwenCloud 配置与使用方法](docs/guides/qwencloud-subtitles.md)包含本机加密备份导入和其他电脑的配置说明。
 
@@ -97,23 +97,25 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 ```mermaid
 flowchart LR
-    B["Chromium / Firefox"] -->|Native Messaging| C["Rust Core"]
-    UI["Compose Desktop"] <-->|Named Pipe IPC| C
-    P["Native Presenter"] <-->|Named Pipe IPC| C
+    B["Chromium / Firefox"] -->|Native Messaging| H["Native Host"]
+    H <-->|Named Pipe IPC| C["Rust Core"]
+    UI["Rust + Slint 工作台 / Presenter"] <-->|Named Pipe IPC| C
     C --> DB[(SQLite)]
     C --> E["HTTP · HLS · DASH · FTP · SFTP · BT"]
     C --> M["Local Player · LAN Cast"]
 ```
 
-核心原则很简单：**只有 Core 拥有下载状态和 SQLite**。Compose Desktop、浏览器扩展、Presenter、播放器和投屏链路都围绕同一个 Core 协作，不再各自维护第二套下载状态。
+**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。当前构建入口默认生成原生候选；Compose 源码保留作迁移对照，正式发布仍需通过完整门禁。
 
 ## 📁 项目结构
 
 | 目录 | 作用 |
 | --- | --- |
-| `native_shell/` | Rust Core、SQLite、传输引擎、Native Messaging Host、更新器 |
-| `desktop_ui/` | Kotlin / Compose Desktop 主工作台 |
-| `presenter_ui/` | 低延迟的原生确认、进度与完成窗口 |
+| `native_shell/` | Rust Core、SQLite、传输引擎及后台媒体服务 |
+| `crates/` | 共享协议及轻量 IPC 客户端 |
+| `native_clients/` | Native Host、CLI、更新器及原生启动入口 |
+| `desktop_ui/` | 迁移对照用的 Kotlin / Compose 工作台 |
+| `native_ui/` | Rust + Slint 原生工作台、确认、进度与完成窗口 |
 | `extension/` | WXT 构建的 Chromium / Firefox Manifest V3 扩展 |
 | `scripts/` | Windows 构建、测试、安装、升级、打包与验证脚本 |
 | `docs/` | [文档索引](docs/README.md)：使用、架构、发布和历史验收证据 |
@@ -140,7 +142,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-t
 cargo test --manifest-path native_shell/Cargo.toml --lib
 
 # Native Presenter
-cargo test --manifest-path presenter_ui/Cargo.toml
+cargo test --manifest-path native_ui/Cargo.toml
 
 # Compose Desktop
 cd desktop_ui

@@ -12,18 +12,18 @@ mod checksum;
 mod clipboard;
 #[cfg(feature = "full-core")]
 mod connection_parts;
-mod contract;
-mod core_ipc;
+use hls_client::core_ipc;
+use hls_protocol::contract;
 #[cfg(feature = "full-core")]
 mod core_runtime;
 #[cfg(feature = "full-core")]
 mod core_server;
 #[cfg(feature = "full-core")]
 mod core_service;
-mod core_spawn;
+use hls_client::core_spawn;
 #[cfg(feature = "full-core")]
 mod crawl;
-mod crawl_contract;
+use hls_protocol::crawl_contract;
 #[cfg(feature = "full-core")]
 mod credentials;
 #[cfg(feature = "full-core")]
@@ -40,28 +40,31 @@ mod ftp_engine;
 mod harvest;
 #[cfg(feature = "full-core")]
 mod http_engine;
-mod instance;
+use hls_client::instance;
 #[cfg(feature = "full-core")]
 mod link_file;
 #[cfg(feature = "full-core")]
 mod local_time;
 #[cfg(feature = "full-core")]
 mod media;
-mod media_ext;
+use hls_client::media_ext;
+#[cfg(feature = "full-core")]
+mod media_proxy;
 #[cfg(feature = "full-core")]
 mod metalink;
 #[cfg(feature = "full-core")]
 mod mirrors;
 #[cfg(feature = "full-core")]
 mod motw;
-#[cfg(feature = "full-core")]
+#[cfg(all(test, feature = "full-core"))]
+#[path = "../../native_clients/src/native_host.rs"]
 mod native_host;
+#[cfg(all(test, feature = "full-core"))]
+pub use native_host::run as run_native_host;
 #[cfg(feature = "full-core")]
 mod native_host_registration;
 #[cfg(feature = "full-core")]
 mod net_policy;
-#[cfg(feature = "full-core")]
-mod ole_drag;
 #[cfg(feature = "full-core")]
 mod output_path;
 #[cfg(feature = "full-core")]
@@ -72,11 +75,10 @@ mod player;
 mod player_thumbnail;
 #[cfg(feature = "full-core")]
 mod power_action;
-mod profile_paths;
+use hls_client::profile_paths;
 #[cfg(feature = "full-core")]
 mod recognize;
-#[cfg(feature = "full-core")]
-mod runtime_log;
+use hls_client::runtime_log;
 #[cfg(feature = "full-core")]
 mod sftp_engine;
 #[cfg(feature = "full-core")]
@@ -97,12 +99,12 @@ mod subtitle_translate;
 mod task_export;
 #[cfg(feature = "full-core")]
 mod torrent_engine;
-mod tray;
+use hls_client::tray;
 #[cfg(feature = "full-core")]
 mod updater;
 #[cfg(feature = "full-core")]
 mod win_reg;
-mod window_util;
+use hls_client::window_util;
 #[cfg(feature = "full-core")]
 mod zip_preview;
 
@@ -121,7 +123,7 @@ pub use contract::{
 };
 pub use core_ipc::{
     default_core_bind, hello_request, serve_tcp_listener, tcp_loopback_enabled, v7_pipe_name,
-    CoreIpcClient, CorePipeRequest, CorePipeResponse, V7_PIPE_NAME, V7_TCP_PORT,
+    CoreIpcClient, CorePipeRequest, CorePipeResponse, PlayerEmbed, V7_PIPE_NAME, V7_TCP_PORT,
 };
 #[cfg(windows)]
 pub use core_ipc::{NamedPipeClient, NamedPipeServer};
@@ -145,21 +147,19 @@ pub use download_worker::{CoreCoordinator, CoreSettings, TaskPaths};
 #[cfg(feature = "full-core")]
 pub use harvest::{harvest_html, harvest_html_filtered, HarvestLink};
 #[cfg(feature = "full-core")]
+pub use hls_client::file_transfer::{begin_file_drag, completed_file_drag, hdrop_bytes};
+#[cfg(feature = "full-core")]
 pub use http_engine::{run_job, run_job_report, EngineError, HttpMirrorReport, HttpRunReport};
 pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
 pub use media_ext::download_category;
 #[cfg(feature = "full-core")]
 pub use metalink::{looks_like_metalink, parse_metalink};
 #[cfg(feature = "full-core")]
-pub use native_host::run as run_native_host;
-#[cfg(feature = "full-core")]
 pub use native_host_registration::{
     prepare_packaged_native_host_manifests, register_packaged_native_host,
     register_packaged_native_host_for_sid, unregister_packaged_native_host,
     unregister_packaged_native_host_for_sid,
 };
-#[cfg(feature = "full-core")]
-pub use ole_drag::{begin_file_drag, completed_file_drag, hdrop_bytes};
 #[cfg(feature = "full-core")]
 pub use player::{run_player_process, PLAYER_WINDOW_TITLE};
 pub use profile_paths::{default_v7_database_path, default_v7_download_dir};
@@ -177,7 +177,7 @@ pub use task_export::export_tasks;
 pub use torrent_engine::{torrent_session, BuiltinTorrentEngine, TorrentSession};
 pub use tray::{completion_sound, show_notification, spawn_tray, TrayAction};
 #[cfg(feature = "full-core")]
-pub use updater::{check_for_update, is_newer_version, run_update_helper, CURRENT_VERSION};
+pub use updater::{check_for_update, is_newer_version, CURRENT_VERSION};
 pub use window_util::{
     activate_window_by_title, begin_caption_drag, center_window_by_title,
     hide_window_from_taskbar_by_title, os_reduce_motion, window_handle_by_title,

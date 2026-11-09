@@ -144,6 +144,9 @@ pub struct Job {
     pub curl_body_limit: Option<u64>,
     #[serde(default)]
     pub origin_boundary: String,
+    /// 同一次范围下载的停止信号，仅在内存中传给底层传输。
+    #[serde(skip)]
+    pub(crate) range_stop: Option<Arc<AtomicBool>>,
 }
 
 fn default_connections() -> usize {
@@ -590,8 +593,32 @@ pub struct ResourceProbe {
 }
 
 pub fn probe_resource(job: &Job) -> Result<ResourceProbe, EngineError> {
-    check_control(&job.control)?;
+    probe_resource_response(job).map(|(probe, _)| probe)
+}
+
+fn probe_resource_response(job: &Job) -> Result<(ResourceProbe, FetchResult), EngineError> {
+    check_job_control(job)?;
     let fetched = fetch(job, Some("bytes=0-0"))?;
+    if fetched.status == 416
+        && fetched.content_range.as_deref().is_some_and(|header| {
+            let mut parts = header.split_whitespace();
+            parts
+                .next()
+                .is_some_and(|unit| unit.eq_ignore_ascii_case("bytes"))
+                && parts.next() == Some("*/0")
+                && parts.next().is_none()
+        })
+    {
+        return Ok((
+            ResourceProbe {
+                total: Some(0),
+                accept_ranges: false,
+                etag: fetched.etag.clone(),
+                last_modified: fetched.last_modified.clone(),
+            },
+            fetched,
+        ));
+    }
     if fetched.status != 200 && fetched.status != 206 {
         return Err(EngineError::Failed(format!("HTTP {}", fetched.status)));
     }
@@ -603,12 +630,15 @@ pub fn probe_resource(job: &Job) -> Result<ResourceProbe, EngineError> {
         .or(fetched.content_length);
     let accept_ranges = fetched.status == 206
         && (fetched.accept_ranges || fetched.content_range.is_some() || total.is_some());
-    Ok(ResourceProbe {
-        total,
-        accept_ranges,
-        etag: fetched.etag,
-        last_modified: fetched.last_modified,
-    })
+    Ok((
+        ResourceProbe {
+            total,
+            accept_ranges,
+            etag: fetched.etag.clone(),
+            last_modified: fetched.last_modified.clone(),
+        },
+        fetched,
+    ))
 }
 
 pub fn run_job(job: &Job) -> Result<(), EngineError> {
@@ -638,6 +668,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     for (index, url) in urls.into_iter().enumerate() {
         let mut attempt = job.clone();
         attempt.url = url;
+        let mut initial_response = None;
         if !post
             && !attempt.sequential
             && (attempt.total == 0
@@ -645,8 +676,8 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                 || (strong_etag(&attempt.etag).is_empty()
                     && attempt.last_modified.trim().is_empty()))
         {
-            match probe_resource(&attempt) {
-                Ok(probe) => {
+            match probe_resource_response(&attempt) {
+                Ok((probe, response)) => {
                     if let Some((len, etag)) = &identity {
                         if !crate::mirrors::mirror_identity_compatible(
                             *len,
@@ -679,6 +710,11 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                     if !probe.accept_ranges || attempt.total == 0 {
                         attempt.sequential = true;
                     }
+                    // A 200 already owns the complete entity. Do not consume a
+                    // one-use URL again merely because its server ignores Range.
+                    if response.status == 200 && attempt.resume_from == 0 {
+                        initial_response = Some(response);
+                    }
                 }
                 Err(error) => {
                     if index > 0 {
@@ -691,7 +727,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                 }
             }
         }
-        match run_job_once(&attempt) {
+        match run_job_once(&attempt, initial_response) {
             Ok(()) => {
                 if index > 0 {
                     let report = &mut reports[index - 1];
@@ -726,7 +762,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     Err(last)
 }
 
-fn run_job_once(job: &Job) -> Result<(), EngineError> {
+fn run_job_once(job: &Job, initial_response: Option<FetchResult>) -> Result<(), EngineError> {
     if job.url.trim().is_empty() {
         return Err(EngineError::Failed("job url missing".into()));
     }
@@ -738,7 +774,7 @@ fn run_job_once(job: &Job) -> Result<(), EngineError> {
         Control::Cancel => return Err(EngineError::Cancel),
         Control::Run => {}
     }
-    let _slot = crate::net_policy::acquire(&job.url, || check_control(&job.control))?;
+    let _slot = crate::net_policy::acquire(&job.url, || check_job_control(job))?;
     // A HEAD job must take the sequential path even when it carries a total: a
     // HEAD range response is 206 + Content-Range with no body, so the range
     // workers read zero bytes forever and the job dies as "made no progress
@@ -752,7 +788,7 @@ fn run_job_once(job: &Job) -> Result<(), EngineError> {
     {
         let _ = fs::remove_file(completed_ranges_path(job));
         let _ = fs::remove_file(active_ranges_path(&job.progress));
-        download_sequential(job)
+        download_sequential(job, initial_response)
     } else {
         download_ranges(job)
     }
@@ -828,6 +864,7 @@ fn fetch_bytes_with_transport(
         mirrors: Vec::new(),
         replay_json: String::new(),
         curl_body_limit: limit,
+        range_stop: None,
         origin_boundary: String::new(),
     };
     let result = (|| {
@@ -850,7 +887,7 @@ fn fetch_bytes_with_transport(
             .body
             .take(limit.map_or(u64::MAX, |limit| limit.saturating_add(1)));
         if let Err(error) = reader.read_to_end(&mut body) {
-            check_control(&job.control)?;
+            check_job_control(&job)?;
             return Err(EngineError::Failed(error.to_string()));
         }
         if limit.is_some_and(|limit| body.len() as u64 > limit) {
@@ -867,7 +904,7 @@ fn fetch_bytes_with_transport(
                 expected_length.unwrap()
             )));
         }
-        crate::net_policy::consume(body.len(), || check_control(&job.control))?;
+        crate::net_policy::consume(body.len(), || check_job_control(&job))?;
         Ok((status, body))
     })();
     let _ = fs::remove_dir_all(dir);
@@ -935,6 +972,7 @@ fn fetch_bytes_range_with_transport(
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: Some(length),
+            range_stop: None,
             origin_boundary: String::new(),
         };
         let range = format!("bytes={start}-{end}");
@@ -973,7 +1011,7 @@ fn fetch_bytes_range_with_transport(
         // 多读一个字节用于判定超长；不能等错误响应结束后才验证大小。
         let mut reader = fetched.body.take(length.saturating_add(1));
         if let Err(error) = reader.read_to_end(&mut body) {
-            check_control(&job.control)?;
+            check_job_control(&job)?;
             return Err(EngineError::Failed(error.to_string()));
         }
         if body.len() as u64 != length {
@@ -982,14 +1020,33 @@ fn fetch_bytes_range_with_transport(
                 body.len()
             )));
         }
-        crate::net_policy::consume(body.len(), || check_control(&job.control))?;
+        crate::net_policy::consume(body.len(), || check_job_control(&job))?;
         Ok(body)
     })();
     let _ = fs::remove_dir_all(dir);
     result
 }
 
+fn check_transfer_control(path: &Path, stop: Option<&AtomicBool>) -> Result<(), EngineError> {
+    check_control(path)?;
+    if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+        return Err(EngineError::Cancel);
+    }
+    Ok(())
+}
+
+fn check_job_control(job: &Job) -> Result<(), EngineError> {
+    check_transfer_control(&job.control, job.range_stop.as_deref())
+}
+
 fn check_control(path: &Path) -> Result<(), EngineError> {
+    if MEDIA_CANCELED.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .is_some_and(MediaCancellation::stopped)
+    }) {
+        return Err(EngineError::Cancel);
+    }
     match read_control(path) {
         Control::Run => Ok(()),
         Control::Pause => Err(EngineError::Pause),
@@ -1019,7 +1076,10 @@ fn mark_file_sparse(_file: &File) {
     }
 }
 
-fn download_sequential(job: &Job) -> Result<(), EngineError> {
+fn download_sequential(
+    job: &Job,
+    initial_response: Option<FetchResult>,
+) -> Result<(), EngineError> {
     let resume_from = if job.resume_from > 0 && job.output.exists() {
         job.resume_from
             .min(job.output.metadata().map(|meta| meta.len()).unwrap_or(0))
@@ -1031,7 +1091,10 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     } else {
         None
     };
-    let fetched = fetch(job, range.as_deref())?;
+    let fetched = match initial_response {
+        Some(response) => response,
+        None => fetch(job, range.as_deref())?,
+    };
     if resume_from > 0 && fetched.status == 200 {
         return Err(EngineError::RangeUnsupported(
             "server ignored sequential resume Range".into(),
@@ -1047,6 +1110,33 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
             require_response_identity(job, &fetched)?;
         }
     }
+    // A sequential transfer must contain the remaining entity, not merely a
+    // server-capped range. Content-Length alone only describes that fragment.
+    let head = request_method(job).eq_ignore_ascii_case("HEAD");
+    let complete_range_total = if fetched.status == 206 && !head {
+        let (start, end, total) = fetched
+            .content_range
+            .as_deref()
+            .and_then(parse_content_range)
+            .and_then(|(start, end, total)| total.map(|total| (start, end, total)))
+            .ok_or_else(|| EngineError::Failed("sequential Content-Range total missing".into()))?;
+        if end + 1 != total {
+            return Err(EngineError::Failed(
+                "incomplete sequential Content-Range".into(),
+            ));
+        }
+        if fetched
+            .content_length
+            .is_some_and(|length| length != total - start)
+        {
+            return Err(EngineError::Failed(
+                "Content-Range response length mismatch".into(),
+            ));
+        }
+        Some(total)
+    } else {
+        None
+    };
     // Only the response may describe its own size.  `job.total` can be a stale
     // caller-supplied expected size or a `bytes=0-0` probe result, so it is trusted
     // only for a 206, where `require_content_range_total` above already proved the
@@ -1056,13 +1146,14 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
     // wire: a job JSON carrying `" Head"` sends HEAD yet would fail this test
     // against the raw `job.method` and reintroduce the very "expected N, got 0"
     // failure this exemption exists to remove.
-    let expected_downloaded = if request_method(job).eq_ignore_ascii_case("HEAD") {
+    let expected_downloaded = if head {
         None
     } else {
-        fetched
-            .content_length
-            .map(|length| resume_from.saturating_add(length))
-            .or_else(|| (fetched.status == 206 && job.total > 0).then_some(job.total))
+        complete_range_total.or_else(|| {
+            fetched
+                .content_length
+                .map(|length| resume_from.saturating_add(length))
+        })
     };
     let mut reader = fetched.body;
     let mut file = if resume_from > 0 {
@@ -1087,19 +1178,19 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
         // 与分段路径一致：按时间检查控制，避免短网络读取反复打开同一控制文件。
         if last_control.elapsed() >= Duration::from_millis(50) {
             last_control = Instant::now();
-            check_control(&job.control)?;
+            check_job_control(job)?;
         }
         let count = match reader.read(&mut buffer) {
             Ok(count) => count,
             Err(err) => {
-                check_control(&job.control)?;
+                check_job_control(job)?;
                 return Err(EngineError::Failed(err.to_string()));
             }
         };
         if count == 0 {
             break;
         }
-        crate::net_policy::consume(count, || check_control(&job.control))?;
+        crate::net_policy::consume(count, || check_job_control(job))?;
         file.write_all(&buffer[..count])
             .map_err(|err| EngineError::Failed(err.to_string()))?;
         downloaded += count as u64;
@@ -1114,7 +1205,7 @@ fn download_sequential(job: &Job) -> Result<(), EngineError> {
             last_progress = Instant::now();
         }
     }
-    check_control(&job.control)?;
+    check_job_control(job)?;
     file.flush()
         .map_err(|err| EngineError::Failed(err.to_string()))?;
     if let Some(expected) = expected_downloaded {
@@ -1132,11 +1223,10 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let _ = fs::remove_file(active_ranges_path(&job.progress));
     let total = job.total;
     if total == 0 {
-        return download_sequential(job);
+        return download_sequential(job, None);
     }
     let workers = job.connections.clamp(1, 64);
-    // Pending ranges remain the first choice; active splitting is gated until
-    // repeated transport/performance validation establishes a default benefit.
+    // 待办范围优先；尾部分流仍需显式启用和可靠校验器，等待真实传输验证。
     let balanced_chunk = total.div_ceil((workers * 4) as u64).max(256 * 1024);
     let chunk = job.chunk_bytes.max(64 * 1024).min(balanced_chunk);
     let mut ranges = Vec::new();
@@ -1189,15 +1279,13 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         return Ok(());
     }
     // 只有"从零开始"的下载才能把 200 解释成服务器不支持 Range：此时没有任何已保留片段，
-    // 续传偏移也为 0，整包 body 可以安全地作为完整资源重新下载。
+    // 续传偏移也为 0，整包 body 可以安全地作为完整资源使用。
     // 失效检查点的残留文件不会复用，也属于从零开始；文件存在本身不代表有效断点。
     let fresh_start = loaded.is_empty() && job.resume_from == 0;
     let workers = workers.min(pending.len());
     let mut scheduler = RangeScheduler::new(pending, workers);
-    scheduler.split_minimum = (std::env::var("HLS_HTTP_ACTIVE_SPLIT").as_deref() == Ok("1")
-        && ((!job.etag.trim().is_empty() && !job.etag.starts_with("W/"))
-            || !job.last_modified.trim().is_empty()))
-    .then_some(256 * 1024);
+    scheduler.split_minimum =
+        active_split_minimum(job, std::env::var("HLS_HTTP_ACTIVE_SPLIT").ok().as_deref());
     let scheduler = Arc::new(scheduler);
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(RangeCheckpoints::new(loaded));
@@ -1223,8 +1311,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
                     failed,
                     stop,
                     fresh_start,
-                );
-            });
+                )
+            })
         }));
     }
     let progress_stop = Arc::clone(&stop);
@@ -1264,8 +1352,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
             thread::sleep(Duration::from_millis(200));
         }
     });
+    let mut fallback_response = None;
     for handle in handles {
-        let _ = handle.join();
+        if let Ok(Some(response)) = handle.join() {
+            fallback_response = Some(response);
+        }
     }
     stop.store(true, Ordering::SeqCst);
     let _ = progress.join();
@@ -1275,9 +1366,10 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         // 已启动的 worker 全部join 完毕，不会有并发写；download_sequential 会重建输出文件。
         // 这样用户至少能拿到文件（失去分段并发与断点续传），而不是拿着已到手的整包失败。
         if fresh_start && matches!(code, EngineErrorCode::RangeIgnored(_)) {
+            check_job_control(job)?;
             let _ = fs::remove_file(completed_ranges_path(job));
             let _ = fs::remove_file(active_ranges_path(&job.progress));
-            return download_sequential(job);
+            return download_sequential(job, fallback_response);
         }
         return Err(code.into_error());
     }
@@ -1310,6 +1402,10 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     Ok(())
 }
 
+fn active_split_minimum(job: &Job, setting: Option<&str>) -> Option<u64> {
+    (setting == Some("1") && !range_validator(job).is_empty()).then_some(256 * 1024)
+}
+
 #[derive(Clone, Debug)]
 enum EngineErrorCode {
     Pause,
@@ -1336,6 +1432,19 @@ impl EngineErrorCode {
     }
 }
 
+fn check_range_control(job: &Job, stop: &AtomicBool) -> Result<(), EngineErrorCode> {
+    // 进度线程也会因暂停设置 stop；必须先保留控制文件中的暂停原因。
+    check_job_control(job).map_err(|error| match error {
+        EngineError::Pause => EngineErrorCode::Pause,
+        EngineError::Cancel => EngineErrorCode::Cancel,
+        other => EngineErrorCode::Failed(other.to_string()),
+    })?;
+    if stop.load(Ordering::SeqCst) {
+        return Err(EngineErrorCode::Cancel);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct WorkRange {
     start: u64,
@@ -1348,6 +1457,15 @@ struct ActiveProgress {
     // Exclusive end of bytes reserved by the reader, including a pending write.
     reserved_until: u64,
     splittable: bool,
+}
+
+impl ActiveProgress {
+    // 调用前旧响应必须已销毁或不再写入；新响应通过校验后才能重新开放分流。
+    fn begin_fetch(&mut self) -> (u64, u64) {
+        self.splittable = false;
+        self.reserved_until = self.cursor;
+        (self.cursor, self.stop)
+    }
 }
 
 struct ActiveRange {
@@ -1426,6 +1544,7 @@ struct RangeScheduler {
     wake_lock: Mutex<()>,
     wake: Condvar,
     split_minimum: Option<u64>,
+    retry_not_before: Mutex<Option<Instant>>,
 }
 
 impl RangeScheduler {
@@ -1446,6 +1565,33 @@ impl RangeScheduler {
             wake_lock: Mutex::new(()),
             wake: Condvar::new(),
             split_minimum: None,
+            retry_not_before: Mutex::new(None),
+        }
+    }
+
+    fn defer_requests(&self, delay: Duration) {
+        let Some(until) = Instant::now().checked_add(delay) else {
+            return;
+        };
+        let mut deadline = self
+            .retry_not_before
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        *deadline = Some(deadline.map_or(until, |previous| previous.max(until)));
+    }
+
+    fn wait_for_request(&self, job: &Job, stop: &AtomicBool) -> Result<(), EngineErrorCode> {
+        loop {
+            check_range_control(job, stop)?;
+            let remaining = self
+                .retry_not_before
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .and_then(|until| until.checked_duration_since(Instant::now()));
+            let Some(remaining) = remaining else {
+                return Ok(());
+            };
+            thread::sleep(remaining.min(Duration::from_millis(50)));
         }
     }
 
@@ -1545,9 +1691,9 @@ impl RangeScheduler {
     }
 
     fn note_storage_latency(&self, elapsed: Duration) {
-        // 落盘长时间阻塞时增加连接只会增加随机写和 fsync 争用。
+        // 只用 payload 写入阻塞判断背压；串行检查点的等锁与同步耗时不代表新增连接压力。
         if elapsed >= Duration::from_millis(250) {
-            self.note_congestion();
+            self.connections.note_congestion();
         }
     }
 
@@ -1614,19 +1760,15 @@ fn range_worker(
     stop: Arc<AtomicBool>,
     // 本次下载是否从零开始（无已保留片段、无续传偏移），含义见 fetch_range。
     fresh: bool,
-) {
-    let Ok(file) = OpenOptions::new().read(true).write(true).open(&job.output) else {
-        let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
-        if slot.is_none() {
-            *slot = Some(EngineErrorCode::Failed("open payload failed".into()));
-        }
-        stop.store(true, Ordering::SeqCst);
-        return;
-    };
-    let mut file = BufWriter::with_capacity(FILE_WRITE_BUFFER, file);
+) -> Option<FetchResult> {
+    let mut transport_job = job.clone();
+    transport_job.range_stop = Some(Arc::clone(&stop));
+    let job = &transport_job;
+    // 尚未领取范围的 worker 不打开文件或分配写缓冲；首次启用后复用同一个 writer。
+    let mut writer: Option<BufWriter<File>> = None;
     loop {
         if stop.load(Ordering::SeqCst) {
-            return;
+            return None;
         }
         match read_control(&job.control) {
             Control::Pause => {
@@ -1635,7 +1777,7 @@ fn range_worker(
                     *slot = Some(EngineErrorCode::Pause);
                 }
                 stop.store(true, Ordering::SeqCst);
-                return;
+                return None;
             }
             Control::Cancel => {
                 let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
@@ -1643,30 +1785,59 @@ fn range_worker(
                     *slot = Some(EngineErrorCode::Cancel);
                 }
                 stop.store(true, Ordering::SeqCst);
-                return;
+                return None;
             }
             Control::Run => {}
         }
         let Some(active) = scheduler.claim(worker_index) else {
             if scheduler.is_idle() {
-                return;
+                return None;
             }
             scheduler.wait_for_change();
             continue;
         };
+        let file = match &mut writer {
+            Some(file) => file,
+            slot @ None => {
+                let Ok(file) = OpenOptions::new().read(true).write(true).open(&job.output) else {
+                    let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
+                    if slot.is_none() {
+                        *slot = Some(EngineErrorCode::Failed("open payload failed".into()));
+                    }
+                    stop.store(true, Ordering::SeqCst);
+                    scheduler.complete(active.id);
+                    return None;
+                };
+                slot.insert(BufWriter::with_capacity(FILE_WRITE_BUFFER, file))
+            }
+        };
         let result = fetch_range(
             job,
-            &mut file,
+            file,
             &active.progress,
             &downloaded,
             &completed,
             &scheduler,
+            &stop,
             fresh,
         );
         scheduler.complete(active.id);
         match result {
-            Ok(_) => {
+            Ok(None) => {
                 scheduler.note_success();
+            }
+            Ok(Some(response)) => {
+                let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
+                // Only the first terminal result owns the response. Other
+                // workers release theirs before the caller rebuilds the file.
+                if slot.is_none() {
+                    *slot = Some(EngineErrorCode::RangeIgnored(
+                        "server ignored Range and returned 200".into(),
+                    ));
+                    stop.store(true, Ordering::SeqCst);
+                    return Some(response);
+                }
+                return None;
             }
             Err(error) => {
                 let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
@@ -1674,7 +1845,7 @@ fn range_worker(
                     *slot = Some(error);
                 }
                 stop.store(true, Ordering::SeqCst);
-                return;
+                return None;
             }
         }
     }
@@ -1693,6 +1864,7 @@ fn persist_range_progress(
     let started = Instant::now();
     file.flush()
         .map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
+    let flushed = started.elapsed();
     completed
         .pending
         .lock()
@@ -1706,13 +1878,14 @@ fn persist_range_progress(
         .durable
         .lock()
         .unwrap_or_else(|err| err.into_inner());
+    let locked = started.elapsed();
     if range_covered(&durable, start, cursor - 1) {
         completed
             .pending
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .retain(|(start, end)| !range_covered(&durable, *start, *end));
-        return Ok(Duration::ZERO);
+        return Ok(flushed);
     }
     let pending = normalize_ranges(std::mem::take(
         &mut *completed
@@ -1728,17 +1901,29 @@ fn persist_range_progress(
     file.get_ref()
         .sync_data()
         .map_err(|err| EngineErrorCode::Failed(err.to_string()))?;
+    let synced = started.elapsed();
     let next = normalize_ranges(durable.iter().copied().chain(pending).collect());
     save_completed_ranges(job, &next)?;
     *durable = next;
     let elapsed = started.elapsed();
     if std::env::var_os("HLS_HTTP_IO_PROFILE").is_some() {
-        eprintln!("http_checkpoint_us={}", elapsed.as_micros());
+        eprintln!(
+            "http_checkpoint_us={} flush_us={} lock_us={} sync_us={} metadata_us={}",
+            elapsed.as_micros(),
+            flushed.as_micros(),
+            locked.saturating_sub(flushed).as_micros(),
+            synced.saturating_sub(locked).as_micros(),
+            elapsed.saturating_sub(synced).as_micros(),
+        );
     }
-    Ok(elapsed)
+    Ok(flushed)
 }
 
-fn wait_before_range_retry(job: &Job, failed_attempts: u32) -> Result<(), EngineErrorCode> {
+fn wait_before_range_retry(
+    job: &Job,
+    stop: &AtomicBool,
+    failed_attempts: u32,
+) -> Result<(), EngineErrorCode> {
     if failed_attempts >= MAX_RANGE_ATTEMPTS {
         return Ok(());
     }
@@ -1749,11 +1934,7 @@ fn wait_before_range_retry(job: &Job, failed_attempts: u32) -> Result<(), Engine
     };
     let mut waited = 0u64;
     while waited < delay_ms {
-        match read_control(&job.control) {
-            Control::Pause => return Err(EngineErrorCode::Pause),
-            Control::Cancel => return Err(EngineErrorCode::Cancel),
-            Control::Run => {}
-        }
+        check_range_control(job, stop)?;
         let step = (delay_ms - waited).min(50);
         thread::sleep(Duration::from_millis(step));
         waited += step;
@@ -1794,10 +1975,11 @@ fn fetch_range(
     downloaded: &AtomicU64,
     completed: &RangeCheckpoints,
     scheduler: &RangeScheduler,
+    stop: &AtomicBool,
     // 本次下载是否从零开始（没有已保留片段、没有续传偏移）。只有为真时，
     // 服务器返回 200 才能被解释为"不支持 Range"而不是"资源身份已变"。
     fresh: bool,
-) -> Result<(), EngineErrorCode> {
+) -> Result<Option<FetchResult>, EngineErrorCode> {
     let start = progress
         .lock()
         .unwrap_or_else(|err| err.into_inner())
@@ -1805,16 +1987,17 @@ fn fetch_range(
     let mut durable_cursor = start;
     let mut failed_attempts = 0u32;
     loop {
-        let (mut cursor, target_end) = {
-            let state = progress.lock().unwrap_or_else(|err| err.into_inner());
-            (state.cursor, state.stop)
-        };
+        scheduler.wait_for_request(job, stop)?;
+        let (mut cursor, target_end) = progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .begin_fetch();
         if cursor > target_end {
-            return Ok(());
+            return Ok(None);
         }
         let request_start = cursor;
         let range = format!("bytes={cursor}-{target_end}");
-        let fetched = match fetch(job, Some(&range)) {
+        let mut fetched = match fetch(job, Some(&range)) {
             Ok(result) => result,
             Err(EngineError::RangeUnsupported(message)) => {
                 return Err(EngineErrorCode::RangeUnsupported(message));
@@ -1829,7 +2012,7 @@ fn fetch_range(
                         "range {request_start}-{target_end} failed after {failed_attempts} attempts: {err}"
                     )));
                 }
-                wait_before_range_retry(job, failed_attempts)?;
+                wait_before_range_retry(job, stop, failed_attempts)?;
                 continue;
             }
         };
@@ -1840,10 +2023,10 @@ fn fetch_range(
             // 拼接整包会污染已保留数据，必须按原来的 RangeUnsupported 失败。
             let identity_matches =
                 fetched.etag.is_empty() || job.etag.is_empty() || fetched.etag == job.etag;
-            if fresh && identity_matches {
-                return Err(EngineErrorCode::RangeIgnored(
-                    "server ignored Range and returned 200".into(),
-                ));
+            if fresh && identity_matches && require_response_identity(job, &fetched).is_ok() {
+                // 200 正文转交单流后不再属于范围 worker；仍保留用户暂停/取消检查。
+                fetched.body.detach_range_stop();
+                return Ok(Some(fetched));
             }
             return Err(EngineErrorCode::RangeUnsupported(
                 "server ignored Range and returned 200".into(),
@@ -1852,6 +2035,9 @@ fn fetch_range(
         if fetched.status != 206 {
             if retryable_http_status(fetched.status) {
                 scheduler.note_congestion();
+                if let Some(delay) = fetched.retry_after {
+                    scheduler.defer_requests(delay);
+                }
                 failed_attempts += 1;
                 if failed_attempts >= MAX_RANGE_ATTEMPTS {
                     return Err(EngineErrorCode::Failed(format!(
@@ -1859,7 +2045,8 @@ fn fetch_range(
                         fetched.status
                     )));
                 }
-                wait_before_range_retry(job, failed_attempts)?;
+                drop(fetched);
+                wait_before_range_retry(job, stop, failed_attempts)?;
                 continue;
             }
             return Err(EngineErrorCode::Failed(format!("HTTP {}", fetched.status)));
@@ -1898,18 +2085,11 @@ fn fetch_range(
         let mut last_control = Instant::now() - Duration::from_millis(50);
         loop {
             // 网络 read 的实际块往往远小于 WRITE_BATCH，不能每次 read 都重新打开控制文件。
-            if last_control.elapsed() >= Duration::from_millis(50) {
+            if stop.load(Ordering::SeqCst) || last_control.elapsed() >= Duration::from_millis(50) {
                 last_control = Instant::now();
-                match read_control(&job.control) {
-                    Control::Pause => {
-                        persist_range_progress(job, file, completed, start, cursor)?;
-                        return Err(EngineErrorCode::Pause);
-                    }
-                    Control::Cancel => {
-                        persist_range_progress(job, file, completed, start, cursor)?;
-                        return Err(EngineErrorCode::Cancel);
-                    }
-                    Control::Run => {}
+                if let Err(error) = check_range_control(job, stop) {
+                    persist_range_progress(job, file, completed, start, cursor)?;
+                    return Err(error);
                 }
             }
             let read_limit = {
@@ -1925,7 +2105,15 @@ fn fetch_range(
             if read_limit == 0 {
                 break;
             }
-            let count = match reader.read(&mut buffer[..read_limit]) {
+            let read = reader.read(&mut buffer[..read_limit]);
+            // read 可能阻塞，返回后不能将协调器已停止的响应继续写盘。
+            if stop.load(Ordering::SeqCst) {
+                if let Err(error) = check_range_control(job, stop) {
+                    persist_range_progress(job, file, completed, start, cursor)?;
+                    return Err(error);
+                }
+            }
+            let count = match read {
                 Ok(count) => count,
                 Err(err) => {
                     read_error = Some(err.to_string());
@@ -1939,18 +2127,19 @@ fn fetch_range(
             let remain = current_stop.saturating_add(1).saturating_sub(cursor) as usize;
             let take = count.min(remain);
             if take > 0 {
-                if let Err(error) = crate::net_policy::consume(take, || check_control(&job.control))
+                if let Err(error) =
+                    crate::net_policy::consume(take, || check_range_control(job, stop))
                 {
                     persist_range_progress(job, file, completed, start, cursor)?;
-                    return Err(match error {
-                        EngineError::Pause => EngineErrorCode::Pause,
-                        EngineError::Cancel => EngineErrorCode::Cancel,
-                        other => EngineErrorCode::Failed(other.to_string()),
-                    });
+                    return Err(error);
                 }
             }
-            if take > 0 && file.write_all(&buffer[..take]).is_err() {
-                return Err(EngineErrorCode::Failed("write failed".into()));
+            if take > 0 {
+                let write_started = Instant::now();
+                if file.write_all(&buffer[..take]).is_err() {
+                    return Err(EngineErrorCode::Failed("write failed".into()));
+                }
+                scheduler.note_storage_latency(write_started.elapsed());
             }
             cursor += take as u64;
             // 限速等待和磁盘写入不能占用进度锁，否则 active_ranges 会阻塞整个进度发布线程。
@@ -1970,6 +2159,8 @@ fn fetch_range(
                 break;
             }
         }
+        // 重试前销毁旧响应，避免重新开放分流时仍有旧 reader 能继续写入。
+        drop(reader);
         let current_stop = progress.lock().unwrap_or_else(|err| err.into_inner()).stop;
         if cursor > current_stop {
             if durable_cursor != cursor {
@@ -1977,7 +2168,7 @@ fn fetch_range(
                     job, file, completed, start, cursor,
                 )?);
             }
-            return Ok(());
+            return Ok(None);
         }
         persist_range_progress(job, file, completed, start, cursor)?;
         durable_cursor = cursor;
@@ -1985,7 +2176,7 @@ fn fetch_range(
             failed_attempts = 0;
             scheduler.note_congestion();
             if read_error.is_some() {
-                wait_before_range_retry(job, 1)?;
+                wait_before_range_retry(job, stop, 1)?;
             }
             continue;
         }
@@ -1997,7 +2188,7 @@ fn fetch_range(
                 "range {request_start}-{target_end} made no progress after {failed_attempts} attempts: {detail}"
             )));
         }
-        wait_before_range_retry(job, failed_attempts)?;
+        wait_before_range_retry(job, stop, failed_attempts)?;
     }
 }
 
@@ -2005,6 +2196,7 @@ struct InterruptibleTcpStream {
     stream: TcpStream,
     control: PathBuf,
     last_control: Instant,
+    range_stop: Option<Arc<AtomicBool>>,
 }
 
 impl Read for InterruptibleTcpStream {
@@ -2016,9 +2208,9 @@ impl Read for InterruptibleTcpStream {
         loop {
             if self.last_control.elapsed() >= Duration::from_millis(50) {
                 self.last_control = Instant::now();
-                match read_control(&self.control) {
-                    Control::Run => {}
-                    Control::Pause | Control::Cancel => {
+                match check_transfer_control(&self.control, self.range_stop.as_deref()) {
+                    Ok(()) => {}
+                    Err(_) => {
                         // Interrupted 会被 read_exact 自动重试，不能用它表达任务停止。
                         return Err(std::io::Error::other("HTTP transfer stopped"));
                     }
@@ -2055,6 +2247,18 @@ enum Body {
     },
     #[cfg(windows)]
     WinHttp(winhttp::WinHttpBody),
+}
+
+impl Body {
+    fn detach_range_stop(&mut self) {
+        match self {
+            Self::Tcp { stream, .. } => stream.range_stop = None,
+            Self::Chunked(body) => body.reader.get_mut().detach_range_stop(),
+            #[cfg(windows)]
+            Self::WinHttp(body) => body.range_stop = None,
+            Self::File { .. } => {}
+        }
+    }
 }
 
 impl Read for Body {
@@ -2228,10 +2432,133 @@ struct FetchResult {
     location: Option<String>,
     content_range: Option<String>,
     content_length: Option<u64>,
+    content_type: String,
+    content_encoding: bool,
+    retry_after: Option<Duration>,
     etag: String,
     last_modified: String,
     accept_ranges: bool,
     body: Body,
+}
+
+struct MediaCancellation {
+    flag: Arc<AtomicBool>,
+    peer: TcpStream,
+    last_check: Instant,
+}
+
+impl MediaCancellation {
+    fn stopped(&mut self) -> bool {
+        if self.flag.load(Ordering::Relaxed) {
+            return true;
+        }
+        if self.last_check.elapsed() < Duration::from_millis(100) {
+            return false;
+        }
+        self.last_check = Instant::now();
+        match self.peer.peek(&mut [0u8; 1]) {
+            Ok(0) => true,
+            Ok(_) => false,
+            Err(error) => !matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ),
+        }
+    }
+}
+
+thread_local! {
+    static MEDIA_CANCELED: std::cell::RefCell<Option<MediaCancellation>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) struct MediaResponse {
+    pub status: u16,
+    pub final_url: String,
+    pub content_type: String,
+    pub content_length: Option<u64>,
+    pub content_range: Option<String>,
+    pub accept_ranges: bool,
+    body: Body,
+}
+
+impl Read for MediaResponse {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        check_control(Path::new("")).map_err(|e| std::io::Error::other(e.to_string()))?;
+        self.body.read(bytes)
+    }
+}
+
+/// Open a streaming GET/HEAD with scoped replay and the existing redirect/proxy policy.
+/// `spec.url` selects the initial request identity; `request_url` may add validated
+/// LL-HLS delivery directives without losing that identity's exact URL headers.
+/// The callback consumes the response on this thread, where cancellation also interrupts I/O.
+pub(crate) fn with_media_response<R>(
+    spec: &crate::TaskSpec,
+    replay: &str,
+    request_url: &str,
+    method: &str,
+    range: Option<&str>,
+    canceled: &Arc<AtomicBool>,
+    peer: TcpStream,
+    consume: impl FnOnce(MediaResponse) -> Result<R, String>,
+) -> Result<R, String> {
+    struct Restore(Option<MediaCancellation>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MEDIA_CANCELED.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    peer.set_read_timeout(Some(Duration::from_millis(1)))
+        .map_err(|e| e.to_string())?;
+    let cancellation = MediaCancellation {
+        flag: Arc::clone(canceled),
+        peer,
+        last_check: Instant::now() - Duration::from_secs(1),
+    };
+    let _restore = Restore(MEDIA_CANCELED.with(|slot| slot.replace(Some(cancellation))));
+    if !matches!(method, "GET" | "HEAD") {
+        return Err("媒体代理仅支持 GET/HEAD".into());
+    }
+    let mut job = Job {
+        url: spec.url.clone(),
+        headers: spec.headers.clone().into_iter().collect(),
+        output: PathBuf::new(),
+        connections: 1,
+        chunk_bytes: 64 * 1024,
+        total: 0,
+        sequential: true,
+        resume_from: 0,
+        proxy: spec.proxy.clone(),
+        resource_key: String::new(),
+        etag: String::new(),
+        last_modified: String::new(),
+        control: PathBuf::new(),
+        progress: PathBuf::new(),
+        method: method.into(),
+        body_path: PathBuf::new(),
+        mirrors: Vec::new(),
+        replay_json: replay.into(),
+        curl_body_limit: None,
+        range_stop: None,
+        origin_boundary: spec.origin_boundary.clone(),
+    };
+    apply_browser_profile(&mut job.headers);
+    check_job_control(&job).map_err(|e| e.to_string())?;
+    // curl 的文件型回退会先缓存整部媒体，不适合局域网流式播放。
+    let (response, final_url) =
+        fetch_follow_restricted(&job, range, None, Some(request_url)).map_err(|e| e.to_string())?;
+    if response.content_encoding {
+        return Err("媒体服务器未返回 identity 编码".into());
+    }
+    consume(MediaResponse {
+        status: response.status,
+        final_url,
+        content_type: response.content_type,
+        content_length: response.content_length,
+        content_range: response.content_range,
+        accept_ranges: response.accept_ranges,
+        body: response.body,
+    })
 }
 
 fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
@@ -2319,17 +2646,18 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
 }
 
 fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
-    fetch_follow_restricted(job, range, None).map(|(response, _)| response)
+    fetch_follow_restricted(job, range, None, None).map(|(response, _)| response)
 }
 
 fn fetch_follow_restricted(
     job: &Job,
     range: Option<&str>,
     origin: Option<&str>,
+    request_url: Option<&str>,
 ) -> Result<(FetchResult, String), EngineError> {
-    let mut url = job.url.clone();
+    let mut url = request_url.unwrap_or(&job.url).to_string();
     let replay = job_replay_json(job);
-    let mut headers = headers_for_request(job, &url);
+    let mut headers = headers_for_request(job, &job.url);
     let mut hop = job.clone();
     for _ in 0..16 {
         if origin
@@ -2354,26 +2682,7 @@ fn fetch_follow_restricted(
                     return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
                 }
             }
-            let (
-                status,
-                location,
-                content_range,
-                content_length,
-                etag,
-                last_modified,
-                accept_ranges,
-                body,
-            ) = http_get(&hop, &parsed, range)?;
-            Ok(FetchResult {
-                status,
-                location,
-                content_range,
-                content_length,
-                etag,
-                last_modified,
-                accept_ranges,
-                body,
-            })
+            http_get(&hop, &parsed, range)
         };
         let mut fetched = request(&headers)?;
         // 修正当前响应对应的 Cookie；不能重新重放上下文而把刚移除的值加回来。
@@ -2477,11 +2786,12 @@ pub(crate) fn read_metadata(
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: Some(limit),
+            range_stop: None,
             origin_boundary: spec.origin_boundary.clone(),
         };
         apply_browser_profile(&mut job.headers);
         let (fetched, final_url) =
-            fetch_follow_restricted(&job, range, origin).map_err(|e| e.to_string())?;
+            fetch_follow_restricted(&job, range, origin, None).map_err(|e| e.to_string())?;
         if range.is_some() && fetched.status != 206 {
             return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
         }
@@ -2504,7 +2814,7 @@ pub(crate) fn read_metadata(
         let mut buffer = [0; 16 * 1024];
         if has_body {
             loop {
-                check_control(&job.control).map_err(|e| e.to_string())?;
+                check_job_control(&job).map_err(|e| e.to_string())?;
                 let want = (limit.saturating_add(1).saturating_sub(body.len() as u64))
                     .min(buffer.len() as u64) as usize;
                 if want == 0 {
@@ -2516,7 +2826,7 @@ pub(crate) fn read_metadata(
                 if n == 0 {
                     break;
                 }
-                crate::net_policy::consume(n, || check_control(&job.control))
+                crate::net_policy::consume(n, || check_job_control(&job))
                     .map_err(|e| e.to_string())?;
                 body.extend_from_slice(&buffer[..n]);
                 if body.len() as u64 > limit {
@@ -2648,7 +2958,7 @@ fn fetch_via_curl_impersonate(
         return Some(Err(EngineError::Failed("curl-impersonate temp dir".into())));
     }
     let result = (|| {
-        check_control(&job.control)?;
+        check_job_control(job)?;
         let body_path = dir.join("body");
         let header_path = dir.join("headers");
         let status_path = dir.join("status");
@@ -2713,7 +3023,7 @@ fn fetch_via_curl_impersonate(
             .map_err(|error| EngineError::Failed(error.to_string()))?;
         drop(command);
         let exit = loop {
-            if let Err(error) = check_control(&job.control) {
+            if let Err(error) = check_job_control(job) {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(error);
@@ -2797,6 +3107,9 @@ fn fetch_via_curl_impersonate(
             location: meta.location.clone(),
             content_range: meta.content_range,
             content_length,
+            content_type: meta.content_type,
+            content_encoding: false,
+            retry_after: meta.retry_after,
             etag: meta.etag,
             last_modified: meta.last_modified,
             accept_ranges: meta.accept_ranges,
@@ -2847,6 +3160,14 @@ fn header_forbidden_on_wire(key: &str) -> bool {
 }
 
 fn header_allowed_on_request(key: &str, value: &str) -> bool {
+    if MEDIA_CANCELED.with(|slot| slot.borrow().is_some())
+        && matches!(
+            key.to_ascii_lowercase().as_str(),
+            "if-none-match" | "if-modified-since" | "if-match" | "if-unmodified-since"
+        )
+    {
+        return false;
+    }
     header_is_wire_safe(key, value) && !header_forbidden_on_wire(key)
 }
 
@@ -2854,39 +3175,9 @@ fn header_token_ok(value: &str) -> bool {
     !value.is_empty() && !value.contains(['\r', '\n', '\0'])
 }
 
-pub(crate) fn sanitize_http_method(raw: &str) -> String {
-    let method = raw.trim();
-    if method.eq_ignore_ascii_case("POST") {
-        "POST".into()
-    } else if method.eq_ignore_ascii_case("HEAD") {
-        "HEAD".into()
-    } else {
-        "GET".into()
-    }
-}
-
-pub fn http_fetch_url_allowed(url: &str) -> bool {
-    let url = url.trim().trim_start_matches('\u{feff}');
-    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
-        return false;
-    }
-    let lower = url.to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
-}
-
-pub fn remote_resource_url_allowed(url: &str) -> bool {
-    let url = url.trim().trim_start_matches('\u{feff}');
-    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
-        return false;
-    }
-    let lower = url.to_ascii_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("ftp://")
-        || lower.starts_with("ftps://")
-        || lower.starts_with("sftp://")
-        || lower.starts_with("magnet:")
-}
+pub use hls_client::request_validation::{
+    http_fetch_url_allowed, remote_resource_url_allowed, sanitize_http_method,
+};
 
 fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
     let raw = raw.trim();
@@ -2991,7 +3282,9 @@ fn record_download_type(job: &Job, status: u16, headers: &str) {
 struct HeaderMeta {
     location: Option<String>,
     content_length: Option<u64>,
+    content_type: String,
     content_range: Option<String>,
+    retry_after: Option<Duration>,
     etag: String,
     last_modified: String,
     accept_ranges: bool,
@@ -3008,6 +3301,9 @@ fn parse_header_meta(head: &str) -> HeaderMeta {
         if let Some(value) = header_value(line, "Content-Length") {
             meta.content_length = value.parse::<u64>().ok();
         }
+        if let Some(value) = header_value(line, "Content-Type") {
+            meta.content_type = value.to_string();
+        }
         if let Some(value) = header_value(line, "Content-Range") {
             meta.content_range = Some(value.to_string());
         }
@@ -3016,6 +3312,10 @@ fn parse_header_meta(head: &str) -> HeaderMeta {
         }
         if let Some(value) = header_value(line, "Last-Modified") {
             meta.last_modified = value.to_string();
+        }
+        if let Some(value) = header_value(line, "Retry-After") {
+            // 支持 delta-seconds；无效值保留现有本地退避，不猜测日期格式。
+            meta.retry_after = value.parse::<u64>().ok().map(Duration::from_secs);
         }
         if let Some(value) = header_value(line, "Accept-Ranges") {
             meta.accept_ranges = value
@@ -3233,22 +3533,11 @@ fn has_absolute_scheme(reference: &str) -> bool {
     bytes.get(index) == Some(&b':')
 }
 
-type HttpGetResponse = (
-    u16,
-    Option<String>,
-    Option<String>,
-    Option<u64>,
-    String,
-    String,
-    bool,
-    Body,
-);
-
 fn http_get(
     job: &Job,
     parsed: &ParsedUrl,
     range: Option<&str>,
-) -> Result<HttpGetResponse, EngineError> {
+) -> Result<FetchResult, EngineError> {
     let mut stream = match proxy_route(&job.proxy) {
         ProxyRoute::Direct => TcpStream::connect((parsed.host.as_str(), parsed.port))
             .map_err(|err| EngineError::Failed(err.to_string()))?,
@@ -3301,6 +3590,7 @@ fn http_get(
         stream,
         control: job.control.clone(),
         last_control: Instant::now() - Duration::from_millis(50),
+        range_stop: job.range_stop.clone(),
     };
     let mut buf = Vec::with_capacity(4096);
     let mut block = [0u8; 4096];
@@ -3310,7 +3600,7 @@ fn http_get(
         let count = match stream.read(&mut block[..want]) {
             Ok(count) => count,
             Err(err) => {
-                check_control(&job.control)?;
+                check_job_control(job)?;
                 return Err(EngineError::Failed(err.to_string()));
             }
         };
@@ -3362,16 +3652,19 @@ fn http_get(
     } else {
         body
     };
-    Ok((
+    Ok(FetchResult {
         status,
-        meta.location,
-        meta.content_range,
-        meta.content_length,
-        meta.etag,
-        meta.last_modified,
+        location: meta.location,
+        content_range: meta.content_range,
+        content_length: meta.content_length,
+        content_type: meta.content_type,
+        content_encoding: meta.content_encoding,
+        retry_after: meta.retry_after,
+        etag: meta.etag,
+        last_modified: meta.last_modified,
         accept_ranges,
         body,
-    ))
+    })
 }
 
 #[cfg(windows)]
@@ -3459,6 +3752,7 @@ mod winhttp {
         connect_key: String,
         signal: Option<Arc<RequestSignal>>,
         control: PathBuf,
+        pub(super) range_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     }
 
     unsafe impl Send for WinHttpBody {}
@@ -3515,7 +3809,7 @@ mod winhttp {
                 }
                 // 已完成的读直接返回；仅网络仍在等待时检查控制，且不持回调锁做文件 I/O。
                 drop(status);
-                super::check_control(&self.control)?;
+                super::check_transfer_control(&self.control, self.range_stop.as_deref())?;
                 status = signal
                     .status
                     .lock()
@@ -3641,7 +3935,7 @@ mod winhttp {
         url: &str,
         range: Option<&str>,
     ) -> Result<super::FetchResult, EngineError> {
-        super::check_control(&job.control)?;
+        super::check_job_control(job)?;
         let parsed = super::parse_http_url(url)?;
         // 必须先于 body 声明，错误返回时先取消并关闭请求，再释放异步发送缓冲区。
         let mut request_body = super::post_body(job)?;
@@ -3684,6 +3978,7 @@ mod winhttp {
                 connect_key,
                 signal: None,
                 control: job.control.clone(),
+                range_stop: job.range_stop.clone(),
             };
             let previous = WinHttpSetStatusCallback(
                 request,
@@ -3800,7 +4095,8 @@ mod winhttp {
             let etag = query_header_string(request, WINHTTP_QUERY_ETAG).unwrap_or_default();
             let last_modified =
                 query_header_string(request, WINHTTP_QUERY_LAST_MODIFIED).unwrap_or_default();
-            let content_length = super::parse_header_meta(&raw_headers).content_length;
+            let meta = super::parse_header_meta(&raw_headers);
+            let content_length = meta.content_length;
             let accept_ranges =
                 query_header_string(request, WINHTTP_QUERY_ACCEPT_RANGES).is_some_and(|value| {
                     value
@@ -3813,6 +4109,9 @@ mod winhttp {
                 location,
                 content_range,
                 content_length,
+                content_type: meta.content_type,
+                content_encoding: meta.content_encoding,
+                retry_after: meta.retry_after,
                 etag,
                 last_modified,
                 accept_ranges,
@@ -3893,6 +4192,7 @@ mod tests {
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: None,
+            range_stop: None,
             origin_boundary: String::new(),
         }
     }
@@ -4094,6 +4394,74 @@ mod tests {
     }
 
     #[test]
+    fn active_split_requires_explicit_opt_in_and_validated_resources() {
+        let (mut job, dir) = temp_job("http://127.0.0.1/", false, 1, 2);
+        for (etag, modified, enabled) in [
+            ("\"v1\"", "", true),
+            (" W/\"v1\" ", "", false),
+            ("w/\"v1\"", "", false),
+            ("", "", false),
+            ("", "Wed, 21 Oct 2015 07:28:00 GMT", true),
+            ("W/\"v1\"", "Wed, 21 Oct 2015 07:28:00 GMT", true),
+            ("\"v1\"\r\nInjected: yes", "", false),
+            ("", "bad\nvalue", false),
+        ] {
+            job.etag = etag.into();
+            job.last_modified = modified.into();
+            for setting in [None, Some("1"), Some("other"), Some(""), Some("0")] {
+                assert_eq!(
+                    active_split_minimum(&job, setting),
+                    (enabled && setting == Some("1")).then_some(256 * 1024),
+                    "etag={etag:?}, modified={modified:?}, setting={setting:?}"
+                );
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn active_split_selects_largest_safe_tail_after_pending_and_connection_gates() {
+        let mut scheduler = RangeScheduler::new(
+            vec![
+                WorkRange {
+                    start: 0,
+                    end: 1999,
+                },
+                WorkRange {
+                    start: 2000,
+                    end: 2999,
+                },
+            ],
+            3,
+        );
+        scheduler.split_minimum = Some(100);
+        let first = scheduler.claim(0).unwrap();
+        {
+            let mut p = first.progress.lock().unwrap();
+            p.splittable = true;
+            p.cursor = 100;
+            p.reserved_until = 1700;
+        }
+        // 尽管原范围可以拆分，先领取待办；尚未获得连接资格的 worker 不能拆分。
+        let second = scheduler.claim(1).unwrap();
+        {
+            let mut p = second.progress.lock().unwrap();
+            assert_eq!((p.cursor, p.stop), (2000, 2999));
+            p.splittable = true;
+            p.cursor = 2100;
+            p.reserved_until = 2200;
+        }
+        assert!(scheduler.claim(2).is_none());
+        scheduler.note_success();
+        scheduler.note_success();
+        let tail = scheduler.claim(2).unwrap();
+        let p = tail.progress.lock().unwrap();
+        assert_eq!((p.cursor, p.stop), (2600, 2999));
+        assert_eq!(second.progress.lock().unwrap().stop, 2599);
+        assert_eq!(first.progress.lock().unwrap().stop, 1999);
+    }
+
+    #[test]
     fn active_split_preserves_reserved_read_and_never_overlaps_tail() {
         let mut scheduler = RangeScheduler::new(vec![WorkRange { start: 0, end: 999 }], 2);
         scheduler.split_minimum = Some(100);
@@ -4118,6 +4486,39 @@ mod tests {
         assert_eq!(
             second.stop - first.cursor + 1,
             (first.stop - first.cursor + 1) + (second.stop - second.cursor + 1)
+        );
+        drop(second);
+        drop(first);
+        scheduler.complete(tail.id);
+        {
+            let mut p = original.progress.lock().unwrap();
+            // 已结束的读操作可能仍保留较大的预留区；下一次 fetch 必须原子重置。
+            assert_eq!(p.begin_fetch(), (100, 699));
+            assert_eq!(p.reserved_until, p.cursor);
+            assert!(!p.splittable);
+        }
+        assert!(
+            scheduler.claim(1).is_none(),
+            "fetch/validation must not be split"
+        );
+        {
+            let mut p = original.progress.lock().unwrap();
+            // 新流式响应校验成功后重新开放，并重新预留正在读/写的区间。
+            p.splittable = true;
+            p.reserved_until = 400;
+        }
+        let tail = scheduler.claim(1).unwrap();
+        let p = tail.progress.lock().unwrap();
+        assert_eq!((p.cursor, p.stop), (550, 699));
+        drop(p);
+        let p = original.progress.lock().unwrap();
+        assert_eq!(p.stop, 549);
+        assert!(p.stop >= p.reserved_until);
+        drop(p);
+        scheduler.complete(tail.id);
+        assert!(
+            scheduler.claim(1).is_none(),
+            "both halves must meet the minimum"
         );
     }
 
@@ -4245,6 +4646,25 @@ mod tests {
         assert_eq!(controller.desired(), 1);
     }
 
+    #[test]
+    fn slow_payload_writes_back_off_without_affecting_fast_writes() {
+        let scheduler = RangeScheduler::new(Vec::new(), 8);
+        scheduler.connections.desired.store(8, Ordering::Release);
+        scheduler.note_storage_latency(Duration::from_millis(10));
+        assert_eq!(scheduler.connections.desired(), 8);
+        for expected in [4, 2, 1] {
+            scheduler.note_storage_latency(Duration::from_millis(300));
+            assert_eq!(scheduler.connections.desired(), expected);
+        }
+        scheduler.note_congestion();
+        assert_eq!(scheduler.connections.desired(), 1);
+        scheduler.note_storage_latency(Duration::from_secs(1));
+        assert_eq!(scheduler.connections.desired(), 1);
+        let single = RangeScheduler::new(Vec::new(), 1);
+        single.note_storage_latency(Duration::from_secs(1));
+        assert_eq!(single.connections.desired(), 1);
+    }
+
     static NEXT_TEMP_JOB_ID: AtomicUsize = AtomicUsize::new(0);
 
     fn serve_body(body: &'static [u8]) -> String {
@@ -4329,10 +4749,173 @@ mod tests {
                 mirrors: Vec::new(),
                 replay_json: String::new(),
                 curl_body_limit: None,
+                range_stop: None,
                 origin_boundary: String::new(),
             },
             dir,
         )
+    }
+
+    #[test]
+    fn idle_range_worker_does_not_require_payload() {
+        let (job, dir) = temp_job("http://127.0.0.1:1", false, 4, 4);
+        let failed = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let result = range_worker(
+            2,
+            &job,
+            Arc::new(RangeScheduler::new(Vec::new(), 4)),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(RangeCheckpoints::new(Vec::new())),
+            Arc::clone(&failed),
+            Arc::clone(&stop),
+            true,
+        );
+        let error = failed.lock().unwrap().take();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(result.is_none());
+        assert!(error.is_none(), "{error:?}");
+        assert!(!stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn range_worker_honors_control_before_opening_payload() {
+        for command in ["pause", "cancel"] {
+            let (job, dir) = temp_job("http://127.0.0.1:1", false, 4, 1);
+            fs::write(&job.control, command).unwrap();
+            let scheduler = Arc::new(RangeScheduler::new(vec![WorkRange { start: 0, end: 3 }], 1));
+            let failed = Arc::new(Mutex::new(None));
+            let stop = Arc::new(AtomicBool::new(false));
+            let result = range_worker(
+                0,
+                &job,
+                Arc::clone(&scheduler),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(RangeCheckpoints::new(Vec::new())),
+                Arc::clone(&failed),
+                Arc::clone(&stop),
+                true,
+            );
+            let error = failed.lock().unwrap().take();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(result.is_none());
+            assert!(
+                matches!(
+                    (&error, command),
+                    (Some(EngineErrorCode::Pause), "pause")
+                        | (Some(EngineErrorCode::Cancel), "cancel")
+                ),
+                "{error:?}"
+            );
+            assert!(stop.load(Ordering::SeqCst));
+            assert_eq!(scheduler.pending.lock().unwrap().len(), 1);
+            assert!(scheduler.active.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn range_worker_open_failure_releases_claim() {
+        let (job, dir) = temp_job("http://127.0.0.1:1", false, 4, 1);
+        let scheduler = Arc::new(RangeScheduler::new(vec![WorkRange { start: 0, end: 3 }], 1));
+        let failed = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let result = range_worker(
+            0,
+            &job,
+            Arc::clone(&scheduler),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(RangeCheckpoints::new(Vec::new())),
+            Arc::clone(&failed),
+            Arc::clone(&stop),
+            true,
+        );
+        let error = failed.lock().unwrap().take();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(result.is_none());
+        assert!(matches!(error, Some(EngineErrorCode::Failed(_))));
+        assert!(stop.load(Ordering::SeqCst));
+        assert!(
+            scheduler.is_idle(),
+            "failed worker retained its range claim"
+        );
+    }
+
+    #[test]
+    fn range_worker_stops_an_active_response_without_losing_the_terminal_reason() {
+        for command in ["run", "pause", "cancel"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let (job, dir) = temp_job(&url, false, 65536, 1);
+            fs::write(&job.output, []).unwrap();
+            let scheduler = Arc::new(RangeScheduler::new(
+                vec![WorkRange {
+                    start: 0,
+                    end: 65535,
+                }],
+                1,
+            ));
+            let downloaded = Arc::new(AtomicU64::new(0));
+            let failed = Arc::new(Mutex::new(None));
+            let stop = Arc::new(AtomicBool::new(false));
+            let server_stop = Arc::clone(&stop);
+            let server_failed = Arc::clone(&failed);
+            let control = job.control.clone();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                // The request is already active; stop before making its body available.
+                if command == "run" {
+                    *server_failed.lock().unwrap() =
+                        Some(EngineErrorCode::Failed("peer HTTP 403".into()));
+                } else {
+                    fs::write(control, command).unwrap();
+                }
+                server_stop.store(true, Ordering::SeqCst);
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(b"HTTP/1.1 206 Partial Content\r\nETag: \"native-test\"\r\nContent-Range: bytes 0-65535/65536\r\nContent-Length: 65536\r\nConnection: close\r\n\r\n");
+                let _ = stream.write_all(&vec![7u8; 65536]);
+            });
+            let response = range_worker(
+                0,
+                &job,
+                Arc::clone(&scheduler),
+                Arc::clone(&downloaded),
+                Arc::new(RangeCheckpoints::new(Vec::new())),
+                Arc::clone(&failed),
+                Arc::clone(&stop),
+                true,
+            );
+            server.join().unwrap();
+            let error = failed.lock().unwrap().take();
+            let output = fs::read(&job.output).unwrap();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(response.is_none());
+            assert!(scheduler.is_idle());
+            assert_eq!(
+                downloaded.load(Ordering::SeqCst),
+                0,
+                "{command}: stopped response was consumed"
+            );
+            assert!(output.is_empty(), "{command}: stopped response was written");
+            assert!(
+                match (&error, command) {
+                    (Some(EngineErrorCode::Failed(message)), "run") => message == "peer HTTP 403",
+                    (Some(EngineErrorCode::Pause), "pause")
+                    | (Some(EngineErrorCode::Cancel), "cancel") => true,
+                    _ => false,
+                },
+                "{command}: {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -4484,12 +5067,12 @@ mod tests {
                 let error = result.err().expect("oversized headers must be rejected");
                 assert!(error.to_string().contains("response headers truncated"));
             } else {
-                let (status, _, _, length, etag, _, _, mut body) = result.unwrap();
-                assert_eq!(status, 200);
-                assert_eq!(length, Some(payload.len() as u64));
-                assert_eq!(etag, "\"boundary\"");
+                let mut response = result.unwrap();
+                assert_eq!(response.status, 200);
+                assert_eq!(response.content_length, Some(payload.len() as u64));
+                assert_eq!(response.etag, "\"boundary\"");
                 let mut received = Vec::new();
-                body.read_to_end(&mut received).unwrap();
+                response.body.read_to_end(&mut received).unwrap();
                 assert_eq!(received, payload, "delimiter at {delimiter_at}");
             }
             server.join().unwrap();
@@ -4520,6 +5103,111 @@ mod tests {
         let error = run_job(&job).unwrap_err().to_string();
         assert!(error.contains("response body length mismatch"), "{error}");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sequential_partial_response_requires_the_complete_tail() {
+        for (range, body, length, resume, total, succeeds) in [
+            ("0-3/10", "abcd", Some(4), 0, 10, false),
+            ("0-3/10", "abcd", Some(4), 0, 0, false),
+            ("4-5/10", "ef", Some(2), 4, 10, false),
+            ("0-3/10", "abcd", None, 0, 10, false),
+            ("0-9/10", "abcdefghij", Some(10), 0, 10, true),
+            ("4-9/10", "efghij", Some(6), 4, 10, true),
+            ("0-9/10", "abcd", Some(4), 0, 10, false),
+            ("0-9/10", "abcd", None, 0, 0, false),
+            ("0-9/10", "abcdefghij", None, 0, 0, true),
+            ("0-3/*", "abcd", Some(4), 0, 0, false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let length = length
+                    .map(|n| format!("Content-Length: {n}\r\n"))
+                    .unwrap_or_default();
+                let reply = format!("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {range}\r\n{length}Connection: close\r\n\r\n{body}");
+                let _ = reader.get_mut().write_all(reply.as_bytes());
+            });
+            let (mut job, dir) = temp_job(&url, true, total, 1);
+            job.resume_from = resume;
+            if resume > 0 {
+                fs::write(&job.output, b"abcd").unwrap();
+            }
+            let result = download_sequential(&job, None);
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), succeeds, "{range}: {result:?}");
+            if succeeds {
+                assert_eq!(fs::read(&job.output).unwrap(), b"abcdefghij");
+            }
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn empty_resource_probe_falls_back_to_an_unranged_get() {
+        for total in [0, 8] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                for attempt in 0..if total == 0 { 2 } else { 1 } {
+                    let (stream, _) = loop {
+                        match listener.accept() {
+                            Ok(connection) => break connection,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(
+                                    Instant::now() < deadline,
+                                    "expected request did not arrive"
+                                );
+                                thread::sleep(Duration::from_millis(10));
+                            }
+                            Err(error) => panic!("accept failed: {error}"),
+                        }
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut request = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        request.push_str(&line);
+                    }
+                    let reply = if attempt == 0 {
+                        assert!(request.to_lowercase().contains("range: bytes=0-0"));
+                        format!("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    } else {
+                        assert!(!request.to_lowercase().contains("range:"));
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+                    };
+                    reader.get_mut().write_all(reply.as_bytes()).unwrap();
+                }
+            });
+            let (mut job, dir) = temp_job(&url, false, 0, 1);
+            job.etag.clear();
+            let result = run_job(&job);
+            server.join().unwrap();
+            assert_eq!(result.is_ok(), total == 0, "{result:?}");
+            if total == 0 {
+                assert_eq!(fs::metadata(&job.output).unwrap().len(), 0);
+            }
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     #[test]
@@ -4677,7 +5365,7 @@ mod tests {
 
     #[test]
     fn stalled_http_headers_body_and_chunked_reads_can_stop() {
-        stalled_transport_reads_can_stop(false);
+        stalled_transport_reads_can_stop(false, &["pause", "cancel"]);
     }
 
     #[cfg(windows)]
@@ -4685,13 +5373,20 @@ mod tests {
     #[ignore = "Run explicitly in Windows Sandbox"]
     fn winhttp_stalled_headers_body_and_chunked_reads_can_stop() {
         assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
-        stalled_transport_reads_can_stop(true);
+        stalled_transport_reads_can_stop(true, &["pause", "cancel"]);
     }
 
-    fn stalled_transport_reads_can_stop(via_proxy: bool) {
+    #[test]
+    fn shared_range_stop_interrupts_stalled_transports_and_preserves_pause() {
+        stalled_transport_reads_can_stop(false, &["worker_stop", "worker_pause"]);
+        #[cfg(windows)]
+        stalled_transport_reads_can_stop(true, &["worker_stop", "worker_pause"]);
+    }
+
+    fn stalled_transport_reads_can_stop(via_proxy: bool, actions: &[&str]) {
         use std::sync::mpsc;
         for phase in ["headers", "body", "chunked"] {
-            for action in ["pause", "cancel"] {
+            for &action in actions {
                 let listener = TcpListener::bind("127.0.0.1:0").unwrap();
                 let addr = listener.local_addr().unwrap();
                 let (ready_tx, ready_rx) = mpsc::channel();
@@ -4719,6 +5414,8 @@ mod tests {
                     let _ = release_rx.recv();
                 });
                 let (mut job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+                let shared_stop = Arc::new(AtomicBool::new(false));
+                job.range_stop = Some(Arc::clone(&shared_stop));
                 if via_proxy {
                     job.proxy = format!("http://{addr}");
                     job.url = "http://hls-control.example/media.bin".into();
@@ -4741,7 +5438,14 @@ mod tests {
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
-                fs::write(&job.control, action).unwrap();
+                if action.starts_with("worker_") {
+                    if action == "worker_pause" {
+                        fs::write(&job.control, "pause").unwrap();
+                    }
+                    shared_stop.store(true, Ordering::SeqCst);
+                } else {
+                    fs::write(&job.control, action).unwrap();
+                }
                 let result = done_rx.recv_timeout(Duration::from_secs(3));
                 let _ = release_tx.send(());
                 server.join().unwrap();
@@ -4752,7 +5456,8 @@ mod tests {
                 assert!(
                     matches!(
                         (&error, action),
-                        (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")
+                        (EngineError::Pause, "pause" | "worker_pause")
+                            | (EngineError::Cancel, "cancel" | "worker_stop")
                     ),
                     "{phase}/{action}: {error}"
                 );
@@ -5434,6 +6139,7 @@ mod tests {
         body: &'static [u8],
         attempts: Arc<AtomicUsize>,
         payload_bytes: Arc<AtomicU64>,
+        retry_times: Arc<Mutex<Vec<Instant>>>,
     ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -5458,10 +6164,11 @@ mod tests {
                     }
                 }
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                retry_times.lock().unwrap().push(Instant::now());
                 let mut stream = reader.into_inner();
                 if attempt < 2 {
                     let _ = stream.write_all(
-                        b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     );
                     continue;
                 }
@@ -5478,6 +6185,9 @@ mod tests {
                 );
                 let _ = stream.write_all(header.as_bytes());
                 let _ = stream.write_all(slice);
+                if payload_bytes.load(Ordering::SeqCst) >= body.len() as u64 {
+                    break;
+                }
             }
         });
         format!("http://127.0.0.1:{}", addr.port())
@@ -5582,6 +6292,7 @@ mod tests {
             mirrors: Vec::new(),
             replay_json: String::new(),
             curl_body_limit: None,
+            range_stop: None,
             origin_boundary: String::new(),
         };
         assert_eq!(request_method(&job), "GET");
@@ -5632,15 +6343,72 @@ mod tests {
         );
         let attempts = Arc::new(AtomicUsize::new(0));
         let payload_bytes = Arc::new(AtomicU64::new(0));
-        let url =
-            serve_transient_429_ranges(body, Arc::clone(&attempts), Arc::clone(&payload_bytes));
-        let (job, dir) = temp_job(&url, false, body.len() as u64, 4);
+        let retry_times = Arc::new(Mutex::new(Vec::new()));
+        let url = serve_transient_429_ranges(
+            body,
+            Arc::clone(&attempts),
+            Arc::clone(&payload_bytes),
+            Arc::clone(&retry_times),
+        );
+        let (job, dir) = temp_job(&url, false, body.len() as u64, 1);
 
         run_job(&job).unwrap();
 
         assert_eq!(fs::read(&job.output).unwrap(), body);
         assert!(attempts.load(Ordering::SeqCst) >= 6);
         assert_eq!(payload_bytes.load(Ordering::SeqCst), body.len() as u64);
+        let times = retry_times.lock().unwrap();
+        assert!(times[1].duration_since(times[0]) >= Duration::from_secs(1));
+        assert!(times[2].duration_since(times[1]) >= Duration::from_secs(1));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shared_retry_deadline_never_shortens_and_remains_interruptible() {
+        let (job, dir) = temp_job("http://127.0.0.1/fixture", false, 1, 1);
+        let scheduler = RangeScheduler::new(Vec::new(), 2);
+        scheduler.defer_requests(Duration::from_secs(60));
+        let deadline = *scheduler.retry_not_before.lock().unwrap();
+        scheduler.defer_requests(Duration::from_secs(1));
+        assert_eq!(*scheduler.retry_not_before.lock().unwrap(), deadline);
+        let stop = AtomicBool::new(false);
+        for shared_stop in [false, true] {
+            stop.store(shared_stop, Ordering::SeqCst);
+            fs::write(&job.control, "pause").unwrap();
+            assert!(matches!(
+                scheduler.wait_for_request(&job, &stop),
+                Err(EngineErrorCode::Pause)
+            ));
+            assert!(matches!(
+                wait_before_range_retry(&job, &stop, 1),
+                Err(EngineErrorCode::Pause)
+            ));
+            fs::write(&job.control, "cancel").unwrap();
+            assert!(matches!(
+                scheduler.wait_for_request(&job, &stop),
+                Err(EngineErrorCode::Cancel)
+            ));
+            assert!(matches!(
+                wait_before_range_retry(&job, &stop, 1),
+                Err(EngineErrorCode::Cancel)
+            ));
+        }
+        fs::write(&job.control, "run").unwrap();
+        assert!(matches!(
+            scheduler.wait_for_request(&job, &stop),
+            Err(EngineErrorCode::Cancel)
+        ));
+        assert!(matches!(
+            wait_before_range_retry(&job, &stop, 1),
+            Err(EngineErrorCode::Cancel)
+        ));
+        assert_eq!(
+            parse_header_meta("Retry-After: 12\r\n").retry_after,
+            Some(Duration::from_secs(12))
+        );
+        assert!(parse_header_meta("Retry-After: invalid\r\n")
+            .retry_after
+            .is_none());
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -5983,6 +6751,206 @@ mod tests {
         run_job(&job).unwrap();
         assert_eq!(fs::read(&job.output).unwrap(), body);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn range_worker_preserves_the_only_full_download_response() {
+        for (known_length, connections) in [(true, 1), (false, 1), (true, 2), (false, 2)] {
+            let body: Vec<u8> = (0..192 * 1024).map(|index| (index % 251) as u8).collect();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!(
+                "http://{}/export?token=a%2Fb+z",
+                listener.local_addr().unwrap()
+            );
+            let served = body.clone();
+            let server = thread::spawn(move || {
+                let mut responses = Vec::new();
+                let mut requests = Vec::new();
+                // All workers reach the server before any can stop its peers.
+                for _ in 0..connections {
+                    let (stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut request = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        request.push_str(&line);
+                    }
+                    requests.push(request);
+                    responses.push(reader.into_inner());
+                }
+                drop(listener);
+                let length = if known_length {
+                    format!("Content-Length: {}\r\n", served.len())
+                } else {
+                    String::new()
+                };
+                for mut response in responses {
+                    let _ = write!(response,
+                        "HTTP/1.1 200 OK\r\n{length}ETag: \"native-test\"\r\nConnection: close\r\n\r\n");
+                    let _ = response.write_all(&served);
+                }
+                requests
+            });
+            // Known length and a strong validator skip the initial Range probe.
+            let (mut job, dir) = temp_job(&url, false, body.len() as u64, connections);
+            job.headers
+                .insert("Authorization".into(), "Bearer one-use".into());
+            let result = run_job(&job);
+            let requests = server.join().unwrap();
+            let output = fs::read(&job.output).ok();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(
+                result.is_ok(),
+                "known_length={known_length}, connections={connections}: {result:?}"
+            );
+            assert_eq!(output.as_deref(), Some(body.as_slice()));
+            assert_eq!(requests.len(), connections);
+            assert!(requests.iter().any(|request| request
+                .to_ascii_lowercase()
+                .contains("range: bytes=0-65535\r\n")));
+            for request in requests {
+                assert!(request.starts_with("GET /export?token=a%2Fb+z HTTP/1.1\r\n"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer one-use\r\n"));
+            }
+        }
+    }
+
+    #[test]
+    fn range_worker_full_response_rejects_changed_validators() {
+        for etag in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nETag: \"changed\"\r\nLast-Modified: Wed, 04 Nov 2026 00:00:00 GMT\r\nConnection: close\r\n\r\nnew!");
+            });
+            let (mut job, dir) = temp_job(&url, false, 4, 1);
+            if !etag {
+                job.etag.clear();
+                job.last_modified = "Tue, 03 Nov 2026 00:00:00 GMT".into();
+            }
+            let result = run_job(&job);
+            server.join().unwrap();
+            let output = fs::read(&job.output).unwrap();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(
+                matches!(result, Err(EngineError::RangeUnsupported(_))),
+                "{result:?}"
+            );
+            assert_eq!(output, vec![0; 4]);
+        }
+    }
+
+    #[test]
+    fn range_worker_full_response_honors_pause_and_cancel() {
+        for command in ["pause", "cancel"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let (job, dir) = temp_job(&url, false, 4, 1);
+            let control = job.control.clone();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                fs::write(control, command).unwrap();
+                let _ = reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nETag: \"native-test\"\r\nConnection: close\r\n\r\nbody");
+            });
+            let result = run_job(&job);
+            server.join().unwrap();
+            let output = fs::read(&job.output).unwrap();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(
+                matches!(
+                    (&result, command),
+                    (Err(EngineError::Pause), "pause") | (Err(EngineError::Cancel), "cancel")
+                ),
+                "{result:?}"
+            );
+            assert_eq!(output, vec![0; 4]);
+        }
+    }
+
+    #[test]
+    fn non_range_probe_preserves_the_only_download_response() {
+        for known_length in [true, false] {
+            let body: Vec<u8> = (0..192 * 1024).map(|index| (index % 251) as u8).collect();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!(
+                "http://{}/export?token=a%2Fb+z",
+                listener.local_addr().unwrap()
+            );
+            let served = body.clone();
+            // The endpoint disappears after its first response, like a consumed token.
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                let length = if known_length {
+                    format!("Content-Length: {}\r\n", served.len())
+                } else {
+                    String::new()
+                };
+                let _ = write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 200 OK\r\n{length}Connection: close\r\n\r\n"
+                );
+                let _ = reader.get_mut().write_all(&served);
+                request
+            });
+            let (mut job, dir) = temp_job(&url, false, 0, 4);
+            job.etag.clear();
+            job.headers
+                .insert("Authorization".into(), "Bearer one-use".into());
+            let result = run_job(&job);
+            let request = server.join().unwrap();
+            let output = fs::read(&job.output).ok();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(result.is_ok(), "known_length={known_length}: {result:?}");
+            assert_eq!(output.as_deref(), Some(body.as_slice()));
+            assert!(request.starts_with("GET /export?token=a%2Fb+z HTTP/1.1\r\n"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("range: bytes=0-0\r\n"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer one-use\r\n"));
+        }
     }
 
     #[test]

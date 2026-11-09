@@ -1,0 +1,85 @@
+import { LineEdit, ComboBox, CheckBox } from "std-widgets.slint";
+import { Tokens, HotButton, FieldLabel } from "theme.slint";
+import { WorkbenchButton } from "workbench_components.slint";
+
+export struct SiteRuleRow {
+    host: string, enabled: bool, concurrency: string, speed: string,
+    proxy-mode: string, proxy: string, directory: string, user-agent: string,
+    referer: string, origin: string, has-credential: bool,
+}
+
+export component SiteRulesEditor inherits VerticalLayout {
+    in property <[SiteRuleRow]> rows;
+    in property <bool> enabled: true;
+    in-out property <int> expanded: 0;
+    callback edited(int, string, string);
+    callback action(int, string);
+    spacing: 12px;
+    HorizontalLayout {
+        Text { text: "按站点下载规则"; color: Tokens.ink; font-size: 15px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+        WorkbenchButton { label: "添加规则"; icon: "new"; outlined: true; enabled: root.enabled && root.rows.length < 100;
+            clicked => { root.expanded = root.rows.length; root.action(-1, "add"); }
+        }
+    }
+    Text { text: "从上到下第一条匹配规则生效；浏览器任务优先沿用实际页面请求。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
+    if root.rows.length == 0: Rectangle {
+        height: 78px; background: Tokens.surface; border-radius: 10px; border-width: 1px; border-color: Tokens.line;
+        Text { text: "尚无站点规则，使用全局下载设置"; color: Tokens.faint; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    for rule[index] in root.rows: Rectangle {
+        background: Tokens.surface; border-radius: 10px; border-width: 1px; border-color: Tokens.line;
+        VerticalLayout {
+            padding: 14px; spacing: 12px;
+            HorizontalLayout {
+                spacing: 6px;
+                CheckBox { checked <=> rule.enabled; enabled: root.enabled; accessible-label: "启用站点规则"; toggled => { root.edited(index, "enabled", self.checked ? "true" : "false"); } }
+                Text { text: rule.host == "" ? "新站点规则" : rule.host; color: Tokens.ink; font-size: 13px; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                WorkbenchButton { label: root.expanded == index ? "收起规则" : "编辑规则"; icon: root.expanded == index ? "up" : "down"; icon-only: true; enabled: root.enabled; clicked => { root.expanded = root.expanded == index ? -1 : index; } }
+                WorkbenchButton { label: "规则上移"; icon: "up"; icon-only: true; enabled: root.enabled && index > 0; clicked => { root.expanded = index - 1; root.action(index, "up"); } }
+                WorkbenchButton { label: "规则下移"; icon: "down"; icon-only: true; enabled: root.enabled && index + 1 < root.rows.length; clicked => { root.expanded = index + 1; root.action(index, "down"); } }
+                WorkbenchButton { label: "移除规则"; icon: "delete"; icon-only: true; danger: true; enabled: root.enabled; clicked => { root.action(index, "remove"); } }
+            }
+            if root.expanded == index: VerticalLayout {
+                spacing: 10px;
+                FieldLabel { label: "站点域名"; }
+                LineEdit { text <=> rule.host; height: Tokens.control-height; placeholder-text: "example.com 或 *.example.com"; accessible-label: "规则域名"; enabled: root.enabled; edited(value) => { root.edited(index, "host", value); } }
+                HorizontalLayout {
+                    spacing: 12px;
+                    VerticalLayout {
+                        spacing: 6px; FieldLabel { label: "并发连接（0 跟随全局）"; }
+                        LineEdit { text <=> rule.concurrency; height: Tokens.control-height; accessible-label: "规则并发连接"; enabled: root.enabled; edited(value) => { root.edited(index, "concurrency", value); } }
+                    }
+                    VerticalLayout {
+                        spacing: 6px; FieldLabel { label: "限速 KiB/s（0 不限制）"; }
+                        LineEdit { text <=> rule.speed; height: Tokens.control-height; accessible-label: "规则限速"; enabled: root.enabled; edited(value) => { root.edited(index, "speed", value); } }
+                    }
+                }
+                FieldLabel { label: "代理"; }
+                ComboBox {
+                    model: ["跟随全局", "直连", "系统代理", "手动代理"];
+                    current-index: rule.proxy-mode == "manual" ? 3 : rule.proxy-mode == "system" ? 2 : rule.proxy-mode == "direct" ? 1 : 0;
+                    height: Tokens.control-height; enabled: root.enabled;
+                    selected(value) => { root.edited(index, "proxy_mode", self.current-index == 3 ? "manual" : self.current-index == 2 ? "system" : self.current-index == 1 ? "direct" : ""); }
+                }
+                if rule.proxy-mode == "manual": LineEdit { text <=> rule.proxy; height: Tokens.control-height; placeholder-text: "http://… 或 socks5://…"; accessible-label: "规则代理地址"; enabled: root.enabled; edited(value) => { root.edited(index, "proxy", value); } }
+                FieldLabel { label: "保存目录（留空跟随分类）"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit { text <=> rule.directory; height: Tokens.control-height; accessible-label: "规则保存目录"; enabled: root.enabled; edited(value) => { root.edited(index, "directory", value); } }
+                    HotButton { label: "浏览…"; icon: "folder"; enabled: root.enabled; clicked => { root.action(index, "folder"); } }
+                }
+                FieldLabel { label: "Referer"; }
+                LineEdit { text <=> rule.referer; height: Tokens.control-height; enabled: root.enabled; accessible-label: "规则 Referer"; edited(value) => { root.edited(index, "referer", value); } }
+                FieldLabel { label: "Origin"; }
+                LineEdit { text <=> rule.origin; height: Tokens.control-height; enabled: root.enabled; accessible-label: "规则 Origin"; edited(value) => { root.edited(index, "origin", value); } }
+                FieldLabel { label: "User-Agent"; }
+                LineEdit { text <=> rule.user-agent; height: Tokens.control-height; enabled: root.enabled; accessible-label: "规则 User-Agent"; edited(value) => { root.edited(index, "user_agent", value); } }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: rule.has-credential ? "已安全保存登录信息" : "尚未保存登录信息"; color: Tokens.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                    HotButton { label: "管理登录信息"; icon: "security"; enabled: root.enabled; clicked => { root.action(index, "credentials"); } }
+                }
+            }
+        }
+    }
+}

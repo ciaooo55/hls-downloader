@@ -1,0 +1,99 @@
+import { ScrollView, LineEdit, CheckBox, ComboBox } from "std-widgets.slint";
+import { Tokens, HotButton, FieldLabel } from "theme.slint";
+import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { NavigationItem, WorkbenchButton } from "workbench_components.slint";
+
+export component QueueWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: "下载队列"; background: Tokens.canvas;
+    default-font-family: Tokens.type-face; default-font-size: 13px;
+    preferred-width: 780px; preferred-height: 640px; min-width: 640px; min-height: 360px;
+    in property <[string]> profiles;
+    in-out property <int> selected;
+    in-out property <string> queue-name;
+    in-out property <string> priority;
+    in-out property <string> max-active;
+    in-out property <string> speed-limit;
+    in-out property <bool> queue-enabled;
+    in-out property <bool> schedule-enabled;
+    in-out property <string> start-time;
+    in-out property <string> stop-time;
+    in-out property <string> active-days;
+    in-out property <string> completion-action;
+    in property <bool> can-remove;
+    in property <bool> can-assign;
+    in property <bool> busy;
+    in property <string> status;
+    callback select-profile(int);
+    callback action(string);
+    VerticalLayout {
+        spacing: 0px;
+        DialogHeader { heading: "下载队列"; description: "独立管理优先级、连接、限速与执行时间"; icon: "queue"; }
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: 180px; background: Tokens.rail;
+                VerticalLayout {
+                padding: 12px; spacing: 10px;
+                ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    viewport-width: self.width;
+                    VerticalLayout {
+                        spacing: 4px;
+                        for name[index] in root.profiles: NavigationItem {
+                            label: name; icon: "queue"; active: index == root.selected; show-count: false; enabled: !root.busy;
+                            clicked => { root.select-profile(index); }
+                        }
+                    }
+                }
+                WorkbenchButton { label: "新建队列"; icon: "new"; outlined: true; enabled: !root.busy; clicked => { root.action("add"); } }
+                HorizontalLayout {
+                    spacing: 8px;
+                    WorkbenchButton { label: "上移队列"; icon: "up"; icon-only: true; outlined: true; enabled: !root.busy && root.selected > 0; clicked => { root.action("up"); } }
+                    WorkbenchButton { label: "下移队列"; icon: "down"; icon-only: true; outlined: true; enabled: !root.busy && root.selected < root.profiles.length - 1; clicked => { root.action("down"); } }
+                }
+                HotButton { label: "删除队列"; icon: "delete"; danger: true; enabled: !root.busy && root.can-remove; clicked => { root.action("remove"); } }
+                }
+            }
+            Rectangle { width: 1px; background: Tokens.line; }
+            ScrollView {
+                horizontal-scrollbar-policy: always-off;
+                viewport-width: self.width;
+                enabled: !root.busy;
+                VerticalLayout {
+                    padding: 20px; spacing: 12px;
+                    Text { text: "队列设置"; color: Tokens.ink; font-size: 16px; font-weight: 600; }
+                    FieldLabel { label: "队列名称"; }
+                    LineEdit { text <=> root.queue-name; height: Tokens.control-height; accessible-label: "队列名称"; }
+                    CheckBox { text: "启用队列"; checked <=> root.queue-enabled; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "优先级 -100 至 100"; } LineEdit { text <=> root.priority; height: Tokens.control-height; } }
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "活动任务 1 至 64"; } LineEdit { text <=> root.max-active; height: Tokens.control-height; } }
+                    }
+                    FieldLabel { label: "队列总限速 KiB/s（0 不限制）"; }
+                    LineEdit { text <=> root.speed-limit; height: Tokens.control-height; }
+                    Rectangle { height: 1px; background: Tokens.line; }
+                    Text { text: "时间与完成动作"; color: Tokens.ink; font-size: 15px; font-weight: 600; }
+                    CheckBox { text: "启用时间表"; checked <=> root.schedule-enabled; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "开始 HH:mm"; } LineEdit { text <=> root.start-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "停止 HH:mm"; } LineEdit { text <=> root.stop-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
+                    }
+                    FieldLabel { label: "生效星期（周一为 1，以逗号分隔）"; }
+                    LineEdit { text <=> root.active-days; height: Tokens.control-height; }
+                    FieldLabel { label: "队列全部完成后"; }
+                    ComboBox { model: ["无操作", "关机", "睡眠", "休眠", "退出程序"]; current-value <=> root.completion-action; height: Tokens.control-height; }
+                    Text { text: "仅在队列中的任务全部成功后触发，执行前可取消。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
+                }
+            }
+        }
+        DialogFooter {
+            status: root.status;
+            HotButton { label: "取消"; enabled: !root.busy; clicked => { root.action("close"); } }
+            if root.can-assign: HotButton { label: "保存并移动所选任务"; enabled: !root.busy; clicked => { root.action("assign"); } }
+            HotButton { label: root.busy ? "保存中…" : "保存队列"; icon: "save"; primary: true; enabled: !root.busy; clicked => { root.action("save"); } }
+        }
+    }
+}

@@ -1,377 +1,381 @@
 {
-  "schema": 1,
-  "product_version": "7.0.3",
-  "generated_from": {
-    "v3": "git:v3.0.39",
-    "v5": "git:v5.0.13",
-    "rust_core": "worktree:native_shell",
-    "compose": "worktree:desktop_ui",
-    "browser_extension": "worktree:extension",
-    "ab_reference": "git:08bfd440a30d367ae369739d866d30f8c1d4b3af"
-  },
-  "status_contract": {
-    "verified": "已记录的入口、Core命令、事件及验证均存在；须核对证据适用版本，不表示当前候选已通过全部功能验收",
-    "partial": "主要路径可用，但未达到 v3 行为或发布门禁",
-    "blocked": "缺少真实实现或发布级验证"
-  },
-  "release_ready": false,
-  "browser_takeover_acceptance": {
-    "decision_date": "2026-10-29",
-    "authority": "用户确认：可靠性交接为必过门槛，零创建按入口记录",
-    "required": [
-      "原始响应与已下载文件不丢失",
-      "同一交接不创建重复任务或并行重复下载",
-      "回执丢失、扩展及浏览器重启后按原身份恢复",
-      "拒绝、取消、离线与导入失败不误删浏览器源文件",
-      "成品长度和哈希正确，组件版本可追溯"
-    ],
-    "download_item_creation": "按入口记录原始创建事件，不再要求所有入口严格零创建；清除历史不算从未创建",
-    "response_preservation": "已发出的普通文件及音视频文件请求由浏览器保全原响应，完成后导入；点击前接管的明确链接仍由 Core 下载"
-  },
-  "release_exclusions": [
-    {
-      "feature_ids": [
-        "media.cast_dlna_chromecast",
-        "media.tvbox_push",
-        "media.cast_and_player_concurrency",
-        "browser.media_push_device_selection"
-      ],
-      "gate_ids": [
-        "browser_media_push"
-      ],
-      "reason": "用户明确要求跳过真实投屏和 TVBox 接收端验收；保留功能，但不将此次未执行的实机验证算作通过。"
-    },
-    {
-      "feature_ids": [
-        "browser.online_subtitle_translation"
-      ],
-      "gate_ids": [],
-      "reason": "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
-    }
-  ],
-  "audit_state": "v7_0_3_convergence_20261031_in_progress",
-  "current_evidence_table": "docs/validation/current-evidence.json",
-  "features": [
-    {
-      "id": "architecture.single_core",
-      "status": "verified",
-      "v3_entry": "backend task manager",
-      "compose_entry": "EnginePipeClient snapshot/events",
-      "core_command": "hello/list_tasks/wait_events",
-      "state_event": "ready/task_created/task_updated/task_progress",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "workbench.geometry",
-      "status": "verified",
-      "v3_entry": "frontend/src/App.tsx + DesktopToolbar + Sidebar + TaskTable",
-      "compose_entry": "AppShell/DesktopToolbar/Sidebar/TaskTable/ConnectionStatus",
-      "core_command": "list_tasks",
-      "state_event": "task snapshots",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "workbench.foundation_component_architecture",
-      "status": "verified",
-      "v3_entry": "custom React desktop controls",
-      "compose_entry": "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
-      "core_command": "none (rendering architecture)",
-      "state_event": "all UI states",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "tasks.selection_keyboard_queue",
-      "status": "partial",
-      "v3_entry": "TaskTable selection and queue reorder",
-      "compose_entry": "TaskTable Ctrl/Shift/keyboard/drag handle",
-      "core_command": "task_action/reorder_queue/place_queue",
-      "state_event": "task_updated",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-      "gap": "bafddff6 同包 r24 聚焦列表后 Ctrl+A 选中 8 项、Esc 清为 0；一次任务拖动未确认顺序改变，不计通过也未证实产品故障。旧 f53019e r18 任务拖动证据保留，不替代本包。完整排序/拖动及键盘组合仍开放。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
-    },
-    {
-      "id": "tasks.named_queue_profiles",
-      "status": "verified",
-      "v3_entry": "queue scheduler and queue ordering",
-      "compose_entry": "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
-      "core_command": "assign_queue/get_settings/set_settings_atomic",
-      "state_event": "task_updated/structured command result/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "tasks.details_logs_speed_connections",
-      "status": "verified",
-      "v3_entry": "TaskDetailsModal/LogModal/SpeedChart",
-      "compose_entry": "TaskDetailsDialog live task lookup",
-      "core_command": "get_task_log/task_action speed/refresh_task_request",
-      "state_event": "task_progress/task_log/toast",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "tasks.refresh_signed_url",
-      "status": "verified",
-      "v3_entry": "task URL refresh and resume",
-      "compose_entry": "TaskDetailsDialog 更新并继续",
-      "core_command": "refresh_task_request",
-      "state_event": "toast/task_updated/task_progress",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "create.protocols_and_recognition",
-      "status": "verified",
-      "v3_entry": "RecognizeDialog",
-      "compose_entry": "NewTaskDialog/ProbeResultDialog/BatchAddDialog/HarvestDialog",
-      "core_command": "probe_url/create_task/harvest_page/import_paths",
-      "state_event": "probe_result/harvest_result/task_created/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "import.file_picker_and_drop",
-      "status": "verified",
-      "v3_entry": "dropImport/importLinkPath/importTorrentPath",
-      "compose_entry": "ContentHeader import + native desktop drop target",
-      "core_command": "import_paths",
-      "state_event": "task_created/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "export.normalized_task_list",
-      "status": "verified",
-      "v3_entry": "formatTaskExport/downloadTextFile",
-      "compose_entry": "ContentHeader export",
-      "core_command": "export_tasks",
-      "state_event": "task_export",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "import.exported_task_json",
-      "status": "verified",
-      "v3_entry": "no versioned task JSON import round trip",
-      "compose_entry": "ContentHeader import / desktop drop target with .json filter",
-      "core_command": "import_paths/create_task",
-      "state_event": "task_created/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "workbench.automatic_responsive_layout",
-      "status": "partial",
-      "v3_entry": "fixed task columns and toolbar",
-      "compose_entry": "responsive task columns with persisted drag/keyboard resize; selected-task toolbar; sortable headers",
-      "core_command": "store_settings(task_column_layout); existing task_action",
-      "state_event": "task snapshots",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-      "gap": "bafddff6 同包 r24 以 1024×600 逻辑窗口、实际 125% OS 比例完成新建、设置滚动/固定保存栏、抓站固定底栏、ZIP、队列、批量及导入导出；初始小工作区使框架报告最小高度 567，不能冒充强制最小尺寸拖动通过。人工慢拖确认未绑定包哈希；100%/150%/200% OS DPI 和完整控件组合仍开放。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
-    },
-    {
-      "id": "media.hls_transfer_parity",
-      "status": "verified",
-      "v3_entry": "HLSDownloader build_task_headers / concurrent segment workers / per-segment key and map parsing / blocking LL-HLS reload",
-      "compose_entry": "NewTaskDialog and browser media handoff",
-      "core_command": "create_task/task_action/refresh_task_request",
-      "state_event": "task_progress/task_updated/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "media.local_player_controls",
-      "status": "verified",
-      "v3_entry": "VideoPlayerModal with timeline, tracks and preview",
-      "compose_entry": "LocalVideoPlayer in the main-window overlay; optional picture-in-picture reuses the same libmpv session",
-      "core_command": "play_task/player_control",
-      "state_event": "player_session",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "media.cast_dlna_chromecast",
-      "status": "verified",
-      "v3_entry": "castTask/controlCast",
-      "compose_entry": "MediaSourcePickerDialog/DevicePickerDialog/CastSessionHud",
-      "core_command": "discover_cast_devices/cast_to_device/share_media/control_cast",
-      "state_event": "cast_devices/cast_session/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "media.lan_share",
-      "status": "verified",
-      "v3_entry": "cast local file/media URL",
-      "compose_entry": "局域网播放 + 地址复制",
-      "core_command": "cast_task/share_media/control_cast stop",
-      "state_event": "cast_session.media_url",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "media.tvbox_push",
-      "status": "verified",
-      "v3_entry": "pushTaskToTvbox/pushTvboxUrl",
-      "compose_entry": "TVBox media source, dedicated device picker and Settings > 投屏与推送 > TVBox 推送",
-      "core_command": "discover_cast_devices/cast_to_device/share_media",
-      "state_event": "cast_devices/cast_session/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "media.cast_and_player_concurrency",
-      "status": "verified",
-      "v3_entry": "player and cast activity overlays",
-      "compose_entry": "LocalVideoPlayer overlay and independent CastSessionHud; local player and cast controls keep separate sessions",
-      "core_command": "player_control/control_cast",
-      "state_event": "player_session/cast_session",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "torrent.multi_file_selection",
-      "status": "verified",
-      "v3_entry": "torrent metadata and file selection",
-      "compose_entry": "TorrentSelectionDialog with tree-safe file selection",
-      "core_command": "probe_torrent/select_torrent_files/create_task",
-      "state_event": "torrent_probe_result/torrent_selection_result",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "settings.current",
-      "status": "verified",
-      "v3_entry": "SettingsPanel",
-      "compose_entry": "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
-      "core_command": "get_settings/set_settings_atomic",
-      "state_event": "structured command result/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "updates.confirmed_download",
-      "status": "verified",
-      "v3_entry": "UpdateNotice",
-      "compose_entry": "UpdateDialog/UpdatePreparedDialog",
-      "core_command": "check_update/download_update/install_update",
-      "state_event": "update_available/update_current/update_ready/update_install_started/update_install_result/error:update_failed",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "browser.request_context_replay",
-      "status": "verified",
-      "v3_entry": "request_context.source_page_identity/build_task_headers",
-      "compose_entry": "Settings > 网络 explains automatic browser identity and manual-only fallback headers",
-      "core_command": "offer_resource/create_task",
-      "state_event": "handoff_offered/task_created/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "browser.takeover_and_recovery",
-      "status": "partial",
-      "v3_entry": "BrowserExtensionDialog/handoff confirmation",
-      "compose_entry": "ExtensionDialog/HandoffDialog",
-      "core_command": "present_handoff/accept_handoff/reject_handoff",
-      "state_event": "handoff_offered/handoff_resolved/browser_status",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-      "gap": "bafddff6 同包 r21 Firefox、r23 Edge 各 11 项及 r21 两浏览器初始离线通过；源文件保留、去重、重启恢复和哈希按入口验证，DownloadItem 创建按入口记录。r21 Edge 重载等待和 r22 缺失媒体夹具的失败保留，不保证每次即时恢复；真实站点全覆盖与签名扩展升级未完成。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/README.md。"
-    },
-    {
-      "id": "browser.media_push_device_selection",
-      "status": "partial",
-      "v3_entry": "browser cast/TVBox push request",
-      "compose_entry": "MediaPushRequested event -> DevicePickerDialog -> CastSessionHud",
-      "core_command": "request_media_push/resolve_media_push/discover_cast_devices/share_media",
-      "state_event": "media_push_requested/media_push_resolved/cast_devices/cast_session/error",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-      "gap": "真实投屏/TVBox 和局域网设备验收按用户要求排除；不将其计为本轮通过。"
-    },
-    {
-      "id": "browser.hot_confirmation_process",
-      "status": "verified",
-      "v3_entry": "native confirmation window",
-      "compose_entry": "Compose HandoffDialog fallback",
-      "core_command": "present_handoff",
-      "state_event": "handoff_offered",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "browser.online_subtitle_translation",
-      "status": "partial",
-      "v3_entry": "新增在线字幕功能，参考实时音频协议与语句配对",
-      "compose_entry": "现有 WXT 插件弹窗与网页播放器字幕按钮；凭据由常驻 Rust Core 持有",
-      "core_command": "subtitle configuration/configure/start/audio/reset/poll/stop",
-      "state_event": "CorePipeResponse::Subtitle / subtitle-state",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-      "gap": "真实百炼云端准确率和延迟按用户决定暂不验收；投屏验收也排除。独立 HTTP(S) 点播音轨最多预取 30 秒；MSE/blob、DRM、无法独立读取的跨域资源及明确选中的备用音轨使用实时采集并显示原因。云端能力未标记为实测完成。"
-    },
-    {
-      "id": "accessibility.automation",
-      "status": "verified",
-      "v3_entry": "browser semantic controls",
-      "compose_entry": "keyboard and tooltip support",
-      "core_command": "none",
-      "state_event": "none",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "performance.release_thresholds",
-      "status": "verified",
-      "v3_entry": "legacy baseline",
-      "compose_entry": "virtualized LazyColumn and coalesced events",
-      "core_command": "all",
-      "state_event": "all",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "package.install_upgrade_rollback",
-      "status": "partial",
-      "v3_entry": "shipping installer",
-      "compose_entry": "build-v7 preview packaging",
-      "core_command": "engine/native host startup",
-      "state_event": "ready/browser_status",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-      "gap": "bafddff6 候选 r21 同版本运行中升级、故障回滚、64 组件、32 MiB 续传及空闲/运行中卸载通过，4 个成品卸载后保持哈希。完整便携及活动检查点补测通过，文化环境限定 en-US；完整 UI 门槛仍开放。历史 1603 与失败证据保留。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r21/。"
-    },
-    {
-      "id": "free.cli",
-      "status": "partial",
-      "v3_entry": "IDM / AB free-edition parity plan",
-      "compose_entry": "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
-      "core_command": "CoreIpcClient versioned Named Pipe; create_task_paused capability",
-      "state_event": "TaskCreated/TaskUpdated/TaskExport",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "free.crawl_sync",
-      "status": "partial",
-      "v3_entry": "IDM / AB free-edition parity plan",
-      "compose_entry": "工具 / 抓站与同步项目; CLI crawl",
-      "core_command": "crawl capability and request; ordinary CreateTask",
-      "state_event": "CrawlProject/CrawlResource; SQLite schema 6 to 7",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "free.zip_preview",
-      "status": "partial",
-      "v3_entry": "IDM / AB free-edition parity plan",
-      "compose_entry": "工具 / ZIP 内容预览; CLI zip",
-      "core_command": "preview_zip capability and request",
-      "state_event": "ZipPreview with metadata_bytes_read",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    },
-    {
-      "id": "http.active_tail_split",
-      "status": "partial",
-      "v3_entry": "IDM / AB free-edition parity plan",
-      "compose_entry": "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
-      "core_command": "existing RangeScheduler pending first, reserved read region",
-      "state_event": "existing durable range checkpoints",
-      "verification": "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
-    }
-  ],
-  "summary": {
-    "verified": 23,
-    "partial": 10,
-    "blocked": 0,
-    "total": 33
-  },
-  "free_edition_scope": {
-    "platform": "Windows x64",
-    "product_account_required": false,
-    "activation_required": false,
-    "excluded": [
-      "recording",
-      "multi_platform",
-      "driver_takeover",
-      "enterprise_auth"
-    ],
-    "current_implementation_report": "docs/validation/free-parity-20261030/README.md"
-  }
+    "schema":  1,
+    "product_version":  "7.0.4",
+    "generated_from":  {
+                           "v3":  "git:v3.0.39",
+                           "v5":  "git:v5.0.13",
+                           "rust_core":  "worktree:native_shell",
+                           "compose":  "worktree:desktop_ui",
+                           "native_ui":  "worktree:native_ui",
+                           "protocol_client":  "worktree:crates",
+                           "browser_extension":  "worktree:extension",
+                           "ab_reference":  "git:08bfd440a30d367ae369739d866d30f8c1d4b3af"
+                       },
+    "status_contract":  {
+                            "verified":  "已记录的入口、Core命令、事件及验证均存在；须核对证据适用版本，不表示当前候选已通过全部功能验收",
+                            "partial":  "主要路径可用，但未达到 v3 行为或发布门禁",
+                            "blocked":  "缺少真实实现或发布级验证"
+                        },
+    "release_ready":  false,
+    "browser_takeover_acceptance":  {
+                                        "decision_date":  "2026-10-29",
+                                        "authority":  "用户确认：可靠性交接为必过门槛，零创建按入口记录",
+                                        "required":  [
+                                                         "原始响应与已下载文件不丢失",
+                                                         "同一交接不创建重复任务或并行重复下载",
+                                                         "回执丢失、扩展及浏览器重启后按原身份恢复",
+                                                         "拒绝、取消、离线与导入失败不误删浏览器源文件",
+                                                         "成品长度和哈希正确，组件版本可追溯"
+                                                     ],
+                                        "download_item_creation":  "按入口记录原始创建事件，不再要求所有入口严格零创建；清除历史不算从未创建",
+                                        "response_preservation":  "已发出的普通文件及音视频文件请求由浏览器保全原响应，完成后导入；点击前接管的明确链接仍由 Core 下载"
+                                    },
+    "release_exclusions":  [
+                               {
+                                   "feature_ids":  [
+                                                       "media.cast_dlna_chromecast",
+                                                       "media.tvbox_push",
+                                                       "media.cast_and_player_concurrency",
+                                                       "browser.media_push_device_selection"
+                                                   ],
+                                   "gate_ids":  [
+                                                    "browser_media_push"
+                                                ],
+                                   "reason":  "用户明确要求跳过真实投屏和 TVBox 接收端验收；保留功能，但不将此次未执行的实机验证算作通过。"
+                               },
+                               {
+                                   "feature_ids":  [
+                                                       "browser.online_subtitle_translation"
+                                                   ],
+                                   "gate_ids":  [
+
+                                                ],
+                                   "reason":  "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
+                               }
+                           ],
+    "audit_state":  "v7_0_4_iteration_in_progress",
+    "current_evidence_table":  "docs/validation/current-evidence.json",
+    "features":  [
+                     {
+                         "id":  "architecture.single_core",
+                         "status":  "verified",
+                         "v3_entry":  "backend task manager",
+                         "compose_entry":  "EnginePipeClient snapshot/events",
+                         "core_command":  "hello/list_tasks/wait_events",
+                         "state_event":  "ready/task_created/task_updated/task_progress",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "workbench.geometry",
+                         "status":  "verified",
+                         "v3_entry":  "frontend/src/App.tsx + DesktopToolbar + Sidebar + TaskTable",
+                         "compose_entry":  "AppShell/DesktopToolbar/Sidebar/TaskTable/ConnectionStatus",
+                         "core_command":  "list_tasks",
+                         "state_event":  "task snapshots",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "workbench.foundation_component_architecture",
+                         "status":  "verified",
+                         "v3_entry":  "custom React desktop controls",
+                         "compose_entry":  "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
+                         "core_command":  "none (rendering architecture)",
+                         "state_event":  "all UI states",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "tasks.selection_keyboard_queue",
+                         "status":  "partial",
+                         "v3_entry":  "TaskTable selection and queue reorder",
+                         "compose_entry":  "TaskTable Ctrl/Shift/keyboard/drag handle",
+                         "core_command":  "task_action/reorder_queue/place_queue",
+                         "state_event":  "task_updated",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
+                         "gap":  "bafddff6 同包 r24 聚焦列表后 Ctrl+A 选中 8 项、Esc 清为 0；一次任务拖动未确认顺序改变，不计通过也未证实产品故障。旧 f53019e r18 任务拖动证据保留，不替代本包。完整排序/拖动及键盘组合仍开放。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
+                     },
+                     {
+                         "id":  "tasks.named_queue_profiles",
+                         "status":  "verified",
+                         "v3_entry":  "queue scheduler and queue ordering",
+                         "compose_entry":  "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
+                         "core_command":  "assign_queue/get_settings/set_settings_atomic",
+                         "state_event":  "task_updated/structured command result/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "tasks.details_logs_speed_connections",
+                         "status":  "verified",
+                         "v3_entry":  "TaskDetailsModal/LogModal/SpeedChart",
+                         "compose_entry":  "TaskDetailsDialog live task lookup",
+                         "core_command":  "get_task_log/task_action speed/refresh_task_request",
+                         "state_event":  "task_progress/task_log/toast",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "tasks.refresh_signed_url",
+                         "status":  "verified",
+                         "v3_entry":  "task URL refresh and resume",
+                         "compose_entry":  "TaskDetailsDialog 更新并继续",
+                         "core_command":  "refresh_task_request",
+                         "state_event":  "toast/task_updated/task_progress",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "create.protocols_and_recognition",
+                         "status":  "verified",
+                         "v3_entry":  "RecognizeDialog",
+                         "compose_entry":  "NewTaskDialog/ProbeResultDialog/BatchAddDialog/HarvestDialog",
+                         "core_command":  "probe_url/create_task/harvest_page/import_paths",
+                         "state_event":  "probe_result/harvest_result/task_created/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "import.file_picker_and_drop",
+                         "status":  "verified",
+                         "v3_entry":  "dropImport/importLinkPath/importTorrentPath",
+                         "compose_entry":  "ContentHeader import + native desktop drop target",
+                         "core_command":  "import_paths",
+                         "state_event":  "task_created/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "export.normalized_task_list",
+                         "status":  "verified",
+                         "v3_entry":  "formatTaskExport/downloadTextFile",
+                         "compose_entry":  "ContentHeader export",
+                         "core_command":  "export_tasks",
+                         "state_event":  "task_export",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "import.exported_task_json",
+                         "status":  "verified",
+                         "v3_entry":  "no versioned task JSON import round trip",
+                         "compose_entry":  "ContentHeader import / desktop drop target with .json filter",
+                         "core_command":  "import_paths/create_task",
+                         "state_event":  "task_created/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "workbench.automatic_responsive_layout",
+                         "status":  "partial",
+                         "v3_entry":  "fixed task columns and toolbar",
+                         "compose_entry":  "responsive task columns with persisted drag/keyboard resize; selected-task toolbar; sortable headers",
+                         "core_command":  "store_settings(task_column_layout); existing task_action",
+                         "state_event":  "task snapshots",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
+                         "gap":  "bafddff6 同包 r24 以 1024×600 逻辑窗口、实际 125% OS 比例完成新建、设置滚动/固定保存栏、抓站固定底栏、ZIP、队列、批量及导入导出；初始小工作区使框架报告最小高度 567，不能冒充强制最小尺寸拖动通过。人工慢拖确认未绑定包哈希；100%/150%/200% OS DPI 和完整控件组合仍开放。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
+                     },
+                     {
+                         "id":  "media.hls_transfer_parity",
+                         "status":  "verified",
+                         "v3_entry":  "HLSDownloader build_task_headers / concurrent segment workers / per-segment key and map parsing / blocking LL-HLS reload",
+                         "compose_entry":  "NewTaskDialog and browser media handoff",
+                         "core_command":  "create_task/task_action/refresh_task_request",
+                         "state_event":  "task_progress/task_updated/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "media.local_player_controls",
+                         "status":  "verified",
+                         "v3_entry":  "VideoPlayerModal with timeline, tracks and preview",
+                         "compose_entry":  "LocalVideoPlayer in the main-window overlay; optional picture-in-picture reuses the same libmpv session",
+                         "core_command":  "play_task/player_control",
+                         "state_event":  "player_session",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "media.cast_dlna_chromecast",
+                         "status":  "verified",
+                         "v3_entry":  "castTask/controlCast",
+                         "compose_entry":  "MediaSourcePickerDialog/DevicePickerDialog/CastSessionHud",
+                         "core_command":  "discover_cast_devices/cast_to_device/share_media/control_cast",
+                         "state_event":  "cast_devices/cast_session/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "media.lan_share",
+                         "status":  "verified",
+                         "v3_entry":  "cast local file/media URL",
+                         "compose_entry":  "局域网播放 + 地址复制",
+                         "core_command":  "cast_task/share_media/control_cast stop",
+                         "state_event":  "cast_session.media_url",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "media.tvbox_push",
+                         "status":  "verified",
+                         "v3_entry":  "pushTaskToTvbox/pushTvboxUrl",
+                         "compose_entry":  "TVBox media source, dedicated device picker and Settings \u003e 投屏与推送 \u003e TVBox 推送",
+                         "core_command":  "discover_cast_devices/cast_to_device/share_media",
+                         "state_event":  "cast_devices/cast_session/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "media.cast_and_player_concurrency",
+                         "status":  "verified",
+                         "v3_entry":  "player and cast activity overlays",
+                         "compose_entry":  "LocalVideoPlayer overlay and independent CastSessionHud; local player and cast controls keep separate sessions",
+                         "core_command":  "player_control/control_cast",
+                         "state_event":  "player_session/cast_session",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "torrent.multi_file_selection",
+                         "status":  "verified",
+                         "v3_entry":  "torrent metadata and file selection",
+                         "compose_entry":  "TorrentSelectionDialog with tree-safe file selection",
+                         "core_command":  "probe_torrent/select_torrent_files/create_task",
+                         "state_event":  "torrent_probe_result/torrent_selection_result",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "settings.current",
+                         "status":  "verified",
+                         "v3_entry":  "SettingsPanel",
+                         "compose_entry":  "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
+                         "core_command":  "get_settings/set_settings_atomic",
+                         "state_event":  "structured command result/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "updates.confirmed_download",
+                         "status":  "verified",
+                         "v3_entry":  "UpdateNotice",
+                         "compose_entry":  "UpdateDialog/UpdatePreparedDialog",
+                         "core_command":  "check_update/download_update/install_update",
+                         "state_event":  "update_available/update_current/update_ready/update_install_started/update_install_result/error:update_failed",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "browser.request_context_replay",
+                         "status":  "verified",
+                         "v3_entry":  "request_context.source_page_identity/build_task_headers",
+                         "compose_entry":  "Settings \u003e 网络 explains automatic browser identity and manual-only fallback headers",
+                         "core_command":  "offer_resource/create_task",
+                         "state_event":  "handoff_offered/task_created/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "browser.takeover_and_recovery",
+                         "status":  "partial",
+                         "v3_entry":  "BrowserExtensionDialog/handoff confirmation",
+                         "compose_entry":  "ExtensionDialog/HandoffDialog",
+                         "core_command":  "present_handoff/accept_handoff/reject_handoff",
+                         "state_event":  "handoff_offered/handoff_resolved/browser_status",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
+                         "gap":  "bafddff6 同包 r21 Firefox、r23 Edge 各 11 项及 r21 两浏览器初始离线通过；源文件保留、去重、重启恢复和哈希按入口验证，DownloadItem 创建按入口记录。r21 Edge 重载等待和 r22 缺失媒体夹具的失败保留，不保证每次即时恢复；真实站点全覆盖与签名扩展升级未完成。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/README.md。"
+                     },
+                     {
+                         "id":  "browser.media_push_device_selection",
+                         "status":  "partial",
+                         "v3_entry":  "browser cast/TVBox push request",
+                         "compose_entry":  "MediaPushRequested event -\u003e DevicePickerDialog -\u003e CastSessionHud",
+                         "core_command":  "request_media_push/resolve_media_push/discover_cast_devices/share_media",
+                         "state_event":  "media_push_requested/media_push_resolved/cast_devices/cast_session/error",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
+                         "gap":  "真实投屏/TVBox 和局域网设备验收按用户要求排除；不将其计为本轮通过。"
+                     },
+                     {
+                         "id":  "browser.hot_confirmation_process",
+                         "status":  "verified",
+                         "v3_entry":  "native confirmation window",
+                         "compose_entry":  "Compose HandoffDialog fallback",
+                         "core_command":  "present_handoff",
+                         "state_event":  "handoff_offered",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "browser.online_subtitle_translation",
+                         "status":  "partial",
+                         "v3_entry":  "新增在线字幕功能，参考实时音频协议与语句配对",
+                         "compose_entry":  "现有 WXT 插件弹窗与网页播放器字幕按钮；凭据由常驻 Rust Core 持有",
+                         "core_command":  "subtitle configuration/configure/start/audio/reset/poll/stop",
+                         "state_event":  "CorePipeResponse::Subtitle / subtitle-state",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
+                         "gap":  "真实百炼云端准确率和延迟按用户决定暂不验收；投屏验收也排除。独立 HTTP(S) 点播音轨最多预取 30 秒；MSE/blob、DRM、无法独立读取的跨域资源及明确选中的备用音轨使用实时采集并显示原因。云端能力未标记为实测完成。"
+                     },
+                     {
+                         "id":  "accessibility.automation",
+                         "status":  "verified",
+                         "v3_entry":  "browser semantic controls",
+                         "compose_entry":  "keyboard and tooltip support",
+                         "core_command":  "none",
+                         "state_event":  "none",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "performance.release_thresholds",
+                         "status":  "verified",
+                         "v3_entry":  "legacy baseline",
+                         "compose_entry":  "virtualized LazyColumn and coalesced events",
+                         "core_command":  "all",
+                         "state_event":  "all",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "package.install_upgrade_rollback",
+                         "status":  "partial",
+                         "v3_entry":  "shipping installer",
+                         "compose_entry":  "build-v7 preview packaging",
+                         "core_command":  "engine/native host startup",
+                         "state_event":  "ready/browser_status",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
+                         "gap":  "bafddff6 候选 r21 同版本运行中升级、故障回滚、64 组件、32 MiB 续传及空闲/运行中卸载通过，4 个成品卸载后保持哈希。完整便携及活动检查点补测通过，文化环境限定 en-US；完整 UI 门槛仍开放。历史 1603 与失败证据保留。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r21/。"
+                     },
+                     {
+                         "id":  "free.cli",
+                         "status":  "partial",
+                         "v3_entry":  "IDM / AB free-edition parity plan",
+                         "compose_entry":  "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
+                         "core_command":  "CoreIpcClient versioned Named Pipe; create_task_paused capability",
+                         "state_event":  "TaskCreated/TaskUpdated/TaskExport",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "free.crawl_sync",
+                         "status":  "partial",
+                         "v3_entry":  "IDM / AB free-edition parity plan",
+                         "compose_entry":  "工具 / 抓站与同步项目; CLI crawl",
+                         "core_command":  "crawl capability and request; ordinary CreateTask",
+                         "state_event":  "CrawlProject/CrawlResource; SQLite schema 6 to 7",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "free.zip_preview",
+                         "status":  "partial",
+                         "v3_entry":  "IDM / AB free-edition parity plan",
+                         "compose_entry":  "工具 / ZIP 内容预览; CLI zip",
+                         "core_command":  "preview_zip capability and request",
+                         "state_event":  "ZipPreview with metadata_bytes_read",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     },
+                     {
+                         "id":  "http.active_tail_split",
+                         "status":  "partial",
+                         "v3_entry":  "IDM / AB free-edition parity plan",
+                         "compose_entry":  "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
+                         "core_command":  "existing RangeScheduler pending first, reserved read region",
+                         "state_event":  "existing durable range checkpoints",
+                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                     }
+                 ],
+    "summary":  {
+                    "verified":  23,
+                    "partial":  10,
+                    "blocked":  0,
+                    "total":  33
+                },
+    "free_edition_scope":  {
+                               "platform":  "Windows x64",
+                               "product_account_required":  false,
+                               "activation_required":  false,
+                               "excluded":  [
+                                                "recording",
+                                                "multi_platform",
+                                                "driver_takeover",
+                                                "enterprise_auth"
+                                            ],
+                               "current_implementation_report":  "docs/validation/free-parity-20261030/README.md"
+                           }
 }

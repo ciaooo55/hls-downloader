@@ -1,0 +1,57 @@
+import { ScrollView, LineEdit, SpinBox, TextEdit } from "std-widgets.slint";
+import { Tokens, HotButton, FieldLabel } from "theme.slint";
+import { DialogHeader, DialogFooter } from "dialog_components.slint";
+
+export component DetailsWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: "任务详情与日志";
+    default-font-family: Tokens.type-face; default-font-size: 13px;
+    background: Tokens.canvas;
+    preferred-width: 800px; preferred-height: 650px; min-width: 600px; min-height: 360px;
+    in property <string> filename;
+    in property <string> status;
+    in property <string> transfer;
+    in property <string> connections;
+    in property <string> diagnostic;
+    in property <string> logs;
+    in property <[float]> speed-history;
+    in-out property <string> url;
+    in-out property <string> cookie;
+    in-out property <int> speed-limit;
+    callback action(string);
+    VerticalLayout {
+        spacing: 0px;
+        DialogHeader { heading: root.filename; description: root.status + " · " + root.transfer; icon: "details"; }
+        ScrollView {
+        horizontal-scrollbar-policy: always-off;
+        viewport-width: self.width;
+        VerticalLayout {
+        padding: 20px; spacing: 14px;
+        Rectangle {
+            height: 96px; background: Tokens.surface; border-radius: 10px; border-width: 1px; border-color: Tokens.line; clip: true;
+            Text { x: 12px; y: 8px; text: "传输速度"; color: Tokens.faint; font-size: 11px; }
+            for sample[index] in root.speed-history: Rectangle {
+                width: parent.width / max(root.speed-history.length, 1);
+                x: index * self.width; height: max(1px, (parent.height - 30px) * sample); y: parent.height - self.height;
+                background: Tokens.accent; opacity: 0.6;
+            }
+        }
+        Text { text: root.connections; color: Tokens.muted; wrap: word-wrap; }
+        if root.diagnostic != "": Text { text: root.diagnostic; color: Tokens.warn; wrap: word-wrap; }
+        FieldLabel { label: "下载地址"; }
+        LineEdit { text <=> root.url; height: Tokens.control-height; accessible-label: "下载地址"; }
+        FieldLabel { label: "更新请求身份"; }
+        HorizontalLayout { spacing: 8px; LineEdit { text <=> root.cookie; height: Tokens.control-height; input-type: password; placeholder-text: "新 Cookie（可选）"; accessible-label: "新 Cookie"; } HotButton { label: "更新并继续"; icon: "retry"; clicked => { root.action("refresh_url"); } } }
+        HorizontalLayout { spacing: 8px; FieldLabel { label: "限速 KiB/s"; } SpinBox { value <=> root.speed-limit; minimum: 0; maximum: 1000000; height: Tokens.control-height; } HotButton { label: "应用"; icon: "check"; clicked => { root.action("speed"); } } }
+        HorizontalLayout { Text { text: "任务日志"; color: Tokens.ink; font-size: 15px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; } HotButton { label: "刷新日志"; icon: "refresh"; clicked => { root.action("logs"); } } }
+        TextEdit { text: root.logs; read-only: true; min-height: 160px; preferred-height: 200px; accessible-label: "任务日志"; }
+        }
+        }
+        DialogFooter {
+            HotButton { label: "打开位置"; icon: "folder"; clicked => { root.action("folder"); } }
+            HotButton { label: "种子文件"; icon: "torrent"; clicked => { root.action("torrent"); } }
+            HotButton { label: "保存站点配置"; icon: "save"; clicked => { root.action("profile"); } }
+            HotButton { label: "关闭"; clicked => { root.action("close"); } }
+        }
+    }
+}

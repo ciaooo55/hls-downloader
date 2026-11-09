@@ -1,0 +1,23 @@
+//! IPC and Windows helpers for clients that never own download state.
+pub use hls_protocol::*;
+pub mod core_ipc;
+pub mod core_spawn;
+pub mod credential_vault;
+pub mod file_transfer;
+pub mod instance;
+pub mod media_ext;
+pub mod profile_paths;
+pub mod request_validation;
+pub mod runtime_log;
+pub mod tray;
+pub mod update_install;
+pub mod window_util;
+pub use core_ipc::*;
+pub use core_spawn::*;
+pub use credential_vault::CredentialVault;
+pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
+pub use media_ext::download_category;
+pub use profile_paths::{default_v7_database_path, default_v7_download_dir};
+pub use runtime_log::{init_runtime_log, record_runtime_log};
+pub use tray::{completion_sound, show_notification, spawn_tray, TrayAction};
+pub use window_util::*;

@@ -35,7 +35,7 @@ function Stop-V7Processes([string]$Root) {
 }
 function Assert-AppImage([string]$Root) {
     $identities = @{}
-    foreach ($name in @('HLSDownloader.exe','app','runtime')) {
+    foreach ($name in @('HLSDownloader.exe','app')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $name))) { throw "v7 portable image is missing ${name}: $Root" }
     }
     $provenancePath = Join-Path $Root 'app\resources\BUILD-PROVENANCE.json'
@@ -45,6 +45,12 @@ function Assert-AppImage([string]$Root) {
         throw "v7 portable image is missing provenance or feature parity: $Root"
     }
     $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$provenance.ui_runtime -ne 'native' -and -not (Test-Path -LiteralPath (Join-Path $Root 'runtime'))) {
+        throw "v7 Compose portable image is missing runtime: $Root"
+    }
+    if ([string]$provenance.ui_runtime -eq 'native' -and -not (Test-Path -LiteralPath (Join-Path $Root 'app\resources\HLSDownloaderPresenter.exe') -PathType Leaf)) {
+        throw "v7 native portable image is missing its UI: $Root"
+    }
     $productVersion = [string](Get-Content -LiteralPath $featureParityPath -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
     if ([int]$provenance.schema -ne 1 -or
         [string]$provenance.product_version -ne $productVersion -or

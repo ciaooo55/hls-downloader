@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -29,11 +30,17 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.support.ui import WebDriverWait
 
 
 EDGE_CANDIDATES = (
     Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+)
+MEDIA_MODES = (
+    "direct", "dual-source", "srcdoc", "shadow", "geometry", "dynamic-shadow", "iframe", "cross-iframe",
+    "ad-direct", "spa", "mse", "mse-sliced", "mse-encrypted", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+    "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
 )
 FIREFOX_CANDIDATES = (
     Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"),
@@ -67,6 +74,29 @@ class QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(payload)
         else:
             super().do_GET()
+
+
+@contextlib.contextmanager
+def browser_workspace(parent: Path):
+    """Keep a cleanup failure from discarding completed browser assertions."""
+    root = Path(tempfile.mkdtemp(prefix="hls-extension-smoke-", dir=parent)).resolve()
+    cleanup = {"complete": False, "path": str(root)}
+    try:
+        yield root, cleanup
+    finally:
+        # Edge's BITS files can stay locked briefly after WebDriver has quit.
+        # This directory was created here, inside the designated test workspace.
+        for attempt in range(5):
+            try:
+                shutil.rmtree(root)
+                cleanup["complete"] = True
+                break
+            except OSError as error:
+                if attempt == 4:
+                    cleanup["error"] = str(error)
+                    print(f"Browser workspace retained: {root}: {error}", file=sys.stderr)
+                else:
+                    time.sleep(0.25 * (attempt + 1))
 
 
 PAGE = """<!doctype html>
@@ -200,6 +230,12 @@ if (mode === 'dual-source') {
 } else if (mode === 'shadow') {
   const host=document.createElement('section'); mount.append(host);
   const root=host.attachShadow({mode:'open'}); const value=video(); value.src='/stream.mp4?player=shadow'; root.append(value);
+} else if (mode === 'geometry') {
+  const host=document.createElement('section'); mount.append(host);
+  const root=host.attachShadow({mode:'open'});
+  root.innerHTML='<style>#primary,#secondary{width:640px;overflow:hidden}</style><div id="primary"><slot name="primary"></slot></div><div id="secondary"><slot name="secondary"></slot></div>';
+  const value=video(); value.slot='primary'; value.src='/stream.mp4?player=geometry'; host.append(value);
+  window.geometryRoot=root;
 } else if (mode === 'dynamic-shadow') {
   const host=document.createElement('section'); mount.append(host);
   setTimeout(() => { const root=host.attachShadow({mode:'open'}); const value=video(); value.src='/stream.mp4?player=dynamic-shadow'; root.append(value); }, 1200);
@@ -505,6 +541,65 @@ def _browser_errors(driver, fixture_origin: str) -> list[str]:
         return []
 
 
+def _check_media_geometry(driver) -> dict:
+    wait = WebDriverWait(driver, 5, poll_frequency=0.05)
+    state_script = """
+        const button=document.querySelector('hls-downloader-media-panel')?.shadowRoot?.querySelector('.video-download');
+        return button ? {left:button.getBoundingClientRect().left,id:button.dataset.resourceId} : null;
+    """
+    initial = driver.execute_script(state_script)
+    # CSSOM edits do not mutate DOM attributes. The clipped ancestor resizes
+    # while the video retains its fixed size and remains partly intersecting.
+    driver.execute_script("window.geometryRoot.querySelector('style').sheet.cssRules[0].style.width='400px'")
+    clipped = wait.until(lambda d: (value := d.execute_script(state_script))
+                         and value['left'] < initial['left'] - 200 and value)
+    driver.execute_script("window.geometryRoot.querySelector('#primary').hidden=true")
+    wait.until(lambda d: d.execute_script(state_script) is None)
+    driver.execute_script("window.geometryRoot.querySelector('#primary').hidden=false")
+    wait.until(lambda d: d.execute_script(state_script))
+    # A slot change must replace the old clipping/visibility dependencies.
+    driver.execute_script("document.querySelector('video').slot='secondary'")
+    wait.until(lambda d: d.execute_script(state_script))
+    driver.execute_script("window.geometryRoot.querySelector('#secondary').style.opacity='0'")
+    wait.until(lambda d: d.execute_script(state_script) is None)
+    driver.execute_script("window.geometryRoot.querySelector('#secondary').style.opacity='1'")
+    restored = wait.until(lambda d: d.execute_script(state_script))
+    if restored['id'] != initial['id']:
+        raise AssertionError(f'geometry: slot change selected a different resource: {restored}')
+    driver.execute_async_script("""
+        const done=arguments[arguments.length-1], host=window.geometryRoot.host;
+        const container=document.createElement('div'); host.replaceWith(container); container.append(host);
+        window.geometryContainer=container;
+        requestAnimationFrame(()=>requestAnimationFrame(()=>done(true)));
+    """)
+    driver.execute_script("window.geometryContainer.style.opacity='0'")
+    wait.until(lambda d: d.execute_script(state_script) is None)
+    driver.execute_script("window.geometryContainer.style.opacity='1'")
+    wait.until(lambda d: d.execute_script(state_script))
+    # Unrelated live/chat-style churn must leave the actionable button intact.
+    stable = driver.execute_async_script("""
+        const done=arguments[arguments.length-1];
+        const root=document.querySelector('hls-downloader-media-panel').shadowRoot;
+        const original=root.querySelector('.video-download');
+        const noise=document.createElement('aside'); document.body.append(noise);
+        for(let i=0;i<250;i++) noise.append(document.createElement('span'));
+        requestAnimationFrame(()=>{
+          for(let n=0;n<6;n++) for(const node of noise.children) {
+            node.className='message-'+n; node.style.color=n%2 ? 'red' : 'blue';
+          }
+          requestAnimationFrame(()=>requestAnimationFrame(()=>{
+            const stable=root.querySelector('.video-download')===original;
+            noise.remove(); done(stable);
+          }));
+        });
+    """)
+    if not stable:
+        raise AssertionError('geometry: unrelated attribute churn replaced the active button')
+    return {'initial': initial, 'clipped': clipped, 'restored': restored,
+            'slotVisibility': True, 'reparentedShadowHost': True,
+            'unrelatedAttributeChanges': 3000, 'buttonStable': stable}
+
+
 def run(
     extension: Path,
     *,
@@ -524,8 +619,7 @@ def run(
         raise RuntimeError(f"Firefox 扩展未构建: {extension}")
     temp_root = Path(__file__).resolve().parents[2] / '.tool-cache' / 'test-tmp'
     temp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="hls-extension-smoke-", dir=temp_root) as temporary:
-        root = Path(temporary)
+    with browser_workspace(temp_root) as (root, cleanup):
         media_root = root / "site"
         media_root.mkdir()
         _make_media(media_root, ffmpeg)
@@ -573,11 +667,7 @@ def run(
                 service = FirefoxService(executable_path=str(driver_path)) if driver_path else FirefoxService()
                 driver = webdriver.Firefox(service=service, options=options)
                 driver.install_addon(str(resolved_addon), temporary=True)
-            for mode in modes or (
-                "direct", "dual-source", "srcdoc", "shadow", "dynamic-shadow", "iframe", "cross-iframe",
-                "ad-direct", "spa", "mse", "mse-sliced", "mse-encrypted", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
-                "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
-            ):
+            for mode in modes or MEDIA_MODES:
                 driver.get(f"http://127.0.0.1:{server.server_port}/index.html?mode={mode}")
                 if mode == "empty-video-src":
                     time.sleep(0.7)
@@ -655,6 +745,8 @@ def run(
                     ownership = state['frameStates'][0]['mediaOwnership']
                     if any(item['purpose'] == 'download' for item in ownership):
                         raise AssertionError(f'{mode}: 解密结果被误标记为可原样重放的下载: {ownership}')
+                if mode == "geometry":
+                    state['geometry'] = _check_media_geometry(driver)
                 if mode == "direct":
                     if not state.get("moreButtons"):
                         raise AssertionError(f"{mode}: 单资源播放器没有显示投屏/推送更多操作入口: {state}")
@@ -771,6 +863,8 @@ def run(
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+        if results:
+            results[-1]["workspace_cleanup"] = cleanup
         return results
 
 
@@ -783,7 +877,7 @@ def main() -> None:
     parser.add_argument("--ffmpeg", default=shutil.which("ffmpeg") or "ffmpeg")
     parser.add_argument("--driver", type=Path, help="可选的匹配版 WebDriver；省略时由 Selenium Manager 查找")
     parser.add_argument("--browser-binary", type=Path, help="可选的浏览器可执行文件路径")
-    parser.add_argument("--mode", action="append", help="只执行指定媒体场景；可重复指定")
+    parser.add_argument("--mode", action="append", choices=MEDIA_MODES, help="只执行指定媒体场景；可重复指定")
     parser.add_argument("--report", type=Path)
     arguments = parser.parse_args()
     results = run(

@@ -1713,23 +1713,19 @@ fn ensure_init_map(
     }
     let suffix = &identity[..16.min(identity.len())];
     let path = seg_dir.join(format!("init-{suffix}.{}", extension(&init_map.uri)));
-    if file_len(&path) == 0 {
-        download_one_with_range(
-            &init_map.uri,
-            headers,
-            proxy,
-            &path,
-            control,
-            init_map.byterange,
-        )?;
-        if let Some(key) = &init_map.key {
-            let key_bytes = load_key(key, headers, proxy, key_cache)?;
-            let iv = key.iv.unwrap_or_else(|| sequence_iv(sequence));
-            let encrypted = fs::read(&path).map_err(|error| error.to_string())?;
-            let plain = decrypt_aes128(&key_bytes, &iv, &encrypted)?;
-            fs::write(&path, plain).map_err(|error| error.to_string())?;
-        }
+    // 磁盘上的旧文件没有完成凭据，可能是上次写盘/解密失败留下的残片。
+    // 仅 map_cache 中本次运行成功落盘的条目可以复用。
+    let mut body = fetch_segment_bytes(&init_map.uri, headers, proxy, control, init_map.byterange)
+        .map_err(|error| error.to_string())?;
+    if let Some(key) = &init_map.key {
+        let key_bytes = load_key(key, headers, proxy, key_cache)?;
+        let iv = key.iv.unwrap_or_else(|| sequence_iv(sequence));
+        body = decrypt_aes128(&key_bytes, &iv, &body)?;
     }
+    if body.is_empty() {
+        return Err("HLS 初始化段为空".into());
+    }
+    fs::write(&path, body).map_err(|error| error.to_string())?;
     map_cache.insert(identity, path.clone());
     Ok(path)
 }
@@ -2271,6 +2267,8 @@ pub(crate) fn vod_segment_identity(
         "duration": (segment.duration * 1_000_000.0).round() / 1_000_000.0,
         "init": stable_media_url(map_uri.unwrap_or("")),
         "key": stable_media_url(key.map(|item| item.uri.as_str()).unwrap_or("")),
+        "key_method": key.map(|item| item.method.as_str()),
+        "iv": key.map(|item| bytes_hex(&item.iv.unwrap_or_else(|| sequence_iv(sequence)))),
         "part_index": segment.part_index,
         "range": range,
         "sequence": sequence,
@@ -2633,6 +2631,119 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn init_map_failure_never_becomes_a_reusable_cache_entry() {
+        let root = std::env::temp_dir().join(format!("hls-init-cache-{}", std::process::id()));
+        let segments = root.join("segments");
+        fs::create_dir_all(&segments).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = BufReader::new(&mut stream);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    assert!(request.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                drop(request);
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\nnot-valid-ciphertext").unwrap();
+            }
+        });
+        let mut map = InitMap {
+            uri: format!("http://{address}/init.mp4"),
+            byterange: None,
+            key: Some(MediaKey {
+                method: "AES-128".into(),
+                uri: "key".into(),
+                iv: Some([0; 16]),
+            }),
+        };
+        let key = map.key.as_ref().unwrap();
+        let mut keys = HashMap::from([(format!("{}:{:?}", key.uri, key.iv), vec![0; 16])]);
+        let mut maps = HashMap::new();
+        let identity = init_map_identity(&map);
+        let path = segments.join(format!("init-{}.mp4", &identity[..16]));
+        fs::write(&path, b"stale partial file").unwrap();
+        for _ in 0..2 {
+            assert!(ensure_init_map(
+                &map,
+                0,
+                &HashMap::new(),
+                "",
+                &segments,
+                &control,
+                &mut keys,
+                &mut maps
+            )
+            .is_err());
+            assert!(maps.is_empty());
+        }
+        map.key = None;
+        let identity = init_map_identity(&map);
+        let path = segments.join(format!("init-{}.mp4", &identity[..16]));
+        fs::write(&path, b"stale partial file").unwrap();
+        let fresh = ensure_init_map(
+            &map,
+            0,
+            &HashMap::new(),
+            "",
+            &segments,
+            &control,
+            &mut keys,
+            &mut maps,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&fresh).unwrap(), b"not-valid-ciphertext");
+        fs::write(&control, "pause").unwrap();
+        assert_eq!(
+            ensure_init_map(
+                &map,
+                0,
+                &HashMap::new(),
+                "",
+                &segments,
+                &control,
+                &mut keys,
+                &mut maps
+            )
+            .unwrap(),
+            fresh
+        );
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vod_identity_tracks_effective_encryption_iv_and_method() {
+        let playlist = parse_playlist(
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXTINF:1,\nseg.ts\n#EXT-X-ENDLIST\n",
+            "https://cdn.test/list.m3u8",
+        )
+        .unwrap();
+        let segment = &playlist.segments[0];
+        let mut key = segment.key.clone().unwrap();
+        let implicit = vod_segment_identity(segment, 7, Some(&key), None);
+        key.iv = Some(sequence_iv(7));
+        assert_eq!(implicit, vod_segment_identity(segment, 7, Some(&key), None));
+        key.iv = Some(sequence_iv(8));
+        assert_ne!(implicit, vod_segment_identity(segment, 7, Some(&key), None));
+        key.iv = Some(sequence_iv(7));
+        key.method = "NONE".into();
+        assert_ne!(implicit, vod_segment_identity(segment, 7, Some(&key), None));
+    }
 
     #[test]
     fn segment_retries_only_recoverable_requests() {

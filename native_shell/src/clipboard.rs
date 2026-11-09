@@ -62,15 +62,7 @@ pub fn write_text(text: &str) -> Result<(), String> {
 }
 
 pub fn write_files(paths: &[std::path::PathBuf]) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        windows_write_files(paths)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = paths;
-        Err("当前系统不支持复制文件到剪贴板".into())
-    }
+    hls_client::file_transfer::write_files(paths)
 }
 
 #[cfg(windows)]
@@ -143,54 +135,6 @@ fn windows_write(text: &str) -> Result<(), String> {
             GlobalFree(handle);
             CloseClipboard();
             return Err("无法写入剪贴板".into());
-        }
-        CloseClipboard();
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn windows_write_files(paths: &[std::path::PathBuf]) -> Result<(), String> {
-    if paths.is_empty() {
-        return Err("没有可复制的文件".into());
-    }
-    let mut wide: Vec<u16> = Vec::new();
-    for path in paths {
-        wide.extend(path.to_string_lossy().encode_utf16());
-        wide.push(0);
-    }
-    wide.push(0);
-    let header = 20usize;
-    let bytes = header + wide.len() * 2;
-    unsafe {
-        if OpenClipboard(0) == 0 {
-            return Err("无法打开剪贴板".into());
-        }
-        if EmptyClipboard() == 0 {
-            CloseClipboard();
-            return Err("无法清空剪贴板".into());
-        }
-        let handle = GlobalAlloc(0x0002, bytes);
-        if handle == 0 {
-            CloseClipboard();
-            return Err("无法分配剪贴板内存".into());
-        }
-        let ptr = GlobalLock(handle) as *mut u8;
-        if ptr.is_null() {
-            GlobalFree(handle);
-            CloseClipboard();
-            return Err("无法锁定剪贴板内存".into());
-        }
-        std::ptr::write_bytes(ptr, 0, header);
-        let p_files = header as u32;
-        std::ptr::copy_nonoverlapping(p_files.to_le_bytes().as_ptr(), ptr, 4);
-        *ptr.add(16) = 1;
-        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr.add(header), wide.len() * 2);
-        GlobalUnlock(handle);
-        if SetClipboardData(15, handle) == 0 {
-            GlobalFree(handle);
-            CloseClipboard();
-            return Err("无法写入文件到剪贴板".into());
         }
         CloseClipboard();
     }

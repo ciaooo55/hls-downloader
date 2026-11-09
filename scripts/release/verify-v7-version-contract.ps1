@@ -31,7 +31,10 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
 }
 
 Assert-Version $version (Match-One 'native_shell\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Rust Core manifest') 'Rust Core manifest'
-Assert-Version $version (Match-One 'presenter_ui\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Presenter manifest') 'Presenter manifest'
+Assert-Version $version (Match-One 'native_ui\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Presenter manifest') 'Presenter manifest'
+Assert-Version $version (Match-One 'crates\protocol\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Protocol manifest') 'Protocol manifest'
+Assert-Version $version (Match-One 'crates\client\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Client manifest') 'Client manifest'
+Assert-Version $version (Match-One 'native_clients\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Native clients manifest') 'Native clients manifest'
 Assert-Version $version (Match-One 'extension\package.json' '(?m)^  "version": "(\d+\.\d+\.\d+)",$' 'Extension package') 'Extension package'
 Assert-Version $version (Match-One 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt' '(?m)^    const val version = "(\d+\.\d+\.\d+)"$' 'Compose Product.version') 'Compose Product.version'
 
@@ -52,9 +55,11 @@ function Assert-LockPackage([string]$RelativePath, [string]$PackageName) {
     Assert-Version $version (Match-One $RelativePath $pattern "$RelativePath $PackageName") "$RelativePath $PackageName"
 }
 
-Assert-LockPackage 'native_shell\Cargo.lock' 'hls-native-shell'
-Assert-LockPackage 'presenter_ui\Cargo.lock' 'hls-native-shell'
-Assert-LockPackage 'presenter_ui\Cargo.lock' 'hls-native-ui'
+Assert-LockPackage 'Cargo.lock' 'hls-native-shell'
+Assert-LockPackage 'Cargo.lock' 'hls-native-ui'
+Assert-LockPackage 'Cargo.lock' 'hls-protocol'
+Assert-LockPackage 'Cargo.lock' 'hls-client'
+Assert-LockPackage 'Cargo.lock' 'hls-native-clients'
 
 $expectedAuditPrefix = 'v' + ($version -replace '\.', '_') + '_'
 if (-not ([string]$feature.audit_state).StartsWith($expectedAuditPrefix, [StringComparison]::Ordinal)) {

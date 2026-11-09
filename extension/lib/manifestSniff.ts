@@ -2,6 +2,11 @@
 
 export type ManifestKind = 'hls' | 'dash'
 
+/** A media payload, partial payload or browser cache hit; never a redirect/error body. */
+export function isMediaResponseStatus(status: number): boolean {
+  return status === 200 || status === 206 || status === 304
+}
+
 const URL_HINT = /(?:\.m3u8?(?:$|[?#])|\.mpd(?:$|[?#])|(?:^|[\/_?.=-])(?:hls|dash|manifest|playlist|master|chunklist)(?:$|[\/_?.=-]))/i
 const MEDIA_URL = /\.(?:m3u8?|mpd|mp4|m4v|m4a|webm|mkv|mov|avi|flv|mp3|aac|flac|ogg|opus|wav)(?:$|[?#])/i
 const MEDIA_MIME = /^(?:audio|video)\//i

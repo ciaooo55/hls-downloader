@@ -85,6 +85,22 @@ describe('HLS browser inspection', () => {
     })
   })
 
+  it('does not send master credentials to a rendition on another CDN', async () => {
+    const fetcher = vi.fn<ManifestFetcher>(async url => new Response(
+      url.endsWith('master.m3u8')
+        ? '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080\nhttps://video.test/1080.m3u8\n'
+        : vod,
+    ))
+    const result = await inspectHlsResource({
+      url: 'https://master.test/master.m3u8',
+      requestHeaders: { Authorization: 'Bearer master', 'X-Media-Token': 'master' },
+      inspectionHeaders: { Cookie: 'sid=master', Referer: 'https://site.test/watch' },
+    }, fetcher)
+    expect(result?.duration).toBe(10)
+    expect(fetcher.mock.calls[0][1].headers).toMatchObject({ authorization: 'Bearer master', cookie: 'sid=master' })
+    expect(fetcher.mock.calls[1][1].headers).toEqual({ referer: 'https://site.test/watch' })
+  })
+
   it('does not expose an infinite VOD size when finite HLS metadata multiplication overflows', async () => {
     const huge = '9'.repeat(308)
     const hugeNumber = Number(huge)

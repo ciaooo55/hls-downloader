@@ -6,8 +6,12 @@ on:
   pull_request:
     paths:
       - '.github/workflows/ci.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'native_clients/**'
       - 'native_shell/**'
-      - 'presenter_ui/**'
+      - 'native_ui/**'
       - 'desktop_ui/**'
       - 'extension/**'
       - 'assets/**'
@@ -124,7 +128,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             .tool-cache/build-cache/cargo-target
-          key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+          key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
 
       - name: Test, build and lint Rust Core
         working-directory: native_shell
@@ -136,12 +140,13 @@ jobs:
           # Player tests intentionally toggle process-wide backend env hooks; serial execution prevents cross-test contamination.
           cargo test --locked --lib -- --test-threads=1
           # The updater binary owns runtime release-signer authorization tests, including the Windows WinTrust path.
-          cargo test --locked --bin HLSDownloaderUpdater
-          cargo build --locked --bin HLSDownloaderUpdater
+          cargo test --locked -p hls-protocol -p hls-client -p hls-native-clients -- --test-threads=1
+          cargo build --locked -p hls-native-clients --bins
+          ../scripts/validation/verify-native-boundaries.ps1
           # Stable IPC/media interfaces intentionally retain these structural lints.
           # Keep every other Clippy warning fatal so new actionable warnings still fail CI.
           cargo clippy --locked --all-targets -- -D warnings -A clippy::large_enum_variant -A clippy::too_many_arguments -A clippy::type_complexity
-          cargo clippy --locked --no-default-features --features presenter-client --all-targets -- -D warnings
+          cargo clippy --locked -p hls-protocol -p hls-client -p hls-native-clients --all-targets -- -D warnings
 
   presenter:
     name: Native presenter
@@ -163,10 +168,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             .tool-cache/build-cache/cargo-target
-          key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('presenter_ui/Cargo.lock', 'presenter_ui/Cargo.toml', 'native_shell/Cargo.lock', 'native_shell/Cargo.toml') }}
+          key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
 
       - name: Test, build and lint native presenter
-        working-directory: presenter_ui
+        working-directory: native_ui
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

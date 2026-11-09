@@ -1,0 +1,448 @@
+import { ScrollView, ListView, CheckBox } from "std-widgets.slint";
+import { Tokens } from "theme.slint";
+import { WorkbenchIcon, WorkbenchButton, NavigationItem, FileTile } from "workbench_components.slint";
+import { MediaSurface, MediaView } from "media.slint";
+
+export struct TaskRow {
+    id: string,
+    name: string,
+    status: string,
+    size: string,
+    speed: string,
+    eta: string,
+    progress: float,
+    selected: bool,
+    kind: string,
+    metadata: string,
+    status-code: string,
+    primary-action: string,
+    primary-label: string,
+}
+
+export struct NavigationRow { id: string, label: string, count: int, active: bool, icon: string, group: string, heading: string }
+export struct TaskMenuRow { label: string, action: string, icon: string, enabled: bool }
+export struct TaskColumn { id: string, label: string, width: float }
+export struct ToolbarItem { action: string, label: string, icon: string }
+
+component HeaderCell inherits Rectangle {
+    in property <string> label;
+    callback clicked;
+    height: 40px;
+    background: touch.has-hover ? Tokens.surface-3 : Tokens.surface-2;
+    Text { x: 14px; width: parent.width - 20px; text: root.label; color: Tokens.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+    Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.hairline; }
+    touch := TouchArea { accessible-role: button; accessible-label: root.label; clicked => { root.clicked(); } }
+}
+
+export component WorkbenchWindow inherits Window {
+    title: "HLS Downloader 7.0.3";
+    icon: @image-url("../../assets/app-icon.png");
+    default-font-family: Tokens.type-face;
+    default-font-size: 13px;
+    background: Tokens.canvas;
+    preferred-width: 1400px;
+    preferred-height: 820px;
+    min-width: 560px;
+    min-height: 360px;
+    in property <[TaskRow]> tasks;
+    in property <length> viewport-width: 1400px;
+    in property <length> viewport-height: 820px;
+    in property <[NavigationRow]> navigation;
+    in property <[TaskMenuRow]> task-menu;
+    in property <[TaskColumn]> columns;
+    in property <[ToolbarItem]> toolbar;
+    in property <string> connection: "正在连接下载引擎…";
+    in property <string> browser-status: "浏览器未连接";
+    in property <string> summary;
+    in property <string> notice;
+    in property <string> heading: "全部任务";
+    in property <int> selected-count;
+    in property <int> task-count;
+    in property <int> visible-count;
+    in property <bool> can-start;
+    in property <bool> can-pause;
+    in property <bool> can-delete;
+    out property <bool> compact-sidebar: viewport-width < 1120px;
+    out property <length> sidebar-width: compact-sidebar ? 64px : 216px;
+    out property <length> content-inset: viewport-width < 900px ? 12px : 20px;
+    in-out property <bool> queues-expanded: true;
+    in-out property <bool> categories-expanded: true;
+    in-out property <string> query;
+    in-out property <bool> tools-open: false;
+    in-out property <bool> context-open: false;
+    in-out property <length> context-x;
+    in-out property <length> context-y;
+    private property <length> tools-x;
+    private property <length> tools-y;
+    in-out property <bool> ctrl-down: false;
+    in-out property <bool> shift-down: false;
+    in property <bool> media-visible;
+    in property <bool> media-detached;
+    in property <bool> media-fullscreen;
+    in property <MediaView> media-state;
+    in property <image> media-thumbnail;
+    in property <string> media-notice;
+    out property <length> video-x: media.video-x;
+    out property <length> video-y: media.video-y;
+    out property <length> video-width: media.video-width;
+    out property <length> video-height: media.video-height;
+    callback media-action(string);
+    callback media-seek(float);
+    callback media-preview(float);
+    callback media-volume(float);
+    callback media-audio(int);
+    callback media-subtitle(int);
+    forward-focus: keyboard;
+    callback action(string);
+    callback select-row(string, bool, bool);
+    callback filter(string);
+    callback sort(string);
+    callback place-row(string, string);
+    callback viewport-resized(float);
+    callback query-edited(string);
+    callback key-command(string, bool, bool);
+    callback request-close;
+    callback files-dropped([string]);
+    callback response-json(string);
+    keyboard := FocusScope {
+        width: parent.width; height: parent.height;
+        key-pressed(event) => {
+            root.ctrl-down = event.modifiers.control;
+            root.shift-down = event.modifiers.shift;
+            if (event.modifiers.control && (event.text == "a" || event.text == "A")) { root.key-command("select_all", true, false); return accept; }
+            if (event.text == Key.Escape) { root.media-action("escape"); root.context-open = false; root.tools-open = false; root.key-command("clear_selection", false, false); return accept; }
+            if (event.text == Key.Delete) { root.action("delete"); return accept; }
+            if (event.text == Key.Return) { root.action("details"); return accept; }
+            if (event.text == Key.UpArrow) { root.key-command("up", event.modifiers.control, event.modifiers.shift); return accept; }
+            if (event.text == Key.DownArrow) { root.key-command("down", event.modifiers.control, event.modifiers.shift); return accept; }
+            if (event.modifiers.control && (event.text == "n" || event.text == "N")) { root.action("new"); return accept; }
+            if (event.modifiers.control && (event.text == "v" || event.text == "V")) { root.action("paste"); return accept; }
+            if (event.modifiers.control && (event.text == "c" || event.text == "C")) { root.action("task:copy_file"); return accept; }
+            return reject;
+        }
+        key-released(event) => { root.ctrl-down = event.modifiers.control; root.shift-down = event.modifiers.shift; return reject; }
+        VerticalLayout {
+            min-width: 0px;
+            spacing: 0px;
+            if !root.media-fullscreen: Rectangle {
+                height: 64px; background: Tokens.surface;
+                HorizontalLayout {
+                    width: parent.width; height: parent.height;
+                    spacing: 0px;
+                    Rectangle {
+                        width: root.sidebar-width; background: Tokens.rail;
+                        HorizontalLayout {
+                            padding-left: root.compact-sidebar ? 14px : 20px; padding-right: 12px; spacing: 10px;
+                            Image { source: @image-url("../../assets/app-icon.png"); width: 34px; height: 34px; y: (parent.height - self.height) / 2; image-fit: contain; }
+                            if !root.compact-sidebar: VerticalLayout {
+                                alignment: center; spacing: 1px;
+                                Text { text: "HLS Downloader"; color: Tokens.ink; font-size: 14px; font-weight: 700; }
+                                Text { text: "下载管理器"; color: Tokens.faint; font-size: 10px; }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                    padding-left: root.content-inset; padding-right: root.content-inset; spacing: 8px;
+                    ScrollView {
+                        vertical-scrollbar-policy: always-off;
+                        horizontal-scrollbar-policy: always-off;
+                        horizontal-stretch: 1;
+                        HorizontalLayout {
+                            height: 64px; spacing: 6px; alignment: start;
+                            for item in root.toolbar: WorkbenchButton {
+                                y: (parent.height - self.height) / 2;
+                                label: item.action == "start" && root.selected-count > 0 ? "开始 / 继续" : item.action == "pause" && root.selected-count > 0 ? "暂停" : item.label;
+                                icon: item.icon; primary: item.action == "new"; outlined: item.action == "paste";
+                                icon-only: root.viewport-width < 900px || (root.viewport-width < 1050px && item.action != "new" && item.action != "paste");
+                                enabled: item.action == "start" ? root.can-start : item.action == "pause" ? root.can-pause : true;
+                                clicked => { root.action(item.action); }
+                            }
+                        }
+                    }
+                    if root.selected-count > 0: WorkbenchButton { label: "删除所选任务"; icon: "delete"; icon-only: true; y: (parent.height - self.height) / 2; enabled: root.can-delete; clicked => { root.action("delete"); } }
+                    tools-button := WorkbenchButton { label: "工具"; icon: "more"; icon-only: root.viewport-width < 700px; y: (parent.height - self.height) / 2; clicked => { root.context-open = false; root.tools-x = self.absolute-position.x; root.tools-y = self.absolute-position.y + self.height; root.tools-open = !root.tools-open; } }
+                    Rectangle {
+                        width: root.viewport-width < 700px ? 108px : root.viewport-width < 980px ? 142px : 218px; height: Tokens.control-height;
+                        y: (parent.height - self.height) / 2;
+                        background: search.has-focus ? Tokens.surface : Tokens.surface-2;
+                        border-width: 1px; border-color: search.has-focus ? Tokens.accent : Tokens.hairline; border-radius: 9px;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 6px; spacing: 8px;
+                            WorkbenchIcon { name: "search"; ink: Tokens.faint; width: 17px; height: 17px; y: (parent.height - self.height) / 2; }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                if root.query == "": Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.viewport-width < 980px ? "搜索" : "搜索任务"; color: Tokens.faint; font-size: 12px; vertical-alignment: center; horizontal-alignment: left; }
+                                search := TextInput {
+                                    x: 0px; y: 0px; width: parent.width; height: parent.height;
+                                    text <=> root.query; single-line: true; color: Tokens.ink; font-size: 13px; vertical-alignment: center; horizontal-alignment: left;
+                                    selection-background-color: Tokens.accent; selection-foreground-color: Tokens.on-accent;
+                                    accessible-role: text-input; accessible-label: "搜索任务"; accessible-value: root.query;
+                                    edited => { root.query-edited(self.text); }
+                                }
+                            }
+                            if root.query != "": WorkbenchButton { label: "清除搜索"; icon: "close"; icon-only: true; width: 26px; clicked => { root.query = ""; root.query-edited(""); } }
+                        }
+                    }
+                    Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.line; }
+                    WorkbenchButton { label: "设置"; icon: "settings"; icon-only: true; outlined: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
+                    WorkbenchButton { label: Tokens.dark ? "切换到浅色模式" : "切换到深色模式"; icon: Tokens.dark ? "sun" : "theme"; icon-only: true; outlined: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Tokens.line; }
+            if !root.media-fullscreen: HorizontalLayout {
+                spacing: 0px;
+                Rectangle {
+                    width: root.sidebar-width; background: Tokens.rail;
+                    VerticalLayout {
+                        padding-left: 12px; padding-right: 12px; padding-top: 12px; padding-bottom: 12px; spacing: 12px;
+                        ScrollView {
+                            horizontal-scrollbar-policy: always-off;
+                            VerticalLayout {
+                                spacing: 4px;
+                                for entry in root.navigation: VerticalLayout {
+                                    spacing: 2px;
+                                    if entry.heading != "" && !root.compact-sidebar: HorizontalLayout {
+                                        height: entry.group == "status" ? 28px : 42px; spacing: 0px;
+                                        Text { text: entry.heading; color: Tokens.faint; font-size: 11px; font-weight: 500; vertical-alignment: center; horizontal-stretch: 1; }
+                                        if entry.group != "status": WorkbenchButton {
+                                            label: entry.group == "queues" ? "展开或收起队列" : "展开或收起分类";
+                                            y: (parent.height - self.height) / 2;
+                                            icon: (entry.group == "queues" ? root.queues-expanded : root.categories-expanded) ? "up" : "down";
+                                            icon-only: true; width: 26px;
+                                            clicked => { if entry.group == "queues" { root.queues-expanded = !root.queues-expanded; } else { root.categories-expanded = !root.categories-expanded; } }
+                                        }
+                                        if entry.group == "queues": WorkbenchButton { label: "管理队列"; icon: "settings"; icon-only: true; width: 26px; y: (parent.height - self.height) / 2; clicked => { root.action("queues"); } }
+                                    }
+                                    if entry.heading != "" && root.compact-sidebar && entry.group != "status": Rectangle { height: 1px; background: Tokens.line; }
+                                    if root.compact-sidebar || entry.group == "status" || (entry.group == "queues" && root.queues-expanded) || (entry.group == "categories" && root.categories-expanded): NavigationItem {
+                                        label: entry.label; icon: entry.icon; count: entry.count; active: entry.active; compact: root.compact-sidebar;
+                                        clicked => { root.filter(entry.id); }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { height: 1px; background: Tokens.line; }
+                        WorkbenchButton { label: "管理队列"; icon: "queue"; icon-only: root.compact-sidebar; clicked => { root.action("queues"); } }
+                    }
+                }
+                Rectangle { width: 1px; background: Tokens.line; }
+                VerticalLayout {
+                    padding-left: root.content-inset; padding-right: root.content-inset; padding-top: 8px; padding-bottom: 18px; spacing: 0px;
+                    Rectangle {
+                        height: root.viewport-height < 500px ? 56px : 72px;
+                        HorizontalLayout {
+                            width: parent.width; height: parent.height;
+                            spacing: 10px;
+                            Text {
+                                text: root.heading; color: Tokens.ink; font-weight: 700; font-size: root.viewport-width < 900px ? 20px : 23px; vertical-alignment: center;
+                                min-width: 0px; horizontal-stretch: 1; overflow: elide;
+                                Tooltip { text: @markdown("\{root.heading}"); }
+                            }
+                            Rectangle {
+                                width: total.preferred-width + 16px; height: 24px; y: (parent.height - self.height) / 2;
+                                border-radius: 7px; background: Tokens.surface; border-width: 1px; border-color: Tokens.line;
+                                total := Text { text: root.visible-count; color: Tokens.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; horizontal-alignment: center; }
+                            }
+                            if root.selected-count > 0: Text { text: "已选 " + root.selected-count + " 项"; color: Tokens.accent; font-size: 12px; vertical-alignment: center; }
+                            if root.selected-count > 0: WorkbenchButton { label: "取消选择"; icon: "close"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.key-command("clear_selection", false, false); } }
+                            if root.selected-count > 0: WorkbenchButton { label: "移动到队列"; icon: "queue"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("移动到队列"); } }
+                            WorkbenchButton { label: "导入"; icon: "import"; outlined: true; icon-only: root.viewport-width < 900px; y: (parent.height - self.height) / 2; clicked => { root.action("import"); } }
+                            WorkbenchButton { label: "导出"; icon: "export"; outlined: true; icon-only: root.viewport-width < 900px; y: (parent.height - self.height) / 2; clicked => { root.action("export"); } }
+                            WorkbenchButton { label: "刷新"; icon: "refresh"; icon-only: root.viewport-width < 900px; y: (parent.height - self.height) / 2; clicked => { root.action("refresh"); } }
+                        }
+                    }
+                    Rectangle {
+                    background: Tokens.surface; border-radius: 12px; border-width: 1px; border-color: Tokens.line;
+                    drop-shadow-offset-y: 2px; drop-shadow-blur: 8px; drop-shadow-color: Tokens.shadow;
+                    // Clip once at the table boundary, keeping individual virtualized rows cheap.
+                    Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px; border-radius: 11px; clip: true;
+                    table-scroll := ScrollView {
+                        width: parent.width; height: parent.height;
+                        vertical-scrollbar-policy: always-off;
+                        horizontal-scrollbar-policy: always-off;
+                        viewport-width: self.width;
+                        viewport-height: self.height;
+                        VerticalLayout {
+                        width: table-scroll.viewport-width; height: table-scroll.viewport-height; spacing: 0px;
+                    HorizontalLayout {
+                        spacing: 0px;
+                        for column in root.columns: HeaderCell { label: column.label; width: column.width * 1px; horizontal-stretch: 0; clicked => { if column.id != "actions" { root.sort(column.id); } } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if root.tasks.length > 0: ListView {
+                        for row[index] in root.tasks: Rectangle {
+                            height: 64px;
+                            background: row.selected ? Tokens.selected : row-touch.pressed ? Tokens.surface-3 : row-touch.has-hover ? Tokens.surface-2 : Tokens.surface;
+                            Rectangle { x: 0px; y: 0px; width: 3px; height: parent.height; background: row.selected ? Tokens.accent : transparent; }
+                            Rectangle { height: 1px; x: 16px; y: parent.height - 1px; width: parent.width - 32px; background: Tokens.hairline; }
+                            row-touch := TouchArea {
+                                accessible-role: list-item; accessible-label: row.name + " " + row.status;
+                                pointer-event(event) => {
+                                    if event.kind == PointerEventKind.down {
+                                        keyboard.focus();
+                                        if event.button != PointerEventButton.right || !row.selected { root.select-row(row.id, event.modifiers.control, event.modifiers.shift); }
+                                        if event.button == PointerEventButton.right {
+                                            root.context-x = self.absolute-position.x + self.mouse-x;
+                                            root.context-y = self.absolute-position.y + self.mouse-y;
+                                            root.context-open = true;
+                                        }
+                                    }
+                                }
+                                double-clicked => { root.action("details"); }
+                            }
+                            HorizontalLayout {
+                                spacing: 0px;
+                                for column in root.columns: Rectangle {
+                                    width: column.width * 1px; horizontal-stretch: 0;
+                                if column.id == "name": HorizontalLayout {
+                                    padding-left: 14px; padding-right: 12px; spacing: 10px;
+                                    CheckBox { checked <=> row.selected; width: 20px; accessible-label: "选择 " + row.name; toggled => { root.select-row(row.id, true, false); } }
+                                    FileTile { kind: row.kind; y: (parent.height - self.height) / 2; }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 4px;
+                                        Text { text: row.name; color: Tokens.ink; overflow: elide; font-size: 13px; font-weight: 500; }
+                                        Text { text: row.metadata; color: Tokens.faint; overflow: elide; font-size: 11px; }
+                                    }
+                                }
+                                if column.id == "size" || column.id == "speed": Text { x: 14px; width: parent.width - 20px; text: column.id == "size" ? row.size : row.speed; color: column.id == "speed" && row.speed != "—" ? Tokens.accent : Tokens.muted; vertical-alignment: center; font-size: 12px; font-weight: column.id == "speed" ? 500 : 400; overflow: elide; }
+                                if column.id == "progress": HorizontalLayout {
+                                    padding-left: 14px; padding-right: 14px; spacing: 10px;
+                                    Rectangle {
+                                        height: 6px; y: (parent.height - self.height) / 2; border-radius: 3px; background: Tokens.surface-3; horizontal-stretch: 1;
+                                        Rectangle { height: parent.height; width: parent.width * row.progress; background: row.status-code == "paused" ? Tokens.warn : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.accent; border-radius: 3px; }
+                                    }
+                                    Text { text: round(row.progress * 100) + "%"; width: 38px; color: Tokens.muted; font-size: 11px; font-weight: 500; vertical-alignment: center; }
+                                }
+                                if column.id == "status": VerticalLayout {
+                                    alignment: center; padding-left: 14px; padding-right: 8px; spacing: 4px;
+                                    Rectangle {
+                                        width: badge.preferred-width + 20px; height: 25px; border-radius: 6px;
+                                        background: row.status-code == "paused" ? Tokens.warn-surface : row.status-code == "completed" || row.status-code == "done" ? Tokens.success-surface : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail-surface : Tokens.surface-2;
+                                        badge := Text { text: row.status; color: row.status-code == "paused" ? Tokens.warn : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : Tokens.accent; font-size: 11px; font-weight: 500; vertical-alignment: center; horizontal-alignment: center; }
+                                    }
+                                    if row.eta != "": Text { text: row.eta; color: Tokens.muted; font-size: 10px; overflow: elide; }
+                                }
+                                if column.id == "actions": HorizontalLayout {
+                                    Rectangle {
+                                        width: 20px;
+                                        WorkbenchIcon { name: "drag"; width: 16px; height: 16px; x: 2px; y: (parent.height - self.height) / 2; }
+                                        Tooltip { text: @markdown("按队列顺序拖动排序"); }
+                                        drag := TouchArea {
+                                            mouse-cursor: grab; accessible-role: button; accessible-label: "调整任务队列顺序";
+                                            pointer-event(event) => {
+                                                if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                                                    if abs(self.mouse-y - self.pressed-y) >= 26px {
+                                                        root.place-row(row.id,root.tasks[max(0,min(root.tasks.length - 1,index+round((self.mouse-y - self.pressed-y)/64px)))].id);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if row.primary-action != "": WorkbenchButton {
+                                        label: row.primary-label + "：" + row.name;
+                                        icon: row.primary-action == "pause" ? "pause" : row.primary-action == "retry" ? "retry" : row.primary-action == "open" ? "file" : row.primary-action == "open_folder" ? "folder" : "play";
+                                        icon-only: true; width: 24px; height: 32px; y: (parent.height - self.height) / 2;
+                                        clicked => { root.select-row(row.id,false,false); root.action("task:" + row.primary-action); }
+                                    }
+                                    WorkbenchButton {
+                                        label: "更多操作：" + row.name; icon: "more"; icon-only: true; width: 24px; height: 32px; y: (parent.height - self.height) / 2;
+                                        clicked => { if !row.selected { root.select-row(row.id,false,false); } root.context-x = self.absolute-position.x; root.context-y = self.absolute-position.y + self.height; root.context-open = true; }
+                                    }
+                                }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                    }
+                    if root.tasks.length == 0: Rectangle {
+                        background: Tokens.surface; vertical-stretch: 1;
+                        VerticalLayout {
+                            alignment: center; spacing: 10px;
+                            HorizontalLayout {
+                                Rectangle { horizontal-stretch: 1; }
+                                Rectangle {
+                                    width: 100px; height: 100px; border-radius: 28px; background: Tokens.selected.with-alpha(0.65);
+                                    Image { source: @image-url("../../assets/app-icon.png"); width: 70px; height: 70px; x: 15px; y: 15px; image-fit: contain; }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            Rectangle { height: 5px; }
+                            Text { text: root.task-count > 0 ? "当前筛选下没有任务" : "开始你的第一个下载"; color: Tokens.ink; font-size: 20px; font-weight: 600; horizontal-alignment: center; }
+                            Text { text: root.task-count > 0 ? "可调整搜索、状态、分类或队列筛选" : "点击工具栏“新建”或粘贴链接开始下载"; color: Tokens.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+                            if root.task-count > 0: HorizontalLayout {
+                                Rectangle { horizontal-stretch: 1; }
+                                WorkbenchButton { label: "重置筛选"; icon: "refresh"; outlined: true; clicked => { root.query = ""; root.query-edited(""); root.filter("all"); } }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            if root.task-count == 0: HorizontalLayout {
+                                Rectangle { horizontal-stretch: 1; }
+                                WorkbenchButton { label: "新建下载"; icon: "new"; primary: true; clicked => { root.action("new"); } }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                    }
+                        }
+                    }
+                    }
+                    }
+                }
+            }
+            media := MediaSurface {
+                visible: root.media-visible && !root.media-detached;
+                height: !self.visible ? 0px : root.media-fullscreen ? max(180px, root.viewport-height - 2px) : min(390px, root.viewport-height * 0.48);
+                state: root.media-state; fullscreen: root.media-fullscreen; detached: false;
+                thumbnail: root.media-thumbnail; notice: root.media-notice;
+                action(value) => { root.media-action(value); } seek(value) => { root.media-seek(value); } preview(value) => { root.media-preview(value); }
+                volume(value) => { root.media-volume(value); } audio(value) => { root.media-audio(value); } subtitle(value) => { root.media-subtitle(value); }
+            }
+            Rectangle { height: 1px; background: Tokens.line; }
+            if !root.media-fullscreen: Rectangle {
+                height: root.notice != "" ? 54px : 32px; background: Tokens.surface;
+                VerticalLayout {
+                    padding-left: 18px; padding-right: 18px;
+                    if root.notice != "": Text { text: root.notice; color: Tokens.warn; font-size: 11px; overflow: elide; Tooltip { text: @markdown("\{root.notice}"); } }
+                    HorizontalLayout {
+                        Text { text: root.connection; color: Tokens.faint; font-size: 11px; vertical-alignment: center; }
+                        Text { text: root.summary; color: Tokens.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: root.browser-status; color: Tokens.faint; font-size: 11px; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+        if root.tools-open || root.context-open: TouchArea { clicked => { root.tools-open = false; root.context-open = false; } }
+        if root.tools-open || root.context-open: Rectangle {
+            width: 210px; height: min(menu-layout.preferred-height, root.height - 12px);
+            x: min(max(0px, root.context-open ? root.context-x : root.tools-x), root.width - self.width);
+            y: min(max(0px, root.context-open ? root.context-y : root.tools-y), root.height - self.height);
+            background: Tokens.surface; border-width: 1px; border-color: Tokens.line; border-radius: 10px;
+            drop-shadow-offset-y: 6px; drop-shadow-blur: 20px; drop-shadow-color: Tokens.dark ? #00000055 : #253b5b26;
+            ScrollView {
+                menu-layout := VerticalLayout {
+                    padding: 6px; spacing: 3px;
+                    if root.context-open: VerticalLayout {
+                        for item in root.task-menu: WorkbenchButton {
+                            label: item.label; icon: item.icon; enabled: item.enabled; menu-item: true;
+                            drag-source: item.action == "task:drag_file";
+                            hint: item.action == "task:drag_file" ? "按住鼠标左键，将所选文件拖到资源管理器；Esc 取消" : item.label;
+                            danger: item.action == "delete" || item.action == "delete_files";
+                            dragged => { root.action(item.action); root.context-open = false; }
+                            clicked => {
+                                if item.action == "task:drag_file" { root.action("drag_help"); }
+                                else { root.context-open = false; root.action(item.action); }
+                            }
+                        }
+                    }
+                    if !root.context-open: VerticalLayout {
+                        for item in ["批量添加", "导入 cURL", "页面抓取", "抓站与同步项目", "ZIP 内容预览", "投屏到电视", "TVBox 推送", "浏览器插件", "通知", "检查更新", "取消完成动作", "队列顺序", "关于"]: WorkbenchButton {
+                            label: item; menu-item: true;
+                            icon: item == "批量添加" ? "batch" : item == "导入 cURL" ? "import" : item == "页面抓取" ? "harvest" : item == "抓站与同步项目" ? "network" : item == "ZIP 内容预览" ? "archive" : item == "投屏到电视" ? "cast" : item == "TVBox 推送" ? "tvbox" : item == "浏览器插件" ? "extension" : item == "检查更新" ? "refresh" : item == "通知" ? "notices" : item == "关于" ? "info" : item == "取消完成动作" ? "close" : item == "队列顺序" ? "queue" : "details";
+                            clicked => { root.tools-open = false; root.action(item); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

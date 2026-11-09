@@ -4,6 +4,53 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 #[test]
+fn stale_cast_control_cannot_stop_a_replacement_session() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let previous = {
+        let _operation = cast_operation().lock().unwrap();
+        crate::cast::remember_lan_share("first fixture");
+        let previous = crate::cast::session_generation();
+        crate::cast::remember_lan_share("replacement fixture");
+        remember_cast_mount(
+            "replacement-token",
+            "http://192.0.2.1/media/replacement-token/media.mp4",
+            "replacement media",
+            "task-replacement",
+        );
+        previous
+    };
+    assert!(coordinator
+        .cast_control(previous, "stop")
+        .unwrap_err()
+        .contains("会话已经改变"));
+    assert_eq!(crate::cast::last_device_label(), "replacement fixture");
+    let current = crate::cast::session_generation();
+    let events = coordinator.cast_control(current, "status").unwrap();
+    assert!(matches!(&events.last().unwrap().event,
+        CoreEvent::CastSession {active:true,session_generation,device_kind,title,task_id,media_url,..}
+        if *session_generation==current && device_kind=="lan" && title=="replacement media"
+            && task_id=="task-replacement" && media_url=="http://192.0.2.1/media/replacement-token/media.mp4"));
+    let stopped = coordinator.cast_control(current, "stop").unwrap();
+    assert!(
+        matches!(&stopped.last().unwrap().event,CoreEvent::CastSession{active:false,media_url,..} if media_url.is_empty())
+    );
+    assert!(crate::cast::last_device_label().is_empty());
+    assert!(active_cast_mount().lock().unwrap().is_none());
+    let idle = coordinator
+        .dispatch(CoreCommand::ControlCast {
+            action: "status".into(),
+        })
+        .unwrap();
+    assert!(matches!(&idle.last().unwrap().event,
+        CoreEvent::CastSession { active:false, session_generation, media_url, supported_actions, .. }
+        if *session_generation==current && media_url.is_empty() && supported_actions.is_empty()));
+    assert!(coordinator
+        .cast_control(current, "play")
+        .unwrap_err()
+        .contains("当前没有投屏会话"));
+}
+
+#[test]
 fn saving_category_dirs_in_the_pipe_shape_is_refused_instead_of_dropped() {
     // 这正是 Compose 主界面曾经发过来的形状。之前 validate_setting 对它毫无意见，
     // parse_category_dirs 静默回退成四个空目录，用户填的分类目录整段消失。
@@ -202,6 +249,66 @@ fn serve_harvest_response(response: String) -> (String, std::sync::mpsc::Receive
         }
     });
     (format!("http://{address}"), receiver)
+}
+
+#[test]
+fn core_completion_probe_uses_draft_headers_and_saved_credentials() {
+    let body = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\nvideo.m3u8\n";
+    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let (origin, request) = serve_harvest_response(response);
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .store_credential(
+            "probe-session",
+            &serde_json::json!({"cookie": "session=valid"}).to_string(),
+            "browser_replay",
+        )
+        .unwrap();
+    let url = format!("{origin}/master.m3u8");
+    let events = coordinator
+        .dispatch(CoreCommand::ProbeUrl {
+            url: url.clone(),
+            spec: Some(TaskSpec {
+                url: "https://ignored.test/old.m3u8".into(),
+                proxy: crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+                credential_ref: Some("probe-session".into()),
+                headers: BTreeMap::from([
+                    ("Referer".into(), "https://site.test/watch/42".into()),
+                    ("Authorization".into(), "Bearer supplied-token".into()),
+                    ("User-Agent".into(), "Probe regression".into()),
+                ]),
+                ..TaskSpec::default()
+            }),
+        })
+        .unwrap();
+    let variants = events
+        .iter()
+        .find_map(|event| match &event.event {
+            CoreEvent::ProbeResult {
+                resource_kind: ResourceKind::Hls,
+                variants,
+                ..
+            } => Some(variants),
+            _ => None,
+        })
+        .expect("authenticated probe result");
+    assert_eq!(variants[0].height, 720);
+    let request = request
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .to_ascii_lowercase();
+    for expected in [
+        "referer: https://site.test/watch/42\r\n",
+        "authorization: bearer supplied-token\r\n",
+        "cookie: session=valid\r\n",
+        "user-agent: probe regression\r\n",
+    ] {
+        assert!(
+            request.contains(expected),
+            "missing {expected:?} in {request:?}"
+        );
+    }
+    assert!(coordinator.tasks().unwrap().is_empty());
 }
 
 #[test]
@@ -929,7 +1036,9 @@ fn advanced_defaults_are_applied_and_host_scope_is_enforced() {
         })
         .unwrap_err();
     assert!(error.contains("允许的域名"));
-    let _ = std::fs::remove_dir_all(&root);
+    // The worker can still write its control file after CreateTask returns.
+    coordinator.cancel_and_wait(&task_id).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -2041,7 +2150,77 @@ fn player_control_accepts_speed_and_pause_on_null_backend() {
 }
 
 #[test]
+#[ignore = "requires bundled FFmpeg; decodes a local WAV through Core's private media mount"]
+fn player_subtitle_audio_reads_owned_bytes_and_rejects_replaced_sessions() {
+    use base64::Engine;
+    let _guard = crate::player::TEST_PLAYER_ENV.lock().unwrap();
+    std::env::set_var("HLS_V7_PLAYER_NULL", "1");
+    let root = lifecycle_test_root("subtitle-audio");
+    std::fs::create_dir_all(&root).unwrap();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    let task_id = lifecycle_task(&coordinator, &root, "completed");
+    let spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&task_id)
+        .cloned()
+        .unwrap();
+    let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+    let pcm: Vec<u8> = [0xd0u8, 0x07].into_iter().cycle().take(64_000).collect();
+    let mut wav = b"RIFF".to_vec();
+    wav.extend(64_036u32.to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16u32.to_le_bytes());
+    wav.extend(1u16.to_le_bytes());
+    wav.extend(1u16.to_le_bytes());
+    wav.extend(16_000u32.to_le_bytes());
+    wav.extend(32_000u32.to_le_bytes());
+    wav.extend(2u16.to_le_bytes());
+    wav.extend(16u16.to_le_bytes());
+    wav.extend(b"data");
+    wav.extend(64_000u32.to_le_bytes());
+    wav.extend(&pcm);
+    std::fs::write(&paths.final_output, wav).unwrap();
+    coordinator
+        .dispatch(CoreCommand::PlayTask {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+    let generation = player_ui_state().lock().unwrap().session_generation;
+    let playing = shared_player().unwrap().source_url().unwrap();
+    let decoded = coordinator
+        .player_subtitle_audio(generation, 0.5, 0.5, || false)
+        .unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(decoded["audio"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(bytes, pcm[..16_000]);
+    assert_eq!(decoded["duration"], 0.5);
+    assert_eq!(shared_player().unwrap().source_url().unwrap(), playing);
+    assert!(coordinator
+        .player_subtitle_audio(generation, 0.0, 1.0, || true)
+        .is_err());
+    coordinator
+        .dispatch(CoreCommand::PlayerControl {
+            action: "stop".into(),
+        })
+        .unwrap();
+    assert!(coordinator.validate_subtitle_player(generation).is_err());
+    assert!(coordinator
+        .player_subtitle_audio(generation, 0.0, 1.0, || false)
+        .is_err());
+    std::env::remove_var("HLS_V7_PLAYER_NULL");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn player_session_reports_play_pause_speed_and_stop() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
     let _guard = crate::player::TEST_PLAYER_ENV.lock().unwrap();
     std::env::set_var("HLS_V7_PLAYER_NULL", "1");
     let dir = std::env::temp_dir().join(format!("hls-player-session-{}", std::process::id()));
@@ -2062,14 +2241,36 @@ fn player_session_reports_play_pause_speed_and_stop() {
         .task_spec("task-1")
         .cloned()
         .unwrap();
-    let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+    // Parallel Core fixtures reuse task-1; restore a distinct identity so their
+    // completion workers cannot replace this test's global null player source.
+    let task_id = "player-lifecycle-fixture";
+    let mut snapshot = coordinator
+        .lock()
+        .unwrap()
+        .snapshot("task-1")
+        .cloned()
+        .unwrap();
+    snapshot.task_id = task_id.into();
+    let mut store = crate::CoreStore::in_memory().unwrap();
+    store
+        .apply_events_and_spec(
+            &[EventEnvelope {
+                sequence: 1,
+                event: CoreEvent::TaskCreated { snapshot },
+            }],
+            Some(&spec),
+        )
+        .unwrap();
+    drop(coordinator);
+    let coordinator = CoreCoordinator::new(PersistentCore::from_store(store).unwrap());
+    let paths = TaskPaths::for_task(task_id, &spec).unwrap();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(&paths.final_output, b"local-media").unwrap();
     coordinator
         .lock()
         .unwrap()
         .handle(CoreCommand::UpdateProgress {
-            task_id: "task-1".into(),
+            task_id: task_id.into(),
             downloaded_bytes: 11,
             total_bytes: Some(11),
             speed_bytes_per_sec: 0,
@@ -2080,9 +2281,44 @@ fn player_session_reports_play_pause_speed_and_stop() {
 
     let play = coordinator
         .dispatch(CoreCommand::PlayTask {
-            task_id: "task-1".into(),
+            task_id: task_id.into(),
         })
         .unwrap();
+    let server = shared_local_media().unwrap();
+    let request = |url: &str| {
+        let token = media_token_from_url(url).unwrap();
+        let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .write_all(
+                format!("GET /media/{token} HTTP/1.1\r\nRange: bytes=0-3\r\n\r\n").as_bytes(),
+            )
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    };
+    let first_url = shared_player().unwrap().source_url().unwrap();
+    let generation = match &play.last().unwrap().event {
+        CoreEvent::PlayerSession {
+            session_generation, ..
+        } => *session_generation,
+        _ => unreachable!(),
+    };
+    coordinator.validate_subtitle_player(generation).unwrap();
+    assert!(coordinator
+        .player_subtitle_audio(generation + 1, 0.0, 1.0, || false)
+        .is_err());
+    assert!(request(&first_url).starts_with("HTTP/1.1 206"));
+    // A failed replacement must keep the current playback address usable.
+    assert!(coordinator
+        .dispatch(CoreCommand::PlayTask {
+            task_id: "missing".into()
+        })
+        .is_err());
+    assert!(request(&first_url).starts_with("HTTP/1.1 206"));
     assert!(matches!(
         play.last().map(|item| &item.event),
         Some(CoreEvent::PlayerSession { active: true, paused: false, title, .. }) if title == "测试影片"
@@ -2115,6 +2351,63 @@ fn player_session_reports_play_pause_speed_and_stop() {
         Some(CoreEvent::PlayerSession { active: true, paused: true, speed, status, .. })
             if (*speed - 1.5).abs() < f64::EPSILON && status == "PAUSED"
     ));
+    let generation = match play.last().map(|item| &item.event) {
+        Some(CoreEvent::PlayerSession {
+            session_generation, ..
+        }) => *session_generation,
+        _ => panic!("missing playback session"),
+    };
+    let mut embed = crate::PlayerEmbed {
+        session_generation: generation,
+        layout_generation: 2,
+        parent_hwnd: Some(42),
+        x: 0,
+        y: 48,
+        width: 640,
+        height: 200,
+    };
+    coordinator.player_embed(embed.clone()).unwrap();
+    embed.layout_generation = 1;
+    assert!(coordinator
+        .player_embed(embed.clone())
+        .unwrap_err()
+        .contains("过期"));
+    embed.layout_generation = 3;
+    embed.width = 0;
+    assert!(coordinator
+        .player_embed(embed.clone())
+        .unwrap_err()
+        .contains("区域"));
+    embed.width = 640;
+    embed.parent_hwnd = None;
+    let detached = coordinator.player_embed(embed.clone()).unwrap();
+    assert!(matches!(
+        detached.last().map(|item| &item.event),
+        Some(CoreEvent::PlayerSession {
+            active: true,
+            layout_generation: 3,
+            paused: true,
+            ..
+        })
+    ));
+    coordinator
+        .dispatch(CoreCommand::PlayTask {
+            task_id: task_id.into(),
+        })
+        .unwrap();
+    let second_url = shared_player().unwrap().source_url().unwrap();
+    assert!(request(&first_url).starts_with("HTTP/1.1 404"));
+    assert!(request(&second_url).starts_with("HTTP/1.1 206"));
+    assert!(coordinator
+        .player_control(generation, "stop")
+        .unwrap_err()
+        .contains("会话已改变"));
+    assert!(request(&second_url).starts_with("HTTP/1.1 206"));
+    embed.layout_generation = 4;
+    assert!(coordinator
+        .player_embed(embed.clone())
+        .unwrap_err()
+        .contains("会话已改变"));
     let stop = coordinator
         .dispatch(CoreCommand::PlayerControl {
             action: "stop".into(),
@@ -2124,7 +2417,52 @@ fn player_session_reports_play_pause_speed_and_stop() {
         stop.last().map(|item| &item.event),
         Some(CoreEvent::PlayerSession { active: false, status, .. }) if status == "STOPPED"
     ));
-    let _ = std::fs::remove_dir_all(dir);
+    assert!(coordinator.player_embed(embed).is_err());
+    assert!(request(&second_url).starts_with("HTTP/1.1 404"));
+    assert!(player_ui_state().lock().unwrap().mount_token.is_empty());
+    coordinator
+        .dispatch(CoreCommand::PlayTask {
+            task_id: task_id.into(),
+        })
+        .unwrap();
+    let third_url = shared_player().unwrap().source_url().unwrap();
+    finish_published_task(
+        &coordinator.core,
+        task_id,
+        &paths,
+        &paths.final_output,
+        None,
+        &spec,
+        false,
+    )
+    .unwrap();
+    assert!(request(&third_url).starts_with("HTTP/1.1 404"));
+    assert_eq!(
+        shared_player().unwrap().source_url().unwrap(),
+        paths.final_output.to_string_lossy()
+    );
+    stop_task_player(&coordinator, task_id).unwrap();
+    assert!(request(&third_url).starts_with("HTTP/1.1 404"));
+    let page = coordinator.task_page(None, 128).unwrap();
+    assert_eq!(
+        page.tasks[0].output_path,
+        paths.final_output.to_string_lossy()
+    );
+    assert!(page.tasks[0].playback_ready);
+    assert!(page.tasks[0]
+        .available_actions
+        .iter()
+        .any(|action| action == "open"));
+    std::fs::remove_file(&paths.final_output).unwrap();
+    let page = coordinator.task_page(None, 128).unwrap();
+    assert!(page.tasks[0].output_missing);
+    assert!(!page.tasks[0].playback_ready);
+    assert!(!page.tasks[0]
+        .available_actions
+        .iter()
+        .any(|action| action == "open"));
+    drop(coordinator);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -2323,6 +2661,125 @@ fn site_rule_credentials_are_vaulted_applied_and_deleted() {
 }
 
 #[test]
+fn core_completion_replay_credentials_fail_explicitly_instead_of_dropping_context() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let anonymous = TaskSpec {
+        url: "https://cdn.test/file.bin".into(),
+        headers: BTreeMap::from([("Referer".into(), "https://site.test/watch".into())]),
+        ..Default::default()
+    };
+    let (unchanged, replay) =
+        hydrate_replay_headers(&coordinator.core(), anonymous.clone()).unwrap();
+    assert_eq!(unchanged.headers, anonymous.headers);
+    assert!(replay.is_empty());
+    assert!(seal_spec_secrets(&coordinator, anonymous)
+        .unwrap()
+        .credential_ref
+        .is_none());
+    for (name, blob, expected) in [
+        ("missing-private-reference", None, "不存在"),
+        (
+            "dpapi-private-reference",
+            Some("dpapi:invalid-private-secret"),
+            "无法解密",
+        ),
+        (
+            "json-private-reference",
+            Some(r#"{"cookie":"private-secret""#),
+            "上下文已损坏",
+        ),
+        (
+            "array-private-reference",
+            Some(r#"["private-secret"]"#),
+            "上下文已损坏",
+        ),
+        (
+            "headers-private-reference",
+            Some(r#"{"request_headers":"private-secret"}"#),
+            "请求头已损坏",
+        ),
+    ] {
+        if let Some(blob) = blob {
+            coordinator
+                .store_credential(name, blob, "browser_replay")
+                .unwrap();
+        }
+        let spec = TaskSpec {
+            url: "https://cdn.test/file.bin".into(),
+            credential_ref: Some(name.into()),
+            headers: BTreeMap::from([("Cookie".into(), "new-private-cookie".into())]),
+            ..Default::default()
+        };
+        let hydrate_error = hydrate_replay_headers(&coordinator.core(), spec.clone()).unwrap_err();
+        let seal_error = seal_spec_secrets(&coordinator, spec).unwrap_err();
+        for error in [hydrate_error, seal_error] {
+            assert!(error.contains(expected), "{name}: {error}");
+            assert!(!error.contains("private"));
+        }
+        assert_eq!(coordinator.load_credential(name).unwrap().as_deref(), blob);
+    }
+}
+
+#[test]
+fn core_completion_sealing_new_headers_preserves_the_existing_replay_context() {
+    for encoded_headers in [false, true] {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        let mut context = serde_json::json!({
+            "cookie": "existing-private-cookie",
+            "request_headers": {"Authorization": "Bearer existing-private-token"},
+            "request_contexts": {"https://segments.test": {
+                "path_contexts": {"/media/": {"request_headers": {"X-CDN-Token": "existing-private-cdn"}}}
+            }},
+            "request_body": "ZXhpc3RpbmctcHJpdmF0ZS1ib2R5"
+        });
+        if encoded_headers {
+            context["request_headers"] = Value::String(context["request_headers"].to_string());
+        }
+        coordinator
+            .store_credential("existing-context", &context.to_string(), "browser_replay")
+            .unwrap();
+        let spec = TaskSpec {
+            url: "https://cdn.test/file.bin".into(),
+            credential_ref: Some("existing-context".into()),
+            headers: BTreeMap::from([("X-New-Token".into(), "new-private-token".into())]),
+            ..Default::default()
+        };
+        let (hydrated, _) = hydrate_replay_headers(&coordinator.core(), spec.clone()).unwrap();
+        assert_eq!(
+            hydrated.headers["Authorization"],
+            "Bearer existing-private-token"
+        );
+        assert_eq!(hydrated.headers["Cookie"], "existing-private-cookie");
+        let spec = seal_spec_secrets(&coordinator, spec).unwrap();
+        assert!(spec.headers.is_empty());
+        let sealed = coordinator
+            .load_credential(spec.credential_ref.as_deref().unwrap())
+            .unwrap()
+            .unwrap();
+        let unsealed = CredentialVault.unprotect(&sealed).unwrap();
+        let merged: Value = serde_json::from_str(&unsealed).unwrap();
+        assert_eq!(merged["cookie"], context["cookie"]);
+        assert_eq!(merged["request_body"], context["request_body"]);
+        assert_eq!(merged["request_contexts"], context["request_contexts"]);
+        assert_eq!(
+            merged["request_headers"]["Authorization"],
+            "Bearer existing-private-token"
+        );
+        assert_eq!(
+            merged["request_headers"]["X-New-Token"],
+            "new-private-token"
+        );
+        assert_eq!(
+            coordinator
+                .load_credential("existing-context")
+                .unwrap()
+                .unwrap(),
+            context.to_string()
+        );
+    }
+}
+
+#[test]
 fn hydrate_replay_headers_applies_cookie() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     coordinator
@@ -2432,6 +2889,8 @@ fn browser_media_push_is_persisted_and_resolved_through_core() {
         status: "pending".into(),
         message: "等待选择设备".into(),
         location: String::new(),
+        credential_ref: None,
+        mime_type: String::new(),
         created_at_ms: 42,
     };
     let events = coordinator
@@ -2486,6 +2945,8 @@ fn browser_media_push_coordinator_enforces_single_pending_and_first_terminal_win
         status: "pending".into(),
         message: "waiting".into(),
         location: String::new(),
+        credential_ref: None,
+        mime_type: String::new(),
         created_at_ms: 100,
     };
     let second = MediaPushRequest {
@@ -2496,6 +2957,8 @@ fn browser_media_push_coordinator_enforces_single_pending_and_first_terminal_win
         status: "pending".into(),
         message: "waiting".into(),
         location: String::new(),
+        credential_ref: None,
+        mime_type: String::new(),
         created_at_ms: 101,
     };
     coordinator
@@ -2557,6 +3020,8 @@ fn browser_media_push_coordinator_rejects_nonpending_request_state() {
         status: "done".into(),
         message: String::new(),
         location: String::new(),
+        credential_ref: None,
+        mime_type: String::new(),
         created_at_ms: 102,
     };
     assert!(coordinator
@@ -3624,6 +4089,56 @@ fn import_paths_continues_after_a_bad_file_and_reports_partial_success() {
 }
 
 #[test]
+fn automatic_batch_urls_are_classified_independently_by_core() {
+    let root = std::env::temp_dir().join(format!("hls-auto-batch-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let target = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    target
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    target
+        .set_setting("download_dir", serde_json::json!(root))
+        .unwrap();
+    target
+        .set_setting("temp_dir", serde_json::json!(root.join("cache")))
+        .unwrap();
+    for (url, expected) in [
+        ("https://cdn.test/file.zip", crate::ResourceKind::File),
+        (
+            "https://cdn.test/MOVIE.M3U8?token=signed#player",
+            crate::ResourceKind::Hls,
+        ),
+        (
+            "https://cdn.test/live/stream.m3u8?token=signed",
+            crate::ResourceKind::Live,
+        ),
+        (
+            "https://cdn.test/movie.mpd?token=signed",
+            crate::ResourceKind::Dash,
+        ),
+        ("ftp://ftp.test/file.zip", crate::ResourceKind::Ftp),
+        ("sftp://sftp.test/file.zip", crate::ResourceKind::Sftp),
+    ] {
+        target
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: url.into(),
+                    resource_kind: crate::ResourceKind::File,
+                    start_paused: true,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let tasks = target.tasks().unwrap();
+        let task = tasks.iter().find(|task| task.url == url).unwrap();
+        assert_eq!(task.resource_kind, expected, "{url}");
+        assert_eq!(task.status, "paused", "{url}");
+    }
+    assert_eq!(target.tasks().unwrap().len(), 6);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn task_list_import_uses_default_for_a_queue_missing_on_this_computer() {
     let path = std::env::temp_dir().join(format!("hls-import-queue-{}.json", std::process::id()));
     fs::write(
@@ -3927,17 +4442,77 @@ fn failure_diagnostics_classify_local_output_failures_without_false_http_codes()
 #[test]
 fn share_media_rejects_ambiguous_and_untrusted_sources() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
-    assert!(share_media(&coordinator, "", "", "", "").is_err());
-    assert!(share_media(&coordinator, "relative-video.mp4", "", "video", "").is_err());
-    assert!(share_media(&coordinator, "", "javascript:alert(1)", "video", "").is_err());
+    assert!(share_media(&coordinator, "", "", "", "", "").is_err());
+    assert!(share_media(&coordinator, "relative-video.mp4", "", "video", "", "").is_err());
+    assert!(share_media(&coordinator, "", "javascript:alert(1)", "video", "", "").is_err());
     assert!(share_media(
         &coordinator,
         r"C:\missing.mp4",
         "https://cdn.test/video.mp4",
         "video",
+        "",
         ""
     )
     .is_err());
+}
+
+#[test]
+fn browser_media_push_binds_only_the_pending_source_and_requires_its_credentials() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .dispatch(CoreCommand::RequestMediaPush {
+            request: MediaPushRequest {
+                id: "push-context".into(),
+                push_kind: "cast".into(),
+                url: "https://cdn.test/media".into(),
+                title: String::new(),
+                mime_type: "application/dash+xml".into(),
+                status: "pending".into(),
+                message: String::new(),
+                location: String::new(),
+                credential_ref: Some("missing-push-credential".into()),
+                created_at_ms: 1,
+            },
+        })
+        .unwrap();
+    assert!(share_media(
+        &coordinator,
+        "",
+        "https://cdn.test/other",
+        "",
+        "",
+        "push-context"
+    )
+    .unwrap_err()
+    .contains("不匹配"));
+    assert!(share_media(
+        &coordinator,
+        "",
+        "https://cdn.test/media",
+        "",
+        "",
+        "push-context"
+    )
+    .unwrap_err()
+    .contains("凭据不存在"));
+    coordinator
+        .dispatch(CoreCommand::ResolveMediaPush {
+            request_id: "push-context".into(),
+            status: "canceled".into(),
+            message: String::new(),
+            location: String::new(),
+        })
+        .unwrap();
+    assert!(share_media(
+        &coordinator,
+        "",
+        "https://cdn.test/media",
+        "",
+        "",
+        "push-context"
+    )
+    .unwrap_err()
+    .contains("已结束"));
 }
 
 #[test]
@@ -3952,7 +4527,7 @@ fn stopping_cast_revokes_the_active_media_mount() {
     let file = dir.join("video.bin");
     std::fs::write(&file, b"cast-lifecycle").unwrap();
     server.mount(&token, file);
-    remember_cast_mount(&token);
+    remember_cast_mount(&token, &server.url_for(&token), "cast-lifecycle", "");
 
     let request = |token: &str| {
         let mut stream = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
@@ -4493,4 +5068,346 @@ fn a_published_selection_directory_reports_the_bytes_it_wrote() {
     // The single-file payload beside it must be untouched by a directory publish.
     assert_eq!(std::fs::read(&published).unwrap(), b"a complete payload");
     let _ = std::fs::remove_dir_all(root);
+}
+
+fn lifecycle_test_root(name: &str) -> PathBuf {
+    std::env::var_os("PI_SCRATCH_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!(
+            "hls-lifecycle-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+}
+
+fn lifecycle_task(coordinator: &CoreCoordinator, root: &Path, status: &str) -> String {
+    let mut core = coordinator.lock().unwrap();
+    let url = format!("https://cdn.test/lifecycle-{}.bin", core.tasks().len());
+    let events = core
+        .handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url,
+                download_dir: root.to_string_lossy().into_owned(),
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = events
+        .iter()
+        .find_map(|event| match &event.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    if status != "queued" {
+        core.handle(CoreCommand::UpdateProgress {
+            task_id: task_id.clone(),
+            downloaded_bytes: 7,
+            total_bytes: Some(100),
+            speed_bytes_per_sec: 0,
+            stage: "waiting".into(),
+            status: status.into(),
+        })
+        .unwrap();
+    }
+    task_id
+}
+
+#[test]
+fn queued_pause_and_cancel_without_directories_are_not_auto_started() {
+    for (action, status) in [("pause", "paused"), ("cancel", "canceled")] {
+        let root = lifecycle_test_root(action);
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        let task_id = lifecycle_task(&coordinator, &root, "queued");
+        assert!(!root.exists());
+        let events = coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id,
+                action: action.into(),
+            })
+            .unwrap();
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event.event, CoreEvent::Error { .. })));
+        coordinator.start_next_queued(false).unwrap();
+        assert_eq!(coordinator.tasks().unwrap()[0].status, status);
+        assert!(coordinator.active.lock().unwrap().is_empty());
+        assert!(!root.exists());
+    }
+}
+
+#[test]
+fn queued_or_exiting_workers_still_receive_pause_and_cancel_control() {
+    for status in ["queued", "paused"] {
+        for action in ["pause", "cancel"] {
+            let root = lifecycle_test_root("exiting-control");
+            let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+            let task_id = lifecycle_task(&coordinator, &root, status);
+            let paths = TaskPaths::for_task(
+                &task_id,
+                coordinator.lock().unwrap().task_spec(&task_id).unwrap(),
+            )
+            .unwrap();
+            paths.prepare().unwrap();
+            coordinator.active.lock().unwrap().insert(task_id.clone());
+            coordinator
+                .dispatch(CoreCommand::TaskAction {
+                    task_id: task_id.clone(),
+                    action: action.into(),
+                })
+                .unwrap();
+            assert_eq!(fs::read_to_string(&paths.control).unwrap(), action);
+            coordinator.active.lock().unwrap().remove(&task_id);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn pause_active_tasks_also_pauses_queued_tasks_before_worker_exit() {
+    let root = lifecycle_test_root("pause-all");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    let active_id = lifecycle_task(&coordinator, &root, "downloading");
+    lifecycle_task(&coordinator, &root, "queued");
+    lifecycle_task(&coordinator, &root, "queued");
+    let paths = TaskPaths::for_task(
+        &active_id,
+        coordinator.lock().unwrap().task_spec(&active_id).unwrap(),
+    )
+    .unwrap();
+    paths.prepare().unwrap();
+    coordinator.active.lock().unwrap().insert(active_id.clone());
+    coordinator.pause_active_tasks().unwrap();
+    assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
+    coordinator.active.lock().unwrap().remove(&active_id);
+    coordinator.start_next_queued(false).unwrap();
+    assert!(coordinator
+        .tasks()
+        .unwrap()
+        .iter()
+        .all(|task| task.status == "paused"));
+    assert!(coordinator.active.lock().unwrap().is_empty());
+    assert!(!root.join(".hls-tasks/task-2").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn schedule_stop_applies_only_to_running_tasks_and_enabled_scheduled_queues() {
+    let mut task = crate::TaskSnapshot {
+        status: "downloading".into(),
+        scheduled_stop_at: "2000-01-01T00:00:00Z".into(),
+        ..Default::default()
+    };
+    assert!(task_schedule_stop_due(&task, &[]));
+    task.scheduled_stop_at = "2999-01-01T00:00:00Z".into();
+    assert!(!task_schedule_stop_due(&task, &[]));
+    // 开始时间限制启动，不应单独中断已运行任务。
+    task.scheduled_stop_at.clear();
+    task.scheduled_start_at = "2999-01-01T00:00:00Z".into();
+    assert!(!task_schedule_stop_due(&task, &[]));
+    let mut profile = QueueProfile {
+        id: task.queue_id.clone(),
+        enabled: true,
+        schedule_enabled: true,
+        start_time: "00:00".into(),
+        stop_time: "00:00".into(),
+        ..Default::default()
+    };
+    for status in ["downloading", "recording", "merging", "checking", "parsing"] {
+        task.status = status.into();
+        assert!(task_schedule_stop_due(&task, &[profile.clone()]));
+    }
+    for status in ["queued", "paused", "canceled", "completed", "failed"] {
+        task.status = status.into();
+        assert!(!task_schedule_stop_due(&task, &[profile.clone()]));
+    }
+    task.status = "downloading".into();
+    profile.enabled = false;
+    assert!(!task_schedule_stop_due(&task, &[profile.clone()]));
+    profile.enabled = true;
+    profile.schedule_enabled = false;
+    assert!(!task_schedule_stop_due(&task, &[profile.clone()]));
+    profile.schedule_enabled = true;
+    profile.id = "other".into();
+    assert!(!task_schedule_stop_due(&task, &[profile]));
+}
+
+#[test]
+fn schedule_stop_dispatches_pause_control_without_touching_queued_tasks() {
+    let root = lifecycle_test_root("scheduled-stop");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let task_id = lifecycle_task(&coordinator, &root, "recording");
+    lifecycle_task(&coordinator, &root, "queued");
+    let profile = QueueProfile {
+        schedule_enabled: true,
+        start_time: "00:00".into(),
+        stop_time: "00:00".into(),
+        ..Default::default()
+    };
+    coordinator
+        .lock()
+        .unwrap()
+        .store_mut()
+        .set_setting(
+            "queue_profiles",
+            serde_json::to_string(&vec![profile]).unwrap(),
+        )
+        .unwrap();
+    let paths = TaskPaths::for_task(
+        &task_id,
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap(),
+    )
+    .unwrap();
+    paths.prepare().unwrap();
+    coordinator.active.lock().unwrap().insert(task_id.clone());
+    coordinator.pause_tasks_outside_schedule().unwrap();
+    assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&task_id)
+            .unwrap()
+            .status,
+        "paused"
+    );
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-2")
+            .unwrap()
+            .status,
+        "queued"
+    );
+    coordinator.active.lock().unwrap().remove(&task_id);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shutdown_waits_for_checkpoints_and_recovers_only_interrupted_tasks() {
+    for resume in [false, true] {
+        let root = lifecycle_test_root("shutdown");
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("core.sqlite3");
+        let coordinator = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        coordinator
+            .lock()
+            .unwrap()
+            .store_mut()
+            .set_setting("resume_interrupted_on_startup", resume)
+            .unwrap();
+        let active_id = lifecycle_task(&coordinator, &root, "downloading");
+        let manual_id = lifecycle_task(&coordinator, &root, "paused");
+        let queued_id = lifecycle_task(&coordinator, &root, "queued");
+        let paths = TaskPaths::for_task(
+            &active_id,
+            coordinator.lock().unwrap().task_spec(&active_id).unwrap(),
+        )
+        .unwrap();
+        paths.prepare().unwrap();
+        coordinator.active.lock().unwrap().insert(active_id.clone());
+        let (tx, rx) = mpsc::channel();
+        *coordinator.worker_wait_started.lock().unwrap() = Some(tx);
+        let runner = coordinator.clone();
+        let shutdown = thread::spawn(move || runner.dispatch(CoreCommand::Shutdown));
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
+        assert_eq!(
+            coordinator
+                .lock()
+                .unwrap()
+                .snapshot(&active_id)
+                .unwrap()
+                .status,
+            "paused"
+        );
+        // 模拟 worker 的断点落盘和最后一笔进度，之后才从 active 移除。
+        fs::write(&paths.progress, b"saved-checkpoint").unwrap();
+        mark_progress(
+            &coordinator.core,
+            &active_id,
+            47,
+            Some(100),
+            "waiting",
+            "paused",
+        )
+        .unwrap();
+        coordinator.active.lock().unwrap().remove(&active_id);
+        shutdown.join().unwrap().unwrap();
+        let persisted = coordinator.lock().unwrap().store().load_tasks().unwrap();
+        let interrupted = persisted
+            .iter()
+            .find(|task| task.task_id == active_id)
+            .unwrap();
+        assert_eq!(interrupted.status, "downloading");
+        assert_eq!(interrupted.downloaded_bytes, 47);
+        assert_eq!(fs::read(&paths.progress).unwrap(), b"saved-checkpoint");
+        coordinator.recover_startup().unwrap();
+        assert_eq!(
+            coordinator
+                .lock()
+                .unwrap()
+                .snapshot(&active_id)
+                .unwrap()
+                .status,
+            "paused"
+        );
+        assert!(coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: manual_id.clone(),
+                action: "resume".into(),
+            })
+            .is_err());
+        assert!(coordinator.active.lock().unwrap().is_empty());
+        drop(coordinator);
+
+        let restarted = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        restarted.recover_startup().unwrap();
+        // 未接受法律条款，恢复测试不启动网络 worker，但可验证恢复后的排队意图。
+        let core = restarted.lock().unwrap();
+        let interrupted = core.snapshot(&active_id).unwrap();
+        assert_eq!(interrupted.status, if resume { "queued" } else { "paused" });
+        assert_eq!(interrupted.downloaded_bytes, 47);
+        assert_eq!(core.snapshot(&manual_id).unwrap().status, "paused");
+        assert_eq!(core.snapshot(&queued_id).unwrap().status, "queued");
+        drop(core);
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn shutdown_timeout_does_not_persist_completed_stop_or_resume_intent() {
+    let root = lifecycle_test_root("shutdown-timeout");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let task_id = lifecycle_task(&coordinator, &root, "downloading");
+    let paths = TaskPaths::for_task(
+        &task_id,
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap(),
+    )
+    .unwrap();
+    paths.prepare().unwrap();
+    coordinator.active.lock().unwrap().insert(task_id.clone());
+    assert!(coordinator.prepare_for_update(Duration::ZERO).is_err());
+    assert!(coordinator.worker_is_active(&task_id).unwrap());
+    assert!(!coordinator.update_shutdown.load(Ordering::SeqCst));
+    assert_eq!(
+        coordinator.lock().unwrap().store().load_tasks().unwrap()[0].status,
+        "paused"
+    );
+    assert!(!paths.progress.exists());
+    coordinator.active.lock().unwrap().remove(&task_id);
+    fs::remove_dir_all(root).unwrap();
 }

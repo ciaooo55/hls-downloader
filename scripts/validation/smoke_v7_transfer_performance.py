@@ -288,6 +288,7 @@ def main() -> int:
         unique_requested_bytes = covered.count(1)
         result = {
             "schema": 1,
+            "engine_sha256": hashlib.sha256(engine_path.read_bytes()).hexdigest(),
             "stage_volume": str(root.resolve().drive).upper(),
             "payload_bytes": PAYLOAD_SIZE,
             "elapsed_ms": round(elapsed * 1000, 2),

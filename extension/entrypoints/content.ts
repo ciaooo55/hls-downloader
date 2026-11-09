@@ -1,5 +1,5 @@
 import { browser } from 'wxt/browser'
-import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, type OverlayAction } from '../lib/mediaOverlay'
+import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect, type OverlayAction, type OverlayRect } from '../lib/mediaOverlay'
 import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
@@ -9,6 +9,7 @@ import { mediaPushTerminalResult } from '../lib/mediaPush'
 import { selectedDownloadUrls } from '../lib/selectionLinks'
 import { formatBytes, formatDuration } from '../lib/format'
 import { installSubtitleContent } from '../lib/subtitleContent'
+import { youtubePageVideoId } from '../lib/siteManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
   let lastError: unknown
@@ -91,15 +92,16 @@ export default defineContentScript({
     // The UI mount below is asynchronous. Capture bridge/webRequest messages
     // during that window instead of losing the first manifest from a fast MSE
     // player (which otherwise leaves the overlay in “正在识别” forever).
-    const earlyResourceEvents: Array<{ url: string; mimeType?: string; inspection?: Partial<MediaResource> }> = []
-    const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string; purpose?: 'mse' | 'download' }> = []
+    const earlyResourceEvents: Array<{ url: string; mimeType?: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl?: string; responseIdentity?: Record<string, string> }> = []
+    const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string; purpose?: 'mse' | 'download'; sourcePageUrl?: string }> = []
     const earlyRuntimeMessages: any[] = []
     let contentReady = false
     const earlyResourceListener = (event: Event) => {
       if (contentReady) return
       const detail = bridgeDetail(event)
+      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
       if (typeof detail.url === 'string') {
-        earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType, inspection: detail.inspection })
+        earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType, inspection: detail.inspection, siteVideoId: detail.siteVideoId, sourcePageUrl: detail.sourcePageUrl, responseIdentity: detail.responseIdentity })
         if (classifyResource(detail.url, detail.mimeType)) requestActivation()
       }
       if (earlyResourceEvents.length > 200) earlyResourceEvents.splice(0, earlyResourceEvents.length - 200)
@@ -107,11 +109,13 @@ export default defineContentScript({
     const earlyMseListener = (event: Event) => {
       if (contentReady) return
       const detail = bridgeDetail(event)
+      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
       if (typeof detail.blobUrl === 'string' && typeof detail.mediaUrl === 'string') {
         earlyMseEvents.push({
           blobUrl: detail.blobUrl,
           mediaUrl: detail.mediaUrl,
           purpose: detail.purpose === 'download' ? 'download' : 'mse',
+          sourcePageUrl: detail.sourcePageUrl,
         })
         if (earlyMseEvents.length > 200) earlyMseEvents.splice(0, earlyMseEvents.length - 200)
         if (detail.purpose === 'download') {
@@ -240,6 +244,7 @@ export default defineContentScript({
     const knownVideos = new Set<HTMLVideoElement>()
     const observedVideoSizes = new WeakSet<HTMLVideoElement>()
     let videoResizeObserver: ResizeObserver | null = null
+    let videoIntersectionObserver: IntersectionObserver | null = null
     const mediaOwnerIds = new WeakMap<HTMLMediaElement, string>()
     let nextMediaOwnerId = 1
     const mediaOwner = (media: HTMLMediaElement) => {
@@ -253,6 +258,7 @@ export default defineContentScript({
       for (const video of knownVideos) {
         if (!video.isConnected) {
           videoResizeObserver?.unobserve(video)
+          videoIntersectionObserver?.unobserve(video)
           observedVideoSizes.delete(video)
           knownVideos.delete(video)
         }
@@ -663,7 +669,7 @@ export default defineContentScript({
       })
     }
 
-    const openVideoPanel = (video: HTMLVideoElement, rect: DOMRect) => {
+    const openVideoPanel = (video: HTMLVideoElement, rect: OverlayRect) => {
       if (!wrap) return
       activeVideo = video
       activePlayback = playbackByVideo.get(video) || null
@@ -689,11 +695,13 @@ export default defineContentScript({
       let visible = 0
       const buttonBounds = videoButtonBounds()
       const videos = currentVideos()
-        .map(video => ({ video, rect: video.getBoundingClientRect(), playback: playbackByVideo.get(video) || null }))
+        .flatMap(video => {
+          const rect = visibleMediaRect(video, { width: innerWidth, height: innerHeight })
+          return rect ? [{ video, rect, playback: playbackByVideo.get(video) || null }] : []
+        })
         .filter(({ video, rect, playback }) => Boolean(playback)
           && (video === activeVideo || (!video.paused && !video.ended))
-          && rect.width >= 180 && rect.height >= 100
-          && rect.bottom >= 0 && rect.top <= innerHeight && rect.right >= 0 && rect.left <= innerWidth)
+          && rect.width >= 180 && rect.height >= 100)
         .map(item => {
           const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
           const exact = candidates.filter(resource => item.playback?.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
@@ -1041,26 +1049,27 @@ export default defineContentScript({
     let positionFrame = 0
     const scheduleVideoButtons = () => {
       if (positionFrame || ctx.isInvalid) return
-      positionFrame = ctx.requestAnimationFrame(() => { positionFrame = 0; updateVideoButtons() })
+      positionFrame = ctx.requestAnimationFrame(() => {
+        positionFrame = 0
+        updateHoveredPlayer()
+        updateVideoButtons()
+      })
     }
-    let pointerFrame = 0
     let pointer = { x: -1, y: -1, inControls: false }
     const updateHoveredPlayer = () => {
-      pointerFrame = 0
       if (videoControlDragging || pointer.inControls || ui.shadow.activeElement) return
-      const target = currentVideos().filter(video => {
-        const rect = video.getBoundingClientRect()
-        return playbackByVideo.has(video) && rect.width >= 180 && rect.height >= 100
+      const candidates = currentVideos().filter(video => {
+        if (!playbackByVideo.has(video)) return false
+        const rect = visibleMediaRect(video, { width: innerWidth, height: innerHeight })
+        return rect && rect.width >= 180 && rect.height >= 100
           && pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom
-      }).sort((left, right) => {
-        const a = left.getBoundingClientRect(); const b = right.getBoundingClientRect()
-        return a.width * a.height - b.width * b.height
-      })[0] || null
-      if (playerDismissTimer) clearTimeout(playerDismissTimer)
-      playerDismissTimer = undefined
+      })
+      const target = mediaElementAtPoint(candidates, pointer)
       if (target) {
-        if (hoveredVideo !== target) { hoveredVideo = target; scheduleVideoButtons() }
-      } else if (hoveredVideo) {
+        if (playerDismissTimer) clearTimeout(playerDismissTimer)
+        playerDismissTimer = undefined
+        hoveredVideo = target
+      } else if (hoveredVideo && !playerDismissTimer) {
         // 留出跨越播放器与按钮间隙的时间，避免鼠标移向按钮时按钮先消失。
         playerDismissTimer = setTimeout(() => {
           playerDismissTimer = undefined
@@ -1071,16 +1080,15 @@ export default defineContentScript({
     }
     ctx.addEventListener(document, 'pointermove', event => {
       pointer = { x: event.clientX, y: event.clientY, inControls: event.composedPath().includes(ui.shadow.host) }
-      if (!pointerFrame) pointerFrame = ctx.requestAnimationFrame(updateHoveredPlayer)
+      scheduleVideoButtons()
     }, { capture: true, passive: true })
     ctx.addEventListener(document, 'pointerout', event => {
       if (event.relatedTarget) return
       pointer = { x: -1, y: -1, inControls: false }
-      if (!pointerFrame) pointerFrame = ctx.requestAnimationFrame(updateHoveredPlayer)
+      scheduleVideoButtons()
     }, { capture: true, passive: true })
     ctx.onInvalidated(() => {
       if (playerDismissTimer) clearTimeout(playerDismissTimer)
-      if (pointerFrame) cancelAnimationFrame(pointerFrame)
     })
     ctx.addEventListener(window, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
     ctx.addEventListener(window, 'resize', scheduleVideoButtons)
@@ -1101,11 +1109,33 @@ export default defineContentScript({
       ? null
       : new ResizeObserver(() => scheduleVideoButtons())
     ctx.onInvalidated(() => videoResizeObserver?.disconnect())
+    videoIntersectionObserver = typeof IntersectionObserver === 'undefined'
+      ? null : new IntersectionObserver(() => scheduleVideoButtons())
+    ctx.onInvalidated(() => videoIntersectionObserver?.disconnect())
+    let geometryTargets = new Set<HTMLElement>()
+    const geometryObserver = new MutationObserver(() => scheduleVideoButtons())
+    const syncMediaGeometry = () => {
+      const next = new Set(currentVideos().flatMap(video => [...mediaOverlayAncestors(video)]))
+      if (next.size === geometryTargets.size && [...next].every(target => geometryTargets.has(target))) return
+      // Observe player geometry directly. Chat/animation attributes elsewhere
+      // must not produce a document-wide stream of mutation records.
+      geometryObserver.disconnect()
+      for (const target of geometryTargets) {
+        if (!next.has(target)) videoResizeObserver?.unobserve(target)
+      }
+      for (const target of next) {
+        geometryObserver.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'hidden'] })
+        if (!geometryTargets.has(target)) videoResizeObserver?.observe(target)
+      }
+      geometryTargets = next
+    }
+    ctx.onInvalidated(() => { geometryObserver.disconnect(); geometryTargets.clear() })
     const trackVideo = (video: HTMLVideoElement) => {
       knownVideos.add(video)
       if (observedVideoSizes.has(video)) return
       observedVideoSizes.add(video)
       videoResizeObserver?.observe(video)
+      videoIntersectionObserver?.observe(video)
     }
 
     const explicitElementSource = (element: HTMLMediaElement | HTMLSourceElement): string => {
@@ -1145,6 +1175,7 @@ export default defineContentScript({
       owner = '',
       confidence = 0,
       inspection?: Partial<MediaResource>,
+      observedIdentity?: Record<string, string>,
     ) => {
       const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
       if (!kind) return
@@ -1167,6 +1198,7 @@ export default defineContentScript({
         owner: owner || (playbackSource ? 'media-element' : 'page'),
         confidence: boundedConfidence(confidence || (playbackSource ? 0.98 : 0.58)),
         replayContext: { method: 'GET', page_url: location.href.split('#', 1)[0] },
+        ...(observedIdentity ? { responseIdentity: observedIdentity } : {}),
       }
       const changed = addResource(resource)
       if (changed) scheduleRender()
@@ -1263,7 +1295,12 @@ export default defineContentScript({
         }
       }
       discover(root)
+      syncMediaGeometry()
       mediaEvents.forEach(type => ctx.addEventListener(root, type, markPlayback, { capture: true }))
+      ctx.addEventListener(root, 'slotchange', () => {
+        syncMediaGeometry()
+        scheduleVideoButtons()
+      }, { capture: true })
       const mediaObserver = new MutationObserver(mutations => {
         // 播放器被移除时也要撤掉旧入口，并释放 ResizeObserver 对元素的引用。
         let playbackChanged = mutations.some(mutation => mutation.removedNodes.length > 0)
@@ -1274,6 +1311,7 @@ export default defineContentScript({
               if (!(node instanceof Element)) return
               const containsMedia = node.matches('video,audio,source')
                 || Boolean(node.querySelector('video,audio,source'))
+                || [...geometryTargets].some(target => node.contains(target))
               if (!containsMedia) return
               discover(node)
               playbackChanged = true
@@ -1287,6 +1325,7 @@ export default defineContentScript({
           }
         })
         if (playbackChanged) {
+          syncMediaGeometry()
           scheduleVideoButtons()
           queueMicrotask(syncPlayingVideos)
         }
@@ -1315,10 +1354,16 @@ export default defineContentScript({
 
     const handleResourceEvent = (event: Event) => {
       const detail = bridgeDetail(event)
-      add(detail.url, detail.mimeType, false, detail.inspection?.inspected ? ['manifest_inspection', 'page_response'] : [], '', 0, detail.inspection)
+      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
+      // A buffered player response may arrive after an SPA navigation.
+      if (detail.siteVideoId && detail.siteVideoId !== youtubePageVideoId(location.href)) return
+      const evidence = detail.inspection?.inspected ? ['manifest_inspection', 'page_response']
+        : detail.siteVideoId ? ['site_player_metadata', 'page_response'] : []
+      add(detail.url, detail.mimeType, false, evidence, '', 0, detail.inspection, detail.responseIdentity)
     }
     const handleMseEvent = (event: Event) => {
       const detail = bridgeDetail(event)
+      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
       const blobUrl = String(detail.blobUrl || '')
       const mediaUrl = String(detail.mediaUrl || '')
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
@@ -1511,6 +1556,7 @@ export default defineContentScript({
       selectionMode = false
       selectionResourceIds = null
       playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
+      mseEvidenceByBlob.clear()
       videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
       panelPosition = null
       if (pinned) setPinned(false)
@@ -1531,6 +1577,7 @@ export default defineContentScript({
     ctx.addEventListener(window, '__hls_downloader_navigation__', syncPage)
     ctx.addEventListener(window, 'pageshow', () => { syncPage(); syncPlayingVideos() })
     ctx.addEventListener(document, 'visibilitychange', () => {
+      scheduleVideoButtons()
       if (document.visibilityState === 'visible') {
         syncPage()
         syncPlayingVideos()

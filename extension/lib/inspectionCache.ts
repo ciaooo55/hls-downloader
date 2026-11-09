@@ -1,3 +1,22 @@
+import { pageIdentity, type MediaResource } from './resources'
+
+/** Keep signatures and captured headers out of the in-memory cache key. */
+export async function adaptiveInspectionKey(
+  resource: Pick<MediaResource, 'url' | 'kind' | 'pageUrl' | 'frameId' | 'method' | 'requestHeaders' | 'responseIdentity' | 'replayContext'>,
+  tabId: number,
+): Promise<string> {
+  const ordered = (values: Record<string, string> = {}) => Object.entries(values)
+    .map(([name, value]) => [name.toLowerCase(), value])
+    .sort(([a], [b]) => a.localeCompare(b))
+  const identity = JSON.stringify([
+    resource.frameId ?? -1, pageIdentity(resource.pageUrl), resource.kind, resource.url,
+    (resource.method || 'GET').toUpperCase(), resource.replayContext?.request_id || '',
+    ordered(resource.requestHeaders), ordered(resource.responseIdentity),
+  ])
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity))
+  return `${tabId}:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
 /**
  * Bounds best-effort manifest inspection in a long-lived MV3 worker. A failed
  * network probe is explicitly released so a renewed signed URL or transient

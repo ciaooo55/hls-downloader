@@ -4,8 +4,8 @@ import { downloadSelectionKey, localDownloadIntentUrl } from '../lib/resources'
 import { mediaPushRequestId } from '../lib/mediaPush'
 import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggregateTabMedia } from '../lib/sniffCommand'
 import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
-import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
-import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, type RequestChain } from '../lib/requestChain'
+import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageIdentity, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
+import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, responseIdentity, type RequestChain, type DownloadLike } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, localFileTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload } from '../lib/takeover'
 import {
   PAUSED_FOLLOW_UP_RECHECK_MS,
@@ -18,8 +18,9 @@ import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffS
 import { createRecurringAlarm, filenameDeterminationEvent, requestHeaderExtraInfo } from '../lib/browserCapabilities'
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
+import { isMediaResponseStatus } from '../lib/manifestSniff'
 import { contentDispositionFilename } from '../lib/contentDisposition'
-import { InspectionCache } from '../lib/inspectionCache'
+import { adaptiveInspectionKey, InspectionCache } from '../lib/inspectionCache'
 import { cookieHeaderForUrl, cookieLookupUrl, cookieMatchesUrl, cookiePartitionKeyForSrcdoc, cookiePartitionSite, cookiePermissionAllows, isCookieHostPermissionError, isSrcdocCookieHostPermissionError, normalizeCookiePermissionHosts, replayCookieIdentity, type ReplayCookie, type SrcdocFrameContext } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
@@ -97,7 +98,8 @@ async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<
   await hydrateLocalDownloads()
   const [item] = await browser.downloads.search({ id: record.downloadId })
   record.sourceStartedAt = item?.startTime
-  record.sourceFilename = item?.filename
+  // 浏览器可在接收响应时按 MIME 调整文件名；完成后才固定导入路径。
+  record.sourceFilename = item?.state === 'complete' ? item.filename : undefined
   const existing = [...localDownloadHandoffs.values()].find(candidate => candidate.downloadId === record.downloadId
       && (!candidate.sourceStartedAt || !record.sourceStartedAt || candidate.sourceStartedAt === record.sourceStartedAt)
     || candidate.sourceStartedAt && candidate.sourceStartedAt === record.sourceStartedAt
@@ -119,7 +121,7 @@ async function findLocalBrowserDownload(record: LocalDownloadHandoff): Promise<B
     && await localDownloadIntentUrl(candidate.url) === record.sourceKey
   if (item && await matches(item)) return item
   // Firefox 的数字下载 ID 不跨浏览器会话持久；仅按稳定属性唯一匹配后重新绑定。
-  if (!record.sourceStartedAt || !record.sourceFilename) return undefined
+  if (!record.sourceStartedAt) return undefined
   const candidates = []
   for (const candidate of await browser.downloads.search({})) {
     if (await matches(candidate)) candidates.push(candidate)
@@ -201,6 +203,8 @@ async function continueLocalDownloadHandoffs(): Promise<void> {
           // data URL 内容可能远超 Native Messaging 限制；文件字节只从已完成的本地文件复制。
           const url = record.importUrl || (item.url.startsWith('data:') ? 'data:application/octet-stream,' : item.url)
           // 登记写盘失败后记录仍可能留在内存；恢复轮询不能绕过持久身份再提交。
+          // 先固定完成文件的路径，丢回执后也不能把同 ID 的另一条路径当作原件删除。
+          record.sourceFilename = item.filename
           await persistLocalDownloads()
           const response = await native({ op: 'offer_local_file', resource: {
             url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
@@ -398,10 +402,16 @@ async function clearTabResources(tabId: number, keep?: string): Promise<void> {
 
 const responseFilename = contentDispositionFilename
 
+const observedTabPages = new Map<number, string>()
+
 async function topLevelPageUrl(tabId: number, fallback = ''): Promise<string> {
   if (tabId >= 0) {
     const tabUrl = (await browser.tabs.get(tabId).catch(() => null))?.url || ''
-    if (/^https?:\/\//i.test(tabUrl)) return tabUrl
+    if (/^https?:\/\//i.test(tabUrl)) {
+      // URL events own later updates; an older async lookup must not undo them.
+      if (!observedTabPages.has(tabId)) observedTabPages.set(tabId, pageIdentity(tabUrl))
+      return tabUrl
+    }
   }
   return fallback
 }
@@ -696,7 +706,7 @@ async function continuePausedHandoffFollowups(): Promise<void> {
   if (parked) schedulePausedFollowUpAccelerator(parked.deadline - Date.now())
 }
 
-async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1) {
+async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1, expectedPageUrl?: string) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
   let pageUrl = resource.pageUrl || ''
@@ -707,6 +717,8 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     // becoming the incorrectly advertised source page.
     pageUrl = await topLevelPageUrl(tabId, pageUrl)
   }
+  // Async inspection must not adopt a newly navigated tab's page identity.
+  if (expectedPageUrl !== undefined && pageIdentity(pageUrl) !== pageIdentity(expectedPageUrl)) return false
   const key = pageResourceKey(tabId, pageUrl)
   const merged = await resourceSessionStore.update(key, resources => mergeResources(
     resources,
@@ -715,6 +727,7 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     true,
   ))
   await setResourceBadge(tabId, merged)
+  return true
 }
 
 function badgeText(resources: MediaResource[]): string {
@@ -890,34 +903,76 @@ async function pingDesktop(): Promise<any> {
   return response
 }
 
+// Abort both pending probes and response body reads when their page disappears.
+const adaptiveInspectionPages = new Map<number, AbortController>()
+const activeAdaptiveInspections = new Map<string, AbortController>()
+
 async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1): Promise<void> {
-  if (resource.inspected) return
+  // Only inspect page-owned GET responses. Extension probes must not recursively
+  // trigger more probes, and a POST manifest must never be reissued as a GET.
+  if (tabId < 0 || (resource.method && resource.method.toUpperCase() !== 'GET')
+    || (resource.statusCode !== undefined
+      && (resource.statusCode < 200 || resource.statusCode >= 300 || [204, 205].includes(resource.statusCode)))) return
+  const pageController = adaptiveInspectionPages.get(tabId) || new AbortController()
+  adaptiveInspectionPages.set(tabId, pageController)
+  let inspectionController: AbortController | undefined
+  const isCurrentPage = () => !pageController.signal.aborted && !inspectionController?.signal.aborted
+    && adaptiveInspectionPages.get(tabId) === pageController
   const normalized = {
     ...resource,
     url: canonicalMediaUrl(resource.url, resource.kind),
   }
-  const inspectionKey = `${tabId}:${normalized.pageUrl || ''}:${normalized.kind}:${normalized.url}`
-  if (!['hls', 'dash'].includes(normalized.kind) || !inspectedAdaptive.claim(inspectionKey)) return
+  if (!['hls', 'dash'].includes(normalized.kind)) return
+  const inspectionKey = await adaptiveInspectionKey(normalized, tabId)
+  if (!isCurrentPage()) return
+  if (resource.inspected) {
+    // A master without a known child still needs the bounded rendition probe.
+    if (resource.kind !== 'hls' || resource.manifestType === 'media' || resource.isLive !== undefined) {
+      activeAdaptiveInspections.get(inspectionKey)?.abort()
+      inspectedAdaptive.claim(inspectionKey)
+    }
+    return
+  }
+  if (!inspectedAdaptive.claim(inspectionKey)) return
+  if (activeAdaptiveInspections.size >= 8) {
+    inspectedAdaptive.defer(inspectionKey, 1_000)
+    return
+  }
+  inspectionController = new AbortController()
+  activeAdaptiveInspections.set(inspectionKey, inspectionController)
   try {
-    // Manifest probes must use the same page identity as the observed request.
-    // A CDN may return 403 to an extension-origin fetch even though the media
-    // request in the tab succeeded. Cookies are looked up for this exact CDN
-    // URL; they are never copied from the page origin to another host.
-    const inspectionHeaders: Record<string, string> = {}
-    const pageUrl = String(resource.pageUrl || '')
-    try {
-      const page = new URL(pageUrl)
-      if (/^https?:$/i.test(page.protocol)) {
-        inspectionHeaders.referer = page.href.split('#', 1)[0]
-        inspectionHeaders.origin = page.origin
-      }
-    } catch {}
-    const cookie = await cookiesFor(normalized.url, await topLevelPageUrl(tabId, pageUrl), tabId, resource.frameId ?? 0)
-    if (cookie) inspectionHeaders.cookie = cookie
-    const probeResource = { ...normalized, inspectionHeaders }
+    const sourcePageUrl = await topLevelPageUrl(tabId, resource.pageUrl || '')
+    if (!isCurrentPage()) return
+    const probeResource = {
+      ...normalized,
+      signal: AbortSignal.any([pageController.signal, inspectionController.signal]),
+      requestContextForUrl: async (url: string) => {
+        if (!isCurrentPage()) throw new Error('媒体来源页面已变化')
+        const chain = requestChains.find({ url, referrer: resource.pageUrl, frameId: resource.frameId,
+          ...(url === normalized.url ? { requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity } : {}),
+        }, Date.now(), tabId, true, 'exact')
+        if (chain && chain.method.toUpperCase() !== 'GET') throw new Error('不能重放非 GET 清单请求')
+        const sameOrigin = new URL(url).origin === new URL(normalized.url).origin
+        const requestHeaders = chain?.requestHeaders || (sameOrigin ? normalized.requestHeaders : undefined)
+        // Captured empty Referer/Origin is authoritative. Only unobserved
+        // requests use the source frame as a fallback, never another CDN's token.
+        const identity = requestHeaders !== undefined
+          ? capturedRequestIdentity(requestHeaders)
+          : resourceRequestIdentity({ pageUrl: resource.pageUrl })
+        const inspectionHeaders: Record<string, string> = {}
+        if (identity.referer) inspectionHeaders.referer = identity.referer
+        if (identity.origin) inspectionHeaders.origin = identity.origin
+        const cookie = await cookiesFor(url, sourcePageUrl, tabId, resource.frameId ?? 0)
+        if (cookie) inspectionHeaders.cookie = cookie
+        if (!isCurrentPage()) throw new Error('媒体来源页面已变化')
+        return { requestHeaders, inspectionHeaders }
+      },
+    }
     const metadata = normalized.kind === 'hls'
       ? await inspectHlsResource(probeResource)
       : await inspectDashResource(probeResource)
+    // An old response must not be relabelled with the tab's new source page.
+    if (!isCurrentPage() || pageIdentity(await topLevelPageUrl(tabId, sourcePageUrl)) !== pageIdentity(sourcePageUrl) || !isCurrentPage()) return
     if (metadata) {
       const enriched = {
         ...normalized,
@@ -927,7 +982,8 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
         confidence: Math.max(boundedConfidence(normalized.confidence), 0.96),
         replayContext: { ...(normalized.replayContext || {}), method: 'GET' },
       }
-      await saveResource(enriched, tabId)
+      if (!isCurrentPage() || !await saveResource(enriched, tabId, sourcePageUrl)) return
+      if (!isCurrentPage() || pageIdentity(await topLevelPageUrl(tabId, sourcePageUrl)) !== pageIdentity(sourcePageUrl) || !isCurrentPage()) return
       await sendCapturedResource(tabId, enriched)
     } else {
       // A response can be temporarily unauthorized, truncated or not yet a
@@ -938,7 +994,11 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
   } catch {
     // A transient CDN/auth failure must not permanently suppress inspection.
     // The captured manifest remains downloadable and the next observation can retry.
-    inspectedAdaptive.defer(inspectionKey)
+    if (isCurrentPage()) inspectedAdaptive.defer(inspectionKey)
+  } finally {
+    if (activeAdaptiveInspections.get(inspectionKey) === inspectionController) {
+      activeAdaptiveInspections.delete(inspectionKey)
+    }
   }
 }
 
@@ -950,8 +1010,10 @@ function successfulChainForResource(resource: MediaResource, explicitChain?: Req
   }
   if (isMatchingSuccess(explicitChain)) return explicitChain
   const found = resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId }, Date.now(), resource.tabId, true)
-    : requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId }, Date.now(), undefined, true)
+    ? requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId,
+      requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity }, Date.now(), resource.tabId, true)
+    : requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId,
+      requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity }, Date.now(), undefined, true)
   return isMatchingSuccess(found) ? found : undefined
 }
 
@@ -964,31 +1026,45 @@ async function readyResourceChain(resource: MediaResource, explicitChain?: Reque
   for (let attempt = 0; attempt < 12; attempt += 1) {
     if (chain && isShortLivedMediaSignatureUsable({ ...resource, url: chain.finalUrl })) return chain
     if (attempt < 11) await new Promise(resolve => setTimeout(resolve, 125))
-    chain = successfulChainForResource(resource)
+    chain = successfulChainForResource({ ...resource, responseIdentity: undefined,
+      replayContext: { ...resource.replayContext, request_id: '' } })
   }
   throw new Error('浏览器尚未获得可用的短效签名媒体链接；请让视频继续播放或刷新页面后重试')
+}
+
+interface ResourceRequestOptions {
+  allowUnverified?: boolean
+  browserDownload?: DownloadLike
+  browserRequestId?: string
+  desktopReady?: boolean
+  resourceCookies?: ReplayCookie[]
 }
 
 async function resourceRequest(
   resource: MediaResource,
   explicitChain?: RequestChain,
-  options: { allowUnverified?: boolean } = {},
+  options: ResourceRequestOptions = {},
 ) {
   resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
   const requireSuccessfulRequest = resource.kind !== 'magnet'
   const findChain = () => {
+    if (options.browserDownload) {
+      return requestChains.find(options.browserDownload, Date.now(), resource.tabId, requireSuccessfulRequest, 'exact')
+    }
     const found = resource.tabId !== undefined && resource.tabId >= 0
-      ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), resource.tabId, requireSuccessfulRequest)
-      : requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId }, Date.now(), undefined, requireSuccessfulRequest)
+      ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId,
+        requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity }, Date.now(), resource.tabId, requireSuccessfulRequest)
+      : requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId,
+        requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity }, Date.now(), undefined, requireSuccessfulRequest)
     return !resource.method || found?.method.toUpperCase() === resource.method.toUpperCase() ? found : undefined
   }
-  let chain = usesShortLivedMediaSignature(resource)
+  let chain = !options.browserDownload && usesShortLivedMediaSignature(resource)
     ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
     : explicitChain || findChain()
   // 点击前接管尚未发出 GET；同 URL 的旧 POST 不能成为这次链接点击的请求体。
   if (resource.method && chain?.method.toUpperCase() !== resource.method.toUpperCase()) chain = undefined
-  if (!chain && !options.allowUnverified && resource.kind !== 'magnet') {
+  if (!chain && (!options.allowUnverified || Object.keys(resource.responseIdentity || {}).length) && resource.kind !== 'magnet') {
     // A visible URL is not by itself a browser request. Replaying a page
     // controller or stale signed gateway without a successful response chain
     // is how HTML pages became download tasks. Close the short observation
@@ -996,6 +1072,9 @@ async function resourceRequest(
     for (let attempt = 0; !chain && attempt < 8; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 75))
       chain = findChain()
+    }
+    if (!chain && Object.keys(resource.responseIdentity || {}).length) {
+      throw new Error('无法唯一关联该媒体响应与浏览器请求；请继续播放后重试')
     }
     const successfulResponse = resource.statusCode !== undefined
       && resource.statusCode >= 200 && resource.statusCode < 400
@@ -1009,7 +1088,7 @@ async function resourceRequest(
 async function resourcePayload(
   resource: MediaResource,
   explicitChain?: RequestChain,
-  options: { allowUnverified?: boolean } = {},
+  options: ResourceRequestOptions = {},
 ) {
   resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
   const { chain, pageUrl } = await resourceRequest(resource, explicitChain, options)
@@ -1045,6 +1124,7 @@ async function resourcePayload(
     userAgent: pageIdentity.userAgent || chainIdentity.userAgent || identity.userAgent,
   }
   const requestContexts: Record<string, Record<string, unknown>> = {}
+  let resourceCookie: string | undefined
   if (resource.tabId !== undefined && resource.tabId >= 0) {
     const cookieSnapshots = new Map<string, Promise<ReplayCookie[]>>()
     const addRequestContext = async (requestUrl: string, requestHeaders: Record<string, string> | undefined) => {
@@ -1054,10 +1134,13 @@ async function resourcePayload(
       const scopedIdentity = capturedRequestIdentity(requestHeaders, navigator.userAgent)
       let snapshot = cookieSnapshots.get(origin)
       if (!snapshot) {
-        snapshot = cookieRecordsFor(requestUrl, pageUrl, resource.tabId, resource.frameId ?? 0, true)
+        snapshot = origin === new URL(resource.url).origin && options.resourceCookies !== undefined
+          ? Promise.resolve(options.resourceCookies)
+          : cookieRecordsFor(requestUrl, pageUrl, resource.tabId, resource.frameId ?? 0, true)
         cookieSnapshots.set(origin, snapshot)
       }
       const cookies = await snapshot
+      if (origin === new URL(resource.url).origin) resourceCookie = cookieHeaderForUrl(cookies, resource.url)
       const context = {
         request_headers: replayableRequestHeaders(requestHeaders),
         referer: scopedIdentity.referer,
@@ -1070,14 +1153,16 @@ async function resourcePayload(
         ...context,
         cookie: cookieHeaderForUrl(cookies, requestUrl), cookies,
         path_contexts: { ...(requestContexts[origin]?.path_contexts as Record<string, unknown> || {}), [path]: context },
+        url_contexts: { ...(requestContexts[origin]?.url_contexts as Record<string, unknown> || {}), [requestUrl.split('#', 1)[0]]: context },
       }
     }
     // 普通文件只重放自身请求；其他媒体/CDN 的身份只供 HLS/DASH 分片使用。
     const contexts = resource.kind === 'hls' || resource.kind === 'dash'
-      ? requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl)
+      ? requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl,
+        Date.now(), 32, chain?.frameId ?? resource.frameId)
       : []
-    // 最后应用所选媒体；同域的其他音轨/分片保留自己的目录请求身份。
-    for (const context of contexts.filter(context => context.requestId !== chain?.requestId)) {
+    // 最后应用所选媒体；其他音轨/密钥保留精确身份，目录默认使用最新请求。
+    for (const context of contexts.filter(context => context.requestId !== chain?.requestId).reverse()) {
       await addRequestContext(context.finalUrl, context.requestHeaders)
     }
     if (chain) await addRequestContext(chain.finalUrl, chain.requestHeaders)
@@ -1108,7 +1193,7 @@ async function resourcePayload(
     preferred_height: resource.preferredHeight || 0,
     referer: sourceIdentity.referer || identity.referer,
     origin: sourceIdentity.origin || identity.origin,
-    cookie: await cookiesFor(resource.url, pageUrl, resource.tabId, resource.frameId ?? 0),
+    cookie: resourceCookie ?? await cookiesFor(resource.url, pageUrl, resource.tabId, resource.frameId ?? 0),
     user_agent: sourceIdentity.userAgent || identity.userAgent,
     request_headers: replayableRequestHeaders(chain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
@@ -1126,12 +1211,12 @@ async function resourcePayload(
 async function requestDownload(
   resource: MediaResource,
   chain?: RequestChain,
-  options: { allowUnverified?: boolean } = {},
+  options: ResourceRequestOptions = {},
 ) {
   if (validDownloadIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`)
   await hydrateHandoffTracker()
   const selectionKey = downloadSelectionKey(resource)
-  const pending = [...trackedHandoffs.values()].find(item => item.tabId === resource.tabId
+  const pending = !options.browserRequestId && [...trackedHandoffs.values()].find(item => item.tabId === resource.tabId
     && item.resourceId === resource.id && item.status === 'pending'
     && (!item.selectionKey || item.selectionKey === selectionKey))
   if (pending) {
@@ -1141,7 +1226,7 @@ async function requestDownload(
     await persistHandoffTracker()
     if (pending.status === 'pending') return previous
   }
-  const key = `${resource.tabId ?? -1}:${resourceFingerprint(resource)}`
+  const key = `${resource.tabId ?? -1}:${options.browserRequestId ? `request:${options.browserRequestId}` : resourceFingerprint(resource)}`
   const active = activeDownloadOffers.get(key)
   if (active) {
     const previous = await active
@@ -1169,7 +1254,7 @@ async function requestDownload(
     const requestId = records.find(item => item.key === digest)!.clientRequestId
     let response: any
     if (created) {
-      if (!await desktopReadyForNewHandoff()) {
+      if (!options.desktopReady && !await desktopReadyForNewHandoff()) {
         return { ok: false, client_request_id: requestId, error: '主程序未连接，保留浏览器下载' }
       }
       try {
@@ -1234,13 +1319,17 @@ function uncertainOffer(requestId: string) {
   }
 }
 
+let desktopReadinessCheck: Promise<boolean> | undefined
+
 async function desktopReadyForNewHandoff(): Promise<boolean> {
   // 只供尚未发送的新交接使用，且必须在暂停原响应前检查；未知旧交接继续按原 ID 恢复。
-  try { return (await native({ op: 'ping', interactive: true }, 1_500))?.ok === true }
-  catch { return false }
+  desktopReadinessCheck ??= native({ op: 'ping', interactive: true }, 1_500)
+    .then(response => response?.ok === true, () => false)
+    .finally(() => { desktopReadinessCheck = undefined })
+  return desktopReadinessCheck
 }
 
-async function offer(resource: MediaResource, chain?: RequestChain, options: { allowUnverified?: boolean } = {}, clientRequestId?: string, recovering = false) {
+async function offer(resource: MediaResource, chain?: RequestChain, options: ResourceRequestOptions = {}, clientRequestId?: string, recovering = false) {
   // 只改写传输负载；原选择身份继续用于去重和弹窗恢复，避免同码率的不同线路串状态。
   const downloadResource = resource.manifestUrl && (resource.kind === 'hls' || resource.kind === 'dash')
     ? { ...resource, url: resource.manifestUrl } : resource
@@ -1483,7 +1572,7 @@ async function installContextMenus(attempt = 0): Promise<void> {
 }
 
 function observedResponse(details: any, chain?: RequestChain) {
-  if (details.statusCode < 200 || details.statusCode >= 400 || !['GET', 'POST'].includes(String(details.method || 'GET').toUpperCase())) {
+  if (!isMediaResponseStatus(details.statusCode) || !['GET', 'POST'].includes(String(details.method || 'GET').toUpperCase())) {
     return { disposition: '', resource: null }
   }
   const headers = details.responseHeaders || []
@@ -1515,6 +1604,7 @@ function observedResponse(details: any, chain?: RequestChain) {
     tabId: details.tabId,
     frameId: details.frameId,
     requestHeaders: chain?.requestHeaders,
+    responseIdentity: responseIdentity(header),
     evidence: [
       'response_headers',
       ...(disposition ? ['content_disposition'] : []),
@@ -1648,11 +1738,17 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
     return undefined
   }
   try {
-    const response = await offer(prepared.resource, chain)
+    const response = await requestDownload(prepared.resource, chain, { desktopReady: true, browserRequestId: early.requestId, browserDownload: {
+      url: chain?.initialUrl || details.url,
+      finalUrl: chain?.finalUrl || details.url,
+      tabId: details.tabId,
+      frameId: details.frameId,
+    } })
     if (response?.ownership_uncertain) {
-      earlyBrowserTakeovers.delete(early.requestId)
       await reportDownloadError(prepared.resource.tabId, response.error)
-      return { cancel: true }
+      // Keep the original response. onCreated pauses its DownloadItem and
+      // resolves the journaled offer by the same browser request identity.
+      return undefined
     }
     // 阻塞原响应直到桌面确认接收，随后在 Firefox 建立 DownloadItem 之前取消。
     // 用户在桌面取消就是取消本次下载，不再启动一个浏览器副本。
@@ -1668,10 +1764,120 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
   return undefined
 }
 
+const preparingFirefoxFileRequests = new Map<string, Promise<{ cancel: boolean } | undefined>>()
+
+function interceptFirefoxFileRequest(details: any) {
+  if (details.method !== 'GET' || !['main_frame', 'sub_frame'].includes(details.type)
+    || !validDownloadIdentity(details.tabId)
+    || (details.proxyInfo && details.proxyInfo.type !== 'direct')
+    || !isDirectDownloadLink(details.url, '', false)) return undefined
+  const chain = requestChains.observeRequest(details)
+  // An authentication retry or redirect has already reached the server. Keep
+  // that browser transfer and its original response on the existing path.
+  if (chain.statusCode || chain.urls.length !== 1) return undefined
+  const key = `${chain.tabId}:${chain.frameId}:${details.url.split('#', 1)[0]}`
+  const active = preparingFirefoxFileRequests.get(key)
+  if (active) return active
+  // Cover preparation as well as the journaled offer. A repeated navigation
+  // must not pass through while the first request is still reading cookies.
+  const pending = prepareFirefoxFileRequest(details, chain).finally(() => {
+    if (preparingFirefoxFileRequests.get(key) === pending) preparingFirefoxFileRequests.delete(key)
+  })
+  preparingFirefoxFileRequests.set(key, pending)
+  return pending
+}
+
+async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
+  const browserFallback = async () => {
+    try {
+      const key = `${chain.tabId}:${resourceFingerprint({ url: details.url, kind: 'file' })}`
+      const active = activeDownloadOffers.get(key)
+      let response = active ? await active : undefined
+      if (!response || response.ownership_uncertain) {
+        const digest = await localDownloadIntentUrl(key)
+        const stored = await browser.storage.local.get(DIRECT_OFFERS_STORAGE_KEY)
+        const records = stored[DIRECT_OFFERS_STORAGE_KEY] as Array<{ key: string, clientRequestId: string }> | undefined
+        const requestId = response?.client_request_id || records?.find(item => item.key === digest)?.clientRequestId
+        if (!requestId) return undefined
+        try { response = await native({ op: 'handoff_status', client_request_id: requestId }, 2_500) } catch {}
+        if (!response?.ok || !response.handoff?.id) response = uncertainOffer(requestId)
+      }
+      if (response.ownership_uncertain) await reportDownloadError(chain.tabId, response.error)
+      return desktopAcceptedHandoff(response) || response.ownership_uncertain ? { cancel: true } : undefined
+    } catch (error) {
+      await reportDownloadError(chain.tabId, '无法确认已有下载交接，请检查主程序后重试')
+      return { cancel: true }
+    }
+  }
+  let resource: MediaResource
+  let resourceCookies: ReplayCookie[]
+  let intent: DownloadClickIntent | undefined
+  try {
+    const config = await settings()
+    if (config.minimumBytes > 0) return browserFallback()
+    const pageUrl = await topLevelPageUrl(chain.tabId, chain.pageUrl)
+    intent = await waitForClickIntent(details.url, details.url, pageUrl, chain, 4)
+    // Pointerdown/click deduplication can leave a second navigation without a
+    // fresh intent. Existing ownership still applies, including after reload.
+    if (!intent) return browserFallback()
+    // Generic controls can match a later response; pre-request ownership needs
+    // the exact link the user chose, before the server has identified a file.
+    if (pageIdentity(intent.href) !== pageIdentity(details.url)) {
+      await clickIntentStore.remember(intent)
+      return browserFallback()
+    }
+    if (!shouldTakeover({ url: details.url, sourcePageUrl: pageUrl, ...config, ...intent, explicitClick: true })
+      || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, pageUrl, 'file'))) {
+      await clickIntentStore.remember(intent)
+      return browserFallback()
+    }
+    // Cookie export remains permission-gated and uses the tab's cookie store.
+    // If that snapshot cannot reproduce this request, preserve the browser's
+    // response instead of starting a desktop request with different credentials.
+    resourceCookies = await cookieRecordsFor(details.url, pageUrl, chain.tabId, chain.frameId, true)
+    if (requestHeader(chain, 'cookie') !== cookieHeaderForUrl(resourceCookies, details.url)) {
+      await clickIntentStore.remember(intent)
+      return browserFallback()
+    }
+    resource = {
+      id: resourceId(details.url), url: details.url, kind: 'file', pageUrl,
+      tabId: chain.tabId, frameId: chain.frameId, method: 'GET',
+      requestHeaders: chain.requestHeaders, seenAt: Date.now(),
+      evidence: ['trusted_download_link', 'request_chain'], confidence: 0.99,
+      replayContext: { method: 'GET', request_id: chain.requestId },
+    }
+  } catch (error) {
+    if (intent) await clickIntentStore.remember(intent)
+    console.debug('HLS Downloader pre-request takeover unavailable', error)
+    return browserFallback()
+  }
+  try {
+    // requestDownload resolves an existing journal before checking readiness
+    // for a new offer. An offline desktop cannot release an uncertain offer.
+    const response = await requestDownload(resource, chain, { resourceCookies })
+    if (response?.ownership_uncertain) await reportDownloadError(resource.tabId, response.error)
+    if (desktopAcceptedHandoff(response) || response?.ownership_uncertain) return { cancel: true }
+  } catch (error) {
+    await reportDownloadError(resource.tabId, '无法确认下载交接，请检查主程序后重试')
+    return { cancel: true }
+  }
+  // A definite refusal/offline result leaves this download with the browser.
+  // Its response and DownloadItem must not prompt for the same handoff again.
+  await clickIntentStore.remember({ ...intent, altBypass: true, at: Date.now() })
+  return undefined
+}
+
 export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === 'loading' || changeInfo.url) {
+    const previousPage = observedTabPages.get(tabId)
+    const nextPage = changeInfo.url === undefined ? undefined : pageIdentity(changeInfo.url)
+    if (nextPage !== undefined) observedTabPages.set(tabId, nextPage)
+    // Reloads invalidate the document even at the same URL; fragment-only
+    // updates preserve it. Unknown previous URLs are invalidated conservatively.
+    if (changeInfo.status === 'loading' || nextPage !== undefined && nextPage !== previousPage) {
       requestChains.clearTab(tabId, true)
+      adaptiveInspectionPages.get(tabId)?.abort()
+      adaptiveInspectionPages.delete(tabId)
       inspectedAdaptive.releasePrefix(`${tabId}:`)
       void browser.action.setBadgeText({ tabId, text: '' }).catch(() => undefined)
       if (changeInfo.url) {
@@ -1683,11 +1889,14 @@ export default defineBackground(() => {
     void refreshTabBadge(activeInfo.tabId).catch(error => console.warn('HLS Downloader badge refresh failed', error))
   })
   browser.tabs.onRemoved.addListener(tabId => {
+    observedTabPages.delete(tabId)
     void directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY,
       current => current.filter(item => item.tabId !== tabId)).catch(() => undefined)
     void browser.storage.session.remove(`download-error:${tabId}`).catch(() => undefined)
     requestChains.clearTab(tabId)
     blobSources.clearTab(tabId)
+    adaptiveInspectionPages.get(tabId)?.abort()
+    adaptiveInspectionPages.delete(tabId)
     inspectedAdaptive.releasePrefix(`${tabId}:`)
     void clearTabResources(tabId).catch(() => undefined)
   })
@@ -1777,6 +1986,13 @@ export default defineBackground(() => {
   ;(browser.webRequest.onBeforeRequest.addListener as any)((details: any) => {
     requestChains.observeRequest(details)
   }, TRACKED_REQUEST_FILTER, ['requestBody'])
+  if (import.meta.env.FIREFOX) {
+    // Firefox can await a verdict with this request's headers before sending
+    // HTTP data. Ordinary Chromium MV3 installations have no blocking API.
+    ;(browser.webRequest.onBeforeSendHeaders.addListener as any)(interceptFirefoxFileRequest, {
+      urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame'],
+    }, ['requestHeaders', 'blocking'])
+  }
   browser.webRequest.onBeforeRedirect.addListener(details => {
     requestChains.observeRedirect(details as any)
   }, TRACKED_REQUEST_FILTER, ['responseHeaders'])
@@ -1836,7 +2052,7 @@ export default defineBackground(() => {
     try {
       const config = await settings()
       if (!config.enabled) return
-      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId ?? downloadIdentity(item).tabId)
+      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId ?? downloadIdentity(item).tabId, false, 'exact')
       // 优先使用浏览器来源或唯一请求链。Chrome 缺少来源时，也不能按时间猜标签页。
       const earlyTakeover = (provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
@@ -1861,12 +2077,13 @@ export default defineBackground(() => {
         if (earlyResult || restored) {
           if (!restored && earlyResult
             && await preserveBrowserDownload(item, earlyResult.resource, earlyResult.intent)) return
-          if (!restored && !await desktopReadyForNewHandoff()) return
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
           const response = earlyResult
-            ? await offer(earlyResult.resource, provisionalChain) : undefined
+            ? await requestDownload(earlyResult.resource, provisionalChain, {
+              browserRequestId: earlyTakeover?.requestId, browserDownload: originalRequest,
+            }) : undefined
           if (response?.ownership_uncertain) {
             browserOwnedByHandoff = true
             await retainUncertainBrowserDownload(item, response, earlyResult?.resource.tabId)
@@ -1910,7 +2127,7 @@ export default defineBackground(() => {
       if (!item.filename && !classified.filename) {
         actualBrowser = await refreshedDownload(item.id, item)
         if (!canContinueTakeover(actualBrowser.state, paused)) return
-        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId ?? downloadIdentity(actualBrowser).tabId)
+        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId ?? downloadIdentity(actualBrowser).tabId, false, 'exact')
         classified = classifyBrowserItem(actualBrowser, provisionalChain)
       } else {
         const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
@@ -1928,7 +2145,7 @@ export default defineBackground(() => {
       // 新标签页下载的点击属于父标签页，不能覆盖已确认的请求来源。
       let chain = provisionalChain ?? (intent?.tabId === undefined
         ? undefined
-        : requestChains.find(classified.actual, Date.now(), downloadIdentity(actualBrowser).tabId ?? intent.tabId))
+        : requestChains.find(classified.actual, Date.now(), downloadIdentity(actualBrowser).tabId ?? intent.tabId, false, 'exact'))
       if (chain && chain !== provisionalChain) {
         classified = classifyBrowserItem(actualBrowser, chain)
         if (!classified.kind) return
@@ -1964,7 +2181,7 @@ export default defineBackground(() => {
       if (await preserveBrowserDownload(actualBrowser, resource, intent)) return
       // DownloadItem 可能先于请求链到达。使用与 offer 相同的解析流程确认方法后
       // 才暂停，且把同一条链传入 offer，避免晚到的 POST 被当成 GET 路径重放。
-      chain = (await resourceRequest(resource, chain)).chain
+      chain = (await resourceRequest(resource, chain, { browserDownload: classified.actual })).chain
       if (!chain) return
       if (chain.method.toUpperCase() === 'POST') {
         // 复用本地导入，复制成功前保留浏览器源文件。
@@ -1980,7 +2197,9 @@ export default defineBackground(() => {
       if (pauseResult === null) return
       paused = pauseResult
       console.debug('HLS Downloader offering a verified browser download')
-      const response = await offer(resource, chain)
+      const response = await requestDownload(resource, chain, {
+        desktopReady: true, browserRequestId: chain.requestId, browserDownload: classified.actual,
+      })
       if (response?.ownership_uncertain) {
         browserOwnedByHandoff = true
         await retainUncertainBrowserDownload(actualBrowser, response, resource.tabId)
@@ -2138,10 +2357,22 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'resource') {
+      const observedIdentity = responseIdentity(name => message.resource.responseIdentity?.[name])
+      const observedChain = Object.keys(observedIdentity).length ? requestChains.find({
+        url: message.resource.url, referrer: sender.url, frameId: sender.frameId,
+        responseIdentity: observedIdentity,
+      }, Date.now(), sender.tab?.id, true) : undefined
       const resource = {
         ...message.resource,
-        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url,
-        frameId: message.resource.frameId ?? sender.frameId,
+        // Observations belong to the sending frame, never a payload-selected one.
+        pageUrl: sender.url || sender.tab?.url || '',
+        tabId: sender.tab?.id ?? -1,
+        frameId: sender.frameId ?? -1,
+        responseIdentity: observedIdentity,
+        ...(Object.keys(observedIdentity).length ? {
+          requestHeaders: observedChain?.requestHeaders || {}, statusCode: observedChain?.statusCode, method: observedChain?.method,
+          replayContext: { ...(message.resource.replayContext || {}), request_id: observedChain?.requestId || '' },
+        } : {}),
       }
       void saveResource(resource, sender.tab?.id ?? -1)
         .then(() => sendResponse({ ok: true }))

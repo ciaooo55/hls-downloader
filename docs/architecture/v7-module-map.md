@@ -11,7 +11,7 @@
 | 内置播放器 | 同目录 `VideoPlayer.kt`；Core player 会话与媒体服务 | 主窗口内浮层、时间轴、缓冲、音量、倍速、音轨/字幕、全屏/画中画；下载中播放，完成后原会话切换成品 |
 | 浏览器插件 | `extension/entrypoints`、`extension/lib` | 媒体发现、清晰度选择、下载接管、复制、字幕会话控制及推送；字幕服务和密钥在主程序设置，实际传输交给 Core |
 | Native Messaging | `native_host.rs`、`native_host_registration.rs` | 浏览器与 Core 之间的有界消息及精确 Host 注册 |
-| 确认/进度/完成窗口 | `presenter_ui/src/hot_main.rs` | 独立提示窗口，通过同一 Core 获取任务和发送操作 |
+| 确认/进度/完成窗口 | `native_ui/src/hot_main.rs` | 独立提示窗口，通过同一 Core 获取任务和发送操作 |
 | 字幕 | Core 字幕链路、插件字幕入口 | 音频预取和翻译状态；本轮没有上传音频或重新验收真实云端服务 |
 | 投屏与 TVBox | Core 媒体推送和控制链路 | 独立控制用途；实体设备仍在本轮验收排除范围 |
 | 安装与交付 | MSI、`scripts` 的打包及生命周期工具 | 安装可选路径；新配置默认 Windows Known Folder Downloads，支持被用户迁移的下载文件夹；未签名包手动升级 |

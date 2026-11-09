@@ -294,6 +294,85 @@ impl CoreRuntime {
             .collect()
     }
 
+    pub(crate) fn task_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<hls_protocol::TaskPage, String> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        if after.is_some_and(|cursor| cursor.len() > 256) {
+            return Err("任务分页游标无效".into());
+        }
+        let mut tasks = Vec::new();
+        let mut bytes = 0;
+        let mut next = None;
+        // Stable IDs avoid a full clone/sort and remain valid after deletion of the cursor row.
+        for (_, snapshot) in self
+            .tasks
+            .range((Excluded(after.unwrap_or_default().to_string()), Unbounded))
+        {
+            let size = serde_json::to_vec(snapshot.as_ref())
+                .map_err(|error| error.to_string())?
+                .len()
+                + 1;
+            if tasks.len() >= limit.clamp(1, 512)
+                || bytes + size > hls_protocol::V7_PAGE_PAYLOAD_BUDGET
+            {
+                if tasks.is_empty() {
+                    return Err("单个任务超过 IPC 分页大小限制".into());
+                }
+                next = tasks.last().map(|task: &TaskSnapshot| task.task_id.clone());
+                break;
+            }
+            tasks.push(snapshot.as_ref().clone());
+            bytes += size;
+        }
+        Ok(hls_protocol::TaskPage {
+            tasks,
+            next,
+            sequence: self.sequence,
+            browser_connected: self.browser_connected(),
+        })
+    }
+
+    pub(crate) fn event_batch_after(
+        &self,
+        sequence: u64,
+    ) -> Result<hls_protocol::EventBatch, String> {
+        let oldest_available = self
+            .events
+            .front()
+            .map_or(self.sequence, |item| item.sequence.saturating_sub(1));
+        let resync_required = sequence < oldest_available || sequence > self.sequence;
+        let mut batch = hls_protocol::EventBatch {
+            events: Vec::new(),
+            latest_sequence: self.sequence,
+            resync_required,
+        };
+        if resync_required {
+            return Ok(batch);
+        }
+        let start = self
+            .events
+            .partition_point(|item| item.sequence <= sequence);
+        let mut bytes = 0;
+        for event in self.events.range(start..).take(256) {
+            let size = serde_json::to_vec(event.as_ref())
+                .map_err(|error| error.to_string())?
+                .len()
+                + 1;
+            if bytes + size > hls_protocol::V7_PAGE_PAYLOAD_BUDGET {
+                if batch.events.is_empty() {
+                    return Err("单个事件超过 IPC 帧大小限制".into());
+                }
+                break;
+            }
+            batch.events.push(event.as_ref().clone());
+            bytes += size;
+        }
+        Ok(batch)
+    }
+
     pub fn latest_sequence(&self) -> u64 {
         self.sequence
     }
@@ -940,10 +1019,12 @@ fn append_snapshot_log(snapshot: &mut TaskSnapshot, line: String) {
     }
 }
 
-fn legal_actions(snapshot: &TaskSnapshot) -> Vec<String> {
+pub(crate) fn legal_actions(snapshot: &TaskSnapshot) -> Vec<String> {
     match snapshot.status.to_ascii_lowercase().as_str() {
         "queued" => vec![
             "start".into(),
+            "pause".into(),
+            "cancel".into(),
             "delete".into(),
             "queue_up".into(),
             "queue_top".into(),
@@ -1048,6 +1129,75 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn task_pages_bound_encoded_bytes_and_keep_deleted_cursor_valid() {
+        let snapshots = (0..140).map(|index| TaskSnapshot {
+            task_id: format!("task-{index:04}"),
+            title: "媒".repeat(12_000),
+            ..Default::default()
+        });
+        let mut runtime = CoreRuntime::from_state(snapshots, [], 10);
+        let first = runtime.task_page(None, 128).unwrap();
+        assert!(!first.tasks.is_empty());
+        assert!(
+            first.tasks.len() < 128,
+            "byte limit must apply before the row limit"
+        );
+        let cursor = first.next.clone().unwrap();
+        let frame = hls_protocol::encode_message(&hls_protocol::CorePipeResponse::TaskPage {
+            request_id: 1,
+            page: first.clone(),
+        })
+        .unwrap();
+        assert!(frame.len() <= hls_protocol::V7_PIPE_MAX_FRAME + 4);
+        runtime.tasks.remove(&cursor);
+        let rest = runtime.task_page(Some(&cursor), 512).unwrap();
+        assert!(rest.tasks.iter().all(|task| task.task_id > cursor));
+        assert_eq!(first.tasks.len() + rest.tasks.len(), 140);
+        runtime.tasks.clear();
+        runtime.tasks.insert(
+            "task-large".into(),
+            Arc::new(TaskSnapshot {
+                task_id: "task-large".into(),
+                title: "x".repeat(hls_protocol::V7_PIPE_MAX_FRAME),
+                ..Default::default()
+            }),
+        );
+        assert!(runtime.task_page(None, 128).is_err());
+    }
+
+    #[test]
+    fn event_batch_reports_ring_loss_and_restarted_history() {
+        let mut runtime = CoreRuntime::new();
+        for _ in 0..4100 {
+            runtime.emit(CoreEvent::Ready {
+                protocol: "test".into(),
+                version: 1,
+            });
+        }
+        let stale = runtime.event_batch_after(0).unwrap();
+        assert!(stale.resync_required);
+        assert!(stale.events.is_empty());
+        let oldest = runtime.events.front().unwrap().sequence;
+        let available = runtime.event_batch_after(oldest - 1).unwrap();
+        assert!(!available.resync_required);
+        assert_eq!(available.events[0].sequence, oldest);
+        let restored = CoreRuntime::from_state([], [], runtime.latest_sequence());
+        assert!(restored.event_batch_after(oldest).unwrap().resync_required);
+        assert!(
+            !restored
+                .event_batch_after(restored.latest_sequence())
+                .unwrap()
+                .resync_required
+        );
+        assert!(
+            restored
+                .event_batch_after(restored.latest_sequence() + 1)
+                .unwrap()
+                .resync_required
+        );
+    }
 
     #[test]
     fn create_paused_does_not_enter_the_schedulable_queue() {
@@ -1187,6 +1337,11 @@ mod tests {
         };
         assert_eq!(legal_actions(&active), vec!["pause", "cancel", "delete"]);
 
+        active.status = "queued".into();
+        let queued = legal_actions(&active);
+        assert!(queued.iter().any(|action| action == "pause"));
+        assert!(queued.iter().any(|action| action == "cancel"));
+
         active.status = "completed".into();
         active.filename = "movie.mp4".into();
         let media = legal_actions(&active);
@@ -1313,6 +1468,8 @@ mod tests {
                 status: "pending".into(),
                 message: String::new(),
                 location: String::new(),
+                credential_ref: None,
+                mime_type: String::new(),
                 created_at_ms: 1,
             },
         });

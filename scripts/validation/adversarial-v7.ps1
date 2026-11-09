@@ -9,10 +9,10 @@ if ($env:HLS_VM_ACCEPTANCE -ne '1') {
     throw 'Full adversarial validation opens native windows and requires the isolated acceptance environment (HLS_VM_ACCEPTANCE=1).'
 }
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
-$presenterManifest = Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\Cargo.toml') -Raw -Encoding UTF8
-$presenterSource = Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\src\hot_main.rs') -Raw -Encoding UTF8
-$presenterBuild = Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\build.rs') -Raw -Encoding UTF8
-$presenterUi = Get-Content -LiteralPath (Join-Path $repo 'presenter_ui\ui\hot.slint') -Raw -Encoding UTF8
+$presenterManifest = Get-Content -LiteralPath (Join-Path $repo 'native_ui\Cargo.toml') -Raw -Encoding UTF8
+$presenterSource = Get-Content -LiteralPath (Join-Path $repo 'native_ui\src\hot_main.rs') -Raw -Encoding UTF8
+$presenterBuild = Get-Content -LiteralPath (Join-Path $repo 'native_ui\build.rs') -Raw -Encoding UTF8
+$presenterUi = Get-Content -LiteralPath (Join-Path $repo 'native_ui\ui\hot.slint') -Raw -Encoding UTF8
 if ($presenterManifest -notmatch 'autobins\s*=\s*false' -or
     $presenterManifest -notmatch 'path\s*=\s*"src/hot_main.rs"' -or
     $presenterSource -match '\b(MainWindow|SettingsWindow|PlayerWindow)\b' -or
@@ -60,7 +60,7 @@ function Assert-ArchitectureBoundary {
     if ($forbidden) {
         throw "Compose must not access SQLite directly: $($forbidden[0].Path):$($forbidden[0].LineNumber)"
     }
-    $nativeHostSource = Join-Path $repo 'native_shell\src\native_host.rs'
+    $nativeHostSource = Join-Path $repo 'native_clients\src\native_host.rs'
     if (-not (Select-String -LiteralPath $nativeHostSource -Pattern 'connect_or_start_core' -Quiet)) {
         throw 'Native Host cold-start boundary is missing.'
     }
@@ -72,14 +72,14 @@ try {
     Invoke-Gate 'Rust Core all-target invariants' {
         & $cargo test --locked --manifest-path native_shell\Cargo.toml --all-targets --quiet -- --test-threads=1
     }
-    Invoke-Gate 'Rust presenter-client IPC contract' {
-        & $cargo test --locked --manifest-path native_shell\Cargo.toml --no-default-features --features presenter-client --all-targets --quiet -- --test-threads=1
+    Invoke-Gate 'Rust lightweight client IPC contract' {
+        & $cargo test --locked -p hls-protocol -p hls-client -p hls-native-clients --all-targets --quiet -- --test-threads=1
     }
     Invoke-Gate 'Native UI task model invariants' {
-        & $cargo test --locked --manifest-path presenter_ui\Cargo.toml --quiet
+        & $cargo test --locked --manifest-path native_ui\Cargo.toml --quiet
         if ($LASTEXITCODE -ne 0) { throw "Native UI tests failed (exit $LASTEXITCODE)" }
         $presenter = Join-Path $env:CARGO_TARGET_DIR 'debug\hls-downloader-presenter.exe'
-        & $cargo build --locked --manifest-path presenter_ui\Cargo.toml --bin hls-downloader-presenter --quiet
+        & $cargo build --locked --manifest-path native_ui\Cargo.toml --bin hls-downloader-presenter --quiet
         if ($LASTEXITCODE -ne 0) { throw "v7 presenter build failed (exit $LASTEXITCODE)" }
         if (-not (Test-Path -LiteralPath $presenter)) { throw "v7 presenter missing after build: $presenter" }
         $selfTest = & $presenter --self-test 2>&1 | Out-String
@@ -87,7 +87,7 @@ try {
             throw "v7 presenter self-test failed: $selfTest"
         }
         $engine = Join-Path $env:CARGO_TARGET_DIR 'debug\hls-downloader-engine.exe'
-        & $cargo build --locked --manifest-path native_shell\Cargo.toml --bin hls-downloader-engine --bin HLSDownloaderNativeHost --quiet
+        & $cargo build --locked --manifest-path Cargo.toml -p hls-native-shell -p hls-native-clients --bin hls-downloader-engine --bin HLSDownloaderNativeHost --quiet
         if ($LASTEXITCODE -ne 0) { throw "v7 engine/Native Host build failed (exit $LASTEXITCODE)" }
         if (-not (Test-Path -LiteralPath $engine)) { throw "v7 engine missing after build: $engine" }
         $nativeHost = Join-Path $env:CARGO_TARGET_DIR 'debug\HLSDownloaderNativeHost.exe'

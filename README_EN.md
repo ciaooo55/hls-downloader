@@ -33,9 +33,11 @@ The recommended way to get HLS Downloader is from **GitHub Releases**:
 
 Release bundles may include Windows x64 **EXE / MSI / Portable ZIP** packages together with matching **Chromium / Firefox browser extensions**.
 
-Installers, Chromium/Firefox extensions and extension sources are available on the [releases page](https://github.com/ciaooo55/hls-downloader/releases). It retains the last release of each major version and a single unsigned v7 prerelease; historical source tags remain available. `main` and desktop candidates may include fixes that are not yet published. Consult each release's notes and validation records for the tested version, scenarios and limitations.
+Installers, Chromium/Firefox extensions and extension sources are available on the [releases page](https://github.com/ciaooo55/hls-downloader/releases). Native candidates and historical Compose prereleases are distinguished by their names and release notes; historical source tags remain available. `main` and desktop candidates may include fixes that are not yet published. Consult each release's notes and validation records for the tested version, scenarios and limitations.
 
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
+
+Current native implementation, component builds and validation are tracked in the [migration log](docs/validation/native-migration-progress.md) and [feature map](docs/validation/native-feature-mapping.md). The [historical delivery record](docs/validation/convergence.md) does not identify the current source or component builds. `release_ready=false`.
 
 ### Requirements
 
@@ -43,13 +45,13 @@ The installer lets you select the installation directory. New profiles save to t
 | --- | --- |
 | Operating system | Windows 10 or Windows 11 (x64) |
 | CPU architecture | **x64 only.** Playback and part of the capture path rely on the x64 native libraries shipped in the package (libmpv, curl-impersonate), so ARM64 Windows cannot run it |
-| Runtime | No pre-installed Java required — the installer bundles a trimmed JRE |
+| Runtime | Native candidates require no Java and contain no JRE; historical Compose packages bundle a JRE |
 | Privileges | MSI installation or upgrade requires administrator rights; see the corresponding release instructions for portable packages |
 | Browser | Chromium-based (Chrome / Edge) or Firefox, for download handoff |
 | Display | 1024×600 minimum; the UI follows the system DPI scaling |
 
 > [!NOTE]
-> `main` currently tracks the **7.0.3** source line. Public installers are published through Releases; builds marked `candidate` or `pre-release` should be treated as test builds.
+> `main` currently tracks the **7.0.4** source line. Public installers are published through Releases; builds marked `candidate` or `pre-release` should be treated as test builds.
 
 Online subtitles can be enabled from the video player button or the extension popup, and dragged directly over the video; if the page has multiple videos, you can switch the bound player from the popup. Subtitle translation service, API key, global toggle, target language, sync mode, source text display, and default offset are configured in the desktop main window under `Settings -> Subtitle Translation` (the key is encrypted at rest by the local Core), while the browser extension only controls the per-page toggle, player selection, and starting/stopping subtitles; see the [QwenCloud subtitle guide](docs/guides/qwencloud-subtitles.md).
 
@@ -95,23 +97,25 @@ That keeps the browser as an entry point rather than the owner of the download l
 
 ```mermaid
 flowchart LR
-    B["Chromium / Firefox"] -->|Native Messaging| C["Rust Core"]
-    UI["Compose Desktop"] <-->|Named Pipe IPC| C
-    P["Native Presenter"] <-->|Named Pipe IPC| C
+    B["Chromium / Firefox"] -->|Native Messaging| H["Native Host"]
+    H <-->|Named Pipe IPC| C["Rust Core"]
+    UI["Rust + Slint Workbench / Presenter"] <-->|Named Pipe IPC| C
     C --> DB[(SQLite)]
     C --> E["HTTP · HLS · DASH · FTP · SFTP · BT"]
     C --> M["Local Player · LAN Cast"]
 ```
 
-The architectural rule is intentionally simple: **the Core is the only owner of download state and SQLite**. Compose Desktop, the browser extension, presenter, player, and casting path all cooperate with the same Core instead of maintaining competing copies of task state.
+**The Core is the only owner of download state and SQLite**. The native workbench, extension, player and casting path cooperate through it. Builds default to native candidates; Compose source remains as a migration reference. Formal publication still requires complete release evidence.
 
 ## 📁 Repository layout
 
 | Path | Responsibility |
 | --- | --- |
-| `native_shell/` | Rust Core, SQLite, transfer engines, Native Messaging Host, updater |
-| `desktop_ui/` | Kotlin / Compose Desktop main workbench |
-| `presenter_ui/` | Low-latency native confirmation, progress, and completion windows |
+| `native_shell/` | Rust Core, SQLite, transfer engines and background media services |
+| `crates/` | Shared protocol and lightweight IPC client |
+| `native_clients/` | Native Host, CLI, updater and native launcher |
+| `desktop_ui/` | Kotlin / Compose migration reference |
+| `native_ui/` | Rust + Slint workbench, confirmation, progress and completion windows |
 | `extension/` | WXT-based Chromium / Firefox Manifest V3 extension |
 | `scripts/` | Windows build, test, install, upgrade, package, and verification scripts |
 | `docs/` | [Documentation index](docs/README.md): guides, architecture, releases and validation evidence |
@@ -138,7 +142,7 @@ Or test individual components:
 cargo test --manifest-path native_shell/Cargo.toml --lib
 
 # Native Presenter
-cargo test --manifest-path presenter_ui/Cargo.toml
+cargo test --manifest-path native_ui/Cargo.toml
 
 # Compose Desktop
 cd desktop_ui

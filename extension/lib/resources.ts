@@ -29,6 +29,8 @@ export interface MediaResource {
   statusCode?: number
   method?: string
   requestHeaders?: Record<string, string>
+  /** Non-secret headers observed alongside a page-read response body. */
+  responseIdentity?: Record<string, string>
   /** Explain why this URL is a candidate; values are bounded, non-secret labels. */
   evidence?: string[]
   /** Stable local owner bucket (page, media-element, MSE, DownloadItem, etc.). */
@@ -187,12 +189,16 @@ export function classifyResource(url: string, mimeType = ''): ResourceKind | nul
   if (!url.startsWith('http://') && !url.startsWith('https://')) return null
   if (SEGMENT_EXT.test(url)) return null
   const mime = mimeType.toLowerCase()
+  // Login/error pages can keep the requested .m3u8/.mpd URL. Their explicit
+  // MIME outweighs the suffix; generic XML remains valid for DASH manifests.
+  if (mime.startsWith('text/html') || mime.startsWith('application/xhtml+xml') || mime.startsWith('image/')
+    || PASSIVE_WEB_MIME.test(mime) && !/^(?:application|text)\/xml\b/.test(mime)) return null
   if (/\.m3u8?(?:$|[?#])/i.test(url) || mime.includes('mpegurl')) return 'hls'
   if (/\.mpd(?:$|[?#])/i.test(url) || mime.includes('dash+xml')) return 'dash'
   if (mime.startsWith('video/') || mime.startsWith('audio/')) return 'media'
   // Query `mime=video/mp4` is a CDN hint, not a JSON/HTML/JS body. Playurl APIs
   // must stay out of the overlay even when they copy player query names.
-  if (PASSIVE_WEB_MIME.test(mime) || mime.startsWith('text/html') || mime.startsWith('image/')) return null
+  if (PASSIVE_WEB_MIME.test(mime)) return null
   if (isCommonMediaStreamUrl(url)) return 'media'
   if (/\.torrent(?:$|[?#])/i.test(url) || mime.includes('bittorrent')) return 'file'
   if (/\.(?:metalink|meta4)(?:$|[?#])/i.test(url) || mime.includes('metalink')) return 'file'
@@ -260,8 +266,9 @@ function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number 
         .split('*')
         .map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
         .join('.*')
+      // Path specificity must never outrank an exact response URL/hash.
       return new RegExp(`^${expression}$`).test(actual.pathname)
-        ? 900 + expected.pathname.replace(/\*/g, '').length
+        ? 900 + Math.min(99, expected.pathname.replace(/\*/g, '').length)
         : -1
     } catch {
       return -1
@@ -459,7 +466,7 @@ export function isSameDocumentPlaybackFallback(sourceUrl: string, pageUrl: strin
   return classifyResource(sourceUrl) == null
 }
 
-export function resourceMatchesPlaybackSource(resource: Pick<MediaResource, 'url' | 'kind'>, sourceUrl: string): boolean {
+export function resourceMatchesPlaybackSource(resource: Pick<MediaResource, 'url' | 'kind' | 'variants'>, sourceUrl: string): boolean {
   if (!sourceUrl || sourceUrl.startsWith('blob:')) return false
   if (sourceUrl === resource.url) return true
   try {
@@ -468,7 +475,11 @@ export function resourceMatchesPlaybackSource(resource: Pick<MediaResource, 'url
   } catch {
     return false
   }
-  return resourceFingerprint(resource) === resourceFingerprint({ ...resource, url: sourceUrl })
+  const fingerprint = resourceFingerprint({ kind: resource.kind, url: sourceUrl })
+  // Compaction folds HLS child playlists into the master; currentSrc may still
+  // expose that exact video variant. Audio/subtitle renditions are not video sources.
+  return [resource.url, ...(resource.kind === 'hls' ? (resource.variants || []).map(variant => variant.url) : [])]
+    .some(url => resourceFingerprint({ kind: resource.kind, url }) === fingerprint)
 }
 
 export function isUsefulResource(resource: MediaResource): boolean {
@@ -823,7 +834,7 @@ export function pruneExpiredResources(resources: MediaResource[], now = Date.now
 
 export function mergeResources(current: MediaResource[], incoming: MediaResource, limit = 100, separateFrames = false): MediaResource[] {
   const now = Date.now()
-  return compactResources(pruneExpiredResources([incoming, ...current], now), limit, separateFrames)
+  return compactResources(pruneExpiredResources([...current, incoming], now), limit, separateFrames)
 }
 
 export function shouldTakeover(input: {

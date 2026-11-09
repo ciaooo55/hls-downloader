@@ -138,7 +138,13 @@ pub(crate) fn decode(
             "-t",
             &seconds.to_string(),
             "-map",
-            "0:a:0",
+            &format!(
+                "0:a:{}",
+                source["audio_index"]
+                    .as_u64()
+                    .filter(|v| *v <= 128)
+                    .unwrap_or(0)
+            ),
             "-vn",
             "-sn",
             "-dn",

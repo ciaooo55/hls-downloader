@@ -216,6 +216,18 @@ describe('browser download takeover helpers', () => {
     })).toBe(true)
   })
 
+  it.each(['rejected', 'canceled', 'expired'])(
+    'preserves the durable desktop decision when receipt recovery returns %s', status => {
+      expect(desktopAcceptedHandoff({
+        ok: true,
+        handoff: {
+          id: 'recovered-offer', status, task_id: null,
+          presentation: 'presented', presentation_ok: true, presentation_mode: 'native-rust',
+        },
+      })).toBe(true)
+    },
+  )
+
   it('distinguishes terminal handoff statuses from reconnectable observations', () => {
     expect(handoffTerminalStatus('pending')).toBe(false)
     expect(handoffTerminalStatus('accepting')).toBe(false)

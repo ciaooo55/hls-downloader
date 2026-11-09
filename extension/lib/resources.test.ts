@@ -419,6 +419,34 @@ describe('resource rules', () => {
     expect(playerPlaybackResources([first, second], { sourceUrls: ['blob:https://site.test/player'], startedAt: now,
       mseResourceUrls: ['https://cdn.test/init.m4s', 'https://cdn.test/two-1.m4s'] }).map(item => item.id)).toEqual(['second'])
   })
+  it('keeps an exact segment match stronger than a long wildcard path', () => {
+    const now = Date.now()
+    const prefix = `https://cdn.test/${'long-path/'.repeat(15)}`
+    const segment = `${prefix}segment-42.m4s`
+    const exact = resource({ id: 'exact', kind: 'dash', url: 'https://cdn.test/exact.mpd',
+      playbackUrls: [segment], seenAt: now })
+    const pattern = resource({ id: 'pattern', kind: 'dash', url: 'https://cdn.test/pattern.mpd',
+      playbackPatterns: [`${prefix}segment-*.m4s`], seenAt: now })
+    expect(playerPlaybackResources([pattern, exact], {
+      sourceUrls: ['blob:https://site.test/player'], startedAt: now, mseResourceUrls: [segment],
+    }).map(item => item.id)).toEqual(['exact'])
+  })
+  it('binds native HLS child playback to its compacted master without matching audio renditions', () => {
+    const now = Date.now()
+    const variant = 'https://cdn.test/video/720.m3u8?channel=one&token=old'
+    const master = resource({ id: 'master', kind: 'hls', url: 'https://cdn.test/master.m3u8',
+      variants: [{ url: variant, height: 720 }], renditionUrls: ['https://cdn.test/audio/en.m3u8'], seenAt: now })
+    const child = resource({ id: 'child', kind: 'hls', url: variant, seenAt: now })
+    expect(playerPlaybackResources([master, child], {
+      sourceUrls: ['https://cdn.test/video/720.m3u8?token=new&channel=one'], startedAt: now,
+    }).map(item => item.id)).toEqual(['master'])
+    expect(playerPlaybackResources([master], {
+      sourceUrls: ['https://cdn.test/video/720.m3u8?channel=two'], startedAt: now,
+    })).toEqual([])
+    expect(playerPlaybackResources([master], {
+      sourceUrls: ['https://cdn.test/audio/en.m3u8'], startedAt: now,
+    })).toEqual([])
+  })
   it('binds YouTube-style videoplayback MSE bytes to the playing video', () => {
     const now = Date.now()
     const stream = 'https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18'

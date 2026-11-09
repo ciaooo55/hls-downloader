@@ -121,6 +121,8 @@ export function desktopAcceptedHandoff(response: unknown): boolean {
   if (!response || typeof response !== 'object') return false
   const value = response as { ok?: boolean; handoff?: BrowserHandoffPayload }
   if (value.ok !== true || !value.handoff?.id) return false
+  // A recovered user cancellation still proves durable admission. Resuming
+  // the browser here would undo that decision and start another download.
   if (value.handoff.status === 'failed') return false
   if (value.handoff.presentation_ok === false) return false
   if (value.handoff.presentation === 'failed') return false

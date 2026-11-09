@@ -1,5 +1,5 @@
-import { type MediaResource, type MediaVariant, type MediaAudioTrack } from './resources'
-import { createManifestFetcher, estimatedManifestBytes, type ManifestFetcher } from './manifestInspection'
+import { type MediaVariant, type MediaAudioTrack } from './resources'
+import { createManifestFetcher, estimatedManifestBytes, type ManifestFetcher, type ManifestRequestContext } from './manifestInspection'
 import { readBoundedResponseText } from './boundedResponse'
 
 export interface DashInspectionResult {
@@ -238,9 +238,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
 }
 
 export async function inspectDashResource(
-  resource: Pick<MediaResource, 'url' | 'requestHeaders'> & {
-    inspectionHeaders?: Record<string, string>
-  },
+  resource: ManifestRequestContext,
   fetcher?: ManifestFetcher,
 ): Promise<DashInspectionResult | null> {
   const response = await createManifestFetcher(resource, fetcher)(resource.url)

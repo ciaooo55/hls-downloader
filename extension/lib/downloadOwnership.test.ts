@@ -8,22 +8,24 @@ const mocks = vi.hoisted(() => {
   const storage = () => ({ get: vi.fn(), set: vi.fn(), remove: vi.fn().mockResolvedValue(undefined) })
   return {
     native: vi.fn(),
+    inspectHls: vi.fn(),
     browser: {
       runtime: { id: 'test', getManifest: () => ({ version: '7.0.3' }), getURL: () => 'chrome-extension://test/', onInstalled: event(), onMessage: event() },
       tabs: { onUpdated: event(), onActivated: event(), onRemoved: event(), get: vi.fn().mockResolvedValue({ url: 'https://site.test/' }), query: vi.fn().mockResolvedValue([]), sendMessage: vi.fn().mockResolvedValue(undefined) },
       contextMenus: { onClicked: event(), removeAll: vi.fn().mockResolvedValue(undefined), create: vi.fn() },
       alarms: { create: vi.fn().mockResolvedValue(undefined), clear: vi.fn().mockResolvedValue(true), onAlarm: event() },
       action: { setBadgeText: vi.fn().mockResolvedValue(undefined) },
-      webRequest: Object.fromEntries(['onSendHeaders', 'onBeforeRequest', 'onBeforeRedirect', 'onHeadersReceived', 'onCompleted', 'onErrorOccurred'].map(key => [key, event()])),
+      webRequest: Object.fromEntries(['onBeforeSendHeaders', 'onSendHeaders', 'onBeforeRequest', 'onBeforeRedirect', 'onHeadersReceived', 'onCompleted', 'onErrorOccurred'].map(key => [key, event()])),
       downloads: { onCreated: event(), onChanged: event(), search: vi.fn(), pause: vi.fn(), resume: vi.fn(), cancel: vi.fn(), erase: vi.fn(), removeFile: vi.fn() },
       storage: { local: storage(), session: storage() },
-      cookies: { getAll: vi.fn().mockResolvedValue([]) },
+      cookies: { getAll: vi.fn().mockResolvedValue([]), getAllCookieStores: vi.fn().mockResolvedValue([{ id: 'store', tabIds: [7] }]) },
     },
   }
 })
 vi.mock('wxt/browser', () => ({ browser: mocks.browser }))
 vi.mock('./nativeBridge', () => ({ NativeBridge: class { request = mocks.native } }))
 vi.mock('./subtitleBackground', () => ({ installSubtitleBackground: vi.fn() }))
+vi.mock('./hlsInspection', () => ({ inspectHlsResource: mocks.inspectHls }))
 
 describe('browser download ownership through registered event listeners', () => {
   let item: any
@@ -44,6 +46,9 @@ describe('browser download ownership through registered event listeners', () => 
       Uint8Array.from(createHash('sha256').update(Buffer.from(data as ArrayBuffer)).digest()).buffer)
     local = { desktopClientId: 'test-client' }
     taskStatus = 'downloading'
+    mocks.inspectHls.mockReset().mockResolvedValue(null)
+    mocks.browser.cookies.getAll.mockReset().mockResolvedValue([])
+    mocks.browser.tabs.get.mockResolvedValue({ url: 'https://site.test/' })
     mocks.browser.storage.local.get.mockImplementation(async () => ({ ...local }))
     mocks.browser.storage.local.set.mockImplementation(async value => { Object.assign(local, value) })
     session = {}
@@ -99,6 +104,274 @@ describe('browser download ownership through registered event listeners', () => 
     else expect(removed).toContain(nextPage)
   })
 
+  function resourceMessage(resource: Record<string, unknown>, frameId = 3) {
+    return new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'resource', resource },
+      { url: 'https://player.test/embed', tab: { id: 7 }, frameId }, resolve,
+    ))
+  }
+
+  const manifestMetadata = { inspected: true, manifestType: 'media', isLive: false,
+    duration: 10, variants: [], renditionUrls: [], audioTracks: [], playbackUrls: [], playbackUrlHashes: [] }
+
+  it.each(['download-now', 'push-to-tv', 'cast-to-device'])('uses the body-associated request identity for %s', async type => {
+    const url = 'https://cdn.test/get?id=42'
+    for (const requestId of ['video', 'audio']) {
+      const request = { requestId, url, method: 'GET', tabId: 7, frameId: 3,
+        type: 'xmlhttprequest', documentUrl: 'https://player.test/embed', timeStamp: Date.now() }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer ${requestId}` }] })
+      listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/octet-stream' }, { name: 'ETag', value: `"${requestId}"` }] })
+    }
+    await resourceMessage({ url, kind: 'hls', ...manifestMetadata, responseIdentity: { etag: '"video"' } })
+    await flush()
+    const stored = (session[pageResourceKey(7, 'https://site.test/')] as any[]).find(resource => resource.url === url)
+    expect(stored.replayContext.request_id).toBe('video')
+    const native = mocks.native.getMockImplementation()!
+    mocks.native.mockImplementation(async message => message.op === 'media_push'
+      ? { ok: true, id: 'push', status: 'pending' } : native(message))
+    const sending = new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type, resource: stored }, { url: 'https://player.test/embed', tab: { id: 7 }, frameId: 3 }, resolve,
+    ))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect((await sending).ok).toBe(true)
+    const offered = mocks.native.mock.calls.find(([message]) => message.op === (type === 'download-now' ? 'offer' : 'media_push'))![0]
+    expect(offered.resource.request_headers.authorization).toBe('Bearer video')
+  })
+
+  it('does not guess credentials when a page body matches concurrent responses equally', async () => {
+    const url = 'https://cdn.test/master.m3u8'
+    for (const requestId of ['one', 'two']) {
+      const request = { requestId, url, method: 'GET', tabId: 7, frameId: 3,
+        type: 'xmlhttprequest', documentUrl: 'https://player.test/embed', timeStamp: Date.now() }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer ${requestId}` }] })
+      listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    }
+    const observation = { id: 'ambiguous', url, kind: 'hls', inspected: true,
+      responseIdentity: { 'content-type': 'application/vnd.apple.mpegurl' }, frameId: 3 }
+    await resourceMessage(observation)
+    await flush()
+    const resource = (session[pageResourceKey(7, 'https://site.test/')] as any[]).find(resource => resource.url === url)
+    expect(resource.replayContext.request_id).toBe('')
+    expect(resource.requestHeaders).toEqual({})
+    const sending = new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource }, { url: 'https://player.test/embed', tab: { id: 7 }, frameId: 3 }, resolve,
+    ))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await sending).toMatchObject({ ok: false, error: expect.stringContaining('无法唯一关联') })
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it('binds resource observations to the browser sender, not payload tab/frame identity', async () => {
+    await resourceMessage({ url: 'https://cdn.test/video.mp4', kind: 'media',
+      tabId: 99, frameId: 8, pageUrl: 'https://wrong.test/', evidence: ['current_src'] })
+    const stored = session[pageResourceKey(7, 'https://site.test/')] as any[]
+    expect(stored).toHaveLength(1)
+    expect(stored[0]).toMatchObject({ tabId: 7, frameId: 3 })
+    const list = (frameId: number) => new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'list' }, { url: 'https://player.test/embed', tab: { id: 7 }, frameId }, resolve,
+    ))
+    expect(await list(3)).toHaveLength(1)
+    expect(await list(8)).toEqual([])
+  })
+
+  it('inspects a shared manifest separately for each owning frame and reuses only same-frame claims', async () => {
+    mocks.inspectHls.mockResolvedValue(manifestMetadata)
+    const resource = { url: 'https://cdn.test/list.m3u8', kind: 'hls' }
+    await resourceMessage(resource, 3)
+    await flush()
+    await resourceMessage(resource, 8)
+    await flush()
+    await resourceMessage(resource, 8)
+    await flush()
+    expect(mocks.inspectHls).toHaveBeenCalledTimes(2)
+    const stored = session[pageResourceKey(7, 'https://site.test/')] as any[]
+    expect(stored.filter(item => item.inspected).map(item => item.frameId).sort()).toEqual([3, 8])
+    expect(mocks.browser.tabs.sendMessage.mock.calls.filter(([, message]) => message.type === 'captured-resource')
+      .map(([, , options]) => options.frameId).sort()).toEqual([3, 8])
+  })
+
+  it.each(['https://cdn.test/media/child.m3u8?track=video', 'https://video.test/child.m3u8'])('uses the observed target identity when inspecting rendition %s', async childUrl => {
+    const masterUrl = 'https://cdn.test/media/master.m3u8'
+    for (const [requestId, url, frameId] of [
+      ['master', masterUrl, 3], ['child', childUrl, 3], ['other-frame', childUrl, 8],
+    ] as const) {
+      const request = { requestId, url, method: 'GET', tabId: 7, frameId,
+        type: 'xmlhttprequest', documentUrl: 'https://player.test/embed', timeStamp: Date.now() }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request, requestHeaders: [
+        { name: 'Authorization', value: `Bearer ${requestId}` },
+        { name: 'X-Playback-Token', value: requestId },
+        { name: 'Referer', value: 'https://player.test/' },
+      ] })
+      listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    }
+    await flush()
+    const probe = mocks.inspectHls.mock.calls.find(([resource]) => resource.url === masterUrl)![0]
+    const masterContext = await probe.requestContextForUrl(masterUrl)
+    const childContext = await probe.requestContextForUrl(childUrl)
+    expect(masterContext.requestHeaders.authorization).toBe('Bearer master')
+    expect(childContext.requestHeaders.authorization).toBe('Bearer child')
+    expect(childContext.requestHeaders['x-playback-token']).toBe('child')
+    expect(childContext.inspectionHeaders).toEqual({ referer: 'https://player.test/' })
+    const unknownContext = await probe.requestContextForUrl('https://unknown.test/child.m3u8')
+    expect(unknownContext.requestHeaders).toBeUndefined()
+  })
+
+  it('does not inspect extension requests, POST manifests or responses without a media body', async () => {
+    for (const [index, [tabId, method, statusCode]] of [
+      [-1, 'GET', 200], [7, 'POST', 200], [7, 'GET', 204], [7, 'GET', 205], [7, 'GET', 302],
+    ].entries()) {
+      listener(mocks.browser.webRequest.onHeadersReceived)({ requestId: `skip-${index}`,
+        url: `https://cdn.test/skip-${index}.m3u8`, tabId, frameId: 0, method, statusCode,
+        type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now(),
+        responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    }
+    await flush()
+    expect(mocks.inspectHls).not.toHaveBeenCalled()
+  })
+
+  it.each([204, 205, 301, 302, 307, 308, 401, 403, 404, 503])('does not publish a media candidate from HTTP %s', async statusCode => {
+    const url = `https://cdn.test/rejected-${statusCode}.m3u8`
+    mocks.browser.tabs.sendMessage.mockClear()
+    listener(mocks.browser.webRequest.onHeadersReceived)({ requestId: `rejected-${statusCode}`,
+      url, tabId: 7, frameId: 3, method: 'GET', statusCode,
+      type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now(),
+      responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    await flush()
+    expect(Object.values(session).flat().some((resource: any) => resource?.url === url)).toBe(false)
+    expect(mocks.browser.tabs.sendMessage.mock.calls.some(([, message]) => message.resource?.url === url)).toBe(false)
+    expect(mocks.inspectHls).not.toHaveBeenCalled()
+  })
+
+  it('retains a cached media response and its credentials without probing an empty 304 body', async () => {
+    const request = { requestId: 'cached-manifest', url: 'https://cdn.test/cached.m3u8?sig=one',
+      tabId: 7, frameId: 3, method: 'GET', type: 'xmlhttprequest',
+      documentUrl: 'https://site.test/', timeStamp: Date.now() }
+    listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer cached' }] })
+    listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 304,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    await flush()
+    expect(Object.values(session).flat().find((resource: any) => resource?.url === request.url))
+      .toMatchObject({ statusCode: 304, requestHeaders: { authorization: 'Bearer cached' } })
+    expect(mocks.inspectHls).not.toHaveBeenCalled()
+  })
+
+  it.each(['m3u8', 'mpd'])('does not turn login pages or JSON errors at a .%s URL into media', async extension => {
+    const url = `https://cdn.test/protected.${extension}`
+    mocks.browser.tabs.sendMessage.mockClear()
+    for (const mime of ['text/html; charset=utf-8', 'application/xhtml+xml', 'application/json', 'image/svg+xml']) {
+      listener(mocks.browser.webRequest.onHeadersReceived)({ requestId: `login-${mime}`,
+        url, tabId: 7, frameId: 3, method: 'GET', statusCode: 200,
+        type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now(),
+        responseHeaders: [{ name: 'Content-Type', value: mime }] })
+    }
+    await flush()
+    expect(Object.values(session).flat().some((resource: any) => resource?.url === url)).toBe(false)
+    expect(mocks.browser.tabs.sendMessage.mock.calls.some(([, message]) => message.resource?.url === url)).toBe(false)
+    expect(mocks.inspectHls).not.toHaveBeenCalled()
+    // XML is a normal DASH server MIME and must remain eligible.
+    listener(mocks.browser.webRequest.onHeadersReceived)({ requestId: 'xml-manifest',
+      url: 'https://cdn.test/valid.mpd', tabId: 7, frameId: 3, method: 'GET', statusCode: 200,
+      type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now(),
+      responseHeaders: [{ name: 'Content-Type', value: 'application/xml' }] })
+    await flush()
+    expect(Object.values(session).flat().find((resource: any) => resource?.url === 'https://cdn.test/valid.mpd'))
+      .toMatchObject({ kind: 'dash' })
+  })
+
+  it.each([true, false])('stops only a sufficient page manifest, complete=%s', async complete => {
+    const request = { requestId: 'page-body', url: 'https://cdn.test/body.m3u8', tabId: 7,
+      frameId: 3, method: 'GET', type: 'xmlhttprequest', documentUrl: 'https://player.test/embed', timeStamp: Date.now() }
+    let release!: (value: unknown) => void
+    mocks.inspectHls.mockImplementation(() => new Promise(resolve => { release = resolve }))
+    listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer page' }] })
+    listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }, { name: 'ETag', value: '"body"' }] })
+    await flush()
+    const probe = mocks.inspectHls.mock.calls[0][0]
+    await resourceMessage({ url: request.url, kind: 'hls', inspected: true,
+      manifestType: complete ? 'media' : 'master',
+      responseIdentity: { 'content-type': 'application/vnd.apple.mpegurl', etag: '"body"' },
+    })
+    await flush()
+    expect(probe.signal.aborted).toBe(complete)
+    release(manifestMetadata)
+    await flush()
+  })
+
+  it('keeps in-flight inspection and exact credentials across fragment navigation', async () => {
+    const url = 'https://cdn.test/list.m3u8?token=one'
+    const request = { requestId: 'fragment-media', url, method: 'GET', tabId: 7, frameId: 3,
+      type: 'xmlhttprequest', documentUrl: 'https://player.test/embed', timeStamp: Date.now() }
+    let release!: (value: unknown) => void
+    mocks.inspectHls.mockImplementation(() => new Promise(resolve => { release = resolve }))
+    listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer fragment-media' }] })
+    listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    await flush()
+    const probe = mocks.inspectHls.mock.calls[0][0]
+    mocks.browser.tabs.get.mockResolvedValue({ url: 'https://site.test/#chapter-2' })
+    listener(mocks.browser.tabs.onUpdated)(7, { url: 'https://site.test/#chapter-2' })
+    await flush()
+    expect(probe.signal.aborted).toBe(false)
+    expect((await probe.requestContextForUrl(url)).requestHeaders.authorization).toBe('Bearer fragment-media')
+    release(manifestMetadata)
+    await flush()
+    const stored = (session[pageResourceKey(7, 'https://site.test/')] as any[]).find(item => item.inspected)
+    expect(stored.replayContext.request_id).toBe('fragment-media')
+    const sending = new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource: stored },
+      { url: 'https://player.test/embed', tab: { id: 7 }, frameId: 3 }, resolve,
+    ))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect((await sending).ok).toBe(true)
+    expect(mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0]
+      .resource.request_headers.authorization).toBe('Bearer fragment-media')
+  })
+
+  it.each(['navigation', 'query', 'reload', 'close'])('discards manifest inspection after source tab %s', async action => {
+    let release!: (value: unknown) => void
+    mocks.inspectHls.mockImplementation(() => new Promise(resolve => { release = resolve }))
+    await resourceMessage({ url: 'https://cdn.test/list.m3u8', kind: 'hls' })
+    await flush()
+    expect(release).toBeTypeOf('function')
+    const signal = mocks.inspectHls.mock.calls[0][0].signal as AbortSignal
+    expect(signal?.aborted).toBe(false)
+    if (action === 'close') listener(mocks.browser.tabs.onRemoved)(7)
+    else {
+      const url = action === 'query' ? 'https://site.test/?episode=2' : 'https://site.test/next'
+      if (action !== 'reload') mocks.browser.tabs.get.mockResolvedValue({ url })
+      listener(mocks.browser.tabs.onUpdated)(7, action === 'reload' ? { status: 'loading', url: 'https://site.test/' } : { url })
+    }
+    await flush()
+    expect(signal.aborted).toBe(true)
+    release(manifestMetadata)
+    await flush()
+    expect(session[pageResourceKey(7, 'https://site.test/next')]).toBeUndefined()
+    expect((session[pageResourceKey(7, 'https://site.test/')] as any[] || []).some(item => item.inspected)).toBe(false)
+    expect(mocks.browser.tabs.sendMessage.mock.calls.filter(([, message]) => message.type === 'captured-resource')).toEqual([])
+  })
+
+  it('does not relabel a manifest if navigation races the final save', async () => {
+    let release!: (value: unknown) => void
+    mocks.inspectHls.mockImplementation(() => new Promise(resolve => { release = resolve }))
+    await resourceMessage({ url: 'https://cdn.test/list.m3u8', kind: 'hls' })
+    await flush()
+    mocks.browser.tabs.get.mockResolvedValueOnce({ url: 'https://site.test/' })
+      .mockResolvedValue({ url: 'https://site.test/next' })
+    release(manifestMetadata)
+    await flush()
+    expect(session[pageResourceKey(7, 'https://site.test/next')]).toBeUndefined()
+    expect(mocks.browser.tabs.sendMessage.mock.calls.filter(([, message]) => message.type === 'captured-resource')).toEqual([])
+  })
+
   function response(early = false, method = 'GET') {
     const request = { requestId: 'download-request', url: item.url, method, tabId: 7,
       frameId: 0, type: 'main_frame', documentUrl: item.referrer, timeStamp: Date.now() }
@@ -112,12 +385,205 @@ describe('browser download ownership through registered event listeners', () => 
         { name: 'Content-Length', value: '1024' }] })
   }
 
-  function directLink() {
+  function directLink(href = 'https://site.test/export.zip') {
     return new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
-      { type: 'intercept-download-link', href: 'https://site.test/export.zip', filename: '' },
+      { type: 'intercept-download-link', href, filename: '' },
       { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 }, resolve,
     ))
   }
+
+  async function firefoxFileRequest(overrides: Record<string, unknown> = {}, intent: Record<string, unknown> | null = {}) {
+    vi.stubEnv('CHROME', '')
+    vi.stubEnv('FIREFOX', 'true')
+    const background = await import('../entrypoints/background')
+    ;(background.default as unknown as { main(): void }).main()
+    await flush()
+    const details = { requestId: 'download-request', url: 'https://site.test/export.zip?token=a%2Fb+z',
+      method: 'GET', tabId: 7, frameId: 0, type: 'main_frame', documentUrl: 'https://site.test/',
+      timeStamp: Date.now(), requestHeaders: [
+        { name: 'Authorization', value: 'Bearer this-request' },
+        { name: 'Cookie', value: 'sid=this-request' },
+        { name: 'Referer', value: 'https://site.test/original' },
+        { name: 'Origin', value: 'https://site.test' },
+        { name: 'User-Agent', value: 'Browser request UA' },
+      ], ...overrides }
+    item.url = item.finalUrl = details.url
+    if (intent) await new Promise(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'click-intent', href: details.url, pageUrl: 'https://site.test/', ...intent },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 }, resolve,
+    ))
+    listener(mocks.browser.webRequest.onBeforeRequest)(details)
+    return { blocked: listener(mocks.browser.webRequest.onBeforeSendHeaders)(details) }
+  }
+
+  it('hands a Firefox attachment to the desktop before sending its original request with exact credentials', async () => {
+    local.authorizedCookieHosts = ['site.test']
+    mocks.browser.cookies.getAll.mockResolvedValue([{ name: 'sid', value: 'this-request', domain: 'site.test',
+      path: '/', hostOnly: true, secure: true }])
+    const { blocked } = await firefoxFileRequest()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toEqual({ cancel: true })
+    const payload = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource
+    expect(payload.url).toBe(item.url)
+    expect(payload.cookie).toBe('sid=this-request')
+    expect(payload.request_headers).toMatchObject({ authorization: 'Bearer this-request',
+      referer: 'https://site.test/original', origin: 'https://site.test', 'user-agent': 'Browser request UA' })
+    expect(payload.request_contexts['https://site.test'].url_contexts[item.url].request_headers.authorization).toBe('Bearer this-request')
+    expect(payload.request_body).toBeUndefined()
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+  })
+
+  it.each([{ enabled: false }, { minimumBytes: 1024 }])('keeps Firefox pre-request navigation under policy %j', async config => {
+    Object.assign(local, config)
+    const { blocked } = await firefoxFileRequest({ requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it.each([{ method: 'POST' }, { type: 'xmlhttprequest' }, { url: 'https://site.test/video.mp4' },
+    { proxyInfo: { type: 'socks', host: '127.0.0.1', port: 1080 } }])('preserves Firefox requests outside explicit file GET takeover: %j', async details => {
+    const { blocked } = await firefoxFileRequest({ ...details, requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it('does not issue an original Firefox request or a second offer when its pre-request receipt is uncertain', async () => {
+    let recovered = false
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'offer') return { ok: false, transport_error: true }
+      if (message.op === 'handoff_status' && recovered) return { ok: true, handoff: { id: 'recovered-file', status: 'pending' } }
+      throw new Error('receipt unavailable')
+    })
+    for (const requestId of ['first', 'second']) {
+      const { blocked } = await firefoxFileRequest({ requestId, requestHeaders: [] })
+      await vi.advanceTimersByTimeAsync(1500)
+      expect(await blocked).toEqual({ cancel: true })
+    }
+    const originalId = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource.client_request_id
+    recovered = true
+    const { blocked } = await firefoxFileRequest({ requestId: 'third', requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toEqual({ cancel: true })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'handoff_status' && message.client_request_id === originalId)).toBe(true)
+  })
+
+  it('leaves a refused Firefox pre-request handoff with the browser through response and DownloadItem events', async () => {
+    mocks.native.mockImplementation(async message => message.op === 'ping'
+      ? { ok: true } : { ok: false, error: 'desktop refused' })
+    const { blocked } = await firefoxFileRequest({ requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    const received = response(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    await received
+    const created = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(1500)
+    await created
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+  })
+
+  it.each([null, { altBypass: true }, { href: 'https://site.test/another.zip' }])('requires the exact eligible Firefox file click: %j', async intent => {
+    const { blocked } = await firefoxFileRequest({ requestHeaders: [] }, intent)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it.each([false, true])('preserves Firefox request cookies when export cannot match, authorized=%s', async authorized => {
+    if (authorized) local.authorizedCookieHosts = ['site.test']
+    mocks.browser.cookies.getAll.mockResolvedValue([{ name: 'sid', value: 'different', domain: 'site.test',
+      path: '/', hostOnly: true, secure: true }])
+    const { blocked } = await firefoxFileRequest()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it('uses one Firefox cookie snapshot from request verification through handoff', async () => {
+    local.authorizedCookieHosts = ['site.test']
+    let reads = 0
+    mocks.browser.cookies.getAll.mockImplementation(async query => query.url && !query.partitionKey ? [{
+      name: 'sid', value: ++reads === 1 ? 'this-request' : 'rotated', domain: 'site.test',
+      path: '/', hostOnly: true, secure: true,
+    }] : [])
+    const { blocked } = await firefoxFileRequest()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toEqual({ cancel: true })
+    const payload = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource
+    expect(payload.cookie).toBe('sid=this-request')
+    expect(payload.request_contexts['https://site.test'].cookies[0].value).toBe('this-request')
+    expect(reads).toBe(1)
+  })
+
+  it('resolves a Firefox pre-request journal after worker reload even while the desktop is offline', async () => {
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      throw new Error('receipt lost')
+    })
+    const first = await firefoxFileRequest({ requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await first.blocked).toEqual({ cancel: true })
+    const requestId = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource.client_request_id
+    vi.clearAllTimers()
+    vi.resetModules()
+    mocks.native.mockImplementation(async () => { throw new Error('desktop offline') })
+    const retry = await firefoxFileRequest({ requestId: 'retry', requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await retry.blocked).toEqual({ cancel: true })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'handoff_status' && message.client_request_id === requestId)).toBe(true)
+  })
+
+  it('keeps an unsent Firefox request with the browser when the desktop is initially offline', async () => {
+    mocks.native.mockImplementation(async () => { throw new Error('desktop offline') })
+    const { blocked } = await firefoxFileRequest({ requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it.each(['missing click', 'disabled', 'changed cookies'])('keeps unresolved Firefox ownership when a later request has %s', async change => {
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      throw new Error('receipt lost')
+    })
+    const first = await firefoxFileRequest({ requestHeaders: [] })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await first.blocked).toEqual({ cancel: true })
+    const original = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource.client_request_id
+    if (change === 'disabled') local.enabled = false
+    const retry = await firefoxFileRequest({ requestId: 'second',
+      requestHeaders: change === 'changed cookies' ? [{ name: 'Cookie', value: 'changed=1' }] : [] },
+    change === 'missing click' ? null : {})
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await retry.blocked).toEqual({ cancel: true })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'handoff_status'
+      && message.client_request_id === original).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps a repeated Firefox navigation blocked while its first credential snapshot is still being prepared', async () => {
+    local.authorizedCookieHosts = ['site.test']
+    let release!: (value: unknown[]) => void
+    const snapshot = new Promise<unknown[]>(resolve => { release = resolve })
+    mocks.browser.cookies.getAll.mockImplementation(() => snapshot)
+    const first = await firefoxFileRequest()
+    await flush()
+    const second = await firefoxFileRequest({ requestId: 'second' }, null)
+    await vi.advanceTimersByTimeAsync(1500)
+    release([{ name: 'sid', value: 'this-request', domain: 'site.test', path: '/', hostOnly: true, secure: true }])
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await first.blocked).toEqual({ cancel: true })
+    expect(await second.blocked).toEqual({ cancel: true })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+  })
 
   it('shares one pending desktop confirmation for repeated direct-link clicks', async () => {
     mocks.native.mockImplementation(async message => {
@@ -145,6 +611,24 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
   })
 
+  it('shares only an in-flight readiness check and checks again after desktop recovery', async () => {
+    let release!: (value: unknown) => void
+    mocks.native.mockImplementation(async message => message.op === 'ping'
+      ? new Promise(resolve => { release = resolve }) : { ok: false })
+    const clicks = Promise.all([directLink(), directLink('https://site.test/another.zip')])
+    await vi.advanceTimersByTimeAsync(500)
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'ping' && message.interactive)).toHaveLength(1)
+    release({ ok: false })
+    expect((await clicks).every(reply => reply.browserFallback === true)).toBe(true)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    mocks.native.mockImplementation(async message => message.op === 'ping'
+      ? { ok: true } : { ok: true, handoff: { id: 'recovered', status: 'pending' } })
+    const retry = directLink()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(await retry).toMatchObject({ browserFallback: false, handoff: { id: 'recovered' } })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'ping' && message.interactive)).toHaveLength(2)
+  })
+
   it('does not replay a previous POST when intercepting a new GET link to the same URL', async () => {
     item.url = item.finalUrl = 'https://site.test/export.zip'
     response(true, 'POST')
@@ -156,6 +640,23 @@ describe('browser download ownership through registered event listeners', () => 
     const offered = mocks.native.mock.calls.find(([message]) => message.op === 'offer')?.[0]
     expect(offered.resource.request_method).not.toBe('POST')
     expect(offered.resource.request_body).toBeUndefined()
+  })
+
+  it('uses one scoped cookie snapshot for the payload and request context', async () => {
+    local.authorizedCookieHosts = ['site.test']
+    let reads = 0
+    mocks.browser.cookies.getAll.mockImplementation(async query => query.url && !query.partitionKey ? [{
+      name: 'sid', value: ++reads === 1 ? 'original' : 'rotated',
+      domain: 'site.test', path: '/', hostOnly: true, secure: true,
+    }] : [])
+    const click = directLink()
+    await vi.advanceTimersByTimeAsync(500)
+    expect((await click).ok).toBe(true)
+    const payload = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource
+    expect(payload.cookie).toBe('sid=original')
+    expect(payload.request_contexts['https://site.test'].cookie).toBe(payload.cookie)
+    expect(payload.request_contexts['https://site.test'].cookies[0].value).toBe('original')
+    expect(reads).toBe(1)
   })
 
   it('keeps repeated link clicks on the same uncertain offer until its receipt is recovered', async () => {
@@ -471,6 +972,25 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalled()
   })
 
+  it('imports the finalized browser filename when it changes after onCreated', async () => {
+    item.state = 'in_progress'
+    item.filename = 'C:\\Downloads\\image.bin'
+    response(true)
+    const created = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await created
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+
+    item.state = 'complete'
+    item.filename = 'C:\\Downloads\\image.png'
+    listener(mocks.browser.downloads.onChanged)({ id: item.id, state: { current: 'complete' } })
+    await flush()
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer_local_file').map(([message]) => message))
+      .toMatchObject([{ resource: { local_source_path: item.filename } }])
+    expect(local['local-browser-download-handoffs']).toMatchObject([{ sourceFilename: item.filename }])
+    expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalled()
+  })
+
   it('retains the original import identity across duplicate download events and worker restart', async () => {
     item.state = 'in_progress'
     response(true)
@@ -595,6 +1115,105 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(true)
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
     expect(mocks.browser.downloads.erase).toHaveBeenCalledWith({ id: 42 })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'ping' && message.interactive)).toHaveLength(1)
+  })
+
+  it.each([0, 3])('hands off audio, video and key identities only from frame %s and successful requests', async frameId => {
+    const urls = ['https://cdn.test/media/main.m3u8', 'https://cdn.test/media/play?track=audio',
+      'https://cdn.test/media/play?track=video', 'https://cdn.test/media/key']
+    for (const [index, url] of urls.entries()) {
+      const request = { requestId: String(index), url, method: 'GET', tabId: 7, frameId,
+        type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now() + index }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer track-${index}` },
+          { name: 'Referer', value: 'https://site.test/' }] })
+      listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: index === 0 ? 'application/vnd.apple.mpegurl' : 'application/octet-stream' }] })
+    }
+    for (const [index, url] of [...urls, 'https://other-frame.test/media/key'].entries()) {
+      const request = { requestId: `other-frame-${index}`, url, method: 'GET', tabId: 7,
+        frameId: frameId + 1, type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now() + 100 + index }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+        requestHeaders: [{ name: 'Authorization', value: 'Bearer other-frame' }] })
+      listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/octet-stream' }] })
+    }
+    const denied = { requestId: 'denied-audio', url: urls[1], method: 'GET', tabId: 7, frameId,
+      type: 'xmlhttprequest', documentUrl: 'https://site.test/', timeStamp: Date.now() + 200 }
+    listener(mocks.browser.webRequest.onSendHeaders)({ ...denied,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer denied' }] })
+    listener(mocks.browser.webRequest.onHeadersReceived)({ ...denied, statusCode: 403,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/json' }] })
+    const sending = new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource: { id: 'main', url: urls[0], kind: 'hls', seenAt: Date.now() } },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId }, resolve,
+    ))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect((await sending).ok).toBe(true)
+    const payload = mocks.native.mock.calls.find(([message]) => message.op === 'offer')?.[0].resource
+    expect(payload.request_headers.authorization).toBe('Bearer track-0')
+    const scoped = payload.request_contexts['https://cdn.test']
+    expect(payload.request_contexts['https://other-frame.test']).toBeUndefined()
+    expect(Object.keys(scoped.url_contexts).sort()).toEqual([...urls].sort())
+    for (const [index, url] of urls.entries()) {
+      expect(scoped.url_contexts[url].request_headers.authorization).toBe(`Bearer track-${index}`)
+    }
+    expect(scoped.path_contexts['/media/'].request_headers.authorization).toBe('Bearer track-0')
+  })
+
+  it('keeps Firefox early takeover bound to the original expiring signature', async () => {
+    vi.stubEnv('CHROME', '')
+    vi.stubEnv('FIREFOX', 'true')
+    const expires = Math.floor(Date.now() / 1000)
+    const originalUrl = `https://site.test/list.m3u8?s=download&e=${expires + 30}`
+    const observe = (requestId: string, url: string) => {
+      const request = { requestId, url, method: 'GET', tabId: 7, frameId: 0,
+        type: 'main_frame', documentUrl: item.referrer, timeStamp: Date.now() }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+        requestHeaders: [{ name: 'X-Playback-Token', value: requestId }] })
+      return listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' },
+          { name: 'Content-Disposition', value: 'attachment; filename="list.m3u8"' }] })
+    }
+    const first = observe('download', originalUrl)
+    const second = observe('player', `https://site.test/list.m3u8?s=player&e=${expires + 300}`)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(await first).toEqual({ cancel: true })
+    await second
+    const offer = mocks.native.mock.calls.find(([message]) => message.op === 'offer'
+      && message.resource.url === originalUrl)?.[0]
+    expect(offer).toBeDefined()
+    expect(offer.resource.request_headers['x-playback-token']).toBe('download')
+  })
+
+  it.each([false, true])('keeps the exact signed manifest and headers through browser takeover, original observed=%s', async observed => {
+    item.url = item.finalUrl = 'https://site.test/list.m3u8?token=download'
+    item.state = 'in_progress'
+    mocks.browser.downloads.cancel.mockImplementation(async () => { item.state = 'interrupted' })
+    for (const [requestId, url, timeStamp] of [
+      ...(observed ? [['download', item.url, Date.now()]] as const : []),
+      ['player', 'https://site.test/list.m3u8?token=player', Date.now() + 1],
+    ] as const) {
+      const request = { requestId, url, method: 'GET', tabId: 7, frameId: 0,
+        type: 'xmlhttprequest', documentUrl: item.referrer, timeStamp }
+      listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+        requestHeaders: [{ name: 'X-Playback-Token', value: requestId }] })
+      listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'application/vnd.apple.mpegurl' }] })
+    }
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(2000)
+    await takeover
+    const offers = mocks.native.mock.calls.filter(([message]) => message.op === 'offer')
+    if (observed) {
+      expect(offers).toHaveLength(1)
+      expect(offers[0][0].resource.url).toBe('https://site.test/list.m3u8?token=download')
+      expect(offers[0][0].resource.request_headers['x-playback-token']).toBe('download')
+    } else {
+      expect(offers).toHaveLength(0)
+      expect(mocks.browser.downloads.pause).not.toHaveBeenCalled()
+      expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+    }
   })
 
   it.each(['removed', 'canceled'])('does not offer a download %s during pause', async state => {
@@ -779,6 +1398,56 @@ describe('browser download ownership through registered event listeners', () => 
     })
     const blocked = response(true)
     await vi.advanceTimersByTimeAsync(500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+  })
+
+  it('keeps a Firefox manifest until a lost receipt is recovered by the original journaled request', async () => {
+    vi.stubEnv('CHROME', '')
+    vi.stubEnv('FIREFOX', 'true')
+    item.url = item.finalUrl = 'https://site.test/list.m3u8'
+    item.mime = 'application/vnd.apple.mpegurl'
+    item.state = 'in_progress'
+    let receiptAvailable = false
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'offer') return { ok: false, transport_error: true }
+      if (message.op === 'handoff_status' && receiptAvailable) return {
+        ok: true, handoff: { id: 'recovered-manifest', status: 'pending' },
+      }
+      throw new Error('receipt unavailable')
+    })
+    const blocked = response(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+    const offered = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0]
+    expect(local['pending-direct-offers-v1']).toEqual([
+      expect.objectContaining({ clientRequestId: offered.resource.client_request_id }),
+    ])
+    receiptAvailable = true
+    const downloadId = item.id
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(1500)
+    await takeover
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'handoff_status'
+      && message.client_request_id === offered.resource.client_request_id)).toBe(true)
+    expect(mocks.browser.downloads.cancel).toHaveBeenCalledWith(downloadId)
+  })
+
+  it('keeps a Firefox manifest in the browser if the ownership journal cannot be saved', async () => {
+    vi.stubEnv('CHROME', '')
+    vi.stubEnv('FIREFOX', 'true')
+    item.url = item.finalUrl = 'https://site.test/list.m3u8'
+    item.mime = 'application/vnd.apple.mpegurl'
+    mocks.browser.storage.local.set.mockImplementation(async value => {
+      if ('pending-direct-offers-v1' in value) throw new Error('journal unavailable')
+      Object.assign(local, value)
+    })
+    const blocked = response(true)
+    await vi.advanceTimersByTimeAsync(1500)
     expect(await blocked).toBeUndefined()
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
     expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()

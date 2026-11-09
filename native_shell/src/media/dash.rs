@@ -1,4 +1,4 @@
-//! Native DASH downloader. Unsupported multi-period codec switches fail closed.
+//! Native DASH downloader. Unsupported multi-period manifests fail closed.
 
 use crate::http_engine::{fetch_bytes_limited, run_job, Job};
 use crate::media::merge::merge_with_ffmpeg;
@@ -35,11 +35,29 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
     if !xml.contains("<MPD") && !xml.contains("<mpd") {
         return Err("not a DASH manifest".into());
     }
-    let dynamic = xml.contains("type=\"dynamic\"") || xml.contains("type='dynamic'");
+    let root = &xml[xml.find("<MPD").or_else(|| xml.find("<mpd")).unwrap()..];
+    let opening = &root[..root.find('>').ok_or("truncated MPD")?];
+    let dynamic = attr(opening, "type").as_deref() == Some("dynamic");
     let period_count = xml
         .matches("<Period")
         .count()
         .max(xml.matches("<period").count());
+    if period_count > 1 {
+        return Err("unsupported multi-period DASH: cannot preserve all periods".into());
+    }
+    for element in ["Initialization", "SegmentURL"] {
+        for tail in xml.split(&format!("<{element}")).skip(1) {
+            let tag = &tail[..tail.find('>').unwrap_or(tail.len())];
+            let field = if element == "Initialization" {
+                "range"
+            } else {
+                "mediaRange"
+            };
+            if attr(tag, field).is_some() {
+                return Err("unsupported DASH SegmentList byte ranges".into());
+            }
+        }
+    }
     let mut representations = Vec::new();
     let mut rest = xml;
     while let Some(start) = rest.find("<Representation") {
@@ -52,9 +70,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             continue;
         }
         let absolute = xml.len() - rest.len() + start;
-        let period_duration = (!dynamic)
-            .then(|| period_duration_seconds(xml, absolute))
-            .flatten();
+        let period_duration = period_duration_seconds(xml, absolute);
         let after = &rest[start..];
         let opening_end = after
             .find('>')
@@ -86,17 +102,37 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             mime
         };
         let (lang, codecs, content_type, label) = set_meta(block, xml, absolute);
-        let base_url = tag_text(block, "BaseURL")
-            .map(|value| resolve(base, &value))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| base.to_string());
-        let segment_list = block.find("<SegmentList").and_then(|start| {
-            let list = &block[start..];
-            list.find("</SegmentList>")
-                .map(|end| &list[..end + "</SegmentList>".len()])
-        });
-        let template_block = segment_template_block(block).unwrap_or(block);
-        let init = attr(template_block, "initialization")
+        let period = enclosing_block(xml, absolute, "Period");
+        let set = enclosing_adaptation_set(xml, absolute);
+        // 每层只取直接子节点，避免把相邻 Representation 的 CDN 地址串到当前轨道。
+        let scopes = [Some(root), period, set.as_deref(), Some(block)];
+        let mut base_url = base.to_string();
+        for scope in scopes.into_iter().flatten() {
+            if let Some(value) = tag_text(scope, "BaseURL") {
+                base_url = resolve(&base_url, &value);
+                if base_url.is_empty() {
+                    return Err("invalid DASH BaseURL".into());
+                }
+            }
+        }
+        let mut segment_list = None;
+        let mut templates = Vec::new();
+        for scope in scopes.into_iter().rev().flatten() {
+            if let Some(list) = direct_child(scope, "SegmentList") {
+                if templates.is_empty() {
+                    segment_list = Some(list);
+                }
+                break;
+            }
+            if let Some(template) = direct_child(scope, "SegmentTemplate") {
+                templates.push(template);
+            }
+        }
+        let template_attr = |key: &str| templates.iter().find_map(|template| attr(template, key));
+        let has_timeline = templates
+            .iter()
+            .any(|template| direct_child(template, "SegmentTimeline").is_some());
+        let init = template_attr("initialization")
             .or_else(|| attr(block, "initialization"))
             .or_else(|| {
                 segment_list.and_then(|list| {
@@ -110,20 +146,20 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let media_template = if segment_list.is_some() {
             None
         } else {
-            attr(template_block, "media")
+            template_attr("media")
         };
         let mut media = Vec::new();
         let mut media_durations = Vec::new();
         if let Some(template) = media_template {
             media.extend(expand_timeline(
-                template_block,
+                &templates,
                 &template,
                 &base_url,
                 &id,
                 bandwidth,
-                period_duration,
+                period_duration.filter(|_| !dynamic || has_timeline),
                 &mut media_durations,
-            ));
+            )?);
         }
         // Only look at the chunks AFTER `<SegmentURL`: chunk 0 is the text
         // before it, which for a Representation-level `<SegmentTemplate ...>`
@@ -147,40 +183,6 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 .filter(|value| value.is_finite() && *value > 0.0)
             {
                 media_durations = vec![seconds; media.len()];
-            }
-        }
-        if media.is_empty() {
-            if let Some(set) = enclosing_adaptation_set(xml, absolute) {
-                let set_template = segment_template_block(&set).unwrap_or(set.as_str());
-                let init_from_set = attr(set_template, "initialization")
-                    .map(|value| resolve(&base_url, &apply_template(&value, &id, 0, 0, bandwidth)));
-                if let Some(template) = attr(set_template, "media") {
-                    media.extend(expand_timeline(
-                        set_template,
-                        &template,
-                        &base_url,
-                        &id,
-                        bandwidth,
-                        period_duration,
-                        &mut media_durations,
-                    ));
-                }
-                representations.push(Representation {
-                    id,
-                    bandwidth,
-                    height,
-                    mime,
-                    lang,
-                    codecs,
-                    content_type,
-                    label,
-                    base_url,
-                    init: init.or(init_from_set).filter(|url| !url.is_empty()),
-                    media: media.into_iter().filter(|url| !url.is_empty()).collect(),
-                    media_durations,
-                });
-                rest = &after[end..];
-                continue;
             }
         }
         representations.push(Representation {
@@ -317,9 +319,6 @@ pub fn download_dash_selected(
     let mut recorded_subs: Vec<Representation> = Vec::new();
     loop {
         let manifest = parse_mpd(&xml, url)?;
-        if multi_period_codec_change(&xml, manifest.period_count) {
-            return Err("unsupported multi-period DASH with codec changes".into());
-        }
         let video = select_video(
             &manifest.representations,
             preferred_bandwidth,
@@ -947,6 +946,7 @@ fn download_one(
         mirrors: Vec::new(),
         replay_json: crate::credentials::scoped_replay_json(),
         curl_body_limit: None,
+        range_stop: None,
         origin_boundary: String::new(),
     };
     run_job(&job).map_err(|error| error.to_string())?;
@@ -1103,19 +1103,138 @@ fn resume_or_fetch(
 }
 
 fn attr(block: &str, key: &str) -> Option<String> {
-    let pattern = format!("{key}=\"");
-    let start = block.find(&pattern)?;
-    let rest = &block[start + pattern.len()..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    for (index, _) in block.match_indices(key) {
+        if index > 0 && !block[..index].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let tail = block[index + key.len()..].trim_start();
+        let Some(value) = tail.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim_start();
+        let Some(quote @ ('\'' | '"')) = value.chars().next() else {
+            continue;
+        };
+        let value = &value[1..];
+        if let Some(end) = value.find(quote) {
+            return Some(decode_xml_text(&value[..end]));
+        }
+    }
+    None
 }
 
 fn tag_text(block: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = block.find(&open)? + open.len();
-    let end = block[start..].find(&close)? + start;
-    Some(block[start..end].trim().to_string())
+    let child = direct_child(block, tag)?;
+    let start = child.find('>')? + 1;
+    let end = child.rfind("</")?;
+    let text = child[start..end].trim();
+    Some(
+        if let Some(text) = text
+            .strip_prefix("<![CDATA[")
+            .and_then(|text| text.strip_suffix("]]>"))
+        {
+            text.to_string()
+        } else {
+            decode_xml_text(text)
+        },
+    )
+}
+
+fn direct_child<'a>(block: &'a str, wanted: &str) -> Option<&'a str> {
+    let mut rest = block.get(block.find('>')? + 1..)?;
+    let mut depth = 0usize;
+    let mut selected = None;
+    while let Some(start) = rest.find('<') {
+        rest = &rest[start..];
+        if rest.starts_with("<!--") {
+            rest = &rest[rest.find("-->")? + 3..];
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            rest = &rest[rest.find("]]>")? + 3..];
+            continue;
+        }
+        let mut quote = None;
+        let end = rest.char_indices().skip(1).find_map(|(index, character)| {
+            if let Some(delimiter) = quote {
+                if character == delimiter {
+                    quote = None;
+                }
+            } else if matches!(character, '\'' | '"') {
+                quote = Some(character);
+            } else if character == '>' {
+                return Some(index);
+            }
+            None
+        })?;
+        let tag = &rest[1..end];
+        let closing = tag.starts_with('/');
+        let name = tag
+            .trim_start_matches('/')
+            .split([' ', '\t', '\r', '\n', '/'])
+            .next()?;
+        if closing {
+            if depth == 0 {
+                return None;
+            }
+            depth -= 1;
+            if depth == 0 {
+                if let Some(selected) = selected.take() {
+                    return Some(&block[selected..block.len() - rest.len() + end + 1]);
+                }
+            }
+        } else if !tag.starts_with(['!', '?']) {
+            if depth == 0 && name == wanted {
+                let start = block.len() - rest.len();
+                if tag.trim_end().ends_with('/') {
+                    return Some(&block[start..start + end + 1]);
+                }
+                selected = Some(start);
+            }
+            if !tag.trim_end().ends_with('/') {
+                depth += 1;
+            }
+        }
+        rest = &rest[end + 1..];
+    }
+    None
+}
+
+fn decode_xml_text(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('&') {
+        decoded.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let Some(end) = rest.find(';') else {
+            decoded.push_str(rest);
+            return decoded;
+        };
+        let name = &rest[1..end];
+        let character = match name {
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            _ => name
+                .strip_prefix("#x")
+                .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+                .or_else(|| {
+                    name.strip_prefix('#')
+                        .and_then(|digits| digits.parse().ok())
+                })
+                .and_then(char::from_u32),
+        };
+        if let Some(character) = character {
+            decoded.push(character);
+        } else {
+            decoded.push_str(&rest[..=end]);
+        }
+        rest = &rest[end + 1..];
+    }
+    decoded.push_str(rest);
+    decoded
 }
 
 fn resolve(base: &str, reference: &str) -> String {
@@ -1297,13 +1416,16 @@ fn playlist_leaf(path: &Path) -> String {
 }
 
 fn enclosing_adaptation_set(xml: &str, at: usize) -> Option<String> {
+    enclosing_block(xml, at, "AdaptationSet").map(str::to_string)
+}
+
+fn enclosing_block<'a>(xml: &'a str, at: usize, tag: &str) -> Option<&'a str> {
     let prefix = xml.get(..at.min(xml.len()))?;
-    let start = prefix.rfind("<AdaptationSet")?;
+    let start = prefix.rfind(&format!("<{tag}"))?;
     let from = &xml[start..];
-    let end = from
-        .find("</AdaptationSet>")
-        .unwrap_or(from.len().min(16_384));
-    Some(from[..end].to_string())
+    let close = format!("</{tag}>");
+    let end = from.find(&close)? + close.len();
+    (at < start + end).then_some(&from[..end])
 }
 
 fn set_meta(block: &str, xml: &str, absolute: usize) -> (String, String, String, String) {
@@ -1566,16 +1688,6 @@ fn download_dash_subtitle_track(
     Ok(vtt_path)
 }
 
-fn segment_template_block(block: &str) -> Option<&str> {
-    let start = block.find("<SegmentTemplate")?;
-    let rest = &block[start..];
-    let end = rest
-        .find("</SegmentTemplate>")
-        .map(|index| index + "</SegmentTemplate>".len())
-        .or_else(|| rest.find("/>").map(|index| index + 2))?;
-    Some(&rest[..end])
-}
-
 fn period_duration_seconds(xml: &str, at: usize) -> Option<f64> {
     let start = xml.get(..at)?.rfind("<Period")?;
     let period = &xml[start..];
@@ -1599,33 +1711,47 @@ fn period_duration_seconds(xml: &str, at: usize) -> Option<f64> {
     (duration.is_finite() && duration > 0.0).then_some(duration)
 }
 
+// 十进制时长转 f64 后可能略高于整数刻度，不能因此多请求一个分片。
+fn ceil_segment_units(value: f64) -> f64 {
+    let nearest = value.round();
+    if (value - nearest).abs() <= value.abs() * f64::EPSILON * 4.0 {
+        nearest
+    } else {
+        value.ceil()
+    }
+}
+
 fn expand_timeline(
-    block: &str,
+    templates: &[&str],
     template: &str,
     base_url: &str,
     id: &str,
     bandwidth: u64,
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
-) -> Vec<String> {
-    let start_number = attr(block, "startNumber")
+) -> Result<Vec<String>, String> {
+    let template_attr = |key: &str| templates.iter().find_map(|template| attr(template, key));
+    let timeline = templates
+        .iter()
+        .find_map(|template| direct_child(template, "SegmentTimeline"));
+    let start_number = template_attr("startNumber")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1);
     let mut media = Vec::new();
     let mut number = start_number;
     let mut clock = 0u64;
     // 固定时长模板没有 SegmentTimeline，按 Period 的边界展开，保留最后一个短分片。
-    if !block.contains("<SegmentTimeline") {
+    if timeline.is_none() {
         if let (Some(seconds), Some(duration)) = (
             period_duration,
-            attr(block, "duration").and_then(|value| value.parse::<u64>().ok()),
+            template_attr("duration").and_then(|value| value.parse::<u64>().ok()),
         ) {
-            let timescale = attr(block, "timescale")
+            let timescale = template_attr("timescale")
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(1);
-            let count = (seconds * timescale as f64 / duration as f64).ceil();
+            let count = ceil_segment_units(seconds * timescale as f64 / duration as f64);
             if duration > 0 && timescale > 0 && count.is_finite() && count <= 1_000_000.0 {
-                let offset = attr(block, "presentationTimeOffset")
+                let offset = template_attr("presentationTimeOffset")
                     .and_then(|value| value.parse::<u64>().ok())
                     .unwrap_or(0);
                 for index in 0..count as u64 {
@@ -1645,51 +1771,77 @@ fn expand_timeline(
                 }
             }
         }
-        return media;
+        return Ok(media);
     }
-    let mut rest = block;
-    let timescale = attr(block, "timescale")
+    let mut rest = timeline.unwrap();
+    let timescale = template_attr("timescale")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
         .max(1);
     while let Some(index) = rest.find("<S") {
         let after = &rest[index + 2..];
-        if !(after.starts_with(' ')
-            || after.starts_with('\n')
-            || after.starts_with('\t')
-            || after.starts_with('>'))
-        {
+        if !(after.starts_with(char::is_whitespace) || after.starts_with('>')) {
             rest = after;
             continue;
         }
-        let end = after.find('>').unwrap_or(0);
+        let end = after.find('>').ok_or("truncated DASH timeline entry")?;
         let tag = &after[..end];
         let duration = attr_unquoted_or_quoted(tag, "d")
             .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(0);
+            .filter(|duration| *duration > 0)
+            .ok_or("invalid DASH timeline duration")?;
         let time = attr_unquoted_or_quoted(tag, "t")
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(clock);
         let repeat = attr_unquoted_or_quoted(tag, "r")
             .and_then(|value| value.parse::<i64>().ok())
-            .unwrap_or(0)
-            .clamp(0, 1_000_000) as u64;
+            .unwrap_or(0);
+        let repeat = if repeat == -1 {
+            let following = &after[end + 1..];
+            let next_tag = following
+                .split("<S")
+                .skip(1)
+                .find(|tail| tail.starts_with(char::is_whitespace) || tail.starts_with('>'));
+            let next_time = next_tag.and_then(|next| {
+                attr_unquoted_or_quoted(&next[..next.find('>')?], "t")?
+                    .parse::<u64>()
+                    .ok()
+            });
+            let boundary = next_time
+                .or_else(|| {
+                    period_duration.map(|seconds| {
+                        let offset = template_attr("presentationTimeOffset")
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        offset.saturating_add(ceil_segment_units(seconds * timescale as f64) as u64)
+                    })
+                })
+                .filter(|boundary| *boundary > time)
+                .ok_or("unbounded DASH negative timeline repeat")?;
+            (boundary - time).div_ceil(duration) - 1
+        } else {
+            u64::try_from(repeat).map_err(|_| "invalid DASH timeline repeat")?
+        };
+        if repeat >= 1_000_000 || media.len() as u64 + repeat + 1 > 1_000_000 {
+            return Err("DASH timeline exceeds segment limit".into());
+        }
         clock = time;
         for _ in 0..=repeat {
-            if media.len() >= 1_000_000 {
-                break;
-            }
             durations.push(duration as f64 / timescale as f64);
             media.push(resolve(
                 base_url,
                 &apply_template(template, id, number, clock, bandwidth),
             ));
-            number += 1;
-            clock = clock.saturating_add(duration);
+            number = number
+                .checked_add(1)
+                .ok_or("DASH segment number overflow")?;
+            clock = clock
+                .checked_add(duration)
+                .ok_or("DASH timeline overflow")?;
         }
         rest = &after[end.saturating_add(1)..];
     }
-    media
+    Ok(media)
 }
 
 fn apply_template(template: &str, id: &str, number: u64, time: u64, bandwidth: u64) -> String {
@@ -1729,30 +1881,132 @@ fn attr_unquoted_or_quoted(block: &str, key: &str) -> Option<String> {
     })
 }
 
-fn multi_period_codec_change(xml: &str, period_count: usize) -> bool {
-    if period_count <= 1 {
-        return false;
-    }
-    let mut codecs = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find("codecs=\"") {
-        let after = &rest[start + 8..];
-        if let Some(end) = after.find('"') {
-            let value = &after[..end];
-            if !value.is_empty() && !codecs.iter().any(|item| item == value) {
-                codecs.push(value.to_string());
-            }
-            rest = &after[end..];
-        } else {
-            break;
-        }
-    }
-    codecs.len() > 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_completion_dash_inherits_bases_lists_and_decodes_signed_urls() {
+        let xml = r#"<MPD><BaseURL serviceLocation="primary">https://cdn.test/media/</BaseURL><Period>
+<BaseURL>episode/</BaseURL><AdaptationSet mimeType="video/mp4"><BaseURL>video/</BaseURL>
+<SegmentList duration="4"><Initialization sourceURL="init.mp4?part=0&amp;sig=abc"/><SegmentURL media="first.m4s?part=1&#38;sig=abc"/></SegmentList>
+<Representation id="one"><BaseURL>low/</BaseURL></Representation>
+<Representation id="two"><BaseURL><![CDATA[high/]]></BaseURL></Representation>
+<Representation id="own"><SegmentTemplate initialization="own-init.mp4" media="own-$Number$.m4s"><SegmentTimeline><S d="2" r="1"/></SegmentTimeline></SegmentTemplate></Representation>
+</AdaptationSet><AdaptationSet mimeType="audio/mp4"><Representation id="audio"><BaseURL>audio.mp4?part=0&amp;sig=abc</BaseURL></Representation></AdaptationSet>
+</Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://origin.test/manifest.mpd").unwrap();
+        for (representation, directory) in
+            parsed.representations.iter().take(2).zip(["low", "high"])
+        {
+            let base = format!("https://cdn.test/media/episode/video/{directory}/");
+            assert_eq!(representation.base_url, base);
+            assert_eq!(
+                representation.init.as_deref(),
+                Some(format!("{base}init.mp4?part=0&sig=abc").as_str())
+            );
+            assert_eq!(
+                representation.media,
+                [format!("{base}first.m4s?part=1&sig=abc")]
+            );
+            assert_eq!(representation.media_durations, [4.0]);
+        }
+        assert_eq!(
+            parsed.representations[2].media,
+            [
+                "https://cdn.test/media/episode/video/own-1.m4s",
+                "https://cdn.test/media/episode/video/own-2.m4s"
+            ]
+        );
+        assert_eq!(
+            parsed.representations[2].init.as_deref(),
+            Some("https://cdn.test/media/episode/video/own-init.mp4")
+        );
+        assert_eq!(
+            parsed.representations[3].base_url,
+            "https://cdn.test/media/episode/audio.mp4?part=0&sig=abc"
+        );
+        assert!(parsed.representations[3].media.is_empty());
+
+        let xml = r#"<MPD><Period><AdaptationSet mimeType="video/mp4">
+<SegmentTemplate initialization="$RepresentationID$/init.mp4" media="$RepresentationID$/$Number$-$Time$.m4s" timescale="100" startNumber="1"><SegmentTimeline><S t="100" d="100" r="1"/></SegmentTimeline></SegmentTemplate>
+<Representation id="own"><SegmentTemplate timescale="10" startNumber="9"><SegmentTimeline><S t="20" d="20" r="1"/></SegmentTimeline></SegmentTemplate></Representation>
+<Representation id="inherited"><SegmentTemplate startNumber="4"/></Representation>
+</AdaptationSet></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        assert_eq!(
+            parsed.representations[0].media,
+            [
+                "https://cdn.test/own/9-20.m4s",
+                "https://cdn.test/own/10-40.m4s"
+            ]
+        );
+        assert_eq!(parsed.representations[0].media_durations, [2.0, 2.0]);
+        assert_eq!(
+            parsed.representations[0].init.as_deref(),
+            Some("https://cdn.test/own/init.mp4")
+        );
+        assert_eq!(
+            parsed.representations[1].media,
+            [
+                "https://cdn.test/inherited/4-100.m4s",
+                "https://cdn.test/inherited/5-200.m4s"
+            ]
+        );
+        assert_eq!(parsed.representations[1].media_durations, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn dynamic_timeline_uses_explicit_period_end_without_rounding_extra_segment() {
+        let xml = r#"<MPD type = 'dynamic'><Period duration='PT0.07S'><Representation id='v'><SegmentTemplate timescale='100' media='$Time$.m4s'><SegmentTimeline><S t='0' d='1' r='-1'/></SegmentTimeline></SegmentTemplate></Representation></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/list.mpd").unwrap();
+        assert!(parsed.dynamic);
+        assert_eq!(
+            parsed.representations[0].media,
+            (0..7)
+                .map(|n| format!("https://cdn.test/{n}.m4s"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(ceil_segment_units(0.07 * 100.0), 7.0);
+        assert_eq!(ceil_segment_units(7.1), 8.0);
+    }
+
+    #[test]
+    fn negative_timeline_repeat_uses_next_time_or_period_end() {
+        for (timeline, offset) in [
+            ("<S t=\"0\" d=\"4\" r=\"-1\"/><S\n t=\"12\" d=\"4\"/>", 0),
+            ("<S t=\"8\" d=\"4\" r=\"-1\"/>", 8),
+        ] {
+            let xml = format!(
+                r#"<MPD type="static"><Period duration="PT16S"><AdaptationSet><Representation id="v"><SegmentTemplate timescale="1" presentationTimeOffset="{offset}" media="$Time$.m4s"><SegmentTimeline>{timeline}</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#
+            );
+            let parsed = parse_mpd(&xml, "https://cdn.test/list.mpd").unwrap();
+            assert_eq!(
+                parsed.representations[0].media,
+                (0..4)
+                    .map(|n| format!("https://cdn.test/{}.m4s", offset + n * 4))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(parsed.representations[0].media_durations, vec![4.0; 4]);
+        }
+        let xml = r#"<MPD><Period><Representation id="v"><SegmentTemplate media="$Time$.m4s"><SegmentTimeline><S d="4" r="-1"/></SegmentTimeline></SegmentTemplate></Representation></Period></MPD>"#;
+        assert!(parse_mpd(xml, "https://cdn.test/list.mpd")
+            .unwrap_err()
+            .contains("unbounded"));
+    }
+
+    #[test]
+    fn byte_range_segment_lists_are_not_treated_as_whole_files() {
+        for entry in [
+            r#"<Initialization sourceURL="all.mp4" range="0-99"/>"#,
+            r#"<SegmentURL media="all.mp4" mediaRange="100-199"/>"#,
+        ] {
+            let xml = format!("<MPD><Period><Representation id=\"v\"><SegmentList>{entry}</SegmentList></Representation></Period></MPD>");
+            assert!(parse_mpd(&xml, "https://cdn.test/list.mpd")
+                .unwrap_err()
+                .contains("byte ranges"));
+        }
+    }
 
     #[test]
     fn separate_vod_audio_opens_preview_before_track_completion() {
@@ -1916,14 +2170,7 @@ mod tests {
             );
         }
         let xml = r#"<MPD type="static" mediaPresentationDuration="PT20S"><Period start="PT2S"><AdaptationSet><Representation id="v"><SegmentTemplate duration="1" media="$Number$.m4s"/></Representation></AdaptationSet></Period><Period start="PT4.5S"/></MPD>"#;
-        assert_eq!(
-            parse_mpd(xml, "https://cdn.test/manifest.mpd")
-                .unwrap()
-                .representations[0]
-                .media
-                .len(),
-            3
-        );
+        assert!(parse_mpd(xml, "https://cdn.test/manifest.mpd").is_err());
     }
 
     #[test]
@@ -2020,11 +2267,15 @@ mod tests {
     }
 
     #[test]
-    fn fails_closed_on_multi_period_codec_change() {
-        let xml = r#"<MPD type="static"><Period><AdaptationSet><Representation id="v" bandwidth="1" codecs="avc1" mimeType="video/mp4"><SegmentURL media="a.m4s"/></Representation></AdaptationSet></Period><Period><AdaptationSet><Representation id="v2" bandwidth="1" codecs="hvc1" mimeType="video/mp4"><SegmentURL media="b.m4s"/></Representation></AdaptationSet></Period></MPD>"#;
-        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
-        assert_eq!(parsed.period_count, 2);
-        assert!(multi_period_codec_change(xml, parsed.period_count));
+    fn fails_closed_on_all_multi_period_manifests() {
+        for codec in ["avc1", "hvc1"] {
+            let xml = format!(
+                r#"<MPD type="static"><Period><AdaptationSet><Representation id="v" bandwidth="1" codecs="avc1" mimeType="video/mp4"><SegmentURL media="a.m4s"/></Representation></AdaptationSet></Period><Period><AdaptationSet><Representation id="v2" bandwidth="1" codecs="{codec}" mimeType="video/mp4"><SegmentURL media="b.m4s"/></Representation></AdaptationSet></Period></MPD>"#
+            );
+            assert!(parse_mpd(&xml, "https://cdn.test/manifest.mpd")
+                .unwrap_err()
+                .contains("multi-period"));
+        }
     }
 
     #[test]

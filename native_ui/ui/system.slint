@@ -1,0 +1,115 @@
+import { ScrollView } from "std-widgets.slint";
+import { Tokens, HotButton, ChoiceButton } from "theme.slint";
+import { DialogHeader, DialogFooter } from "dialog_components.slint";
+
+export component SystemWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: root.page == "browser" ? "浏览器插件" : root.page == "notices" ? "通知中心" : root.page == "updates" ? "软件更新" : "关于 HLS Downloader";
+    default-font-family: Tokens.type-face;
+    default-font-size: 13px;
+    background: Tokens.canvas;
+    preferred-width: 780px; preferred-height: 620px;
+    min-width: 620px; min-height: 380px;
+    in-out property <string> page: "browser";
+    in property <string> browser-status;
+    in property <string> content;
+    in property <string> notice;
+    in property <bool> can-download;
+    in property <bool> can-install;
+    in property <bool> busy;
+    callback action(string);
+    VerticalLayout {
+        spacing: 0px;
+        DialogHeader {
+            heading: root.page == "browser" ? "浏览器插件" : root.page == "notices" ? "通知中心" : root.page == "updates" ? "软件更新" : "关于 HLS Downloader";
+            description: root.page == "browser" ? "识别网页资源，将下载交给桌面" : root.page == "updates" ? "检查版本，下载并校验更新包" : root.page == "notices" ? "查看最近的任务与系统消息" : "版本、组件与诊断信息";
+            icon: root.page == "browser" ? "extension" : root.page == "updates" ? "refresh" : root.page == "notices" ? "notices" : "info";
+        }
+        VerticalLayout {
+        padding: 20px; spacing: 16px;
+        HorizontalLayout {
+            spacing: 8px;
+            for item[index] in ["浏览器插件", "通知", "更新", "关于"]: ChoiceButton {
+                label: item;
+                icon: index == 0 ? "extension" : index == 1 ? "notices" : index == 2 ? "refresh" : "info";
+                selected: (index == 0 && root.page == "browser") || (index == 1 && root.page == "notices") || (index == 2 && root.page == "updates") || (index == 3 && root.page == "about");
+                clicked => { root.action(item); }
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            background: Tokens.surface; border-radius: Tokens.panel-radius;
+            border-width: 1px; border-color: Tokens.line;
+            ScrollView {
+                x: 16px; y: 16px; width: parent.width - 32px; height: parent.height - 32px;
+                horizontal-scrollbar-policy: always-off;
+                viewport-width: self.width;
+                viewport-height: contents.min-height;
+                contents := VerticalLayout {
+                    height: self.min-height; spacing: 14px; alignment: start;
+                    if root.page == "browser": VerticalLayout {
+                        spacing: 14px; alignment: start;
+                        Text { text: root.browser-status; color: Tokens.ink; font-size: 16px; }
+                        Text {
+                            text: "识别网页音视频、HLS、DASH 和播放器；接管下载并保留请求身份。\n安装或重载扩展后，请刷新正在播放的网页。";
+                            color: Tokens.muted; wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            HotButton { label: "Chrome / Edge 扩展"; icon: "extension"; clicked => { root.action("chromium"); } }
+                            HotButton { label: "Firefox Add-ons"; icon: "extension"; clicked => { root.action("firefox"); } }
+                        }
+                        HotButton { label: "刷新接管状态"; icon: "refresh"; clicked => { root.action("handoffs"); } }
+                        Text {
+                            text: "Chrome / Edge：在扩展管理页加载解压目录，已有扩展选择重新加载。\nFirefox：使用商店签名版。Cookie 仅按具体站点授权读取。\n交接结果未查清时按原请求恢复；桌面接收后取消，本次下载结束。";
+                            color: Tokens.muted; wrap: word-wrap;
+                        }
+                    }
+                    if root.content != "" || root.page != "browser": Text {
+                        text: root.content == "" && root.page == "notices" ? "暂无通知" : root.content == "" && root.page == "updates" ? "点击「检查更新」查看可用版本" : root.content;
+                        color: Tokens.ink; wrap: word-wrap;
+                    }
+                }
+            }
+        }
+        }
+        DialogFooter {
+            status: root.notice;
+            if root.page == "updates": HotButton { label: "检查更新"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("check_update"); } }
+            if root.page == "updates": HotButton { label: "下载并校验"; icon: "running"; enabled: root.can-download && !root.busy; primary: true; clicked => { root.action("download_update"); } }
+            if root.page == "updates": HotButton { label: "安装更新"; icon: "check"; enabled: root.can-install && !root.busy; primary: true; clicked => { root.action("install_update"); } }
+            if root.page == "notices": HotButton { label: "清空通知"; clicked => { root.action("clear_notices"); } }
+            if root.page == "about": HotButton { label: "打开日志目录"; icon: "folder"; clicked => { root.action("logs"); } }
+            HotButton { label: "关闭"; clicked => { root.action("close"); } }
+        }
+    }
+}
+
+export component DecisionWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: root.heading;
+    default-font-family: Tokens.type-face;
+    default-font-size: 13px;
+    background: Tokens.canvas;
+    preferred-width: 520px; preferred-height: 320px;
+    min-width: 360px; min-height: 280px;
+    in property <string> heading;
+    in property <string> message;
+    in property <string> confirm-label;
+    in property <bool> busy;
+    callback decided(bool);
+    VerticalLayout {
+        spacing: 0px;
+        DialogHeader { heading: root.heading; description: "请确认后继续"; icon: "info"; }
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            viewport-width: self.width;
+            VerticalLayout { padding: 24px; Text { text: root.message; color: Tokens.muted; wrap: word-wrap; } }
+        }
+        DialogFooter {
+            HotButton { label: "取消"; enabled: !root.busy; clicked => { root.decided(false); } }
+            HotButton { label: root.confirm-label; enabled: !root.busy; primary: true; clicked => { root.decided(true); } }
+        }
+    }
+}

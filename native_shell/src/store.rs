@@ -83,6 +83,38 @@ impl CoreStore {
         Ok(store)
     }
 
+    fn commit_with_durability<R>(
+        &mut self,
+        durable: bool,
+        operation: impl FnOnce(&mut Connection) -> Result<R, String>,
+    ) -> Result<R, String> {
+        if !durable {
+            return operation(&mut self.connection);
+        }
+        let previous: i64 = self
+            .connection
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .map_err(|error| format!("read Core durability: {error}"))?;
+        if previous >= 2 {
+            return operation(&mut self.connection);
+        }
+        // SQLite forbids this switch inside a transaction. The owning Core lock
+        // covers the switch, transaction and restoration.
+        self.connection
+            .pragma_update(None, "synchronous", "FULL")
+            .map_err(|error| format!("enable Core durable commit: {error}"))?;
+        let result = operation(&mut self.connection);
+        if let Err(error) = self.connection.pragma_update(None, "synchronous", previous) {
+            // A successful COMMIT must stay successful. Retaining FULL is safe;
+            // reporting failure here would roll memory back behind durable data.
+            crate::record_runtime_log(
+                "database_sync_restore_failed",
+                serde_json::json!({"error": error.to_string()}),
+            );
+        }
+        result
+    }
+
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
@@ -249,128 +281,142 @@ impl CoreStore {
         {
             return Ok(());
         }
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|error| format!("begin Core event transaction: {error}"))?;
-        if let Some(handoff) = handoff {
-            let encoded = serde_json::to_string(handoff)
-                .map_err(|error| format!("encode Core handoff: {error}"))?;
-            upsert_handoff_row(
-                &transaction,
-                &handoff.id,
-                &encoded,
-                &handoff.status,
-                handoff.task_id.as_deref(),
-                handoff.created_at_ms,
-            )?;
-        }
-        for envelope in events {
-            match &envelope.event {
-                CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
-                    upsert_task(&transaction, snapshot, envelope.sequence)?;
-                    if snapshot.status == "failed" {
-                        if let Some(line) = snapshot.log_tail.last() {
-                            append_task_log(&transaction, snapshot, "error", line)?;
+        let durable = handoff.is_some()
+            || spec.is_some()
+            || settings.is_some()
+            || events.iter().any(|envelope| match &envelope.event {
+                CoreEvent::TaskProgress { snapshot } => !matches!(
+                    snapshot.status.as_str(),
+                    "downloading" | "processing" | "merging" | "recording" | "checking"
+                ),
+                CoreEvent::PlayerSession { .. }
+                | CoreEvent::CastSession { .. }
+                | CoreEvent::BrowserStatus { .. } => false,
+                _ => true,
+            });
+        self.commit_with_durability(durable, |connection| {
+            let transaction = connection
+                .transaction()
+                .map_err(|error| format!("begin Core event transaction: {error}"))?;
+            if let Some(handoff) = handoff {
+                let encoded = serde_json::to_string(handoff)
+                    .map_err(|error| format!("encode Core handoff: {error}"))?;
+                upsert_handoff_row(
+                    &transaction,
+                    &handoff.id,
+                    &encoded,
+                    &handoff.status,
+                    handoff.task_id.as_deref(),
+                    handoff.created_at_ms,
+                )?;
+            }
+            for envelope in events {
+                match &envelope.event {
+                    CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
+                        upsert_task(&transaction, snapshot, envelope.sequence)?;
+                        if snapshot.status == "failed" {
+                            if let Some(line) = snapshot.log_tail.last() {
+                                append_task_log(&transaction, snapshot, "error", line)?;
+                            }
                         }
                     }
-                }
-                CoreEvent::TaskProgress { snapshot } => {
-                    upsert_task(&transaction, snapshot, envelope.sequence)?;
-                    if let Some(line) = snapshot.log_tail.last() {
-                        append_task_log(&transaction, snapshot, "progress", line)?;
+                    CoreEvent::TaskProgress { snapshot } => {
+                        upsert_task(&transaction, snapshot, envelope.sequence)?;
+                        if let Some(line) = snapshot.log_tail.last() {
+                            append_task_log(&transaction, snapshot, "progress", line)?;
+                        }
                     }
+                    CoreEvent::TaskDeleted { task_id } => {
+                        transaction
+                            .execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])
+                            .map_err(|error| format!("delete Core task {task_id}: {error}"))?;
+                        transaction
+                            .execute(
+                                "DELETE FROM task_specs WHERE task_id = ?1",
+                                params![task_id],
+                            )
+                            .map_err(|error| format!("delete Core task spec {task_id}: {error}"))?;
+                        transaction
+                            .execute("DELETE FROM logs WHERE task_id = ?1", params![task_id])
+                            .map_err(|error| format!("delete Core task log {task_id}: {error}"))?;
+                    }
+                    CoreEvent::Ready { .. }
+                    | CoreEvent::SettingsChanged { .. }
+                    | CoreEvent::ClipboardOffer { .. }
+                    | CoreEvent::HandoffOffered { .. }
+                    | CoreEvent::HandoffResolved { .. }
+                    | CoreEvent::UiShow { .. }
+                    | CoreEvent::Error { .. }
+                    | CoreEvent::ProbeResult { .. }
+                    | CoreEvent::TorrentProbeResult { .. }
+                    | CoreEvent::TorrentSelectionResult { .. }
+                    | CoreEvent::TaskTorrentFiles { .. }
+                    | CoreEvent::CastDevices { .. }
+                    | CoreEvent::UpdateAvailable { .. }
+                    | CoreEvent::UpdateCurrent { .. }
+                    | CoreEvent::UpdateReady { .. }
+                    | CoreEvent::UpdateInstallStarted { .. }
+                    | CoreEvent::UpdateInstallResult { .. }
+                    | CoreEvent::DuplicateOffered { .. }
+                    | CoreEvent::Toast { .. }
+                    | CoreEvent::HarvestResult { .. }
+                    | CoreEvent::HarvestProbeResult { .. }
+                    | CoreEvent::TaskLog { .. }
+                    | CoreEvent::TaskExport { .. }
+                    | CoreEvent::BrowserStatus { .. }
+                    | CoreEvent::MediaPushRequested { .. }
+                    | CoreEvent::MediaPushResolved { .. }
+                    | CoreEvent::PowerActionPending { .. }
+                    | CoreEvent::CastSession { .. }
+                    | CoreEvent::PlayerSession { .. } => {}
                 }
-                CoreEvent::TaskDeleted { task_id } => {
-                    transaction
-                        .execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])
-                        .map_err(|error| format!("delete Core task {task_id}: {error}"))?;
+                sync_event_side_rows(&transaction, &envelope.event)?;
+            }
+            if let Some(spec) = spec {
+                let task_id = events.iter().find_map(|event| match &event.event {
+                    CoreEvent::TaskCreated { snapshot }
+                    | CoreEvent::TaskUpdated { snapshot }
+                    | CoreEvent::TaskProgress { snapshot } => Some(snapshot.task_id.as_str()),
+                    _ => None,
+                });
+                if let Some(task_id) = task_id {
+                    let json = serde_json::to_string(spec)
+                        .map_err(|error| format!("encode Core task spec {task_id}: {error}"))?;
                     transaction
                         .execute(
-                            "DELETE FROM task_specs WHERE task_id = ?1",
-                            params![task_id],
-                        )
-                        .map_err(|error| format!("delete Core task spec {task_id}: {error}"))?;
-                    transaction
-                        .execute("DELETE FROM logs WHERE task_id = ?1", params![task_id])
-                        .map_err(|error| format!("delete Core task log {task_id}: {error}"))?;
-                }
-                CoreEvent::Ready { .. }
-                | CoreEvent::SettingsChanged { .. }
-                | CoreEvent::ClipboardOffer { .. }
-                | CoreEvent::HandoffOffered { .. }
-                | CoreEvent::HandoffResolved { .. }
-                | CoreEvent::UiShow { .. }
-                | CoreEvent::Error { .. }
-                | CoreEvent::ProbeResult { .. }
-                | CoreEvent::TorrentProbeResult { .. }
-                | CoreEvent::TorrentSelectionResult { .. }
-                | CoreEvent::TaskTorrentFiles { .. }
-                | CoreEvent::CastDevices { .. }
-                | CoreEvent::UpdateAvailable { .. }
-                | CoreEvent::UpdateCurrent { .. }
-                | CoreEvent::UpdateReady { .. }
-                | CoreEvent::UpdateInstallStarted { .. }
-                | CoreEvent::UpdateInstallResult { .. }
-                | CoreEvent::DuplicateOffered { .. }
-                | CoreEvent::Toast { .. }
-                | CoreEvent::HarvestResult { .. }
-                | CoreEvent::HarvestProbeResult { .. }
-                | CoreEvent::TaskLog { .. }
-                | CoreEvent::TaskExport { .. }
-                | CoreEvent::BrowserStatus { .. }
-                | CoreEvent::MediaPushRequested { .. }
-                | CoreEvent::MediaPushResolved { .. }
-                | CoreEvent::PowerActionPending { .. }
-                | CoreEvent::CastSession { .. }
-                | CoreEvent::PlayerSession { .. } => {}
-            }
-            sync_event_side_rows(&transaction, &envelope.event)?;
-        }
-        if let Some(spec) = spec {
-            let task_id = events.iter().find_map(|event| match &event.event {
-                CoreEvent::TaskCreated { snapshot }
-                | CoreEvent::TaskUpdated { snapshot }
-                | CoreEvent::TaskProgress { snapshot } => Some(snapshot.task_id.as_str()),
-                _ => None,
-            });
-            if let Some(task_id) = task_id {
-                let json = serde_json::to_string(spec)
-                    .map_err(|error| format!("encode Core task spec {task_id}: {error}"))?;
-                transaction
-                    .execute(
-                        "INSERT INTO task_specs(task_id, spec_json) VALUES (?1, ?2)\
+                            "INSERT INTO task_specs(task_id, spec_json) VALUES (?1, ?2)\
                          ON CONFLICT(task_id) DO UPDATE SET spec_json = excluded.spec_json",
-                        params![task_id, json],
-                    )
-                    .map_err(|error| format!("persist Core task spec {task_id}: {error}"))?;
+                            params![task_id, json],
+                        )
+                        .map_err(|error| format!("persist Core task spec {task_id}: {error}"))?;
+                }
             }
-        }
-        if let Some(sequence) = events.last().map(|event| event.sequence) {
-            transaction
-                .execute(
-                    "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
-                     ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = excluded.sequence",
-                    params![sequence as i64],
-                )
-                .map_err(|error| format!("persist Core event checkpoint: {error}"))?;
-        }
-        if let Some(settings) = settings {
-            for (key, value) in settings {
-                let encoded = serde_json::to_string(value)
-                    .map_err(|error| format!("encode Core setting {key}: {error}"))?;
+            if let Some(sequence) = events.last().map(|event| event.sequence) {
                 transaction
                     .execute(
-                        r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
-                           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
-                        params![key, encoded],
+                        "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
+                     ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = excluded.sequence",
+                        params![sequence as i64],
                     )
-                    .map_err(|error| format!("write Core setting {key}: {error}"))?;
+                    .map_err(|error| format!("persist Core event checkpoint: {error}"))?;
             }
-        }
-        transaction
-            .commit()
-            .map_err(|error| format!("commit Core event transaction: {error}"))
+            if let Some(settings) = settings {
+                for (key, value) in settings {
+                    let encoded = serde_json::to_string(value)
+                        .map_err(|error| format!("encode Core setting {key}: {error}"))?;
+                    transaction
+                        .execute(
+                            r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
+                           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
+                            params![key, encoded],
+                        )
+                        .map_err(|error| format!("write Core setting {key}: {error}"))?;
+                }
+            }
+            transaction
+                .commit()
+                .map_err(|error| format!("commit Core event transaction: {error}"))
+        })
     }
 
     fn setting_json(&self, key: &str) -> Result<Option<String>, String> {
@@ -474,9 +520,8 @@ impl CoreStore {
         write: Option<CredentialWrite<'_>>,
         settings: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
-        let transaction = self
-            .connection
-            .transaction()
+        self.commit_with_durability(true, |connection| {
+        let transaction = connection.transaction()
             .map_err(|error| format!("begin Core credential transaction: {error}"))?;
         let applied = (|| -> Result<(), String> {
             match write {
@@ -529,6 +574,7 @@ impl CoreStore {
                 Err(error)
             }
         }
+        })
     }
 
     pub fn store_credential(
@@ -537,20 +583,14 @@ impl CoreStore {
         protected_blob: &str,
         kind: &str,
     ) -> Result<(), String> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .min(i64::MAX as u128) as i64;
-        self.connection
-            .execute(
-                "INSERT INTO credentials(credential_ref, protected_blob, kind, created_at_ms)\
-                 VALUES (?1, ?2, ?3, ?4)\
-                 ON CONFLICT(credential_ref) DO UPDATE SET protected_blob = excluded.protected_blob, kind = excluded.kind",
-                params![credential_ref, protected_blob, kind, now],
-            )
-            .map_err(|error| format!("store Core credential {credential_ref}: {error}"))?;
-        Ok(())
+        self.apply_credential_with_settings(
+            Some(CredentialWrite::Store {
+                credential_ref,
+                protected_blob,
+                kind,
+            }),
+            &BTreeMap::new(),
+        )
     }
 
     pub fn load_credential(&self, credential_ref: &str) -> Result<Option<String>, String> {
@@ -565,13 +605,10 @@ impl CoreStore {
     }
 
     pub fn delete_credential(&mut self, credential_ref: &str) -> Result<(), String> {
-        self.connection
-            .execute(
-                "DELETE FROM credentials WHERE credential_ref = ?1",
-                params![credential_ref],
-            )
-            .map_err(|error| format!("delete Core credential {credential_ref}: {error}"))?;
-        Ok(())
+        self.apply_credential_with_settings(
+            Some(CredentialWrite::Delete { credential_ref }),
+            &BTreeMap::new(),
+        )
     }
 
     pub fn save_handoff(
@@ -582,8 +619,8 @@ impl CoreStore {
         task_id: Option<&str>,
         created_at_ms: u64,
     ) -> Result<(), String> {
-        self.connection
-            .execute(
+        self.commit_with_durability(true, |connection| {
+        connection.execute(
                 "INSERT INTO handoffs(handoff_id, public_json, status, task_id, created_at_ms)\
                  VALUES (?1, ?2, ?3, ?4, ?5)\
                  ON CONFLICT(handoff_id) DO UPDATE SET public_json = excluded.public_json, status = excluded.status, task_id = excluded.task_id",
@@ -591,6 +628,7 @@ impl CoreStore {
             )
             .map_err(|error| format!("save Core handoff {handoff_id}: {error}"))?;
         Ok(())
+        })
     }
 
     pub fn load_handoffs(&self) -> Result<Vec<String>, String> {
@@ -857,6 +895,17 @@ fn sync_event_side_rows(transaction: &Transaction<'_>, event: &CoreEvent) -> Res
                 None,
                 request.created_at_ms,
             )?;
+            // 播放服务已经持有内存快照；终态与清理凭据必须一同提交。
+            if matches!(request.status.as_str(), "done" | "failed" | "canceled") {
+                if let Some(credential_ref) = &request.credential_ref {
+                    transaction
+                        .execute(
+                            "DELETE FROM credentials WHERE credential_ref = ?1",
+                            params![credential_ref],
+                        )
+                        .map_err(|error| format!("delete media push credential: {error}"))?;
+                }
+            }
         }
         _ => {}
     }
@@ -1261,6 +1310,170 @@ mod tests {
             .unwrap();
         assert!(store.load_tasks().unwrap().is_empty());
         assert_eq!(store.latest_sequence().unwrap(), 12);
+    }
+
+    #[test]
+    fn media_push_terminal_and_credential_cleanup_commit_together() {
+        let mut store = CoreStore::in_memory().unwrap();
+        store
+            .store_credential("push-credential", "encrypted", "browser_replay")
+            .unwrap();
+        let request = crate::MediaPushRequest {
+            id: "push-atomic".into(),
+            push_kind: "cast".into(),
+            url: "https://cdn.test/a.mp4".into(),
+            title: String::new(),
+            status: "pending".into(),
+            message: String::new(),
+            location: String::new(),
+            credential_ref: Some("push-credential".into()),
+            mime_type: String::new(),
+            created_at_ms: 1,
+        };
+        store
+            .apply_events(&[EventEnvelope {
+                sequence: 1,
+                event: CoreEvent::MediaPushRequested {
+                    request: request.clone(),
+                },
+            }])
+            .unwrap();
+        assert!(store.load_credential("push-credential").unwrap().is_some());
+        store.connection.execute_batch("CREATE TRIGGER abort_checkpoint BEFORE UPDATE ON event_checkpoints BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END;").unwrap();
+        let mut resolved = request;
+        resolved.status = "done".into();
+        let terminal = [EventEnvelope {
+            sequence: 2,
+            event: CoreEvent::MediaPushResolved { request: resolved },
+        }];
+        assert!(store.apply_events(&terminal).is_err());
+        assert!(store.load_credential("push-credential").unwrap().is_some());
+        assert_eq!(store.latest_sequence().unwrap(), 1);
+        assert!(store
+            .query_handoffs(Some("push-atomic"), None, true)
+            .unwrap()[0]
+            .contains("pending"));
+        store
+            .connection
+            .execute_batch("DROP TRIGGER abort_checkpoint;")
+            .unwrap();
+        store.apply_events(&terminal).unwrap();
+        assert!(store.load_credential("push-credential").unwrap().is_none());
+        assert!(store
+            .query_handoffs(Some("push-atomic"), None, true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn critical_commits_use_full_sync_and_restore_normal_after_rollback() {
+        let mut store = CoreStore::in_memory().unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TABLE sync_observations(value INTEGER);\
+             CREATE TRIGGER observe_task_sync BEFORE INSERT ON tasks BEGIN \
+               INSERT INTO sync_observations SELECT synchronous FROM pragma_synchronous; END;\
+             CREATE TRIGGER observe_credential_sync BEFORE INSERT ON credentials BEGIN \
+               INSERT INTO sync_observations SELECT synchronous FROM pragma_synchronous; END;",
+            )
+            .unwrap();
+        let snapshot = crate::TaskSnapshot {
+            task_id: "durable-task".into(),
+            status: "downloading".into(),
+            ..Default::default()
+        };
+        let event = |sequence, event| EventEnvelope { sequence, event };
+        store
+            .apply_events(&[event(
+                1,
+                CoreEvent::TaskCreated {
+                    snapshot: snapshot.clone(),
+                },
+            )])
+            .unwrap();
+        store
+            .apply_events(&[event(
+                2,
+                CoreEvent::TaskProgress {
+                    snapshot: snapshot.clone(),
+                },
+            )])
+            .unwrap();
+        store
+            .store_credential("durable-secret", "protected", "browser_replay")
+            .unwrap();
+        let sync_levels: Vec<i64> = store
+            .connection
+            .prepare("SELECT value FROM sync_observations")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(sync_levels, vec![2, 1, 2]);
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_durable_checkpoint BEFORE UPDATE ON event_checkpoints BEGIN \
+             SELECT RAISE(ABORT, 'injected durable commit failure'); END;",
+            )
+            .unwrap();
+        let terminal = crate::TaskSnapshot {
+            status: "completed".into(),
+            ..snapshot
+        };
+        let events = [event(3, CoreEvent::TaskProgress { snapshot: terminal })];
+        assert!(store.apply_events(&events).is_err());
+        assert_eq!(store.latest_sequence().unwrap(), 2);
+        assert_eq!(store.load_tasks().unwrap()[0].status, "downloading");
+        let restored: i64 = store
+            .connection
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(restored, 1);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_durable_checkpoint")
+            .unwrap();
+        store.apply_events(&events).unwrap();
+        let final_sync: i64 = store
+            .connection
+            .query_row(
+                "SELECT value FROM sync_observations ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(final_sync, 2);
+        assert_eq!(store.load_tasks().unwrap()[0].status, "completed");
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER observe_telemetry_sync BEFORE INSERT ON event_checkpoints BEGIN \
+               INSERT INTO sync_observations SELECT synchronous FROM pragma_synchronous; END;",
+            )
+            .unwrap();
+        store
+            .apply_events(&[event(
+                4,
+                CoreEvent::BrowserStatus {
+                    connected: true,
+                    version: "fixture".into(),
+                    browser: "edge".into(),
+                    message: String::new(),
+                },
+            )])
+            .unwrap();
+        let telemetry_sync: i64 = store
+            .connection
+            .query_row(
+                "SELECT value FROM sync_observations ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(telemetry_sync, 1);
     }
 
     // A credential is the only copy of a secret the plaintext of which never

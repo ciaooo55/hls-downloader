@@ -128,7 +128,10 @@ def main() -> int:
                 staged.flush()
                 os.fsync(staged.fileno())
         environment = os.environ.copy()
+        environment.pop("HLS_V7_CORE_TCP", None)
+        environment.pop("HLS_V7_CORE_BIND", None)
         environment["HLS_V7_DATA_DIR"] = str(root / "data")
+        environment["HLS_V7_DOWNLOAD_DIR"] = str(root / "downloads")
         environment["HLS_V7_PIPE"] = rf"\\.\pipe\HLSDownloader.v7-smoke-{uuid.uuid4().hex}"
         if args.profile_startup:
             environment["HLS_V7_STARTUP_PROFILE"] = "1"

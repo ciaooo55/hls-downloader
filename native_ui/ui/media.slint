@@ -1,0 +1,179 @@
+import { Slider, ComboBox } from "std-widgets.slint";
+import { Tokens, HotButton } from "theme.slint";
+import { WorkbenchButton } from "workbench_components.slint";
+
+export struct MediaView {
+    title: string, paused: bool, speed: float, position: float, duration: float,
+    time: string, volume: float, muted: bool, buffering: bool,
+    audio: [string], subtitles: [string], audio-index: int, subtitle-index: int,
+    translating: bool, caption: string, translation-notice: string,
+}
+
+component MediaSeek inherits FocusScope {
+    in property <float> value;
+    in property <float> maximum;
+    private property <float> target: max(0, min(root.maximum, pointer.mouse-x / max(1px, root.width) * root.maximum));
+    private property <float> preview-position: pointer.has-hover && root.enabled ? root.target : -1;
+    callback seek(float);
+    callback preview(float);
+    height: 22px; horizontal-stretch: 1;
+    accessible-role: slider; accessible-label: "播放进度";
+    accessible-enabled: root.enabled; accessible-value: root.value;
+    accessible-value-minimum: 0; accessible-value-maximum: root.maximum; accessible-value-step: 5;
+    accessible-action-set-value(v) => { if root.enabled && v.is-float() { root.seek(max(0,min(root.maximum,v.to-float()))); } }
+    accessible-action-increment => { if root.enabled { root.seek(min(root.maximum,root.value+5)); } }
+    accessible-action-decrement => { if root.enabled { root.seek(max(0,root.value - 5)); } }
+    changed preview-position => { root.preview(root.preview-position); }
+    key-pressed(event) => {
+        if !root.enabled { return reject; }
+        if event.text == Key.RightArrow { root.seek(min(root.maximum,root.value+5)); return accept; }
+        if event.text == Key.LeftArrow { root.seek(max(0,root.value - 5)); return accept; }
+        if event.text == Key.Home { root.seek(0); return accept; }
+        if event.text == Key.End { root.seek(root.maximum); return accept; }
+        return reject;
+    }
+    Rectangle { y: (parent.height - 4px)/2; height: 4px; width: parent.width; background: Tokens.line; border-radius: 2px; }
+    Rectangle { y: (parent.height - 4px)/2; height: 4px; width: parent.width * max(0,min(1,root.value/max(1,root.maximum))); background: Tokens.accent; border-radius: 2px; }
+    Rectangle { x: max(0px,min(parent.width - 12px,parent.width*root.value/max(1,root.maximum) - 6px)); y: 5px; width: 12px; height: 12px; border-radius: 6px; background: root.has-focus ? Tokens.accent : Tokens.muted; }
+    pointer := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.focus(); root.seek(root.target); }
+        moved => { if self.pressed { root.seek(root.target); } }
+    }
+}
+
+export component MediaSurface inherits Rectangle {
+    background: Tokens.surface-2;
+    in property <MediaView> state;
+    in property <bool> detached;
+    in property <bool> fullscreen;
+    in property <image> thumbnail;
+    in property <string> notice;
+    out property <length> video-x: video.absolute-position.x;
+    out property <length> video-y: video.absolute-position.y;
+    out property <length> video-width: video.width;
+    out property <length> video-height: video.height;
+    callback action(string);
+    callback seek(float);
+    callback preview(float);
+    callback volume(float);
+    callback audio(int);
+    callback subtitle(int);
+    VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: Tokens.control-height + 16px;
+            HorizontalLayout {
+                width: parent.width; height: parent.height; padding: 8px; spacing: Tokens.control-gap;
+                Text { text: root.state.title; color: Tokens.ink; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
+                WorkbenchButton { label: root.detached ? "回到主窗" : "画中画"; icon: root.detached ? "dock" : "pip"; outlined: true; icon-only: true; clicked => { root.action(root.detached ? "dock" : "pip"); } }
+                WorkbenchButton { label: root.fullscreen ? "退出全屏" : "全屏"; icon: root.fullscreen ? "restore" : "fullscreen"; outlined: true; icon-only: true; clicked => { root.action("fullscreen"); } }
+                WorkbenchButton { label: "停止"; icon: "stop"; outlined: true; icon-only: true; clicked => { root.action("stop"); } }
+            }
+        }
+        // Native video occupies this rectangle only. All controls are outside
+        // it, so the child HWND cannot cover a menu, track picker or preview.
+        video := Rectangle {
+            background: #080a0d; min-height: 40px; vertical-stretch: 1;
+            Text { text: root.state.buffering ? "正在缓冲…" : ""; color: #b4bdc9; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        if root.state.translating: Rectangle {
+            background: Tokens.surface;
+            min-height: root.state.caption == "" ? 30px : 62px;
+            Text {
+                x: 12px; width: parent.width - 24px; height: parent.height;
+                text: root.state.caption == "" ? root.state.translation-notice : root.state.caption;
+                color: root.state.caption == "" ? Tokens.muted : Tokens.ink;
+                font-size: root.state.caption == "" ? 12px : 16px;
+                wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center;
+                overflow: elide; accessible-label: "翻译字幕";
+            }
+        }
+        if root.thumbnail.width > 0: Rectangle {
+            height: 110px; background: Tokens.surface;
+            HorizontalLayout {
+                padding: 3px;
+                Image { source: root.thumbnail; width: 184px; image-fit: contain; }
+                Text { text: "时间预览"; color: Tokens.muted; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                HotButton { label: "关闭预览"; clicked => { root.action("clear_preview"); } }
+            }
+        }
+        Rectangle {
+            height: 126px;
+            VerticalLayout {
+                padding: 8px; spacing: 8px;
+                HorizontalLayout {
+                    MediaSeek { maximum: max(1, root.state.duration); value: root.state.position; enabled: root.state.duration > 0; seek(value) => { root.seek(value); } preview(value) => { root.preview(value); } }
+                    Text { text: root.state.time; color: Tokens.muted; min-width: 108px; vertical-alignment: center; }
+                }
+                HorizontalLayout {
+                    spacing: Tokens.control-gap;
+                    WorkbenchButton { label: root.state.paused ? "播放" : "暂停"; icon: root.state.paused ? "play" : "pause"; primary: true; icon-only: true; clicked => { root.action(root.state.paused ? "resume" : "pause"); } }
+                    WorkbenchButton { label: "后退 10 秒"; icon: "back"; outlined: true; icon-only: true; clicked => { root.action("seek_back"); } }
+                    WorkbenchButton { label: "前进 10 秒"; icon: "forward"; outlined: true; icon-only: true; clicked => { root.action("seek_fwd"); } }
+                    WorkbenchButton { label: root.state.muted ? "取消静音" : "静音"; icon: root.state.muted ? "muted" : "volume"; icon-only: true; clicked => { root.action("mute"); } }
+                    Slider { minimum: 0; maximum: 100; value: root.state.volume; accessible-label: "音量"; min-width: 60px; preferred-width: 80px; changed(value) => { root.volume(value); } }
+                    ComboBox {
+                        accessible-label: "播放速度";
+                        model: ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "2×", "4×"];
+                        current-index: root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
+                        current-value: "" + root.state.speed + "×";
+                        min-width: 82px; preferred-width: 82px; height: Tokens.control-height; horizontal-stretch: 0;
+                        selected(value) => { root.action("speed:" + (self.current-index == 0 ? "0.25" : self.current-index == 1 ? "0.5" : self.current-index == 2 ? "0.75" : self.current-index == 3 ? "1" : self.current-index == 4 ? "1.25" : self.current-index == 5 ? "1.5" : self.current-index == 6 ? "2" : "4")); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    WorkbenchButton { label: "预览帧"; icon: "media"; outlined: true; icon-only: true; clicked => { root.action("preview"); } }
+                }
+                HorizontalLayout {
+                    spacing: 5px;
+                    Text { text: "音轨"; color: Tokens.muted; vertical-alignment: center; }
+                    ComboBox { model: root.state.audio; accessible-label: "音轨"; min-width: 80px; height: Tokens.control-height; current-index: root.state.audio-index; enabled: root.state.audio.length > 0; selected(value) => { root.audio(self.current-index); } }
+                    Text { text: "字幕"; color: Tokens.muted; vertical-alignment: center; }
+                    ComboBox { model: root.state.subtitles; accessible-label: "字幕"; min-width: 80px; height: Tokens.control-height; current-index: root.state.subtitle-index; selected(value) => { root.subtitle(self.current-index); } }
+                    WorkbenchButton { label: root.state.translating ? "停止翻译" : "字幕翻译"; icon: "subtitle"; outlined: true; icon-only: true; clicked => { root.action("translate"); } }
+                    Text { text: root.notice; color: Tokens.warn; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; Tooltip { text: @markdown("\{root.notice}"); } }
+                }
+            }
+        }
+    }
+}
+
+export component PlayerWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: "HLS 播放器 · 画中画";
+    background: Tokens.surface;
+    default-font-family: Tokens.type-face;
+    default-font-size: 12px;
+    always-on-top: true;
+    preferred-width: 760px; preferred-height: 480px;
+    min-width: 560px; min-height: 300px;
+    in property <MediaView> state;
+    in property <image> thumbnail;
+    in property <string> notice;
+    in property <bool> fullscreen;
+    out property <length> video-x: surface.video-x;
+    out property <length> video-y: surface.video-y;
+    out property <length> video-width: surface.video-width;
+    out property <length> video-height: surface.video-height;
+    callback action(string);
+    callback seek(float);
+    callback preview(float);
+    callback volume(float);
+    callback audio(int);
+    callback subtitle(int);
+    forward-focus: keys;
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.action("escape"); return accept; }
+            if event.text == " " { root.action(root.state.paused ? "resume" : "pause"); return accept; }
+            return reject;
+        }
+        surface := MediaSurface {
+            width: parent.width; height: parent.height;
+            state: root.state; detached: true; fullscreen: root.fullscreen; thumbnail: root.thumbnail; notice: root.notice;
+            action(value) => { root.action(value); } seek(value) => { root.seek(value); } preview(value) => { root.preview(value); }
+            volume(value) => { root.volume(value); } audio(value) => { root.audio(value); } subtitle(value) => { root.subtitle(value); }
+        }
+    }
+}

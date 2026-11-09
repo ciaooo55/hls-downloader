@@ -66,7 +66,23 @@ enum Mount {
         file: PathBuf,
         total: u64,
     },
-    Remote(String),
+    Proxy(Arc<crate::media_proxy::MediaProxy>),
+}
+
+impl Mount {
+    fn revoke(&self) {
+        if let Self::Proxy(proxy) = self {
+            proxy.canceled.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for MediaState {
+    fn drop(&mut self) {
+        for (_, mount) in &self.mounts {
+            mount.revoke();
+        }
+    }
 }
 
 impl MediaServer {
@@ -146,8 +162,17 @@ impl MediaServer {
         self.store(token, Mount::Growing { root, file, total });
     }
 
-    pub fn mount_remote(&self, token: &str, url: String) {
-        self.store(token, Mount::Remote(url));
+    pub(crate) fn mount_proxy(
+        &self,
+        token: &str,
+        spec: crate::TaskSpec,
+        replay: String,
+    ) -> Result<(), String> {
+        self.store(
+            token,
+            Mount::Proxy(Arc::new(crate::media_proxy::MediaProxy::new(spec, replay)?)),
+        );
+        Ok(())
     }
 
     pub fn unmount(&self, token: &str) -> bool {
@@ -155,7 +180,14 @@ impl MediaServer {
             return false;
         };
         let before = state.mounts.len();
-        state.mounts.retain(|(name, _)| name != token);
+        state.mounts.retain(|(name, mount)| {
+            if name == token {
+                mount.revoke();
+                false
+            } else {
+                true
+            }
+        });
         state.mounts.len() != before
     }
 
@@ -182,7 +214,7 @@ impl MediaServer {
                         Mount::Dir(_) => Some("/local.m3u8".into()),
                         Mount::Downloading(_) => Some("/preview.m3u8".into()),
                         Mount::Growing { .. } => None,
-                        Mount::Remote(_) => None,
+                        Mount::Proxy(proxy) => Some(format!("/{}", proxy.cast_name())),
                     })
             })
             .unwrap_or_default();
@@ -199,9 +231,16 @@ impl MediaServer {
             return;
         }
         if let Ok(mut state) = self.inner.lock() {
-            state.mounts.retain(|(name, _)| name != token);
+            state.mounts.retain(|(name, mount)| {
+                if name == token {
+                    mount.revoke();
+                    false
+                } else {
+                    true
+                }
+            });
             if state.mounts.len() >= 64 {
-                state.mounts.remove(0);
+                state.mounts.remove(0).1.revoke();
             }
             state.mounts.push((token.to_string(), mount));
         }
@@ -329,22 +368,11 @@ fn handle_client(
     let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
     if let Some(token) = path.strip_prefix("/tvbox/") {
         let token = token.split('/').next().unwrap_or(token);
-        let Some(mount) = resolve_mount(mounts, token) else {
+        let Some(_) = resolve_mount(mounts, token) else {
             return write_status(&mut stream, 404, b"not found");
         };
         let advertised = advertise_host(peer, port);
-        let location = match mount {
-            Mount::Remote(url) => {
-                if !media_redirect_allowed(url) {
-                    return write_status(&mut stream, 404, b"not found");
-                }
-                url.clone()
-            }
-            _ => format!("http://{advertised}/media/{token}"),
-        };
-        if !media_redirect_allowed(&location) {
-            return write_status(&mut stream, 404, b"not found");
-        }
+        let location = format!("http://{advertised}/media/{token}");
         let body = format!(
             "{{\"url\":\"{}\",\"title\":\"{}\"}}",
             json_escape(&location),
@@ -364,8 +392,8 @@ fn handle_client(
         return Ok(());
     };
     let file_path = match mount {
-        Mount::Remote(url) => {
-            return write_redirect(&mut stream, url);
+        Mount::Proxy(proxy) => {
+            return proxy.serve(&mut stream, &request, sub, &format!("/media/{token}"));
         }
         Mount::Growing { root, file, total } => {
             if !sub.is_empty() {
@@ -461,27 +489,6 @@ fn advertise_host(peer: Option<IpAddr>, port: u16) -> String {
             .unwrap_or_else(|| format!("127.0.0.1:{port}")),
         None => format!("127.0.0.1:{port}"),
     }
-}
-
-fn write_redirect(stream: &mut TcpStream, location: &str) -> Result<(), String> {
-    if !media_redirect_allowed(location) {
-        return write_status(stream, 404, b"not found");
-    }
-    let header = format!(
-        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-    stream
-        .write_all(header.as_bytes())
-        .map_err(|error| error.to_string())
-}
-
-fn media_redirect_allowed(location: &str) -> bool {
-    let trimmed = location.trim().trim_start_matches('\u{feff}');
-    if trimmed.chars().any(|ch| ch.is_control()) {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 fn json_escape(value: &str) -> String {
@@ -1235,19 +1242,6 @@ mod tests {
         assert!(first.starts_with('m'));
         assert!(!first.starts_with("task-"));
         assert_eq!(first.len(), 33);
-    }
-
-    #[test]
-    fn media_redirects_reject_header_injection() {
-        assert!(media_redirect_allowed("http://127.0.0.1:9/media/m1"));
-        assert!(media_redirect_allowed("HTTP://127.0.0.1:9/media/m1"));
-        assert!(!media_redirect_allowed(
-            "http://evil.example/\r\nLocation: http://x"
-        ));
-        assert!(!media_redirect_allowed("javascript:alert(1)"));
-        assert!(!media_redirect_allowed("\u{feff}javascript:alert(1)"));
-        assert!(!media_redirect_allowed("https://x/\0y"));
-        assert_eq!(json_escape("http://x\"y"), "http://x\\\"y");
     }
 
     fn fs_create(path: &Path) {

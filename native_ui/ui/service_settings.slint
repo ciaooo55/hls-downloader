@@ -1,0 +1,95 @@
+import { ScrollView, LineEdit, ComboBox, CheckBox } from "std-widgets.slint";
+import { Tokens, HotButton } from "theme.slint";
+import { DialogHeader, DialogFooter } from "dialog_components.slint";
+
+export component ServiceSettingsWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: root.mode == "subtitle" ? "字幕翻译设置" : "站点凭据";
+    default-font-family: Tokens.type-face; default-font-size: 13px;
+    background: Tokens.canvas;
+    preferred-width: 650px; preferred-height: 650px; min-width: 440px; min-height: 360px;
+    in property <string> mode;
+    in property <bool> busy;
+    in property <bool> loaded;
+    in property <string> status;
+    in property <string> key-status;
+    in-out property <string> provider: "dashscope";
+    in-out property <string> workspace;
+    in-out property <string> region: "cn-beijing";
+    in-out property <string> api-key;
+    in-out property <bool> clear-key;
+    in-out property <string> source: "auto";
+    in-out property <string> target: "zh";
+    in-out property <string> offset: "0";
+    in-out property <bool> translation-enabled;
+    in-out property <bool> show-source: true;
+    in-out property <bool> prefetch;
+    in-out property <string> host;
+    in-out property <string> cookie;
+    in-out property <string> authorization;
+    in-out property <string> identity-headers;
+    in-out property <bool> clear-credential;
+    in-out property <bool> default-cookie;
+    callback action(string);
+    VerticalLayout {
+        spacing: 0px;
+        DialogHeader { heading: root.mode == "subtitle" ? "字幕翻译" : "站点登录信息"; description: root.mode == "subtitle" ? "配置翻译服务、语言与字幕显示" : "管理 Cookie 与身份请求头，已存凭据不会回显"; icon: root.mode == "subtitle" ? "subtitle" : "security"; }
+        ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            viewport-width: self.width;
+            VerticalLayout {
+                padding: 24px; spacing: 14px;
+                if root.key-status != "": Text { text: root.key-status; color: Tokens.muted; wrap: word-wrap; }
+                if root.mode == "subtitle": VerticalLayout {
+                    spacing: 8px;
+                    Text { text: "服务提供方"; color: Tokens.muted; }
+                    ComboBox { height: Tokens.control-height; model: ["dashscope", "qwencloud"]; current-value <=> root.provider; enabled: root.loaded && !root.busy; }
+                    if root.provider == "dashscope": VerticalLayout {
+                        spacing: 5px;
+                        Text { text: "百炼业务空间 ID"; color: Tokens.muted; }
+                        LineEdit { height: Tokens.control-height; text <=> root.workspace; enabled: root.loaded && !root.busy; }
+                        ComboBox { height: Tokens.control-height; model: ["cn-beijing", "ap-southeast-1"]; current-value <=> root.region; enabled: root.loaded && !root.busy; }
+                    }
+                    Text { text: "API Key（留空保留已存密钥）"; color: Tokens.muted; }
+                    LineEdit { height: Tokens.control-height; text <=> root.api-key; input-type: password; enabled: root.loaded && !root.busy; }
+                    CheckBox { text: "清除已存 API Key"; checked <=> root.clear-key; enabled: root.loaded && !root.busy; }
+                    CheckBox { text: "启用在线字幕翻译"; checked <=> root.translation-enabled; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "源语言"; color: Tokens.muted; vertical-alignment: center; }
+                        ComboBox { height: Tokens.control-height; model: ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th"]; current-value <=> root.source; }
+                        Text { text: "目标语言"; color: Tokens.muted; vertical-alignment: center; }
+                        ComboBox { height: Tokens.control-height; model: ["zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th"]; current-value <=> root.target; }
+                    }
+                    Text { text: "字幕偏移（秒，-30 至 30）"; color: Tokens.muted; }
+                    LineEdit { height: Tokens.control-height; text <=> root.offset; }
+                    CheckBox { text: "同时显示原文"; checked <=> root.show-source; }
+                    CheckBox { text: "预取可独立读取的音轨"; checked <=> root.prefetch; }
+                }
+                if root.mode == "credentials": VerticalLayout {
+                    spacing: 8px;
+                    CheckBox { text: "设置手动默认 Cookie"; checked <=> root.default-cookie; }
+                    if !root.default-cookie: VerticalLayout {
+                        spacing: 5px;
+                        Text { text: "站点域名（例如 media.example.com）"; color: Tokens.muted; }
+                        LineEdit { height: Tokens.control-height; text <=> root.host; }
+                        Text { text: "Authorization（留空不设置此头）"; color: Tokens.muted; }
+                        LineEdit { height: Tokens.control-height; text <=> root.authorization; input-type: password; }
+                        Text { text: "其他身份请求头（JSON 对象，留空不设置）"; color: Tokens.muted; }
+                        LineEdit { height: Tokens.control-height; text <=> root.identity-headers; input-type: password; placeholder-text: "{\"X-Playback-Token\":\"…\"}"; accessible-label: "其他身份请求头"; }
+                    }
+                    Text { text: "Cookie"; color: Tokens.muted; }
+                    LineEdit { height: Tokens.control-height; text <=> root.cookie; input-type: password; }
+                    CheckBox { text: "清除该站点或默认 Cookie 凭据"; checked <=> root.clear-credential; }
+                    Text { text: "请先在网络设置中保存该域名的站点规则。默认 Cookie 只用于已允许的站点。\n浏览器实际请求身份优先；已存凭据不会在界面、导出或配置中回显。"; color: Tokens.muted; wrap: word-wrap; }
+                }
+            }
+        }
+        DialogFooter {
+            status: root.status;
+            if root.mode == "subtitle": HotButton { label: "重新读取"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("reload"); } }
+            HotButton { label: "关闭"; clicked => { root.action("close"); } }
+            HotButton { label: root.busy ? "保存中…" : "保存"; icon: "save"; primary: true; enabled: root.loaded && !root.busy; clicked => { root.action("save"); } }
+        }
+    }
+}

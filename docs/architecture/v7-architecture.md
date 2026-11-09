@@ -18,7 +18,7 @@ WXT 扩展 → Native Messaging Host → Rust Core + SQLite
 | --- | --- |
 | `native_shell/` | 下载协议、任务与设置、媒体服务、Core/Host/播放器进程入口 |
 | `desktop_ui/` | 主工作台、任务与队列、设置、设备选择、主界面播放器浮层 |
-| `presenter_ui/` | 预热的浏览器确认、下载进度和完成临时窗口，无 SQLite 访问 |
+| `native_ui/` | 预热的浏览器确认、下载进度和完成临时窗口，无 SQLite 访问 |
 | `extension/` | 网页资源识别、下载接管、字幕与媒体推送，经 Host 提交给 Core |
 
 关闭主工作台不终止活动下载。浏览器 offer 优先交给已驻留 Presenter，避免为确认下载等待 JVM 冷启动；Compose 的后备确认路径不能与 Presenter 重复接单。

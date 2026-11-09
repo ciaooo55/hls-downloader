@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from ctypes import wintypes
+import hashlib
 import json
 import math
 import os
@@ -14,6 +15,7 @@ import subprocess
 import tempfile
 from validation_workspace import test_tmp
 import time
+import uuid
 
 from v7_core_ipc import free_port, send_frame
 
@@ -171,6 +173,7 @@ def main() -> int:
             "HLS_V7_DOWNLOAD_DIR": str(root / "downloads"),
             "HLS_V7_CORE_TCP": "1",
             "HLS_V7_CORE_BIND": f"127.0.0.1:{port}",
+            "HLS_V7_PIPE": rf"\\.\pipe\HLSDownloader.soak-{uuid.uuid4().hex}",
         }
     )
     engine = subprocess.Popen(
@@ -263,6 +266,7 @@ def main() -> int:
         report = {
             "schema": 1,
             "engine": str(args.engine.resolve()),
+            "engine_sha256": hashlib.sha256(engine_path.read_bytes()).hexdigest(),
             "idle": {
                 "actual_seconds": args.idle_seconds,
                 "samples": len(idle_samples),

@@ -434,6 +434,30 @@ def _cdp_evaluate(websocket_url: str, expression: str, await_promise: bool = Fal
         connection.close()
 
 
+def _load_unpacked_extension(driver, extension: Path) -> None:
+    address = (driver.capabilities.get("ms:edgeOptions", {}).get("debuggerAddress")
+               or driver.capabilities.get("goog:chromeOptions", {}).get("debuggerAddress"))
+    if not address:
+        raise RuntimeError("Browser did not expose its isolated debugging endpoint")
+    with urlopen(f"http://{address}/json/version", timeout=5) as response:
+        endpoint = json.load(response)["webSocketDebuggerUrl"]
+    # Extensions commands belong to the browser target, not Selenium's page
+    # target. Recent Chromium no longer reliably loads --load-extension.
+    connection = websocket.create_connection(endpoint, timeout=10, suppress_origin=True)
+    try:
+        connection.send(json.dumps({"id": 1, "method": "Extensions.loadUnpacked",
+                                    "params": {"path": str(extension.resolve())}}))
+        while True:
+            message = json.loads(connection.recv())
+            if message.get("id") != 1:
+                continue
+            if message.get("result", {}).get("id") != EXTENSION_ID:
+                raise RuntimeError(f"Could not load the expected extension: {message}")
+            return
+    finally:
+        connection.close()
+
+
 def _download_items(driver, inspector: str) -> list[dict[str, Any]]:
     driver.switch_to.window(inspector)
     return _extension_call(
@@ -516,9 +540,7 @@ def _create_driver(
         driver.install_addon(str(addon), temporary=True)
         return driver
     common = [
-        "--disable-features=DisableLoadExtensionCommandLineSwitch",
-        f"--disable-extensions-except={extension}",
-        f"--load-extension={extension}",
+        "--enable-unsafe-extension-debugging",
         "--remote-allow-origins=*",
         "--no-first-run",
         "--disable-default-apps",
@@ -541,14 +563,21 @@ def _create_driver(
             options.add_argument(argument)
         options.add_experimental_option("prefs", preferences)
         service = ChromeService(executable_path=str(driver_path) if driver_path else None, env=service_env)
-        return webdriver.Chrome(service=service, options=options)
-    options = EdgeOptions()
-    options.binary_location = str(binary)
-    for argument in common:
-        options.add_argument(argument)
-    options.add_experimental_option("prefs", preferences)
-    service = EdgeService(executable_path=str(driver_path) if driver_path else None, env=service_env)
-    return webdriver.Edge(service=service, options=options)
+        driver = webdriver.Chrome(service=service, options=options)
+    else:
+        options = EdgeOptions()
+        options.binary_location = str(binary)
+        for argument in common:
+            options.add_argument(argument)
+        options.add_experimental_option("prefs", preferences)
+        service = EdgeService(executable_path=str(driver_path) if driver_path else None, env=service_env)
+        driver = webdriver.Edge(service=service, options=options)
+    try:
+        _load_unpacked_extension(driver, extension)
+    except Exception:
+        driver.quit()
+        raise
+    return driver
 
 
 def run(

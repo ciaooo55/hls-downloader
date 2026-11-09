@@ -1,4 +1,5 @@
 import { removeRawQueryParameters } from './urlQuery'
+import { isMediaResponseStatus } from './manifestSniff'
 
 export interface HeaderLike {
   name?: string
@@ -78,6 +79,20 @@ export interface DownloadLike {
   referrer?: string
   tabId?: number
   frameId?: number
+  requestId?: string
+  responseIdentity?: Record<string, string>
+}
+
+const RESPONSE_IDENTITY_HEADERS = ['date', 'content-type', 'content-length', 'content-range', 'etag', 'last-modified']
+
+/** Non-secret response metadata links page-read bodies to observed requests. */
+export function responseIdentity(getHeader: (name: string) => string | null | undefined): Record<string, string> {
+  const identity: Record<string, string> = {}
+  for (const name of RESPONSE_IDENTITY_HEADERS) {
+    const value = String(getHeader(name) || '').trim()
+    if (value && value.length <= 1024) identity[name] = value
+  }
+  return identity
 }
 
 function headers(values: HeaderLike[] | undefined): Record<string, string> {
@@ -296,19 +311,38 @@ export class RequestChainStore {
     return chain
   }
 
-  find(download: DownloadLike, now = Date.now(), preferredTabId?: number, successfulOnly = false): RequestChain | undefined {
+  find(
+    download: DownloadLike,
+    now = Date.now(),
+    preferredTabId?: number,
+    successfulOnly = false,
+    match: 'media' | 'exact' = 'media',
+  ): RequestChain | undefined {
     this.cleanup(now)
-    const candidates = [download.url, download.finalUrl]
+    const identity = responseIdentity(name => download.responseIdentity?.[name])
+    const identityEntries = Object.entries(identity)
+    const hasResponseIdentity = identityEntries.length > 0
+    if (download.requestId || hasResponseIdentity) match = 'exact'
+    // Media panels can refresh signed URLs; a browser DownloadItem must keep
+    // the exact request it owns. Its final URL also disambiguates shared
+    // gateways that redirect successive downloads to different files.
+    const key = match === 'exact' ? (url: string) => url.split('#', 1)[0] : mediaRequestKey
+    const candidates = (match === 'exact' && download.finalUrl
+      ? [download.finalUrl]
+      : [download.url, download.finalUrl])
       .filter((value): value is string => Boolean(value))
-      .map(mediaRequestKey)
+      .map(key)
     const referrer = download.referrer ? normalized(download.referrer) : ''
     const tabId = preferredTabId ?? (typeof download.tabId === 'number' && Number.isInteger(download.tabId) && download.tabId >= 0 ? download.tabId : undefined)
     const frameId = typeof download.frameId === 'number' && Number.isInteger(download.frameId) && download.frameId >= 0 ? download.frameId : undefined
-    let matches = [...this.chains.values()]
-      .filter(chain => chain.urls.some(url => candidates.includes(mediaRequestKey(url))))
+    const exactChain = download.requestId ? this.chains.get(download.requestId) : undefined
+    let matches = (download.requestId ? (exactChain ? [exactChain] : []) : [...this.chains.values()])
+      .filter(chain => (match === 'exact' && download.finalUrl ? [chain.finalUrl] : chain.urls)
+        .some(url => candidates.includes(key(url))))
       .filter(chain => !successfulOnly || (chain.statusCode >= 200 && chain.statusCode < 400))
       .filter(chain => tabId === undefined || chain.tabId === tabId)
       .filter(chain => tabId === undefined || frameId === undefined || chain.frameId === frameId)
+      .filter(chain => identityEntries.every(([name, value]) => chain.responseHeaders[name]?.trim() === value))
     if (referrer) {
       const pageMatches = matches.filter(chain => normalized(chain.pageUrl) === referrer)
       if (pageMatches.length) matches = pageMatches
@@ -317,27 +351,43 @@ export class RequestChainStore {
     const first = matches[0]
     if (!first) return undefined
     if (matches.some(chain => chain.tabId !== first.tabId || chain.frameId !== first.frameId)) return undefined
-    return matches.sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    // Identical URL/metadata cannot identify two concurrent authenticated
+    // responses. Keep the body unresolved instead of borrowing newer headers.
+    if (hasResponseIdentity && !download.requestId && matches.length > 1) {
+      const requestIdentity = (chain: RequestChain) => JSON.stringify([
+        chain.method, chain.requestBody, Object.entries(chain.requestHeaders).sort(([left], [right]) => left.localeCompare(right)),
+      ])
+      const identity = requestIdentity(first)
+      if (matches.some(chain => requestIdentity(chain) !== identity)) return undefined
+    }
+    return matches.length === 1 ? first : matches.sort((left, right) => right.updatedAt - left.updatedAt)[0]
   }
 
-  contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 32): RequestChain[] {
+  contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 32, frameId?: number): RequestChain[] {
     this.cleanup(now)
     const page = normalized(pageUrl)
     const supportedTypes = new Set(['xmlhttprequest', 'media', 'other'])
     const selected = new Map<string, RequestChain>()
     const candidates = [...this.chains.values()]
       .filter(chain => chain.tabId === tabId && supportedTypes.has(chain.type))
+      .filter(chain => frameId === undefined || frameId < 0 || chain.frameId === frameId)
+      .filter(chain => isMediaResponseStatus(chain.statusCode) || (chain.statusCode === 0 && !chain.failedAt))
       .filter(chain => {
         if (!page) return true
         return normalized(chain.pageUrl) === page
           || normalized(chain.requestHeaders.referer || '') === page
       })
-      .sort((left, right) => right.updatedAt - left.updatedAt)
+      // A pending retry must not replace a confirmed track/key identity. Its
+      // captured headers remain a fallback for URLs with no response yet.
+      .sort((left, right) => Number(isMediaResponseStatus(right.statusCode)) - Number(isMediaResponseStatus(left.statusCode))
+        || right.updatedAt - left.updatedAt)
     for (const chain of candidates) {
       const origin = httpOrigin(chain.finalUrl)
       if (!origin) continue
-      const pathname = new URL(chain.finalUrl).pathname
-      const scope = origin + pathname.slice(0, pathname.lastIndexOf('/') + 1)
+      // Tracks and keys can share a directory (or pathname) but use different
+      // credentials. Retain the latest confirmed identity per exact URL under
+      // the existing bound, using pending headers only as a fallback.
+      const scope = chain.finalUrl.split('#', 1)[0]
       if (selected.has(scope)) continue
       selected.set(scope, chain)
       if (selected.size >= limit) break

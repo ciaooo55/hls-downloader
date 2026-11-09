@@ -231,16 +231,25 @@ try {
     # AppSearch 会覆盖命令行或向导传入的属性；只在未选择目录时恢复旧路径。
     $restoreDirectoryAction = 'V7RestoreInstallDir'
     $restoreDirectoryCondition = 'NOT INSTALLDIR AND V7_EXISTING_INSTALLDIR'
+    $legacyDirectorySearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='V7_LEGACY_INSTALLDIR'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$restoreDirectoryAction'"
     Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$restoreDirectoryAction',51,'INSTALLDIR','[V7_EXISTING_INSTALLDIR]')"
     foreach ($table in @('InstallUISequence', 'InstallExecuteSequence')) {
         $searchSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``$table`` WHERE ``Action``='AppSearch'"
         $costSequence = Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``$table`` WHERE ``Action``='CostInitialize'"
-        if ($null -eq $searchSequence -or $null -eq $costSequence -or [int]$searchSequence + 1 -ge [int]$costSequence) {
+        if ($null -eq $searchSequence -or $null -eq $costSequence -or [int]$searchSequence + 2 -ge [int]$costSequence) {
             throw "MSI has no directory-restore slot after AppSearch in $table."
         }
         Invoke-MsiNonQuery "DELETE FROM ``$table`` WHERE ``Action``='$restoreDirectoryAction'"
-        Invoke-MsiNonQuery "INSERT INTO ``$table`` (``Action``,``Condition``,``Sequence``) VALUES ('$restoreDirectoryAction','$restoreDirectoryCondition',$([int]$searchSequence + 1))"
+        if ($legacyDirectorySearch) {
+            Invoke-MsiNonQuery "DELETE FROM ``$table`` WHERE ``Action``='V7UseLegacyInstallDir'"
+            Invoke-MsiNonQuery "INSERT INTO ``$table`` (``Action``,``Condition``,``Sequence``) VALUES ('V7UseLegacyInstallDir','NOT V7_EXISTING_INSTALLDIR AND V7_LEGACY_INSTALLDIR AND JP_UPGRADABLE_FOUND',$([int]$searchSequence + 1))"
+        }
+        Invoke-MsiNonQuery "INSERT INTO ``$table`` (``Action``,``Condition``,``Sequence``) VALUES ('$restoreDirectoryAction','$restoreDirectoryCondition',$([int]$searchSequence + 2))"
+    }
+    if ($legacyDirectorySearch) {
+        Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='V7UseLegacyInstallDir'"
+        Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('V7UseLegacyInstallDir',51,'V7_EXISTING_INSTALLDIR','[V7_LEGACY_INSTALLDIR]')"
     }
 
     # 先移除旧产品再写入新文件；旧版 jpackage 卸载可能递归移除 INSTALLDIR。

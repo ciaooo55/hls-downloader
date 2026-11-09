@@ -16,7 +16,7 @@
 //! 而计划任务的触发窗口就整体偏移一天。Windows 侧同一风险由 `GetLocalTime` 的
 //! `wDayOfWeek` 映射承担，两条各有自己的用例。
 //!
-//! 整个模块挂在 `#[cfg(feature = "full-core")]` 上：`presenter-client` 组合不碰本地时间。
+//! 整个模块挂在 `#[cfg(feature = "full-core")]` 上：轻量客户端独立于 Core，不引入本地时间计算。
 
 #[cfg(not(windows))]
 use std::time::{SystemTime, UNIX_EPOCH};

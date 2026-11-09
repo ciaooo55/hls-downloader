@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -78,37 +78,7 @@ fn reject_task_url(url: &str) -> Result<(), String> {
     Err("链接协议不受支持".into())
 }
 
-pub(crate) fn validate_local_source_path(
-    url: &str,
-    source_path: &str,
-    expected_size: Option<u64>,
-) -> Result<PathBuf, String> {
-    let lower_url = url.to_ascii_lowercase();
-    if !(lower_url.starts_with("blob:") || lower_url.starts_with("data:"))
-        || url.is_empty()
-        || url.chars().any(char::is_control)
-    {
-        return Err("本地源只允许对应 blob: 或 data: 资源".into());
-    }
-    let path = Path::new(source_path.trim());
-    if !path.is_absolute() || source_path.chars().any(char::is_control) {
-        return Err("本地源路径必须是有效的绝对路径".into());
-    }
-    let canonical =
-        fs::canonicalize(path).map_err(|error| format!("无法读取本地源文件: {error}"))?;
-    let metadata = fs::metadata(&canonical).map_err(|error| error.to_string())?;
-    if !metadata.is_file() {
-        return Err("本地源必须是常规文件".into());
-    }
-    let expected = expected_size.ok_or_else(|| "本地源缺少声明的文件大小".to_string())?;
-    if metadata.len() != expected {
-        return Err(format!(
-            "本地源大小不匹配: 声明 {expected} 字节，实际 {} 字节",
-            metadata.len()
-        ));
-    }
-    Ok(canonical)
-}
+pub(crate) use hls_client::request_validation::validate_local_source_path;
 
 fn is_importable_local_path(url: &str) -> bool {
     let bytes = url.as_bytes();
@@ -207,6 +177,7 @@ pub fn build_job(
         mirrors: spec.mirrors.clone(),
         replay_json: String::new(),
         curl_body_limit: None,
+        range_stop: None,
         origin_boundary: spec.origin_boundary.clone(),
     };
     Ok((job, paths))
@@ -225,10 +196,20 @@ pub(crate) fn hydrate_replay_headers(
             .map_err(|_| "v7 Core mutex poisoned".to_string())?;
         locked.store().load_credential(&credential_ref)?
     };
-    let Some(blob) = blob else {
-        return Ok((spec, String::new()));
-    };
-    let plain = CredentialVault.unprotect(&blob).unwrap_or(blob);
+    let blob = blob.ok_or_else(|| "请求凭据不存在，请重新获取站点凭据".to_string())?;
+    let plain = CredentialVault
+        .unprotect(&blob)
+        .map_err(|_| "请求凭据无法解密，请重新获取站点凭据".to_string())?;
+    let context = serde_json::from_str::<serde_json::Map<String, Value>>(&plain)
+        .map_err(|_| "请求凭据上下文已损坏，请重新获取站点凭据".to_string())?;
+    match context.get("request_headers") {
+        None | Some(Value::Object(_)) => {}
+        Some(Value::String(text)) => {
+            serde_json::from_str::<serde_json::Map<String, Value>>(text)
+                .map_err(|_| "请求凭据中的请求头已损坏，请重新获取站点凭据".to_string())?;
+        }
+        _ => return Err("请求凭据中的请求头已损坏，请重新获取站点凭据".into()),
+    }
     let replay = crate::credentials::bind_replay_source_url(&plain, &spec.url);
     apply_replay_json_for(&mut spec.headers, &replay, &spec.url);
     Ok((spec, replay))
@@ -576,46 +557,91 @@ impl CoreCoordinator {
 
     pub fn tasks(&self) -> Result<Vec<crate::TaskSnapshot>, String> {
         self.refresh_output_flags()?;
-        let core = self
-            .core
-            .lock()
-            .map_err(|_| "v7 Core mutex poisoned".to_string())?;
-        let mut tasks = core.tasks();
-        for task in &mut tasks {
-            if let Some(spec) = core.task_spec(&task.task_id) {
-                if let Ok(paths) = TaskPaths::for_task(&task.task_id, spec) {
-                    task.output_path = resolved_task_output(&core, &task.task_id, &paths)
-                        .to_string_lossy()
-                        .into_owned();
-                    task.playback_ready = if matches!(task.status.as_str(), "completed" | "done") {
-                        Path::new(&task.output_path).is_file()
-                    } else {
-                        playable_task_playlist(&paths).is_some()
-                            || playable_http_total(&paths, spec).is_some()
-                    };
-                }
-            }
-        }
+        let (mut tasks, specs) = {
+            let core = self.lock()?;
+            let tasks = core.tasks();
+            let specs: HashMap<_, _> = tasks
+                .iter()
+                .filter_map(|task| {
+                    core.task_spec(&task.task_id)
+                        .cloned()
+                        .map(|spec| (task.task_id.clone(), spec))
+                })
+                .collect();
+            (tasks, specs)
+        };
+        enrich_task_snapshots(&mut tasks, &specs);
         Ok(tasks)
     }
 
+    pub(crate) fn task_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<hls_protocol::TaskPage, String> {
+        let (mut page, specs) = {
+            let core = self.lock()?;
+            let page = core.task_page(after, limit)?;
+            let specs: HashMap<_, _> = page
+                .tasks
+                .iter()
+                .filter_map(|task| {
+                    core.task_spec(&task.task_id)
+                        .cloned()
+                        .map(|spec| (task.task_id.clone(), spec))
+                })
+                .collect();
+            (page, specs)
+        };
+        // Resolve published files and preview checkpoints outside the Core lock,
+        // for this page only. The new IPC path must preserve snapshot semantics.
+        enrich_task_snapshots(&mut page.tasks, &specs);
+        let mut bytes = 0;
+        for (index, task) in page.tasks.iter().enumerate() {
+            bytes += serde_json::to_vec(task)
+                .map_err(|error| error.to_string())?
+                .len()
+                + 1;
+            if bytes > hls_protocol::V7_PAGE_PAYLOAD_BUDGET {
+                if index == 0 {
+                    return Err("单个任务超过 IPC 分页大小限制".into());
+                }
+                page.tasks.truncate(index);
+                page.next = page.tasks.last().map(|task| task.task_id.clone());
+                break;
+            }
+        }
+        Ok(page)
+    }
+
     fn refresh_output_flags(&self) -> Result<(), String> {
-        let completed: Vec<String> = self
-            .lock()?
-            .tasks()
-            .into_iter()
-            .filter(|task| matches!(task.status.as_str(), "completed" | "done"))
-            .map(|task| task.task_id)
-            .collect();
-        for task_id in completed {
-            let missing = {
-                let core = self.lock()?;
-                core.task_spec(&task_id)
-                    .and_then(|spec| TaskPaths::for_task(&task_id, spec).ok())
-                    .map(|paths| !resolved_task_output(&core, &task_id, &paths).exists())
-                    .unwrap_or(false)
+        let completed: Vec<_> = {
+            let core = self.lock()?;
+            core.tasks()
+                .into_iter()
+                .filter(|task| matches!(task.status.as_str(), "completed" | "done"))
+                .filter_map(|task| {
+                    core.task_spec(&task.task_id)
+                        .cloned()
+                        .map(|spec| (task, spec))
+                })
+                .collect()
+        };
+        for (task, spec) in completed {
+            let Ok(paths) = TaskPaths::for_task(&task.task_id, &spec) else {
+                continue;
             };
-            self.lock()?.mark_output_missing(&task_id, missing)?;
+            // Published-path reads and filesystem metadata may block, e.g. on
+            // a disconnected volume. Never perform them under the Core lock.
+            let missing = !resolved_snapshot_output(Some(&task), &paths).exists();
+            let mut core = self.lock()?;
+            let unchanged = core.snapshot(&task.task_id).is_some_and(|current| {
+                matches!(current.status.as_str(), "completed" | "done")
+                    && current.output_path == task.output_path
+            }) && core.task_spec(&task.task_id) == Some(&spec);
+            if unchanged {
+                core.mark_output_missing(&task.task_id, missing)?;
+            }
         }
         Ok(())
     }
@@ -666,6 +692,105 @@ impl CoreCoordinator {
                 crate::site_rules::host_of(&spec.url)
             ),
         })
+    }
+
+    pub fn player_embed(&self, embed: crate::PlayerEmbed) -> Result<Vec<EventEnvelope>, String> {
+        // Serialize with play/stop so old geometry can never reach a replacement
+        // libmpv session. No Core/database lock is held across the player IPC.
+        let mut state = player_ui_state()
+            .lock()
+            .map_err(|_| "player session lock")?;
+        if !state.active || state.session_generation != embed.session_generation {
+            return Err("播放会话已改变，请刷新播放器状态".into());
+        }
+        if embed.layout_generation <= state.layout_generation {
+            return Err("播放器布局请求已过期".into());
+        }
+        if let Some(parent) = embed.parent_hwnd {
+            if parent <= 1
+                || embed.x < 0
+                || embed.y < 0
+                || !(1..=16384).contains(&embed.width)
+                || !(1..=16384).contains(&embed.height)
+            {
+                return Err("播放器宿主区域无效".into());
+            }
+            shared_player()?.attach_embed_hwnd(
+                parent,
+                embed.x,
+                embed.y,
+                embed.width,
+                embed.height,
+            )?;
+        } else {
+            shared_player()?.detach_embed()?;
+        }
+        state.layout_generation = embed.layout_generation;
+        emit_player_session(self, &state)
+    }
+
+    pub fn player_control(
+        &self,
+        generation: u64,
+        action: &str,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        player_control_events(self, action, Some(generation))
+    }
+
+    pub(crate) fn validate_subtitle_player(&self, generation: u64) -> Result<(), String> {
+        let state = player_ui_state()
+            .lock()
+            .map_err(|_| "player session lock")?;
+        if generation == 0 || !state.active || state.session_generation != generation {
+            return Err("播放会话已改变，请重新开启字幕翻译".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn player_subtitle_audio(
+        &self,
+        generation: u64,
+        position: f64,
+        seconds: f64,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<serde_json::Value, String> {
+        let server = shared_local_media()?;
+        // Decode only bytes already owned by Core. Never hand origin credentials
+        // to FFmpeg or reissue the browser's original request for subtitles.
+        let url = {
+            let state = player_ui_state()
+                .lock()
+                .map_err(|_| "player session lock")?;
+            if generation == 0 || !state.active || state.session_generation != generation {
+                return Err("播放会话已改变，请重新开启字幕翻译".into());
+            }
+            mount_task_url(self, &state.task_id, server)?
+        };
+        let token = media_token_from_url(&url).ok_or("字幕音轨缺少媒体标识")?;
+        let metadata = shared_player()?.metadata();
+        let audio_index = metadata
+            .tracks
+            .iter()
+            .filter(|track| track.kind == "audio")
+            .position(|track| track.selected)
+            .unwrap_or(0);
+        let result = crate::subtitle_audio_source::decode(
+            &serde_json::json!({"url": url, "audio_index": audio_index}),
+            position,
+            seconds,
+            || cancelled() || self.validate_subtitle_player(generation).is_err(),
+        );
+        server.unmount(&token);
+        self.validate_subtitle_player(generation)?;
+        result
+    }
+
+    pub fn cast_control(
+        &self,
+        generation: u64,
+        action: &str,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        cast_control_events(self, action, Some(generation))
     }
 
     pub fn dispatch(&self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
@@ -838,35 +963,7 @@ impl CoreCoordinator {
             return Ok(events);
         }
         if let CoreCommand::ControlCast { action } = command {
-            let playback = crate::cast::control_session(&action)?;
-            if action == "stop" {
-                clear_cast_mount();
-            }
-            return self.lock()?.emit(CoreEvent::CastSession {
-                active: action != "stop",
-                title: String::new(),
-                device: playback.label,
-                status: match action.as_str() {
-                    "pause" => "已暂停投屏".into(),
-                    "play" => "继续投屏".into(),
-                    "stop" => "已停止投屏".into(),
-                    "status" => playback.state.clone(),
-                    "seek_back" => "已后退 10 秒".into(),
-                    "seek_forward" => "已快进 10 秒".into(),
-                    _ if action.starts_with("seek_to:") => "已跳转".into(),
-                    _ if action.starts_with("seek:") => "已调整播放位置".into(),
-                    _ => action,
-                },
-                task_id: String::new(),
-                media_url: String::new(),
-                device_kind: playback.device_kind,
-                supported_actions: playback.supported_actions,
-                playing: playback.playing,
-                paused: playback.paused,
-                position_seconds: playback.position_seconds,
-                duration_seconds: playback.duration_seconds,
-                position_available: playback.position_available,
-            });
+            return cast_control_events(self, &action, None);
         }
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
@@ -1103,6 +1200,9 @@ impl CoreCoordinator {
     fn dispatch_inner(&self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
         if let CoreCommand::TaskAction { task_id, action } = &command {
             if matches!(action.as_str(), "start" | "resume" | "retry") {
+                if self.update_shutdown.load(Ordering::SeqCst) {
+                    return Err("下载引擎正在准备退出，暂不启动新任务".into());
+                }
                 self.require_legal()?;
             }
             if action == "open" {
@@ -1210,12 +1310,13 @@ impl CoreCoordinator {
             url,
             title,
             device_id,
+            request_id,
         } = &command
         {
-            return share_media(self, path, url, title, device_id);
+            return share_media(self, path, url, title, device_id, request_id);
         }
         if let CoreCommand::PlayerControl { action } = &command {
-            return player_control_events(self, action);
+            return player_control_events(self, action, None);
         }
         if let CoreCommand::ProbeUrl { url, spec } = &command {
             return probe_command(self, url, spec.as_ref());
@@ -1308,6 +1409,9 @@ impl CoreCoordinator {
                 .core
                 .lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+            if start_action.is_some() && self.update_shutdown.load(Ordering::SeqCst) {
+                return Err("下载引擎正在准备退出，暂不启动新任务".into());
+            }
             if let Some(task_id) = task_id.as_deref() {
                 if let Some(action) = start_action.as_deref() {
                     start_accepted = core.snapshot(task_id).is_some_and(|task| {
@@ -1322,7 +1426,10 @@ impl CoreCoordinator {
                     }
                 }
                 if let CoreCommand::TaskAction { action, .. } = &command {
-                    if matches!(action.as_str(), "pause" | "cancel") {
+                    // active 包含正在退出的 worker；仅无 worker 的排队任务可跳过文件控制。
+                    if matches!(action.as_str(), "pause" | "cancel")
+                        && self.worker_is_active(task_id)?
+                    {
                         if let Some(spec) = core.task_spec(task_id).cloned() {
                             let paths = TaskPaths::for_task(task_id, &spec)?;
                             paths.set_control(if action == "pause" {
@@ -1401,11 +1508,14 @@ impl CoreCoordinator {
             .lock()?
             .store()
             .setting_bool("resume_interrupted_on_startup", false)?;
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let tasks = self.tasks()?;
         for task in tasks {
             if matches!(
                 task.status.as_str(),
-                "downloading" | "recording" | "merging" | "checking"
+                "downloading" | "recording" | "merging" | "checking" | "parsing"
             ) {
                 let status = if resume { "queued" } else { "paused" };
                 mark_progress(
@@ -1425,12 +1535,49 @@ impl CoreCoordinator {
     }
 
     pub fn pause_active_tasks(&self) -> Result<(), String> {
-        let tasks = self.tasks()?;
+        self.pause_tasks(true).map(|_| ())
+    }
+
+    // 先暂停 queued，再向 worker 发控制，避免退出回调把尚未暂停的队列任务补位。
+    // core -> active 是唯一嵌套锁顺序；启动路径在持有 active 时不获取 core。
+    fn pause_tasks(&self, include_queued: bool) -> Result<Vec<String>, String> {
+        let mut core = self.lock()?;
+        let mut tasks = core.tasks();
+        tasks.sort_by_key(|task| task.status != "queued");
+        let mut interrupted = Vec::new();
         for task in tasks {
-            if matches!(
+            let running = matches!(
                 task.status.as_str(),
-                "downloading" | "recording" | "merging" | "checking"
-            ) {
+                "downloading" | "recording" | "merging" | "checking" | "parsing"
+            );
+            let has_worker = self.worker_is_active(&task.task_id)?;
+            let interrupted_task = running || (task.status == "queued" && has_worker);
+            if !interrupted_task && !(include_queued && task.status == "queued") {
+                continue;
+            }
+            if has_worker {
+                if let Some(spec) = core.task_spec(&task.task_id) {
+                    TaskPaths::for_task(&task.task_id, spec)?.set_control("pause")?;
+                }
+            }
+            core.handle(CoreCommand::TaskAction {
+                task_id: task.task_id.clone(),
+                action: "pause".into(),
+            })?;
+            if interrupted_task {
+                interrupted.push(task.task_id);
+            }
+        }
+        Ok(interrupted)
+    }
+
+    pub(crate) fn pause_tasks_outside_schedule(&self) -> Result<(), String> {
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let profiles = self.settings()?.queue_profiles;
+        for task in self.tasks()? {
+            if task_schedule_stop_due(&task, &profiles) {
                 self.dispatch_inner(CoreCommand::TaskAction {
                     task_id: task.task_id,
                     action: "pause".into(),
@@ -1442,10 +1589,14 @@ impl CoreCoordinator {
 
     pub fn prepare_for_update(&self, timeout: Duration) -> Result<(), String> {
         self.update_shutdown.store(true, Ordering::SeqCst);
-        if let Err(error) = self.pause_active_tasks() {
-            self.update_shutdown.store(false, Ordering::SeqCst);
-            return Err(error);
-        }
+        // 退出不等于用户暂停全部队列；仅记住这次主动停止的运行任务。
+        let interrupted = match self.pause_tasks(false) {
+            Ok(interrupted) => interrupted,
+            Err(error) => {
+                self.update_shutdown.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        };
         let deadline = Instant::now() + timeout;
         loop {
             let active = self
@@ -1454,7 +1605,38 @@ impl CoreCoordinator {
                 .map_err(|_| "下载任务注册表已损坏".to_string())?
                 .len();
             if active == 0 {
+                let mut core = self.lock()?;
+                // 这是退出检查点，不发布新事件，也不推进运行态事件序号。
+                let sequence = core.latest_sequence();
+                let mut recovery = Vec::new();
+                for task_id in interrupted {
+                    let Some(mut snapshot) = core
+                        .snapshot(&task_id)
+                        .filter(|task| task.status == "paused")
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    // 仅持久化恢复意图：运行态仍 paused，避免同进程重新启动或被进度防回退覆盖。
+                    snapshot.status = "downloading".into();
+                    snapshot.available_actions =
+                        vec!["pause".into(), "cancel".into(), "delete".into()];
+                    recovery.push(EventEnvelope {
+                        sequence,
+                        event: CoreEvent::TaskUpdated { snapshot },
+                    });
+                }
+                if let Err(error) = core.store_mut().apply_events(&recovery) {
+                    self.update_shutdown.store(false, Ordering::SeqCst);
+                    return Err(error);
+                }
                 return Ok(());
+            }
+            #[cfg(test)]
+            if let Ok(mut sender) = self.worker_wait_started.lock() {
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(());
+                }
             }
             if Instant::now() >= deadline {
                 self.update_shutdown.store(false, Ordering::SeqCst);
@@ -2034,29 +2216,31 @@ impl CoreCoordinator {
         if !queue_profile_allowed(&profile) {
             return Ok(());
         }
-        {
-            let mut core = self.lock()?;
-            let status = core.snapshot(&task_id).map(|task| task.status.clone());
-            if !matches!(status.as_deref(), Some("queued" | "downloading")) {
-                return Ok(());
-            }
-            if status.as_deref() == Some("queued") {
-                if let Some(spec) = spec.as_ref() {
-                    let paths = TaskPaths::for_task(&task_id, spec)?;
-                    if let Err(error) = paths.prepare().and_then(|_| paths.set_control("run")) {
-                        // 无效目录只阻止当前任务，不能把它留在队列头阻塞所有后续下载。
-                        core.report_failure(
-                            &task_id,
-                            task_failure_from_error(
-                                &error,
-                                "waiting",
-                                &spec.url,
-                                0,
-                                spec.credential_ref.is_some(),
-                            ),
-                        )?;
-                        return Ok(());
-                    }
+        // 状态检查、控制初始化和 worker 注册共用 core 锁，暂停不能漏掉尚未注册的启动。
+        let mut core = self.lock()?;
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let status = core.snapshot(&task_id).map(|task| task.status.clone());
+        if !matches!(status.as_deref(), Some("queued" | "downloading")) {
+            return Ok(());
+        }
+        if status.as_deref() == Some("queued") {
+            if let Some(spec) = spec.as_ref() {
+                let paths = TaskPaths::for_task(&task_id, spec)?;
+                if let Err(error) = paths.prepare().and_then(|_| paths.set_control("run")) {
+                    // 无效目录只阻止当前任务，不能把它留在队列头阻塞所有后续下载。
+                    core.report_failure(
+                        &task_id,
+                        task_failure_from_error(
+                            &error,
+                            "waiting",
+                            &spec.url,
+                            0,
+                            spec.credential_ref.is_some(),
+                        ),
+                    )?;
+                    return Ok(());
                 }
             }
         }
@@ -2072,21 +2256,19 @@ impl CoreCoordinator {
                 .count();
             if active_in_queue >= max && !active.contains(&task_id) {
                 drop(active);
-                if let Ok(mut core) = self.lock() {
-                    let progress = core
-                        .snapshot(&task_id)
-                        .filter(|task| task.status == "downloading")
-                        .map(|task| (task.downloaded_bytes, task.total_bytes));
-                    if let Some((downloaded_bytes, total_bytes)) = progress {
-                        let _ = core.handle(CoreCommand::UpdateProgress {
-                            task_id: task_id.clone(),
-                            downloaded_bytes,
-                            total_bytes,
-                            speed_bytes_per_sec: 0,
-                            stage: "waiting".into(),
-                            status: "queued".into(),
-                        });
-                    }
+                let progress = core
+                    .snapshot(&task_id)
+                    .filter(|task| task.status == "downloading")
+                    .map(|task| (task.downloaded_bytes, task.total_bytes));
+                if let Some((downloaded_bytes, total_bytes)) = progress {
+                    core.handle(CoreCommand::UpdateProgress {
+                        task_id: task_id.clone(),
+                        downloaded_bytes,
+                        total_bytes,
+                        speed_bytes_per_sec: 0,
+                        stage: "waiting".into(),
+                        status: "queued".into(),
+                    })?;
                 }
                 return Ok(());
             }
@@ -2094,6 +2276,7 @@ impl CoreCoordinator {
                 return Ok(());
             }
         }
+        drop(core);
         crate::sleep_inhibit::set_active(true);
         let core = Arc::clone(&self.core);
         let active = Arc::clone(&self.active);
@@ -2226,6 +2409,19 @@ fn load_queue_profiles(store: &crate::CoreStore) -> Result<Vec<QueueProfile>, St
 fn task_schedule_allowed(task: &crate::TaskSnapshot) -> bool {
     crate::net_policy::scheduled_start_reached(&task.scheduled_start_at)
         && !crate::net_policy::scheduled_stop_hit(&task.scheduled_stop_at)
+}
+
+fn task_schedule_stop_due(task: &crate::TaskSnapshot, profiles: &[QueueProfile]) -> bool {
+    matches!(
+        task.status.as_str(),
+        "downloading" | "recording" | "merging" | "checking" | "parsing"
+    ) && (crate::net_policy::scheduled_stop_hit(&task.scheduled_stop_at)
+        || profiles.iter().any(|profile| {
+            profile.id == task.queue_id
+                && profile.enabled
+                && profile.schedule_enabled
+                && !queue_profile_allowed(profile)
+        }))
 }
 
 fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, String> {
@@ -3159,18 +3355,22 @@ fn finish_published_task(
         }
     }
     // 与开始播放串行，避免播放器刚挂载分片就被收尾删除。
-    let player_state = player_ui_state()
+    let mut player_state = player_ui_state()
         .lock()
         .map_err(|_| "player session lock".to_string());
     let mut thumbnail_guard = None;
-    let playback_released = match &player_state {
+    let playback_released = match player_state.as_mut() {
         Ok(state) if state.active && state.task_id == task_id => {
-            crate::player_thumbnail::cancel_and_wait().and_then(|guard| {
+            let result = crate::player_thumbnail::cancel_and_wait().and_then(|guard| {
                 thumbnail_guard = Some(guard);
                 shared_player().and_then(|player| {
                     player.finish_download(&published.to_string_lossy(), &state.title)
                 })
-            })
+            });
+            if result.is_ok() {
+                state.release_mount();
+            }
+            result
         }
         Ok(_) => Ok(()),
         Err(error) => Err(error.clone()),
@@ -3516,10 +3716,12 @@ fn resolve_published(paths: &TaskPaths) -> PathBuf {
 }
 
 fn resolved_task_output(core: &PersistentCore, task_id: &str, paths: &TaskPaths) -> PathBuf {
+    resolved_snapshot_output(core.snapshot(task_id), paths)
+}
+
+fn resolved_snapshot_output(task: Option<&crate::TaskSnapshot>, paths: &TaskPaths) -> PathBuf {
     if !paths.task_dir().join("published.path").exists() {
-        if let Some(task) = core
-            .snapshot(task_id)
-            .filter(|task| matches!(task.status.as_str(), "completed" | "done"))
+        if let Some(task) = task.filter(|task| matches!(task.status.as_str(), "completed" | "done"))
         {
             let saved = PathBuf::from(&task.output_path);
             if !task.output_path.is_empty() && published_path_allowed(&saved, paths) {
@@ -3528,6 +3730,27 @@ fn resolved_task_output(core: &PersistentCore, task_id: &str, paths: &TaskPaths)
         }
     }
     resolve_published(paths)
+}
+
+fn enrich_task_snapshots(tasks: &mut [crate::TaskSnapshot], specs: &HashMap<String, TaskSpec>) {
+    for task in tasks {
+        let Some(spec) = specs.get(&task.task_id) else {
+            continue;
+        };
+        let Ok(paths) = TaskPaths::for_task(&task.task_id, spec) else {
+            continue;
+        };
+        task.output_path = resolved_snapshot_output(Some(task), &paths)
+            .to_string_lossy()
+            .into_owned();
+        task.playback_ready = if matches!(task.status.as_str(), "completed" | "done") {
+            task.output_missing = !Path::new(&task.output_path).is_file();
+            task.available_actions = crate::core_runtime::legal_actions(task);
+            !task.output_missing
+        } else {
+            playable_task_playlist(&paths).is_some() || playable_http_total(&paths, spec).is_some()
+        };
+    }
 }
 
 fn published_path_allowed(candidate: &Path, paths: &TaskPaths) -> bool {
@@ -3886,18 +4109,25 @@ fn seal_spec_secrets(
             protected_headers.insert(key, Value::String(value));
         }
     }
-    let mut context = spec
-        .credential_ref
-        .as_deref()
-        .and_then(|credential_ref| coordinator.load_credential(credential_ref).ok().flatten())
-        .map(|blob| CredentialVault.unprotect(&blob).unwrap_or(blob))
-        .and_then(|plain| serde_json::from_str::<Value>(&plain).ok())
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut existing_headers = context
-        .remove("request_headers")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
+    let mut context = if let Some(credential_ref) = spec.credential_ref.as_deref() {
+        let blob = coordinator
+            .load_credential(credential_ref)?
+            .ok_or_else(|| "请求凭据不存在，请重新获取站点凭据".to_string())?;
+        let plain = CredentialVault
+            .unprotect(&blob)
+            .map_err(|_| "请求凭据无法解密，请重新获取站点凭据".to_string())?;
+        serde_json::from_str::<serde_json::Map<String, Value>>(&plain)
+            .map_err(|_| "请求凭据上下文已损坏，请重新获取站点凭据".to_string())?
+    } else {
+        serde_json::Map::new()
+    };
+    let mut existing_headers = match context.remove("request_headers") {
+        Some(Value::Object(headers)) => headers,
+        Some(Value::String(text)) => serde_json::from_str::<serde_json::Map<String, Value>>(&text)
+            .map_err(|_| "请求凭据中的请求头已损坏，请重新获取站点凭据".to_string())?,
+        None => serde_json::Map::new(),
+        _ => return Err("请求凭据中的请求头已损坏，请重新获取站点凭据".into()),
+    };
     existing_headers.extend(protected_headers);
     context.insert("request_headers".into(), Value::Object(existing_headers));
     let json = Value::Object(context).to_string();
@@ -3944,6 +4174,9 @@ fn take_header(headers: &mut BTreeMap<String, String>, name: &str) -> Option<Str
 #[derive(Clone)]
 struct PlayerUiState {
     active: bool,
+    mount_token: String,
+    session_generation: u64,
+    layout_generation: u64,
     title: String,
     task_id: String,
     status: String,
@@ -3955,11 +4188,25 @@ impl Default for PlayerUiState {
     fn default() -> Self {
         Self {
             active: false,
+            mount_token: String::new(),
+            session_generation: 0,
+            layout_generation: 0,
             title: String::new(),
             task_id: String::new(),
             status: "STOPPED".into(),
             paused: false,
             speed: 1.0,
+        }
+    }
+}
+
+impl PlayerUiState {
+    fn release_mount(&mut self) {
+        if !self.mount_token.is_empty() {
+            if let Ok(server) = shared_local_media() {
+                server.unmount(&self.mount_token);
+            }
+            self.mount_token.clear();
         }
     }
 }
@@ -3989,6 +4236,8 @@ fn emit_player_session(
     };
     coordinator.lock()?.emit(CoreEvent::PlayerSession {
         active,
+        session_generation: state.session_generation,
+        layout_generation: state.layout_generation,
         title: state.title.clone(),
         task_id: state.task_id.clone(),
         status: status.into(),
@@ -4017,15 +4266,25 @@ fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
-    let url = mount_task_url(coordinator, task_id, shared_local_media()?)?;
+    let server = shared_local_media()?;
+    let url = mount_task_url(coordinator, task_id, server)?;
+    let mount_token = media_token_from_url(&url).ok_or("播放地址缺少媒体标识")?;
     let title = if spec.title.trim().is_empty() {
         spec.filename
     } else {
         spec.title
     };
-    shared_player()?.play(&url, &title)?;
+    if let Err(error) = shared_player()?.play(&url, &title) {
+        server.unmount(&mount_token);
+        return Err(error);
+    }
+    current.release_mount();
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
     let state = PlayerUiState {
         active: true,
+        mount_token,
+        session_generation: GENERATION.fetch_add(1, Ordering::SeqCst) + 1,
+        layout_generation: 0,
         title,
         task_id: task_id.to_string(),
         status: "PLAYING".into(),
@@ -4044,6 +4303,7 @@ fn stop_task_player(coordinator: &CoreCoordinator, task_id: &str) -> Result<(), 
     if state.active && state.task_id == task_id {
         let _thumbnails = crate::player_thumbnail::cancel_and_wait()?;
         shared_player()?.stop();
+        state.release_mount();
         *state = PlayerUiState::default();
         emit_player_session(coordinator, &state)?;
     }
@@ -4148,31 +4408,43 @@ fn media_token_from_url(url: &str) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
-fn active_cast_token() -> &'static Mutex<Option<String>> {
-    static TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    TOKEN.get_or_init(|| Mutex::new(None))
+#[derive(Clone, Default)]
+struct CastMount {
+    token: String,
+    media_url: String,
+    title: String,
+    task_id: String,
 }
 
-fn remember_cast_mount(token: &str) {
-    let previous = active_cast_token()
-        .lock()
-        .ok()
-        .and_then(|mut current| current.replace(token.to_string()));
-    if let Some(previous) = previous.filter(|item| item != token) {
+fn active_cast_mount() -> &'static Mutex<Option<CastMount>> {
+    static MOUNT: OnceLock<Mutex<Option<CastMount>>> = OnceLock::new();
+    MOUNT.get_or_init(|| Mutex::new(None))
+}
+
+fn remember_cast_mount(token: &str, media_url: &str, title: &str, task_id: &str) {
+    let previous = active_cast_mount().lock().ok().and_then(|mut current| {
+        current.replace(CastMount {
+            token: token.into(),
+            media_url: media_url.into(),
+            title: title.into(),
+            task_id: task_id.into(),
+        })
+    });
+    if let Some(previous) = previous.filter(|item| item.token != token) {
         if let Ok(server) = shared_media() {
-            server.unmount(&previous);
+            server.unmount(&previous.token);
         }
     }
 }
 
 fn clear_cast_mount() {
-    let token = active_cast_token()
+    let mount = active_cast_mount()
         .lock()
         .ok()
         .and_then(|mut current| current.take());
-    if let Some(token) = token {
+    if let Some(mount) = mount {
         if let Ok(server) = shared_media() {
-            server.unmount(&token);
+            server.unmount(&mount.token);
         }
     }
 }
@@ -4188,7 +4460,62 @@ fn cast_lan_host(device_id: &str) -> Result<String, String> {
         .ok_or_else(|| "无法确定到投屏设备的局域网出口地址".to_string())
 }
 
+fn cast_operation() -> &'static Mutex<()> {
+    static OPERATION: OnceLock<Mutex<()>> = OnceLock::new();
+    OPERATION.get_or_init(|| Mutex::new(()))
+}
+
+fn cast_control_events(
+    coordinator: &CoreCoordinator,
+    action: &str,
+    generation: Option<u64>,
+) -> Result<Vec<EventEnvelope>, String> {
+    // Receiver I/O is serialized with source replacement, independently of
+    // Core's state lock and of the local-player session.
+    let _operation = cast_operation().lock().map_err(|_| "投屏操作锁不可用")?;
+    let current = crate::cast::session_generation();
+    if generation.is_some_and(|expected| expected == 0 || expected != current) {
+        return Err("投屏会话已经改变，请刷新后重试".into());
+    }
+    let playback = crate::cast::control_session(action)?;
+    if action == "stop" {
+        clear_cast_mount();
+    }
+    let mount = active_cast_mount()
+        .lock()
+        .map_err(|_| "投屏来源锁不可用")?
+        .clone()
+        .unwrap_or_default();
+    coordinator.lock()?.emit(CoreEvent::CastSession {
+        active: action != "stop" && !playback.device_kind.is_empty(),
+        session_generation: current,
+        title: mount.title,
+        device: playback.label,
+        status: match action {
+            "pause" => "已暂停投屏".into(),
+            "play" => "继续投屏".into(),
+            "stop" => "已停止投屏".into(),
+            "status" => playback.state.clone(),
+            "seek_back" => "已后退 10 秒".into(),
+            "seek_forward" => "已快进 10 秒".into(),
+            _ if action.starts_with("seek_to:") => "已跳转".into(),
+            _ if action.starts_with("seek:") => "已调整播放位置".into(),
+            _ => action.into(),
+        },
+        task_id: mount.task_id,
+        media_url: mount.media_url,
+        device_kind: playback.device_kind,
+        supported_actions: playback.supported_actions,
+        playing: playback.playing,
+        paused: playback.paused,
+        position_seconds: playback.position_seconds,
+        duration_seconds: playback.duration_seconds,
+        position_available: playback.position_available,
+    })
+}
+
 fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
+    let _operation = cast_operation().lock().map_err(|_| "投屏操作锁不可用")?;
     let host = cast_lan_host("")?;
     let loopback = mount_task_url(coordinator, task_id, shared_media()?)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
@@ -4207,8 +4534,9 @@ fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
     };
     let _ = crate::cast::ssdp_notify(&location);
     crate::cast::remember_lan_share("局域网播放地址");
-    remember_cast_mount(&token);
+    remember_cast_mount(&token, &location, &title, task_id);
     coordinator.lock()?.emit(CoreEvent::CastSession {
+        session_generation: crate::cast::session_generation(),
         active: true,
         title,
         device: "局域网".into(),
@@ -4230,6 +4558,7 @@ fn cast_to_device(
     task_id: &str,
     device_id: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
+    let _operation = cast_operation().lock().map_err(|_| "投屏操作锁不可用")?;
     let host = cast_lan_host(device_id)?;
     let loopback = mount_task_url(coordinator, task_id, shared_media()?)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
@@ -4249,8 +4578,9 @@ fn cast_to_device(
     if device_id.trim().is_empty() {
         let _ = crate::cast::ssdp_notify(&location);
         crate::cast::remember_lan_share("局域网播放地址");
-        remember_cast_mount(&token);
+        remember_cast_mount(&token, &location, &title, task_id);
         return coordinator.lock()?.emit(CoreEvent::CastSession {
+            session_generation: crate::cast::session_generation(),
             active: true,
             title,
             device: "局域网".into(),
@@ -4274,8 +4604,9 @@ fn cast_to_device(
         }
     };
     let playback = crate::cast::last_session_status();
-    remember_cast_mount(&token);
+    remember_cast_mount(&token, &location, &title, task_id);
     coordinator.lock()?.emit(CoreEvent::CastSession {
+        session_generation: crate::cast::session_generation(),
         active: true,
         title,
         device,
@@ -4298,12 +4629,28 @@ fn share_media(
     url: &str,
     title: &str,
     device_id: &str,
+    request_id: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
+    let _operation = cast_operation().lock().map_err(|_| "投屏操作锁不可用")?;
     let path = path.trim();
     let url = url.trim();
     if path.is_empty() == url.is_empty() {
         return Err("请选择一个本机媒体文件或媒体链接".into());
     }
+    let browser_request = if request_id.is_empty() {
+        None
+    } else {
+        let request = coordinator
+            .query_handoffs(Some(request_id), None, false)?
+            .into_iter()
+            .filter_map(|item| serde_json::from_str::<MediaPushRequest>(&item).ok())
+            .find(|item| item.id == request_id && item.status == "pending")
+            .ok_or("浏览器投送请求已结束或不存在")?;
+        if !path.is_empty() || request.url != url {
+            return Err("投送媒体与浏览器请求不匹配".into());
+        }
+        Some(request)
+    };
     let server = shared_media()?;
     server.enable_lan();
     let token = crate::playback::random_mount_token();
@@ -4337,22 +4684,33 @@ fn share_media(
         } else {
             title.trim().to_string()
         };
-        url.to_string()
+        let spec = coordinator.apply_defaults_to_spec(TaskSpec {
+            url: url.to_string(),
+            mime_type: browser_request
+                .as_ref()
+                .map(|request| request.mime_type.clone())
+                .unwrap_or_default(),
+            credential_ref: browser_request.and_then(|request| request.credential_ref),
+            ..TaskSpec::default()
+        })?;
+        let (spec, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
+        let host = cast_lan_host(device_id)?;
+        server.mount_proxy(&token, spec, replay)?;
+        match crate::cast::lan_media_url(server, &token, &host) {
+            Ok(url) => url,
+            Err(error) => {
+                server.unmount(&token);
+                return Err(error);
+            }
+        }
     };
     if device_id.trim().is_empty() {
-        let published_url = if url.is_empty() {
-            let _ = crate::cast::ssdp_notify(&media_url);
-            media_url.clone()
-        } else {
-            let host = cast_lan_host("")?;
-            server.mount_remote(&token, media_url.clone());
-            let redirect = crate::cast::lan_media_url(server, &token, &host)?;
-            let _ = crate::cast::ssdp_notify(&redirect);
-            redirect
-        };
+        let published_url = media_url.clone();
+        let _ = crate::cast::ssdp_notify(&published_url);
         crate::cast::remember_lan_share("局域网播放地址");
-        remember_cast_mount(&token);
+        remember_cast_mount(&token, &published_url, &media_title, "");
         return coordinator.lock()?.emit(CoreEvent::CastSession {
+            session_generation: crate::cast::session_generation(),
             active: true,
             title: media_title,
             device: "局域网".into(),
@@ -4376,8 +4734,9 @@ fn share_media(
         }
     };
     let playback = crate::cast::last_session_status();
-    remember_cast_mount(&token);
+    remember_cast_mount(&token, &media_url, &media_title, "");
     coordinator.lock()?.emit(CoreEvent::CastSession {
+        session_generation: crate::cast::session_generation(),
         active: true,
         title: media_title,
         device,
@@ -4387,7 +4746,7 @@ fn share_media(
             "正在投屏".into()
         },
         task_id: String::new(),
-        media_url: String::new(),
+        media_url,
         device_kind: playback.device_kind,
         supported_actions: playback.supported_actions,
         playing: playback.playing,
@@ -4401,10 +4760,18 @@ fn share_media(
 fn probe_command(
     coordinator: &CoreCoordinator,
     url: &str,
-    _spec: Option<&TaskSpec>,
+    spec: Option<&TaskSpec>,
 ) -> Result<Vec<EventEnvelope>, String> {
     reject_task_url(url)?;
-    match crate::recognize::probe_with_harvest(url) {
+    let mut spec = spec.cloned().unwrap_or_default();
+    spec.url = url.to_string();
+    let spec = coordinator.apply_defaults_to_spec(spec)?;
+    let (spec, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
+    let headers = spec.headers.into_iter().collect();
+    let result = with_replay_json(&replay, || {
+        crate::recognize::probe_with_harvest_context(url, &headers, &spec.proxy)
+    });
+    match result {
         Ok((kind, label, variants, harvest)) => {
             let mut events = coordinator.lock()?.emit(CoreEvent::ProbeResult {
                 url: url.to_string(),
@@ -4653,6 +5020,7 @@ fn harvest_page(
                     mirrors: Vec::new(),
                     replay_json: String::new(),
                     curl_body_limit: None,
+                    range_stop: None,
                     origin_boundary: String::new(),
                 };
                 let size = crate::http_engine::probe_resource(&job)
@@ -4691,6 +5059,7 @@ fn push_task_tvbox(
     coordinator: &CoreCoordinator,
     task_id: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
+    let _operation = cast_operation().lock().map_err(|_| "投屏操作锁不可用")?;
     let loopback = mount_task_url(coordinator, task_id, shared_media()?)?;
     let token = media_token_from_url(&loopback).ok_or_else(|| "播放地址无效".to_string())?;
     let server = shared_media()?;
@@ -4721,8 +5090,9 @@ fn push_task_tvbox(
         return Err(error);
     }
     crate::cast::remember_tvbox(&endpoint);
-    remember_cast_mount(&token);
+    remember_cast_mount(&token, &url, &title, task_id);
     coordinator.lock()?.emit(CoreEvent::CastSession {
+        session_generation: crate::cast::session_generation(),
         active: true,
         title,
         device: format!("TVBox · {endpoint}"),
@@ -4953,7 +5323,9 @@ fn drag_completed_file(
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let paths = TaskPaths::for_task(task_id, &spec)?;
     let published = resolved_task_output(&*coordinator.lock()?, task_id, &paths);
-    crate::completed_file_drag(&published)?;
+    if crate::completed_file_drag(&published)? == hls_client::file_transfer::DragOutcome::Canceled {
+        return Ok(Vec::new());
+    }
     coordinator.lock()?.emit(CoreEvent::Toast {
         level: "drag_file".into(),
         message: format!("可拖到资源管理器 {}", published.display()),
@@ -5171,11 +5543,17 @@ fn player_control(action: &str) -> Result<(), String> {
 fn player_control_events(
     coordinator: &CoreCoordinator,
     action: &str,
+    expected_generation: Option<u64>,
 ) -> Result<Vec<EventEnvelope>, String> {
     let state = {
         let mut state = player_ui_state()
             .lock()
             .map_err(|_| "player state lock".to_string())?;
+        if expected_generation
+            .is_some_and(|generation| !state.active || generation != state.session_generation)
+        {
+            return Err("播放会话已改变，请刷新播放器状态".into());
+        }
         player_control(action)?;
         match action {
             "pause" => {
@@ -5188,6 +5566,7 @@ fn player_control_events(
                 state.status = "PLAYING".into();
             }
             "stop" => {
+                state.release_mount();
                 state.active = false;
                 state.paused = false;
                 state.status = "STOPPED".into();

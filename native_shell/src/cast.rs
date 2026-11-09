@@ -1150,14 +1150,25 @@ pub fn play_on_device(device_id: &str, media_url: &str, title: &str) -> Result<S
     Ok(device.label)
 }
 
-fn last_cast() -> &'static Mutex<Option<CastDeviceInfo>> {
-    static LAST: OnceLock<Mutex<Option<CastDeviceInfo>>> = OnceLock::new();
-    LAST.get_or_init(|| Mutex::new(None))
+#[derive(Default)]
+struct CastSessionState {
+    device: Option<CastDeviceInfo>,
+    generation: u64,
+}
+
+fn last_cast() -> &'static Mutex<CastSessionState> {
+    static LAST: OnceLock<Mutex<CastSessionState>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(CastSessionState::default()))
+}
+
+pub(crate) fn session_generation() -> u64 {
+    last_cast().lock().map_or(0, |state| state.generation)
 }
 
 fn remember_last_device(device: CastDeviceInfo) {
     if let Ok(mut guard) = last_cast().lock() {
-        *guard = Some(device);
+        guard.generation = guard.generation.saturating_add(1);
+        guard.device = Some(device);
     }
 }
 
@@ -1165,7 +1176,7 @@ pub fn last_device_label() -> String {
     last_cast()
         .lock()
         .ok()
-        .and_then(|guard| guard.as_ref().map(|item| item.label.clone()))
+        .and_then(|guard| guard.device.as_ref().map(|item| item.label.clone()))
         .unwrap_or_default()
 }
 
@@ -1190,7 +1201,10 @@ pub fn remember_lan_share(label: &str) {
 }
 
 pub fn last_session_status() -> CastPlaybackStatus {
-    let device = last_cast().lock().ok().and_then(|guard| guard.clone());
+    let device = last_cast()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.device.clone());
     device
         .as_ref()
         .map(|item| CastPlaybackStatus {
@@ -1213,8 +1227,18 @@ pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
     let device = last_cast()
         .lock()
         .ok()
-        .and_then(|guard| guard.clone())
-        .ok_or_else(|| "当前没有投屏会话".to_string())?;
+        .and_then(|guard| guard.device.clone());
+    let Some(device) = device else {
+        // An idle status read is normal during UI startup and reconnection.
+        return if action == "status" {
+            Ok(CastPlaybackStatus {
+                state: "STOPPED".into(),
+                ..Default::default()
+            })
+        } else {
+            Err("当前没有投屏会话".into())
+        };
+    };
     let kind = device_kind(&device);
     if kind == "tvbox" || kind == "lan" {
         if action != "stop" && action != "status" {
@@ -1253,7 +1277,7 @@ pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
 
 fn clear_last_device() {
     if let Ok(mut guard) = last_cast().lock() {
-        *guard = None;
+        guard.device = None;
     }
 }
 
@@ -1608,10 +1632,16 @@ fn split_http_url(url: &str) -> Result<(String, u16, String), String> {
 }
 
 fn didl_lite(url: &str, title: &str) -> String {
+    let mime = chromecast_mime(url, title);
+    let class = if mime.starts_with("audio/") {
+        "object.item.audioItem"
+    } else {
+        "object.item.videoItem"
+    };
     let title = xml_escape(title);
     let url = xml_escape(url);
     format!(
-        "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\"><item id=\"0\" parentID=\"-1\" restricted=\"1\"><dc:title>{title}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:video/mp4:*\">{url}</res></item></DIDL-Lite>"
+        "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\"><item id=\"0\" parentID=\"-1\" restricted=\"1\"><dc:title>{title}</dc:title><upnp:class>{class}</upnp:class><res protocolInfo=\"http-get:*:{mime}:*\">{url}</res></item></DIDL-Lite>"
     )
 }
 
@@ -2481,6 +2511,12 @@ fn chromecast_mime(media_url: &str, title: &str) -> &'static str {
         "video/webm"
     } else if leaf.contains(".mkv") {
         "video/x-matroska"
+    } else if leaf.contains(".mp3") {
+        "audio/mpeg"
+    } else if leaf.contains(".m4a") {
+        "audio/mp4"
+    } else if leaf.contains(".aac") {
+        "audio/aac"
     } else {
         "video/mp4"
     }
@@ -2884,6 +2920,12 @@ mod tests {
         assert!(ssdp_notify("http://10.0.0.2/\r\nLOCATION: http://evil").is_err());
         assert!(soap_name_ok("urn:schemas-upnp-org:service:AVTransport:1"));
         assert!(!soap_name_ok("urn:x\"><evil"));
+        assert!(didl_lite("http://10.0.0.2/media/index.m3u8", "Live")
+            .contains("http-get:*:application/vnd.apple.mpegurl:*"));
+        let audio = didl_lite("http://10.0.0.2/media/audio.mp3", "Audio");
+        assert!(
+            audio.contains("http-get:*:audio/mpeg:*") && audio.contains("object.item.audioItem")
+        );
     }
 
     #[test]

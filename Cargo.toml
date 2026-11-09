@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/protocol", "crates/client", "native_shell", "native_clients", "native_ui"]
+default-members = ["crates/protocol", "crates/client", "native_shell", "native_clients"]
+
+[profile.release]
+strip = "debuginfo"
+lto = "thin"
+codegen-units = 1
+# Core catches worker panics; preserve unwind across the workspace.
+panic = "unwind"

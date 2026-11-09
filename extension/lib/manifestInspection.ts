@@ -2,10 +2,18 @@ import { replayableRequestHeaders } from './resources'
 
 export type ManifestFetcher = (url: string, init: RequestInit) => Promise<Response>
 
-interface ManifestRequestContext {
+export interface ManifestRequestHeaders {
   requestHeaders?: Record<string, string>
   /** Supplied by the background only after associating a resource with its page. */
   inspectionHeaders?: Record<string, string>
+}
+
+export interface ManifestRequestContext extends ManifestRequestHeaders {
+  url: string
+  /** Aborted when the owning page is replaced or closed, including body reads. */
+  signal?: AbortSignal
+  /** Return the target's complete identity; this replaces the base headers. */
+  requestContextForUrl?: (url: string) => Promise<ManifestRequestHeaders>
 }
 
 function inspectionHeaders(
@@ -27,27 +35,46 @@ function inspectionHeaders(
   return headers
 }
 
-/** Retry a contextual inspection once with replay-safe headers under one deadline. */
+/** Resolve each rendition's identity before a bounded, best-effort inspection. */
 export function createManifestFetcher(
   context: ManifestRequestContext,
   fetcher: ManifestFetcher = (url, init) => fetch(url, init),
 ): (url: string) => Promise<Response> {
-  const headers = inspectionHeaders(context.requestHeaders, context.inspectionHeaders)
-  const fallbackHeaders = inspectionHeaders(context.requestHeaders)
-  const hasContext = Object.keys(context.inspectionHeaders || {}).length > 0
   return async url => {
-    const init = { credentials: 'include' as const, headers, signal: AbortSignal.timeout(5_000) }
+    context.signal?.throwIfAborted()
+    let scoped: ManifestRequestHeaders
+    if (context.requestContextForUrl) scoped = await context.requestContextForUrl(url)
+    else {
+      const sameOrigin = new URL(url).origin === new URL(context.url).origin
+      scoped = {
+        requestHeaders: sameOrigin ? context.requestHeaders : Object.fromEntries(
+          Object.entries(context.requestHeaders || {}).filter(([name]) =>
+            ['accept', 'accept-language', 'referer', 'origin'].includes(name.toLowerCase())),
+        ),
+        inspectionHeaders: Object.fromEntries(Object.entries(context.inspectionHeaders || {})
+          .filter(([name]) => name.toLowerCase() !== 'cookie' || url === context.url)),
+      }
+    }
+    context.signal?.throwIfAborted()
+    const headers = inspectionHeaders(scoped.requestHeaders, scoped.inspectionHeaders)
+    const fallbackHeaders = inspectionHeaders(scoped.requestHeaders)
+    const hasContext = JSON.stringify(headers) !== JSON.stringify(fallbackHeaders)
+    // Observed URLs are already final. Never forward custom tokens through an
+    // unseen redirect; the browser's next observation can identify that target.
+    const timeout = AbortSignal.timeout(5_000)
+    const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout
+    const init = { credentials: 'include' as const, redirect: 'error' as const, headers, signal }
     let response: Response
     try {
       response = await fetcher(url, init)
     } catch (error) {
-      if (!hasContext) throw error
-      return fetcher(url, { ...init, headers: fallbackHeaders })
+      if (!hasContext || signal.aborted) throw error
+      response = await fetcher(url, { ...init, headers: fallbackHeaders })
     }
-    if (response.ok || !hasContext) return response
-    // Release a rejected streaming response before opening its replacement.
-    try { await response.body?.cancel() } catch {}
-    return fetcher(url, { ...init, headers: fallbackHeaders })
+    if (!response.ok) {
+      try { await response.body?.cancel() } catch {}
+    }
+    return response
   }
 }
 

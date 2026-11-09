@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path.TrimEnd('\', '/')
 $cacheRoot = Join-Path $repo '.tool-cache\build-cache'
 $relativeTargets = @(
-    'target', 'native_shell\target', 'presenter_ui\target',
+    'target', 'native_shell\target', 'native_ui\target',
     'desktop_ui\build', 'desktop_ui\resources\common',
     'extension\.output', 'extension\.wxt',
     '.tool-cache\build-cache\cargo-target', '.tool-cache\build-cache\compose-build'

@@ -220,6 +220,21 @@ impl PersistentCore {
         self.runtime.list_tasks()
     }
 
+    pub(crate) fn task_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<hls_protocol::TaskPage, String> {
+        self.runtime.task_page(after, limit)
+    }
+
+    pub(crate) fn event_batch_after(
+        &self,
+        sequence: u64,
+    ) -> Result<hls_protocol::EventBatch, String> {
+        self.runtime.event_batch_after(sequence)
+    }
+
     pub(crate) fn snapshot(&self, task_id: &str) -> Option<&TaskSnapshot> {
         self.runtime.snapshot(task_id)
     }
@@ -416,7 +431,7 @@ impl PersistentCore {
         Ok(events)
     }
 
-    fn from_store(store: CoreStore) -> Result<Self, String> {
+    pub(crate) fn from_store(store: CoreStore) -> Result<Self, String> {
         let snapshots = store.load_tasks()?;
         let specs = store.load_task_specs()?;
         let sequence = store.latest_sequence()?;
@@ -694,6 +709,8 @@ mod tests {
                     status: "pending".into(),
                     message: String::new(),
                     location: String::new(),
+                    credential_ref: None,
+                    mime_type: String::new(),
                     created_at_ms: 1,
                 },
             })
@@ -986,6 +1003,8 @@ mod tests {
             status: "pending".into(),
             message: String::new(),
             location: String::new(),
+            credential_ref: None,
+            mime_type: String::new(),
             created_at_ms: 1,
         };
         let second = crate::MediaPushRequest {
@@ -996,6 +1015,8 @@ mod tests {
             status: "pending".into(),
             message: String::new(),
             location: String::new(),
+            credential_ref: None,
+            mime_type: String::new(),
             created_at_ms: 2,
         };
 
@@ -1078,6 +1099,8 @@ mod tests {
             status: "pending".into(),
             message: String::new(),
             location: String::new(),
+            credential_ref: None,
+            mime_type: String::new(),
             created_at_ms: 8,
         };
         core.handle(CoreCommand::RequestMediaPush {
@@ -1133,6 +1156,8 @@ mod tests {
             status: "pending".into(),
             message: String::new(),
             location: String::new(),
+            credential_ref: None,
+            mime_type: String::new(),
             created_at_ms: 7,
         };
         let terminal = CoreCommand::ResolveMediaPush {
@@ -1198,6 +1223,8 @@ mod tests {
             status: "pending".into(),
             message: String::new(),
             location: String::new(),
+            credential_ref: None,
+            mime_type: String::new(),
             created_at_ms: 1,
         };
         {
@@ -1246,6 +1273,8 @@ mod tests {
             status: "pending".into(),
             message: String::new(),
             location: String::new(),
+            credential_ref: None,
+            mime_type: String::new(),
             created_at_ms: 2,
         };
         {

@@ -39,6 +39,34 @@ describe('browser request chains', () => {
     expect(store.find({ url: 'https://b.test/file' }, 1100)?.requestId).toBe('b')
   })
 
+  it('associates page-read bodies by response identity and refuses ambiguous credentials', () => {
+    const store = new RequestChainStore()
+    const url = 'https://cdn.test/get?id=one'
+    for (const [requestId, etag] of [['video', '"video"'], ['audio', '"audio"']]) {
+      const request = { requestId, url, tabId: 7, frameId: 3, timeStamp: 1000 }
+      store.observeRequest({ ...request, requestHeaders: [{ name: 'Authorization', value: `Bearer ${requestId}` }] })
+      store.observeResponse({ ...request, statusCode: 200,
+        responseHeaders: [{ name: 'ETag', value: etag }, { name: 'Content-Type', value: 'application/octet-stream' }] })
+    }
+    expect(store.find({ url, frameId: 3, responseIdentity: { etag: '"video"' } }, 1100, 7, true)?.requestHeaders.authorization)
+      .toBe('Bearer video')
+    expect(store.find({ url, responseIdentity: { 'content-type': 'application/octet-stream' } }, 1100, 7, true)).toBeUndefined()
+    expect(store.find({ url, requestId: 'audio', frameId: 3 }, 1100, 7, true)?.requestHeaders.authorization).toBe('Bearer audio')
+    expect(store.find({ url, requestId: 'audio', frameId: 8 }, 1100, 7, true)).toBeUndefined()
+    expect(store.find({ url: `${url}&token=other`, requestId: 'audio' }, 1100, 7, true)).toBeUndefined()
+    expect(store.find({ url, requestId: 'missing', frameId: 3 }, 1100, 7, true)).toBeUndefined()
+    expect(store.find({ url, requestId: 'audio', frameId: 3 }, 1100, 8, true)).toBeUndefined()
+    expect(store.find({ url, requestId: 'audio', frameId: 3, responseIdentity: { etag: '"video"' } },
+      1100, 7, true)).toBeUndefined()
+    store.observeResponse({ requestId: 'rejected', url, tabId: 7, frameId: 3, statusCode: 403, timeStamp: 1000 })
+    expect(store.find({ url, requestId: 'rejected', frameId: 3 }, 1100, 7, true)).toBeUndefined()
+    store.observeRequest({ requestId: 'video-repeat', url, tabId: 7, frameId: 3, timeStamp: 1050,
+      requestHeaders: [{ name: 'Authorization', value: 'Bearer video' }] })
+    store.observeResponse({ requestId: 'video-repeat', url, tabId: 7, frameId: 3, timeStamp: 1060, statusCode: 200,
+      responseHeaders: [{ name: 'ETag', value: '"video"' }] })
+    expect(store.find({ url, frameId: 3, responseIdentity: { etag: '"video"' } }, 1100, 7, true)?.requestId).toBe('video-repeat')
+  })
+
   it('finds the exact headers for a canonicalized LL-HLS playlist', () => {
     const store = new RequestChainStore()
     store.observeRequest({
@@ -124,6 +152,49 @@ describe('browser request chains', () => {
     expect(store.find({
       url: 'https://cdn.test/movie.mp4?s=old&e=100&_t=90&quality=1080',
     }, 1100, 3, true)).toBeUndefined()
+  })
+
+  it('keeps browser downloads bound to their exact signed request instead of the newest media signature', () => {
+    const store = new RequestChainStore()
+    const url = 'https://cdn.test/movie.mp4?token=original'
+    for (const [requestId, requestUrl, timeStamp] of [
+      ['download', url, 1000],
+      ['player', 'https://cdn.test/movie.mp4?token=rotated', 1100],
+    ] as const) {
+      store.observeResponse({ requestId, url: requestUrl, tabId: 3, frameId: 0,
+        statusCode: 200, timeStamp,
+        requestHeaders: [{ name: 'X-Playback-Token', value: requestId }],
+      })
+    }
+    expect(store.find({ url, tabId: 3 }, 1200, undefined, false, 'exact')?.requestId).toBe('download')
+    expect(store.find({ url, tabId: 3 }, 1200, undefined, true)?.requestId).toBe('player')
+    expect(store.find({ url: 'https://cdn.test/movie.mp4?token=unknown', tabId: 3 },
+      1200, undefined, false, 'exact')).toBeUndefined()
+  })
+
+  it('uses the final download URL to disambiguate repeated redirect gateways', () => {
+    const store = new RequestChainStore()
+    const url = 'https://site.test/download'
+    for (const [requestId, finalUrl, timeStamp] of [
+      ['wanted', 'https://cdn.test/one.zip', 1000],
+      ['other', 'https://cdn.test/two.zip', 1100],
+    ] as const) {
+      store.observeRequest({ requestId, url, tabId: 3, timeStamp })
+      store.observeRedirect({ requestId, url, redirectUrl: finalUrl, tabId: 3, timeStamp: timeStamp + 1 })
+      store.observeResponse({ requestId, url: finalUrl, tabId: 3, statusCode: 200, timeStamp: timeStamp + 2 })
+    }
+    expect(store.find({ url, finalUrl: 'https://cdn.test/one.zip', tabId: 3 },
+      1200, undefined, false, 'exact')?.requestId).toBe('wanted')
+    expect(store.find({ url, finalUrl: 'https://cdn.test/missing.zip', tabId: 3 },
+      1200, undefined, false, 'exact')).toBeUndefined()
+  })
+
+  it('does not match a browser download from a different LL-HLS poll', () => {
+    const store = new RequestChainStore()
+    store.observeResponse({ requestId: 'poll', url: 'https://cdn.test/live.m3u8?_HLS_msn=2',
+      tabId: 3, statusCode: 200, timeStamp: 1000 })
+    expect(store.find({ url: 'https://cdn.test/live.m3u8?_HLS_msn=1', tabId: 3 },
+      1100, undefined, false, 'exact')).toBeUndefined()
   })
 
   it('bounds request history while retaining a recent failed request', () => {
@@ -225,7 +296,7 @@ describe('browser request chains', () => {
     })
 
     const contexts = store.contextsForPage(7, 'https://page.test/watch', 1200)
-    expect(contexts.map(item => item.requestId)).toEqual(['segment-new', 'manifest'])
+    expect(contexts.map(item => item.requestId)).toEqual(['segment-new', 'segment-old', 'manifest'])
   })
 
   it('keeps different authorization contexts for media directories on the same origin', () => {
@@ -236,7 +307,71 @@ describe('browser request chains', () => {
         requestHeaders: [{ name: 'Authorization', value: `Bearer ${path.split('/')[0]}` }] })
     }
     expect(store.contextsForPage(7, 'https://page.test/watch', 1200).map(c => c.requestId))
-      .toEqual(['chunks/2.m4s', 'init/video.mp4', 'hls/master.m3u8'])
+      .toEqual(['chunks/2.m4s', 'chunks/1.m4s', 'init/video.mp4', 'hls/master.m3u8'])
+  })
+
+  it.each([0, 3])('keeps auxiliary media credentials in the selected frame %s', frameId => {
+    const store = new RequestChainStore()
+    for (const [index, sourceFrame] of [frameId, frameId + 1].entries()) {
+      const request = { requestId: `frame-${sourceFrame}`, url: 'https://cdn.test/media/key',
+        tabId: 7, frameId: sourceFrame, type: 'xmlhttprequest',
+        documentUrl: 'https://page.test/watch', timeStamp: 1000 + index }
+      store.observeRequest({ ...request,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer frame-${sourceFrame}` }] })
+      store.observeResponse({ ...request, statusCode: 200 })
+    }
+
+    expect(store.contextsForPage(7, 'https://page.test/watch', 1200, 32, frameId)
+      .map(chain => chain.requestHeaders.authorization)).toEqual([`Bearer frame-${frameId}`])
+  })
+
+  it.each([0, 204, 205, 302, 401, 403, 500])(
+    'keeps confirmed credentials when a newer request has response status %s', statusCode => {
+      const store = new RequestChainStore()
+      const request = { url: 'https://cdn.test/media/key', tabId: 7, frameId: 0,
+        type: 'xmlhttprequest', documentUrl: 'https://page.test/watch' }
+      store.observeRequest({ ...request, requestId: 'confirmed', timeStamp: 1000,
+        requestHeaders: [{ name: 'Authorization', value: 'Bearer confirmed' }] })
+      store.observeResponse({ ...request, requestId: 'confirmed', timeStamp: 1010, statusCode: 200 })
+      store.observeRequest({ ...request, requestId: 'retry', timeStamp: 1100,
+        requestHeaders: [{ name: 'Authorization', value: 'Bearer unconfirmed' }] })
+      if (statusCode) store.observeResponse({ ...request, requestId: 'retry', timeStamp: 1110, statusCode })
+
+      expect(store.contextsForPage(7, request.documentUrl, 1200)[0]?.requestHeaders.authorization)
+        .toBe('Bearer confirmed')
+      store.observeResponse({ ...request, requestId: 'retry', timeStamp: 1120, statusCode: 304 })
+      expect(store.contextsForPage(7, request.documentUrl, 1200)[0]?.requestHeaders.authorization)
+        .toBe('Bearer unconfirmed')
+    },
+  )
+
+  it('keeps pending request headers as a fallback but excludes requests that failed before a response', () => {
+    const store = new RequestChainStore()
+    for (const requestId of ['pending', 'failed']) {
+      store.observeRequest({ requestId, url: `https://cdn.test/media/${requestId}`, tabId: 7,
+        type: 'media', documentUrl: 'https://page.test/watch', timeStamp: 1000,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer ${requestId}` }] })
+    }
+    store.fail('failed', 1100)
+
+    expect(store.contextsForPage(7, 'https://page.test/watch', 1200).map(chain => chain.requestId))
+      .toEqual(['pending'])
+  })
+
+  it('keeps exact track credentials in one directory while replacing repeated URLs and bounding memory', () => {
+    const store = new RequestChainStore()
+    const urls = ['https://cdn.test/media/main.m3u8', 'https://cdn.test/media/play?track=audio',
+      'https://cdn.test/media/play?track=video', 'https://cdn.test/media/play?track=audio']
+    for (const [index, url] of urls.entries()) {
+      store.observeRequest({ requestId: String(index), url, tabId: 7,
+        type: 'media', documentUrl: 'https://page.test/watch', timeStamp: 1000 + index,
+        requestHeaders: [{ name: 'Authorization', value: `Bearer track-${index}` }] })
+    }
+    const contexts = store.contextsForPage(7, 'https://page.test/watch', 1200)
+    expect(contexts.map(chain => chain.requestId)).toEqual(['3', '2', '0'])
+    expect(contexts.map(chain => chain.requestHeaders.authorization))
+      .toEqual(['Bearer track-3', 'Bearer track-2', 'Bearer track-0'])
+    expect(store.contextsForPage(7, 'https://page.test/watch', 1200, 2)).toHaveLength(2)
   })
 
   it('keeps a recent playback context long enough for a user to choose a resource', () => {

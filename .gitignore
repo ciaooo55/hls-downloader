@@ -18,7 +18,7 @@ node_modules/
 /target/
 native_shell/target/
 native_shell/site-cache/
-presenter_ui/target/
+native_ui/target/
 extension/node_modules/
 extension/.wxt/
 extension/.output/
@@ -29,6 +29,8 @@ desktop_ui/.kotlin/
 bin/
 !native_shell/src/bin/
 !native_shell/src/bin/*.rs
+!native_clients/src/bin/
+!native_clients/src/bin/*.rs
 /build/
 /desktop_ui/build/
 /release/

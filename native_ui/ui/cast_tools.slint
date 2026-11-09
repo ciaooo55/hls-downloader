@@ -1,0 +1,110 @@
+import { ScrollView, LineEdit, ComboBox, Slider } from "std-widgets.slint";
+import { Tokens, HotButton, ChoiceButton } from "theme.slint";
+import { DialogHeader, DialogFooter } from "dialog_components.slint";
+
+export component CastWindow inherits Window {
+    icon: @image-url("../../assets/app-icon.png");
+    title: "投屏与媒体推送";
+    default-font-family: Tokens.type-face;
+    default-font-size: 13px;
+    background: Tokens.canvas;
+    preferred-width: 720px; preferred-height: 640px;
+    min-width: 480px; min-height: 380px;
+    in-out property <string> page: "source";
+    in-out property <string> mode: "cast";
+    in-out property <string> source-kind: "url";
+    in-out property <string> path;
+    in-out property <string> url;
+    in-out property <string> media-title;
+    in property <bool> locked-source;
+    in property <string> source-label;
+    in property <[string]> devices;
+    in-out property <int> selected-device: -1;
+    in property <bool> discovering;
+    in property <bool> busy;
+    in property <string> notice;
+    in property <bool> active;
+    in property <string> session-label;
+    in property <string> session-status;
+    in property <string> session-url;
+    in property <bool> can-pause;
+    in property <bool> can-play;
+    in property <bool> can-seek;
+    in property <bool> can-stop;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> time;
+    in property <bool> browser-request;
+    callback action(string);
+    callback seek(float);
+    VerticalLayout {
+        spacing: 0px;
+        DialogHeader { heading: "投屏与媒体推送"; description: root.browser-request ? "选择接收设备，继续这次浏览器推送" : "将媒体发送到设备，或发布局域网播放地址"; icon: "cast"; }
+        VerticalLayout {
+        padding: 20px; spacing: 16px;
+        HorizontalLayout {
+            spacing: 8px;
+            ChoiceButton { label: "来源与设备"; selected: root.page == "source"; clicked => { root.page = "source"; } }
+            ChoiceButton { label: "当前会话"; selected: root.page == "session"; clicked => { root.page = "session"; } }
+        }
+        ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            viewport-width: self.width;
+            VerticalLayout {
+                spacing: 14px; alignment: start;
+                if root.page == "source": VerticalLayout {
+                    spacing: 12px; alignment: start;
+                    Text { text: root.browser-request ? "浏览器媒体推送 · 请选择接收端" : "选择媒体来源"; color: Tokens.ink; font-size: 17px; }
+                    if root.locked-source: Text { text: root.source-label; color: Tokens.ink; wrap: word-wrap; }
+                    if !root.locked-source: VerticalLayout {
+                        spacing: 5px;
+                        ComboBox { height: Tokens.control-height; model: ["媒体链接", "本机文件"]; current-index: root.source-kind == "file" ? 1 : 0; enabled: !root.busy; selected(value) => { root.source-kind = self.current-index == 1 ? "file" : "url"; } }
+                        if root.source-kind == "url": LineEdit { height: Tokens.control-height; text <=> root.url; placeholder-text: "https://…"; enabled: !root.busy; accessible-label: "投送媒体链接"; }
+                        if root.source-kind == "file": HorizontalLayout {
+                            spacing: Tokens.control-gap;
+                            LineEdit { height: Tokens.control-height; text <=> root.path; placeholder-text: "本机媒体路径"; enabled: !root.busy; accessible-label: "投送媒体路径"; }
+                            HotButton { label: "选择文件"; icon: "folder"; enabled: !root.busy; clicked => { root.action("file"); } }
+                        }
+                        LineEdit { height: Tokens.control-height; text <=> root.media-title; placeholder-text: "显示名称（可选）"; enabled: !root.busy; accessible-label: "投送媒体名称"; }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        ComboBox { height: Tokens.control-height; model: ["DLNA / Chromecast", "TVBox"]; current-index: root.mode == "tvbox" ? 1 : 0; enabled: !root.busy && !root.discovering && !root.browser-request; selected(value) => { root.mode = self.current-index == 1 ? "tvbox" : "cast"; root.action("mode"); } }
+                        HotButton { label: root.discovering ? "正在搜索…" : "搜索设备"; icon: "search"; enabled: !root.busy && !root.discovering; clicked => { root.action("scan"); } }
+                    }
+                    for device[index] in root.devices: HotButton {
+                        label: device; primary: index == root.selected-device; enabled: !root.busy;
+                        clicked => { root.selected-device = index; }
+                    }
+                    if root.devices.length == 0: Text { text: root.discovering ? "正在搜索局域网接收端…" : "尚未发现设备。可重新搜索，或在投屏设置中配置接收端。"; color: Tokens.muted; wrap: word-wrap; }
+                    VerticalLayout {
+                        spacing: 6px;
+                        HotButton { label: root.busy ? "正在提交…" : "发送到所选设备"; icon: "cast"; primary: true; enabled: !root.busy && !root.discovering && root.selected-device >= 0; clicked => { root.action("connect"); } }
+                        HotButton { label: "发布局域网播放地址"; icon: "network"; enabled: !root.busy && !root.discovering; clicked => { root.action("publish"); } }
+                    }
+                    if root.browser-request: HotButton { label: "取消这次浏览器推送"; enabled: !root.busy; clicked => { root.action("cancel_push"); } }
+                    Text { text: "设备只接收 Core 提供的媒体地址。浏览器凭据由 Core 使用。TVBox 的暂停、进度等控制以接收端实际能力为准。"; color: Tokens.muted; wrap: word-wrap; }
+                }
+                if root.page == "session": VerticalLayout {
+                    spacing: 12px; alignment: start;
+                    Text { text: root.active ? root.session-label : "当前没有投屏会话"; color: Tokens.ink; font-size: 17px; wrap: word-wrap; }
+                    Text { text: root.session-status; color: Tokens.muted; wrap: word-wrap; }
+                    LineEdit { height: Tokens.control-height; text: root.session-url; read-only: true; accessible-label: "局域网播放地址"; }
+                    Text { text: root.time; color: Tokens.muted; }
+                    Slider { minimum: 0; maximum: max(1, root.duration); value: root.position; enabled: root.active && root.can-seek && !root.busy; changed(value) => { root.seek(value); } }
+                    HorizontalLayout {
+                        spacing: 5px;
+                        HotButton { label: "播放"; icon: "play"; enabled: root.active && root.can-play && !root.busy; clicked => { root.action("control:play"); } }
+                        HotButton { label: "暂停"; icon: "pause"; enabled: root.active && root.can-pause && !root.busy; clicked => { root.action("control:pause"); } }
+                        HotButton { label: "−10 秒"; icon: "back"; enabled: root.active && root.can-seek && !root.busy; clicked => { root.action("control:seek_back"); } }
+                        HotButton { label: "+10 秒"; icon: "forward"; enabled: root.active && root.can-seek && !root.busy; clicked => { root.action("control:seek_forward"); } }
+                    }
+                    HotButton { label: "停止分享 / 投屏"; icon: "stop"; enabled: root.active && root.can-stop && !root.busy; clicked => { root.action("control:stop"); } }
+                    HotButton { label: "刷新会话"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("control:status"); } }
+                }
+            }
+        }
+        }
+        DialogFooter { status: root.notice; HotButton { label: "关闭窗口"; enabled: !root.busy; clicked => { root.action("close"); } } }
+    }
+}

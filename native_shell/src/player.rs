@@ -450,16 +450,26 @@ impl Player {
                 GetParent, IsWindow, SetParent, SetWindowPos, HWND_TOP, SWP_NOACTIVATE,
                 SWP_SHOWWINDOW,
             };
+            let mut inner = self.inner.lock().map_err(|_| "player lock")?;
             let mut slot = self.embed_wid.lock().map_err(|_| "player embed lock")?;
             if unsafe { IsWindow(parent as _) } == 0 {
                 return Err("播放器宿主已关闭".into());
             }
             // 使用宿主的 DPI 模式创建和移动子 HWND，坐标与 Compose 的像素矩形一致。
-            if unsafe { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent as _)) }
-                .is_null()
-            {
+            let previous_dpi =
+                unsafe { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent as _)) };
+            if previous_dpi.is_null() {
                 return Err(std::io::Error::last_os_error().to_string());
             }
+            struct RestoreDpi(windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT);
+            impl Drop for RestoreDpi {
+                fn drop(&mut self) {
+                    unsafe {
+                        SetThreadDpiAwarenessContext(self.0);
+                    }
+                }
+            }
+            let _dpi = RestoreDpi(previous_dpi);
             if let Some(wid) = *slot {
                 if unsafe { IsWindow(wid as _) } != 0 {
                     // 调整尺寸、主界面和画中画之间切换，只移动同一个视频子窗口。
@@ -486,7 +496,25 @@ impl Player {
                     return Ok(());
                 }
             }
-            *slot = Some(create_child_host_parent(parent, x, y, w, h)?);
+            // The workbench may open after standalone playback has started.
+            // Updating wid rebuilds only mpv's video output; loadfile, the
+            // playback position, tracks and the player process stay intact.
+            // Later main/PiP moves only reparent this stable host HWND.
+            if matches!(*inner, Backend::Mpv(_)) {
+                self.command_locked(&mut inner, "set ontop no")?;
+                self.command_locked(&mut inner, "set fullscreen no")?;
+                self.command_locked(&mut inner, "script-message-to osc osc-visibility never")?;
+            }
+            let host = create_child_host_parent(parent, x, y, w, h)?;
+            if matches!(*inner, Backend::Mpv(_)) {
+                if let Err(error) = self.command_locked(&mut inner, &format!("set wid {host}")) {
+                    unsafe {
+                        windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(host as _);
+                    }
+                    return Err(error);
+                }
+            }
+            *slot = Some(host);
         }
         #[cfg(not(windows))]
         {
@@ -507,6 +535,32 @@ impl Player {
                 }
             }
         }
+    }
+
+    pub fn detach_embed(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(|_| "player lock")?;
+        if let Backend::Child(child) = &mut *inner {
+            child.request("detach_embed", None)?;
+            return Ok(());
+        }
+        #[cfg(windows)]
+        if let Some(wid) = *self.embed_wid.lock().map_err(|_| "player embed lock")? {
+            use windows_sys::Win32::{
+                Foundation::{GetLastError, SetLastError},
+                UI::WindowsAndMessaging::{IsWindow, SetParent, ShowWindow, HWND_MESSAGE, SW_HIDE},
+            };
+            unsafe {
+                if IsWindow(wid as _) != 0 {
+                    ShowWindow(wid as _, SW_HIDE);
+                    SetLastError(0);
+                    // Preserve the same video HWND when the UI host is released.
+                    if SetParent(wid as _, HWND_MESSAGE).is_null() && GetLastError() != 0 {
+                        return Err(std::io::Error::last_os_error().to_string());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn hide_embed(&self) -> Result<(), String> {
@@ -844,6 +898,10 @@ pub fn run_player_process() -> i32 {
                     player.hide_embed()?;
                     Ok(serde_json::Value::Null)
                 }
+                "detach_embed" => {
+                    player.detach_embed()?;
+                    Ok(serde_json::Value::Null)
+                }
                 "stop" => {
                     player.stop();
                     Ok(serde_json::Value::Null)
@@ -989,7 +1047,7 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
         if let Ok(cwd) = std::env::current_dir() {
             for name in names {
                 candidates.push(cwd.join(name));
-                candidates.push(cwd.join("presenter_ui").join(name));
+                candidates.push(cwd.join("native_ui").join(name));
             }
         }
         for name in names {

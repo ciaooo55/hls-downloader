@@ -625,6 +625,7 @@ fn download_torrent_with_telemetry(
                 mirrors: Vec::new(),
                 replay_json: String::new(),
                 curl_body_limit: None,
+                range_stop: None,
                 origin_boundary: String::new(),
             };
             last = match run_job(&job) {
@@ -2101,7 +2102,7 @@ mod tests {
             fs::create_dir(&outside).unwrap();
             fs::write(outside.join("out.bin"), b"old-outside").unwrap();
             let status = std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J"])
+                .args(["/D", "/C", "mklink", "/J"])
                 .arg(&junction)
                 .arg(&outside)
                 .status()

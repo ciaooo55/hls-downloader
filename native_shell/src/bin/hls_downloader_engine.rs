@@ -183,7 +183,14 @@ fn main() -> ExitCode {
                     "core_ready",
                     serde_json::json!({"elapsed_ms": started.elapsed().as_millis()}),
                 );
-                eprintln!("download engine listening on {address}");
+                if hls_native_shell::tcp_loopback_enabled() {
+                    eprintln!("download engine listening on {address}");
+                } else {
+                    eprintln!(
+                        "download engine listening on {}",
+                        hls_native_shell::v7_pipe_name()
+                    );
+                }
                 match worker.join() {
                     Ok(Ok(())) => ExitCode::SUCCESS,
                     Ok(Err(error)) => {

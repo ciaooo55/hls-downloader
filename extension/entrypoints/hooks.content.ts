@@ -1,9 +1,11 @@
 import { copyHttpBufferSource, inheritHttpBufferSource } from '../lib/blobOwnership'
-import { detectManifestKind, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
+import { detectManifestKind, isMediaResponseStatus, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from '../lib/manifestSniff'
 import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from '../lib/hlsWorkerOwnership'
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import type { MediaResource } from '../lib/resources'
+import { SITE_RESPONSE_LIMIT, shouldInspectSiteResponse, siteManifestCandidates } from '../lib/siteManifest'
+import { responseIdentity } from '../lib/requestChain'
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -21,18 +23,40 @@ export default defineContentScript({
     const mixedMseBuffers = new WeakSet<object>()
     const mediaSourceBlobs = new WeakMap<object, string>()
     const sourceBufferOwners = new WeakMap<object, object>()
-    const pendingResources: Array<{ url: string; mimeType: string; inspection?: Partial<MediaResource> }> = []
+    const responsePages = new WeakMap<Response, string>()
+    type BodyObservation = { observed: boolean }
+    const responseBodies = new WeakMap<Response, BodyObservation>()
+    const bodyObservationFor = (response: Response): BodyObservation => {
+      let observation = responseBodies.get(response)
+      if (!observation) {
+        observation = { observed: false }
+        responseBodies.set(response, observation)
+      }
+      return observation
+    }
+    const sourcePageUrl = () => location.href.split('#', 1)[0]
+    const pendingInspections = new Map<() => void, string>()
+    const cancelObsoleteInspections = () => {
+      const pageUrl = sourcePageUrl()
+      for (const [cancel, owner] of pendingInspections) {
+        if (owner !== pageUrl) cancel()
+      }
+    }
+    const pendingResources: Array<{ url: string; mimeType: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl: string; responseIdentity?: Record<string, string> }> = []
     type MediaOwnershipPurpose = 'mse' | 'download'
-    const pendingMse: Array<{ blobUrl: string; mediaUrl: string; purpose: MediaOwnershipPurpose }> = []
+    const pendingMse: Array<{ blobUrl: string; mediaUrl: string; purpose: MediaOwnershipPurpose; sourcePageUrl: string }> = []
     const mseReportTimes = new Map<string, { mediaUrl: string; purpose: MediaOwnershipPurpose; at: number }>()
     const MSE_REPORT_INTERVAL_MS = 300
-    const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>) => {
+    const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>, siteVideoId?: string, pageUrl = sourcePageUrl(), identity?: Record<string, string>) => {
+      if (pageUrl !== sourcePageUrl()) return
       if (typeof url !== 'string') return
       if (!shouldReportMediaResponse(url, mimeType)) return
-      const detail = { url, mimeType, inspection }
+      const detail = { url, mimeType, inspection, siteVideoId, sourcePageUrl: pageUrl, ...(identity ? { responseIdentity: identity } : {}) }
       const previous = pendingResources.findIndex(item => item.url === url)
       if (previous >= 0) {
-        detail.inspection ||= pendingResources[previous].inspection
+        if (pendingResources[previous].sourcePageUrl === pageUrl) {
+          detail.inspection ||= pendingResources[previous].inspection
+        }
         pendingResources.splice(previous, 1)
       }
       pendingResources.push(detail)
@@ -54,50 +78,65 @@ export default defineContentScript({
       const existing = pendingMse.findIndex(item => item.blobUrl === blobUrl
         && item.mediaUrl === mediaUrl && item.purpose === purpose)
       if (existing >= 0) pendingMse.splice(existing, 1)
-      pendingMse.push({ blobUrl, mediaUrl, purpose })
+      const detail = { blobUrl, mediaUrl, purpose, sourcePageUrl: sourcePageUrl() }
+      pendingMse.push(detail)
       if (pendingMse.length > 48) pendingMse.shift()
       window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', {
-        detail: JSON.stringify({ blobUrl, mediaUrl, purpose }),
+        detail: JSON.stringify(detail),
       }))
     }
-    const inspectManifestResponse = async (response: Response, mimeType: string) => {
-      if (!shouldInspectManifestResponse(response.url, mimeType)) return
+    const reportSiteManifests = (url: string, body: unknown, pageUrl: string) => {
+      if (pageUrl !== sourcePageUrl()) return
+      for (const candidate of siteManifestCandidates(url, pageUrl, body)) {
+        report(candidate.url, candidate.mimeType, undefined, candidate.videoId, pageUrl)
+      }
+    }
+    const inspectManifestResponse = async (response: Response, mimeType: string, pageUrl: string, observation: BodyObservation) => {
+      const siteResponse = shouldInspectSiteResponse(response.url, pageUrl, mimeType)
+      if (!siteResponse && !shouldInspectManifestResponse(response.url, mimeType)) return
       const body = response.body
       if (!body) return
       const reader = body.getReader()
       const chunks: Uint8Array[] = []
       let total = 0
       let complete = false
+      let cancelled = false
+      const cancel = () => {
+        if (cancelled) return
+        cancelled = true
+        pendingInspections.delete(cancel)
+        // 只释放插件的克隆分支；tee 的取消回执可能等到播放器读完，不能等待。
+        void reader.cancel().catch(() => undefined)
+      }
+      pendingInspections.set(cancel, pageUrl)
       try {
-        while (total <= 2 * 1024 * 1024) {
+        while (!cancelled && !observation.observed && pageUrl === sourcePageUrl() && total <= SITE_RESPONSE_LIMIT) {
           const next = await reader.read()
           if (next.done) { complete = true; break }
           if (!next.value) continue
           const value = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value)
           total += value.byteLength
-          if (total > 2 * 1024 * 1024) break
+          if (total > SITE_RESPONSE_LIMIT) break
           chunks.push(value)
         }
+        if (cancelled || !total || !complete || observation.observed || pageUrl !== sourcePageUrl()) return
+        const prefix = new TextDecoder().decode(
+          (() => {
+            const bytes = new Uint8Array(total)
+            let offset = 0
+            chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength })
+            return bytes
+          })(),
+        )
+        await inspectTextBody(response.url, prefix, pageUrl, responseIdentity(name => response.headers.get(name)), observation)
       } catch {
         return
       } finally {
-        // 克隆流的 cancel 可能等到原始响应被消费完；不能阻塞页面播放器。
-        void reader.cancel().catch(() => undefined)
+        cancel()
       }
-      if (!total || !complete) return
-      const prefix = new TextDecoder().decode(
-        (() => {
-          const bytes = new Uint8Array(total)
-          let offset = 0
-          chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength })
-          return bytes
-        })(),
-      )
-      const kind = detectManifestKind(prefix)
-      if (!kind) return
-      await reportManifest(response.url, kind, prefix)
     }
-    const reportManifest = async (url: string, kind: 'hls' | 'dash', text: string) => {
+    const reportManifest = async (url: string, kind: 'hls' | 'dash', text: string, pageUrl: string, identity?: Record<string, string>) => {
+      if (pageUrl !== sourcePageUrl()) return
       // 使用播放器成功取得的正文。禁止为子清单另发无页面凭据的 fetch。
       const fetcher = async (requested: string) => {
         if (requested !== url) throw new Error('Child manifest not observed yet')
@@ -106,7 +145,34 @@ export default defineContentScript({
       const inspection = kind === 'hls'
         ? await inspectHlsResource({ url }, fetcher)
         : await inspectDashResource({ url }, fetcher)
-      report(url, manifestMimeType(kind), inspection || undefined)
+      report(url, manifestMimeType(kind), inspection || undefined, undefined, pageUrl, identity)
+    }
+    const inspectTextBody = async (url: string, text: string, pageUrl: string, identity: Record<string, string>, observation?: BodyObservation) => {
+      if (observation?.observed || text.length > SITE_RESPONSE_LIMIT || pageUrl !== sourcePageUrl()) return
+      if (shouldInspectSiteResponse(url, pageUrl, identity['content-type'])) {
+        if (observation) observation.observed = true
+        reportSiteManifests(url, text, pageUrl)
+        return
+      }
+      const kind = detectManifestKind(text.slice(0, 256))
+      if (!kind) return
+      if (observation) observation.observed = true
+      await reportManifest(url, kind, text, pageUrl, identity)
+    }
+    const inspectReadBody = async (url: string, body: unknown, pageUrl: string, identity: Record<string, string>, observation?: BodyObservation) => {
+      if (observation?.observed || pageUrl !== sourcePageUrl() || !/^https?:\/\//i.test(url)) return
+      let bytes: Uint8Array | undefined
+      let blob: Blob | undefined
+      if (body instanceof ArrayBuffer) bytes = new Uint8Array(body)
+      else if (ArrayBuffer.isView(body)) bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+      else if (body instanceof Blob) blob = body
+      const size = bytes?.byteLength ?? blob?.size ?? 0
+      if (!size || size > SITE_RESPONSE_LIMIT) return
+      const prefix = bytes ? new TextDecoder().decode(bytes.subarray(0, 256)) : await blob!.slice(0, 256).text()
+      const kind = detectManifestKind(prefix)
+      if (!kind || pageUrl !== sourcePageUrl()) return
+      const text = bytes ? new TextDecoder().decode(bytes) : await blob!.text()
+      await inspectTextBody(url, text, pageUrl, identity, observation)
     }
     let blobSliceInstalled = false
     const installBlobSliceHook = () => {
@@ -196,8 +262,16 @@ export default defineContentScript({
       // Frozen URL.createObjectURL only disables blob: download correlation.
     }
     window.addEventListener('__hls_downloader_replay__', () => {
-      pendingResources.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
-      pendingMse.forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
+      pendingResources.filter(event => event.sourcePageUrl === sourcePageUrl())
+        .forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
+      pendingMse.filter(event => event.sourcePageUrl === sourcePageUrl())
+        .forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
+    })
+    for (const event of ['__hls_downloader_navigation__', 'popstate', 'hashchange']) {
+      window.addEventListener(event, cancelObsoleteInspections)
+    }
+    window.addEventListener('pagehide', () => {
+      for (const cancel of pendingInspections.keys()) cancel()
     })
     try {
       const notifyNavigation = () => queueMicrotask(() => {
@@ -359,37 +433,63 @@ export default defineContentScript({
     try {
       const responseText = Response.prototype.text
       Response.prototype.text = async function () {
+        const pageUrl = responsePages.get(this) || sourcePageUrl()
         const text = await responseText.call(this)
         // 不透明 URL/MIME 的清单仍会被播放器按文本读取；复用这次读取即可识别。
-        if (this.ok && /^https?:\/\//i.test(this.url) && text.length <= 2 * 1024 * 1024) {
-          const kind = detectManifestKind(text.slice(0, 256))
-          if (kind) void reportManifest(this.url, kind, text).catch(() => undefined)
+        if (isMediaResponseStatus(this.status) && /^https?:\/\//i.test(this.url)) {
+          void inspectTextBody(this.url, text, pageUrl, responseIdentity(name => this.headers.get(name)), bodyObservationFor(this)).catch(() => undefined)
         }
         return text
       }
+      const responseJson = Response.prototype.json
+      Response.prototype.json = async function () {
+        const pageUrl = responsePages.get(this) || sourcePageUrl()
+        const value = await responseJson.call(this)
+        try {
+          if (isMediaResponseStatus(this.status) && pageUrl === sourcePageUrl()
+            && shouldInspectSiteResponse(this.url, pageUrl, this.headers.get('content-type') || '')) {
+            const observation = bodyObservationFor(this)
+            if (!observation.observed) {
+              observation.observed = true
+              reportSiteManifests(this.url, value, pageUrl)
+            }
+          }
+        } catch {}
+        return value
+      }
       const responseArrayBuffer = Response.prototype.arrayBuffer
       Response.prototype.arrayBuffer = async function () {
+        const pageUrl = responsePages.get(this) || sourcePageUrl()
         const value = await responseArrayBuffer.call(this)
         rememberBufferSource(value, this.url)
+        if (isMediaResponseStatus(this.status)) void inspectReadBody(this.url, value, pageUrl, responseIdentity(name => this.headers.get(name)), bodyObservationFor(this)).catch(() => undefined)
         return value
       }
       const responseBlob = Response.prototype.blob
       Response.prototype.blob = async function () {
+        const pageUrl = responsePages.get(this) || sourcePageUrl()
         const value = await responseBlob.call(this)
         rememberBufferSource(value, this.url)
+        if (isMediaResponseStatus(this.status)) void inspectReadBody(this.url, value, pageUrl, responseIdentity(name => this.headers.get(name)), bodyObservationFor(this)).catch(() => undefined)
         return value
       }
       const responseBytes = Response.prototype.bytes
       if (typeof responseBytes === 'function') {
         Response.prototype.bytes = async function (this: Response) {
+          const pageUrl = responsePages.get(this) || sourcePageUrl()
           const value = await responseBytes.call(this)
           rememberBufferSource(value, this.url)
+          if (isMediaResponseStatus(this.status)) void inspectReadBody(this.url, value, pageUrl, responseIdentity(name => this.headers.get(name)), bodyObservationFor(this)).catch(() => undefined)
           return value
         }
       }
       const responseClone = Response.prototype.clone
       Response.prototype.clone = function () {
         const value = responseClone.call(this)
+        // Clones share one HTTP body observation; separate requests never do.
+        responseBodies.set(value, bodyObservationFor(this))
+        const pageUrl = responsePages.get(this)
+        if (pageUrl !== undefined) responsePages.set(value, pageUrl)
         if (value.body) streamSources.set(value.body, value.url || this.url)
         return value
       }
@@ -399,16 +499,20 @@ export default defineContentScript({
 
     const originalFetch = window.fetch
     window.fetch = async function (...args) {
+      const pageUrl = sourcePageUrl()
       const response = await originalFetch.apply(this, args)
+      responsePages.set(response, pageUrl)
+      if (pageUrl !== sourcePageUrl() || !isMediaResponseStatus(response.status)) return response
       const mimeType = response.headers.get('content-type') || ''
-      report(response.url, mimeType)
+      report(response.url, mimeType, undefined, undefined, pageUrl, responseIdentity(name => response.headers.get(name)))
       // Some live CDNs expose an extensionless URL and label the manifest as
       // octet-stream.  A bounded clone lets the isolated world classify it
       // immediately without buffering the real response or touching page
       // playback.  Ordinary MP4s are not cloned unless their URL has a
       // manifest-like hint.
-      if (response.ok && shouldInspectManifestResponse(response.url, mimeType)) {
-        try { void inspectManifestResponse(response.clone(), mimeType).catch(() => undefined) } catch {
+      if (response.ok && (shouldInspectManifestResponse(response.url, mimeType)
+        || shouldInspectSiteResponse(response.url, location.href, mimeType))) {
+        try { void inspectManifestResponse(response.clone(), mimeType, pageUrl, bodyObservationFor(response)).catch(() => undefined) } catch {
           // 锁定/不透明响应不能让页面已成功的 fetch 失败。
         }
       }
@@ -429,6 +533,7 @@ export default defineContentScript({
     // 为一次响应触发 N 次上报，N 个闭包还一直跟着这个对象。改为每个对象只注册一次，
     // 并用 WeakMap 记住最近一次请求的 URL 作为 responseURL 的回退。
     const xhrRequestedUrls = new WeakMap<XMLHttpRequest, string>()
+    const xhrPages = new WeakMap<XMLHttpRequest, string>()
     const instrumentedXhrs = new WeakSet<XMLHttpRequest>()
     try {
       const descriptor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'response')
@@ -455,19 +560,30 @@ export default defineContentScript({
       password?: string | null,
     ) {
       xhrRequestedUrls.set(this, String(url))
+      xhrPages.set(this, sourcePageUrl())
       if (!instrumentedXhrs.has(this)) {
         instrumentedXhrs.add(this)
         this.addEventListener('load', () => {
+          const pageUrl = xhrPages.get(this)
+          if (pageUrl !== sourcePageUrl() || !isMediaResponseStatus(this.status)) return
           const responseUrl = this.responseURL || xhrRequestedUrls.get(this) || ''
           const mimeType = this.getResponseHeader('content-type') || ''
-          report(responseUrl, mimeType)
+          const identity = responseIdentity(name => this.getResponseHeader(name))
+          report(responseUrl, mimeType, undefined, undefined, pageUrl, identity)
+          if (this.status >= 200 && this.status < 300
+            && shouldInspectSiteResponse(responseUrl, location.href, mimeType)) {
+            try {
+              if (this.responseType === 'json') reportSiteManifests(responseUrl, this.response, pageUrl)
+              else if (!this.responseType || this.responseType === 'text') reportSiteManifests(responseUrl, this.responseText, pageUrl)
+            } catch {}
+          }
           if (this.status >= 200 && this.status < 300
             && (!this.responseType || this.responseType === 'text')) {
             try {
               const text = String(this.responseText || '')
               const kind = detectManifestKind(text.slice(0, 128 * 1024))
               if (kind && text.length <= 2 * 1024 * 1024) {
-                void reportManifest(responseUrl, kind, text).catch(() => undefined)
+                void reportManifest(responseUrl, kind, text, pageUrl, identity).catch(() => undefined)
               }
             } catch {
               // Binary XHR responses expose no responseText; fetch/MSE hooks
@@ -477,6 +593,9 @@ export default defineContentScript({
           const response = this.response
           if (response && typeof response === 'object') {
             rememberBufferSource(response, responseUrl)
+            if (this.status >= 200 && this.status < 300) {
+              void inspectReadBody(responseUrl, response, pageUrl, identity).catch(() => undefined)
+            }
           }
         })
       }

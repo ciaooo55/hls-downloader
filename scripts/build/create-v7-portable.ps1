@@ -1,20 +1,21 @@
 param(
-    [string]$OutZip = ''
+    [string]$OutZip = '',
+    [string]$AppImage = ''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
 . (Join-Path $PSScriptRoot '..\V7ExtensionArchive.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $composeBuild = if ($env:HLS_COMPOSE_BUILD_DIR) { $env:HLS_COMPOSE_BUILD_DIR } else { Join-Path $repo '.tool-cache\build-cache\compose-build' }
-$appImage = Join-Path $composeBuild 'compose\binaries\main\app\HLSDownloader'
+$appImage = if ($AppImage) { (Resolve-Path -LiteralPath $AppImage).Path } else { Join-Path $composeBuild 'compose\binaries\main\app\HLSDownloader' }
 if (-not (Test-Path -LiteralPath (Join-Path $appImage 'HLSDownloader.exe'))) {
-    throw "Compose App-Image is missing: $appImage. Run gradlew.bat createDistributable first."
+    throw "Application image is missing: $appImage. Build the selected runtime first."
 }
 $provenancePath = Join-Path $appImage 'app\resources\BUILD-PROVENANCE.json'
 $featureParityPath = Join-Path $appImage 'app\resources\FEATURE-PARITY.json'
 if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $featureParityPath -PathType Leaf)) {
-    throw 'Compose App-Image is missing the v7 provenance or feature parity files.'
+    throw 'Application image is missing the v7 provenance or feature parity files.'
 }
 $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
@@ -31,7 +32,7 @@ if ([int]$provenance.schema -ne 1 -or
     [string]$provenance.feature_parity_path -ne 'config/release/feature-parity.json' -or
     [string]$provenance.feature_parity_sha256 -ne $canonicalFeatureHash -or
     $embeddedFeatureHash -ne $canonicalFeatureHash) {
-    throw 'Compose App-Image provenance is not bound to the current v7 source and feature parity.'
+    throw 'Application image provenance is not bound to the current v7 source and feature parity.'
 }
 $out = if ($OutZip) { [IO.Path]::GetFullPath($OutZip) } else { Join-Path $repo "artifacts\v7-productization\package\HLSDownloader-$productVersion-Windows-x64-Portable.zip" }
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
