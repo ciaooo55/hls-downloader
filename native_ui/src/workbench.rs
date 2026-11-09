@@ -18,9 +18,14 @@ use std::{
 };
 
 enum WorkbenchJob {
-    Request(CorePipeRequest),
+    Request(Box<CorePipeRequest>),
     Snapshot(u64),
     Batch(u64, Vec<CoreCommand>),
+}
+
+struct QueueSave {
+    request_id: u64,
+    assignment: Option<(Vec<String>, String)>,
 }
 
 pub struct Workbench {
@@ -41,7 +46,7 @@ pub struct Workbench {
     settings_save_id: Cell<Option<u64>>,
     queues: RefCell<Option<QueueEditor>>,
     pending_queues: Cell<bool>,
-    queue_save: RefCell<Option<(u64, Option<(Vec<String>, String)>)>>,
+    queue_save: RefCell<Option<QueueSave>>,
     tools: RefCell<Option<Rc<ResourceTools>>>,
     media: RefCell<Option<Rc<crate::media_controller::MediaController>>>,
     system: RefCell<Option<Rc<crate::system_tools::SystemTools>>>,
@@ -908,7 +913,7 @@ impl Workbench {
     }
 
     fn request(&self, request: CorePipeRequest) -> bool {
-        self.job(WorkbenchJob::Request(request))
+        self.job(WorkbenchJob::Request(Box::new(request)))
     }
     fn send(&self, command: CoreCommand) {
         self.request(CorePipeRequest::Command {
@@ -1373,14 +1378,14 @@ impl Workbench {
                     .queue_save
                     .borrow()
                     .as_ref()
-                    .is_some_and(|(id, _)| *id == request_id)
+                    .is_some_and(|save| save.request_id == request_id)
                 {
-                    let (_, assignment) = self.queue_save.borrow_mut().take().unwrap();
+                    let save = self.queue_save.borrow_mut().take().unwrap();
                     if let Some(editor) = self.queues.borrow().as_ref() {
                         editor.window.set_busy(false);
                         editor.window.set_status("队列已保存".into());
                     }
-                    if let Some((task_ids, queue_id)) = assignment {
+                    if let Some((task_ids, queue_id)) = save.assignment {
                         self.send(CoreCommand::AssignQueue { task_ids, queue_id });
                     }
                 }
@@ -1432,7 +1437,7 @@ impl Workbench {
                     .queue_save
                     .borrow()
                     .as_ref()
-                    .is_some_and(|(id, _)| Some(*id) == request_id)
+                    .is_some_and(|save| Some(save.request_id) == request_id)
                 {
                     self.queue_save.borrow_mut().take();
                     if let Some(editor) = self.queues.borrow().as_ref() {
@@ -1803,7 +1808,10 @@ impl Workbench {
                             request_id: id,
                             values,
                         }) {
-                            *this.queue_save.borrow_mut() = Some((id, assignment));
+                            *this.queue_save.borrow_mut() = Some(QueueSave {
+                                request_id: id,
+                                assignment,
+                            });
                             editor.window.set_busy(true);
                         }
                     }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 
-// web-ext 的 Android 调试工具间接使用 forge；无上游修复时验证锁定的本地补丁。
+// web-ext 的 Android 调试工具间接使用 forge；验证上游修复及依赖审计。
 const requireExtension = createRequire(new URL('../../extension/package.json', import.meta.url));
 const requireWebExt = createRequire(requireExtension.resolve('web-ext'));
 const requireAdb = createRequire(requireWebExt.resolve('@devicefarmer/adbkit'));
@@ -36,15 +36,36 @@ const nullAlgorithm = asn1.fromDer(encodedDigest([], true));
 nullAlgorithm.value[0].value[1].value = 'garbage';
 assert.throws(() => key.publicKey.verify(rawDigest, signed(asn1.toDer(nullAlgorithm).getBytes())), /DigestInfo/);
 
+// deepmerge 尚无已发布修复；验证锁定补丁保持数据属性，不调用 __proto__ setter。
+const requireLinter = createRequire(requireWebExt.resolve('addons-linter'));
+const merge = requireLinter('deepmerge');
+const poisoned = () => JSON.parse('{"__proto__":{"hlsPoisoned":true}}');
+for (const [target, source] of [
+  [poisoned(), {}],
+  [Object.create(null), poisoned()],
+  [{ nested: poisoned() }, {}],
+  [{ nested: poisoned() }, { nested: poisoned() }],
+]) {
+  const result = merge(target, source);
+  assert.equal(Object.getPrototypeOf(result), Object.prototype);
+  assert.equal(result.hlsPoisoned, undefined);
+  assert.equal(result.nested?.hlsPoisoned, undefined);
+  assert.equal({}.hlsPoisoned, undefined);
+}
+const symbol = Symbol('merge');
+assert.deepEqual(merge({ a: { x: 1 }, values: [1] }, { a: { y: 2 }, values: [2], [symbol]: 3 }),
+  { a: { x: 1, y: 2 }, values: [1, 2], [symbol]: 3 });
+
 const input = readFileSync(0, 'utf8').replace(/^\uFEFF/, '').trim();
 const audit = JSON.parse(input);
 assert.ok(audit.advisories && audit.metadata, 'Audit must return a complete advisory report');
-const remaining = Object.values(audit.advisories).filter(advisory => {
-  // 只认可本脚本刚刚验证过的、仅影响已补丁 forge 1.4.0 的上游告警。
-  return !(advisory.module_name === 'node-forge' &&
-    advisory.github_advisory_id === 'GHSA-86w9-cpqp-85rv' &&
-    advisory.findings.length > 0 && advisory.findings.every(finding => finding.version === '1.4.0'));
-});
+const remaining = Object.values(audit.advisories).filter(advisory => !(
+  advisory.module_name === 'deepmerge' &&
+  advisory.github_advisory_id === 'GHSA-gcqx-w48m-w2h4' &&
+  advisory.findings.length > 0 && advisory.findings.every(finding => finding.version === '4.3.1')
+));
 assert.equal(remaining.length, 0, JSON.stringify(remaining, null, 2));
 console.log(JSON.stringify({ passed: true, valid_signatures: 2, malformed_signatures_rejected: 4,
-  locally_patched_advisory: 'GHSA-86w9-cpqp-85rv', unaddressed_advisories: remaining.length }));
+  forge_version: requireAdb('node-forge/package.json').version,
+  locally_patched_advisory: 'GHSA-gcqx-w48m-w2h4', prototype_poisoning_cases: 4,
+  unaddressed_advisories: remaining.length }));

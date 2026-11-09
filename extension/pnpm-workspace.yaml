@@ -6,7 +6,10 @@ overrides:
   image-size: 2.0.4
   adm-zip: 0.6.1
   brace-expansion@1: 1.1.21
-  fast-uri@3: 3.1.8
+  fast-uri@3: 3.1.9
+  node-forge@1: 1.4.1
+  vite@8: 8.1.6
+  undici@7: 7.30.1
   source-map-js: 1.2.2
   shell-quote: 1.12.0
 onlyBuiltDependencies:
@@ -18,4 +21,4 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - image-size@2.0.4
 patchedDependencies:
-  node-forge@1.4.0: patches/node-forge@1.4.0.patch
+  deepmerge@4.3.1: patches/deepmerge@4.3.1.patch

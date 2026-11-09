@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 /**
  * 下载分类表的**跨语言**守卫。
  *
- * 这张表在 Rust（`native_shell/src/media_ext.rs::MEDIA_FOLDER_EXTENSIONS` 等）和
+ * 这张表在 Rust（`crates/client/src/media_ext.rs::MEDIA_FOLDER_EXTENSIONS` 等）和
  * Kotlin（`Main.kt::downloadCategory`）各有一份。历史上它们分叉过：Kotlin 那份漏了
  * ts / m4v / m4a / jpg / png / gif / webp，多了 Core 不认识的 apk / dmg / pkg，
  * 又少了 iso，还没有 hls/dash/live 的媒体短路。症状是同一个 .ts 文件在接管弹窗里
@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
  */
 class CategoryParityTest {
     private fun mediaExtSource(): String =
-        File("../native_shell/src/media_ext.rs").readText()
+        File("../crates/client/src/media_ext.rs").readText()
 
     private fun categorySource(): String =
         mediaExtSource()

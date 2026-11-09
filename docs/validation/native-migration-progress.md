@@ -284,3 +284,10 @@
 - 最终静态检查 `clippy-verified.log`：整个 workspace 的全部目标通过，保留项目既有结构性豁免（large_enum_variant、too_many_arguments、type_complexity、UI while_let_loop），未新增告警豁免。全量测试后仅整理等价 match 条件、测试初始化及模块位置，并让 HLS 测试服务端读取完整请求头，防止连接短读干扰断言；这些收尾不代表重新执行过整套工作区测试。新增文件暂存后检查并清理两个末尾空行，暂存差异检查通过。Python IPC 七项用例和 17 个修改过的 Python/YAML 文件语法检查通过。
 
 - 收尾后 `client-strict-clippy.log` 对协议、共享客户端和轻客户端全部目标执行无豁免的 `-D warnings` 检查，通过；`client-final-tests.log` 为 48 通过、1 个 UAC 用例忽略；`hls-init-map-final.log` 的初始化段失败不污染缓存用例通过。没有重复整套 UI/工作区回归，生产业务变更此前已完成工作区回归。
+
+### 2026-11-10 发布前 CI 与安全复核
+
+- 首次同步提交 `88a6ecc5` 后，GitHub v7 CI 实际发现两处原生工作台 Clippy 问题及 Compose 分类对照测试的旧路径。工作请求变体改用 Box，缩小有界通道项；队列保存状态使用具名结构，保留收到持久化回执后才指派任务的顺序。分类对照改读 `crates/client/src/media_ext.rs`。最终检查结果以下次提交的 CI 和本地日志为准。
+- Rust Security 新报 SQLite 与 Markdown 解析公告，已升级 rusqlite 0.41.1 / libsqlite3-sys 0.39.1 / pulldown-cmark 0.13.6；完整工作区回归在 `workspace-security-final.log`，尚在运行时不计通过。
+- 扩展构建链升级 vitest 5.0.3、fast-uri 3.1.9、node-forge 1.4.1、vite 8.1.6、undici 7.30.1。node-forge 原本地补丁由上游修复替代；deepmerge 4.3.1 对应 GHSA-gcqx-w48m-w2h4 尚无已发布修复，锁定补丁覆盖源码、CJS 与 UMD 分发，将结果属性写入改成数据属性，避免调用原型 setter。未放宽其他依赖公告门禁。
+- `extension-security-final.log`：实际 web-ext 依赖入口的两种合法签名通过、四种畸形签名拒绝、四组原型污染及正常合并回归通过，其他未处理公告为零。`extension-security-tests.log`：升级后 54 文件、592 项测试及 TypeScript 检查通过。

@@ -1,5 +1,5 @@
 {
-  "source_baseline": "412f1f984b645375f7a8e0acb8585113e2a6cc9e",
+  "source_baseline": "88a6ecc54d49262c1d0c0d51b2d1139bd5f536a7",
   "status": "native_candidate_in_progress",
   "historical_evidence": {
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
@@ -229,7 +229,8 @@
       "files": 54,
       "passed": 592,
       "typecheck": "passed",
-      "log": "artifacts/release-native-20261110/extension-tests.log"
+      "log": "artifacts/release-native-20261110/extension-security-tests.log",
+      "toolchain": "vitest 5.0.3; pnpm 11.7.0"
     },
     "installer_structure": {
       "status": "passed",
@@ -276,6 +277,17 @@
       "passed": 1,
       "failed": 0,
       "log": "artifacts/release-native-20261110/hls-init-map-final.log"
+    },
+    "security_update": {
+      "rust_dependencies": [
+        "rusqlite 0.41.1",
+        "libsqlite3-sys 0.39.1",
+        "pulldown-cmark 0.13.6"
+      ],
+      "workspace_revalidation": "running; workspace-security-final.log",
+      "extension_regression": "passed; extension-security-final.log",
+      "extension_advisories": "GHSA-gcqx-w48m-w2h4 locally patched and runtime-verified; no other unresolved advisories",
+      "remote_ci": "first push exposed presenter Clippy, Compose old source path and new dependency advisories; fixes require new exact-SHA CI"
     }
   }
 }
