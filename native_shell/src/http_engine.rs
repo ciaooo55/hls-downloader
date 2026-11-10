@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::net::TcpStream;
+use std::net::{Ipv6Addr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -2719,9 +2719,20 @@ pub(crate) fn http_origin(url: &str) -> Option<String> {
     Some(format!(
         "{}://{}:{}",
         if parsed.https { "https" } else { "http" },
-        parsed.host.to_ascii_lowercase(),
+        uri_host(&parsed.host).to_ascii_lowercase(),
         parsed.port
     ))
+}
+
+pub(crate) fn request_origin(url: &str) -> String {
+    let Ok(parsed) = parse_http_url(url) else {
+        return String::new();
+    };
+    format!(
+        "{}://{}",
+        if parsed.https { "https" } else { "http" },
+        host_header(&parsed).to_ascii_lowercase()
+    )
 }
 
 pub(crate) struct MetadataResponse {
@@ -3200,17 +3211,50 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
         .min()
         .unwrap_or(rest.len());
     let (hostport, request_target) = rest.split_at(authority_end);
-    let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
-        if host.starts_with('[') {
-            return Err(EngineError::Failed("ipv6 url unsupported".into()));
+    // Socket hostnames are bare; HTTP authorities/WinHTTP retain brackets.
+    // Canonicalize literals so equivalent IPv6 spellings share an origin.
+    let (host, port) = if let Some(literal) = hostport.strip_prefix('[') {
+        let (address, suffix) = literal
+            .split_once(']')
+            .ok_or_else(|| EngineError::Failed("invalid IPv6 host".into()))?;
+        let host = ipv6_host(
+            address
+                .parse::<Ipv6Addr>()
+                .map_err(|_| EngineError::Failed("invalid IPv6 host".into()))?,
+        );
+        let port = if suffix.is_empty() {
+            None
+        } else {
+            Some(
+                suffix
+                    .strip_prefix(':')
+                    .ok_or_else(|| EngineError::Failed("invalid IPv6 authority".into()))?,
+            )
+        };
+        (host, port)
+    } else if let Some((host, port)) = hostport.rsplit_once(':') {
+        if host.contains([':', '[', ']']) {
+            return Err(EngineError::Failed("invalid url host".into()));
         }
-        (
-            host.to_string(),
-            port.parse::<u16>()
-                .map_err(|_| EngineError::Failed("invalid port".into()))?,
-        )
+        (host.to_string(), Some(port))
     } else {
-        (hostport.to_string(), if https { 443 } else { 80 })
+        if hostport.contains(['[', ']']) {
+            return Err(EngineError::Failed("invalid url host".into()));
+        }
+        (hostport.to_string(), None)
+    };
+    let port = match port {
+        Some(port) if !port.is_empty() && port.bytes().all(|ch| ch.is_ascii_digit()) => port
+            .parse::<u16>()
+            .map_err(|_| EngineError::Failed("invalid port".into()))?,
+        Some(_) => return Err(EngineError::Failed("invalid port".into())),
+        None => {
+            if https {
+                443
+            } else {
+                80
+            }
+        }
     };
     if host.is_empty()
         || host
@@ -3242,9 +3286,27 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
 fn host_header(parsed: &ParsedUrl) -> String {
     let default_port = if parsed.https { 443 } else { 80 };
     if parsed.port == default_port {
-        parsed.host.clone()
+        uri_host(&parsed.host)
     } else {
-        format!("{}:{}", parsed.host, parsed.port)
+        format!("{}:{}", uri_host(&parsed.host), parsed.port)
+    }
+}
+
+fn uri_host(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
+}
+
+pub(crate) fn ipv6_host(address: Ipv6Addr) -> String {
+    // Browser URL origins serialize mapped addresses as hexadecimal pieces.
+    if address.to_ipv4_mapped().is_some() {
+        let segments = address.segments();
+        format!("::ffff:{:x}:{:x}", segments[6], segments[7])
+    } else {
+        address.to_string()
     }
 }
 
@@ -3946,7 +4008,12 @@ mod winhttp {
             let session = cached_session(proxy)?;
             let connect_key = super::origin_connect_key(proxy, &parsed.host, parsed.port);
             let connect = take_connect(&connect_key).unwrap_or_else(|| {
-                WinHttpConnect(session, wide(&parsed.host).as_ptr(), parsed.port, 0)
+                WinHttpConnect(
+                    session,
+                    wide(&super::uri_host(&parsed.host)).as_ptr(),
+                    parsed.port,
+                    0,
+                )
             });
             if connect.is_null() {
                 return Err(EngineError::Failed(format!(
@@ -5481,6 +5548,125 @@ mod tests {
         assert!(require_content_range_start(None, 0).is_err());
         for header in ["byte界 0-7/8", "🙂🙂", "byte� 0-7/8"] {
             assert_eq!(parse_content_range(header), None);
+        }
+    }
+
+    #[test]
+    fn ipv6_authorities_preserve_host_redirect_and_origin_boundaries() {
+        for (url, host, authority) in [
+            ("http://[::1]?key=1#ignored", "::1", "[::1]"),
+            (
+                "https://[2001:DB8::1]:443/a",
+                "2001:db8::1",
+                "[2001:db8::1]",
+            ),
+            (
+                "http://[::ffff:192.0.2.1]:8080/a",
+                "::ffff:c000:201",
+                "[::ffff:c000:201]:8080",
+            ),
+        ] {
+            let parsed = parse_http_url(url).unwrap();
+            assert_eq!(parsed.host, host);
+            assert_eq!(host_header(&parsed), authority);
+        }
+        assert_eq!(
+            parse_http_url("http://[::1]?key=1#ignored").unwrap().path,
+            "/?key=1"
+        );
+        let current = parse_http_url("http://[::1]:8080/dir/file").unwrap();
+        assert_eq!(
+            resolve_location(&current, "next"),
+            "http://[::1]:8080/dir/next"
+        );
+        assert_eq!(
+            resolve_location(&current, "/file"),
+            "http://[::1]:8080/file"
+        );
+        assert_eq!(
+            http_origin("http://[0:0:0:0:0:0:0:1]/"),
+            http_origin("http://[::1]:80/x")
+        );
+        assert_ne!(
+            http_origin("http://[::1]/"),
+            http_origin("http://[::1]:81/")
+        );
+        assert_eq!(
+            request_origin("HTTPS://[2001:DB8::1]:443/a"),
+            "https://[2001:db8::1]"
+        );
+        assert_eq!(request_origin("http://[::1]:8080/a"), "http://[::1]:8080");
+        for url in [
+            "http://::1/",
+            "http://[::1/",
+            "http://[::1]extra/",
+            "http://[::1]:/",
+            "http://[::1]:+80/",
+            "http://[::1]:65536/",
+            "http://[localhost]/",
+            "http://[::1]]/",
+            "http://host]/",
+            "http://[fe80::1%25eth0]/",
+        ] {
+            assert!(parse_http_url(url).is_err(), "{url}");
+            assert!(request_origin(url).is_empty(), "{url}");
+        }
+    }
+
+    #[test]
+    fn ipv6_loopback_range_redirect_keeps_credentials_on_same_origin() {
+        let mut transports = vec!["raw"];
+        #[cfg(windows)]
+        transports.push("winhttp");
+        for transport in transports {
+            let listener = TcpListener::bind("[::1]:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                for index in 0..2 {
+                    let (stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).unwrap() > 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        head.push_str(&line);
+                    }
+                    let head = head.to_ascii_lowercase();
+                    assert!(head.contains(&format!("host: {address}\r\n")), "{head}");
+                    assert!(head.contains("range: bytes=2-5\r\n"), "{head}");
+                    assert!(head.contains("cookie: session=ipv6\r\n"), "{head}");
+                    assert!(head.contains("authorization: bearer ipv6\r\n"), "{head}");
+                    let response = if index == 0 {
+                        "HTTP/1.1 307 Redirect\r\nLocation: /file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    } else {
+                        assert!(head.starts_with("get /file http/1.1\r\n"), "{head}");
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/8\r\nContent-Length: 4\r\nConnection: close\r\n\r\ncdef"
+                    };
+                    reader.get_mut().write_all(response.as_bytes()).unwrap();
+                }
+            });
+            let mut job = post_test_job(format!("http://{address}/start"), PathBuf::new());
+            job.method = "GET".into();
+            job.headers = HashMap::from([
+                ("Cookie".into(), "session=ipv6".into()),
+                ("Authorization".into(), "Bearer ipv6".into()),
+            ]);
+            if transport == "winhttp" {
+                job.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into();
+            }
+            let mut fetched = fetch_follow(&job, Some("bytes=2-5")).unwrap();
+            assert_eq!(fetched.status, 206, "{transport}");
+            assert_eq!(fetched.content_range.as_deref(), Some("bytes 2-5/8"));
+            let mut bytes = Vec::new();
+            fetched.body.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"cdef");
+            server.join().unwrap();
         }
     }
 

@@ -1,4 +1,5 @@
 //! Credential replay scopes owned by the Core.
+pub(crate) use crate::http_engine::request_origin;
 pub use hls_client::CredentialVault;
 
 thread_local! {
@@ -216,7 +217,11 @@ fn replay_cookie_header(cookies: &[serde_json::Value], request_url: &str) -> Str
     let Some((scheme, authority)) = origin.split_once("://") else {
         return String::new();
     };
-    let host = authority.split(':').next().unwrap_or("");
+    let host = if let Some(literal) = authority.strip_prefix('[') {
+        literal.split_once(']').map(|(host, _)| host).unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
     let path = replay_request_path(request_url);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -226,6 +231,18 @@ fn replay_cookie_header(cookies: &[serde_json::Value], request_url: &str) -> Str
     for cookie in cookies.iter().take(256) {
         let text = |key| cookie.get(key).and_then(|v| v.as_str()).unwrap_or("");
         let domain = text("domain").trim_start_matches('.').to_ascii_lowercase();
+        let domain = if domain.contains(':') {
+            let literal = domain
+                .strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .unwrap_or(&domain);
+            let Ok(address) = literal.parse::<std::net::Ipv6Addr>() else {
+                continue;
+            };
+            crate::http_engine::ipv6_host(address)
+        } else {
+            domain
+        };
         let cookie_path = text("path");
         let name = text("name");
         let value = text("value");
@@ -268,37 +285,6 @@ fn replay_request_path(url: &str) -> &str {
         return "/";
     }
     target.split(['?', '#']).next().unwrap_or("/")
-}
-
-pub(crate) fn request_origin(url: &str) -> String {
-    let url = url.trim();
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return String::new();
-    };
-    let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
-        return String::new();
-    }
-    let hostport = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if hostport.is_empty() {
-        return String::new();
-    }
-    let hostport = if scheme == "https" {
-        hostport
-            .strip_suffix(":443")
-            .unwrap_or(&hostport)
-            .to_string()
-    } else {
-        hostport
-            .strip_suffix(":80")
-            .unwrap_or(&hostport)
-            .to_string()
-    };
-    format!("{scheme}://{hostport}")
 }
 
 fn insert_header(
@@ -617,6 +603,48 @@ mod tests {
             "https://cdn.test/video.bin",
         );
         assert!(!headers.contains_key("Cookie"));
+    }
+
+    #[test]
+    fn ipv6_replay_keeps_literal_cookies_and_rejects_other_origins() {
+        let replay = bind_replay_source_url(
+            &serde_json::json!({"request_headers":{"Authorization":"Bearer ipv6"},
+                "request_contexts":{"https://[::1]":{"cookies":[
+                    {"name":"one","value":"1","domain":"[0:0:0:0:0:0:0:1]","path":"/","hostOnly":true,"secure":true},
+                    {"name":"two","value":"2","domain":"::1","path":"/","hostOnly":true},
+                    {"name":"wrong","value":"3","domain":"[::2]","path":"/","hostOnly":false}
+                ]}}}).to_string(),
+            "https://[0:0:0:0:0:0:0:1]:443/start",
+        );
+        let mut headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(&mut headers, &replay, "https://[::1]/file");
+        assert_eq!(
+            headers.get("Cookie").map(String::as_str),
+            Some("one=1; two=2")
+        );
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer ipv6")
+        );
+        for url in [
+            "https://[::2]/file",
+            "https://[::1]:444/file",
+            "http://[::1]/file",
+        ] {
+            let mut headers = std::collections::BTreeMap::new();
+            apply_replay_json_for(&mut headers, &replay, url);
+            assert!(!headers.contains_key("Cookie"), "{url}");
+            assert!(!headers.contains_key("Authorization"), "{url}");
+        }
+        let replay = serde_json::json!({
+            "_task_url":"https://[::ffff:192.0.2.1]/start",
+            "request_contexts":{"https://[::ffff:c000:201]":{"cookies":[
+                {"name":"mapped","value":"1","domain":"[::ffff:192.0.2.1]","path":"/","hostOnly":true}
+            ]}}
+        }).to_string();
+        let mut headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(&mut headers, &replay, "https://[::ffff:c000:201]/file");
+        assert_eq!(headers.get("Cookie").map(String::as_str), Some("mapped=1"));
     }
 
     #[test]

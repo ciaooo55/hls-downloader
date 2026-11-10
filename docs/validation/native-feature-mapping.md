@@ -29,7 +29,7 @@
 | browser.takeover_and_recovery | Presenter、`SystemWindow` 浏览器页 | PresentHandoff、AcceptHandoff、RejectHandoff、LoadHandoffs | 原 ID 恢复合同保留；新 UI 和双浏览器断连/重启组合待完成 |
 | browser.media_push_device_selection | `cast_tools.rs` 推送裁决 | RequestMediaPush、ResolveMediaPush、LoadHandoffs | 真实 Core 恢复原 ID、GUI 选择并发送、原 ID 持久完成通过；浏览器/Host 断连矩阵待验收，实机排除 |
 | browser.hot_confirmation_process | `hot_main.rs`、激活管道 | PresentHandoff | 确认、进度、完成与单实例已迁；同包带凭据交接呈现时延未验收 |
-| browser.online_subtitle_translation | 扩展字幕、`ServiceSettingsWindow`、`player_subtitles.rs` | configuration/configure/start/audio/reset/poll/stop | 本地配置与 DPAPI 保存已接；原生主窗/PiP 字幕 HUD、按需工作线程、Core 自有字节有界解码、seek/换片/音轨代数失效已实现，工作区 UI 28 项与真实 FFmpeg/Core 私有挂载字幕回归通过。未实现暂停等待字幕；真实云质量排除 |
+| browser.online_subtitle_translation | 扩展字幕、`ServiceSettingsWindow`、`player_subtitles.rs` | configuration/configure/start/audio/reset/poll/stop | 本地配置、DPAPI 保存、主窗/PiP 字幕 HUD、按需工作线程与 Core 自有字节有界解码已接。2026-11-11 补齐现有预取模式的字幕不足自动暂停、准备完成恢复、用户暂停优先、偏移与速度对应的时间轴、禁用/错误退出及旧会话失效；本轮源码验证见 `native-migration-progress.md`。rc2 包不包含此修复；新包 GUI 和真实云质量未计通过 |
 | accessibility.automation | Slint accessibility、工作台控件与列表标签 | 无 | 已实际读取 UIA 控件树并完成中文搜索和部分操作；输入法组合输入、完整 Tab/读屏未验收 |
 | performance.release_thresholds | Release 构建和性能脚本 | 完整组合 | 2026-11-10 新 Core 的两次 256 MiB 本机下载为 32.58/41.13 MiB/s，哈希正确、发布后额外读取 0，峰值工作集 27.09/27.21 MiB；修正检查点等锁/同步误触发降并发，保留 8 MiB 持久化。60 秒空闲及 18,000 次空任务快照 IPC 通过，p95 0.203 ms、错误 0；四 Host 并发只启动一个 Core，最慢首次回执 968.29 ms。低并发候选的两次性能失败均保留。完整包、千任务及长期运行尚未验收；无同条件 IDM 对照 |
 | package.install_upgrade_rollback | 原生 launcher、WiX、Portable、Updater | 既有更新合同 | 已增加原生 EXE/MSI/Portable 构建路径，默认不使用 Compose/JRE；轻量 WiX 结构夹具通过，支持已公开 Compose 7.0.3 自定义目录迁移。真实安装/升级/失败回滚尚未验收，P6/P7 未完成 |
@@ -38,5 +38,6 @@
 | free.zip_preview | `ResourceToolsWindow` ZIP 模式 | PreviewZip | 2026-11-09 本地路径经原生 UI 输入并读取，正确显示两项归档内容；远程 ZIP 经真实 Core API 读取通过。远程 GUI 和系统选择器选中 ZIP 仍未验收：owned 弹窗自动化输入/缓存异常，未用 Core 结果替代 GUI 通过 |
 | http.active_tail_split | 现有实验开关、Core RangeScheduler | 调度内部 | 保持默认关闭；新候选正确性、崩溃恢复及收益比较未完成 |
 | http.coordinated_range_stop | `http_engine.rs` 范围 worker、正文循环及 TCP/WinHTTP/curl 等待 | 调度内部，无协议变化 | 2026-11-09 补齐共享停止到传输层的传播，保留暂停原因与首个错误；单流接收原 200 响应时解除范围停止绑定。2026-11-10 最终 HTTP 83 项通过、8 项忽略，覆盖本机 TCP/WinHTTP 响应头、正文、chunked 停滞及原响应复用。curl 新停止分支未运行专用组件回归；DNS/连接阶段仍有底层超时边界。最新成品验证见实施记录 |
+| http.ipv6_download | `http_engine.rs`、`credentials.rs` | 既有 HTTP 下载与媒体请求 | 2026-11-11 支持方括号 IPv6 字面地址，统一 Host、重定向、连接复用与来源判断；Cookie 域匹配支持压缩/完整/IPv4 映射写法并保持跨源隔离。HTTP 86 项、凭据 17 项回归通过，包含本机 IPv6 TCP/WinHTTP 的真实 Range 与重定向。不支持 zone identifier；未将本机 HTTP 测试记为公网 IPv6 HTTPS 验收。rc2 包不包含此修复 |
 
 每次完成验证应在 `native-migration-progress.md` 登记实际日志、二进制身份和范围，再更新本表。模拟 Core、真实 Core、本地媒体和真实浏览器交接的证据不能互相替代。

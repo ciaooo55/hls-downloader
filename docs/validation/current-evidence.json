@@ -1,5 +1,5 @@
 {
-  "source_baseline": "88a6ecc54d49262c1d0c0d51b2d1139bd5f536a7",
+  "source_baseline": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
   "status": "native_candidate_in_progress",
   "historical_evidence": {
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
@@ -7,6 +7,45 @@
   },
   "scope": "7.0.4 原生候选；本表只列当前验证边界。历史 Compose 记录不作为原生发布门禁。最终包源码身份以 ARTIFACT-MANIFEST.json 为准。",
   "test_matrix": "artifacts/release-native-20261110/workspace-results.json",
+  "source_iteration_20261111": {
+    "base_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
+    "scope": "IPv6 地址、来源与 Cookie 处理；原生播放器预取字幕不足时的暂停与恢复。此记录独立于已发布 rc2。",
+    "report": "artifacts/regression-20261111/results.json",
+    "core_tests": { "passed": 654, "failed": 0, "ignored": 13 },
+    "core_test_partition": [
+      "http.log: 86 passed, 8 ignored",
+      "credentials.log: 17 passed",
+      "core-callers.log: 551 passed, 5 ignored; skipped the two preceding modules"
+    ],
+    "presenter_tests": { "passed": 36, "failed": 0, "ignored": 0 },
+    "strict_clippy": "Core and presenter --all-targets passed, using only existing lint allowances; core-clippy.log and ui-clippy.log",
+    "execution_scope": "命令行测试、独立本机网络与字幕管道夹具；没有操作个人桌面或浏览器。真实云端字幕质量、完整 GUI/DPI 与长期运行未计通过。"
+  },
+  "published_candidate": {
+    "tag": "v7.0.4-rc2",
+    "source_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
+    "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4-rc2",
+    "release_ready": false,
+    "candidate_validation_passed": true,
+    "evidence": "artifacts/release-native-20261110/delivery-eb2364eb/VALIDATION.json",
+    "publication": "artifacts/release-native-20261110/delivery-eb2364eb/PUBLICATION.json",
+    "scope": "已发布预览包的限定验收；不包含此后的源码修复，也不代表完整 GUI/DPI/可访问性或长期稳定性验收。",
+    "checks": {
+      "core": "651 passed, 13 ignored",
+      "msi": "25 upgrade checks; 23 failure rollback checks",
+      "browser_media": "Edge and Firefox: 24 scenarios each",
+      "browser_credentials_recovery": "Edge: 50 checks; Firefox: 56 checks",
+      "browser_handoff": "Edge and Firefox: 34 checks each",
+      "published_assets": "14 assets; remote digests match received local bytes"
+    },
+    "workflows": [
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494301",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494285",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494480",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847523594",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/42853589062"
+    ]
+  },
   "features": [
     {
       "id": "architecture.single_core",
@@ -214,6 +253,7 @@
     }
   ],
   "native_candidate": {
+    "evidence_scope": "rc2 之前的源码与功能记录；旧 pending 项不能覆盖 published_candidate 中绑定成品的已完成验收。",
     "product_version": "7.0.4",
     "ui_runtime": "native",
     "release_ready": false,

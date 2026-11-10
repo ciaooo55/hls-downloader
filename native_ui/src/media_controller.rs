@@ -311,6 +311,7 @@ impl MediaController {
             }
             value => {
                 if self.active.get() {
+                    self.subtitles.borrow().user_control(value);
                     self.command(value.into());
                 }
             }
@@ -494,6 +495,7 @@ impl MediaController {
                 duration: *duration_seconds,
                 paused: *paused,
                 buffering: *buffering || self.pending_subtitle_reset.get().is_some(),
+                speed: *speed,
             });
         let audio_changed = tracks
             .iter()
@@ -590,6 +592,13 @@ impl MediaController {
                 .set(commands.iter().any(|c| c == "player_embed_generation"));
             self.controls_supported
                 .set(commands.iter().any(|c| c == "player_control_generation"));
+        }
+        if let Some(id) = id {
+            let success = matches!(response, CorePipeResponse::Events { events, .. }
+                if !events.iter().any(|event| matches!(event.event, CoreEvent::Error { .. })));
+            if self.subtitles.borrow().playback_response(id, success) && !success {
+                self.notice("字幕播放控制失败，请手动控制播放");
+            }
         }
         if self.pending_subtitle_reset.get().is_some() && self.pending_subtitle_reset.get() == id {
             self.pending_subtitle_reset.set(None);
@@ -714,6 +723,21 @@ impl MediaController {
                 0.0
             };
         let (caption, notice) = subtitles.display(position);
+        if self.controls_supported.get() {
+            if let Some(paused) = subtitles.playback_action(position) {
+                let id = (self.id)();
+                subtitles.playback_command_sent(id, paused);
+                let sent = (self.request)(CorePipeRequest::PlayerControl {
+                    request_id: id,
+                    session_generation: self.session.get(),
+                    action: if paused { "pause" } else { "resume" }.into(),
+                });
+                if !sent {
+                    subtitles.playback_response(id, false);
+                    self.notice("字幕播放控制未发送，请手动控制播放");
+                }
+            }
+        }
         view.translating = subtitles.enabled();
         view.caption = caption.into();
         view.translation_notice = notice.into();
