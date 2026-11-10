@@ -118,15 +118,36 @@ function Start-InstalledApplication([string]$Root) {
         }) | Select-Object -First 1
     } while ((-not $engine -or -not $presenter) -and (Get-Date) -lt $deadline)
     if (-not $engine -or -not $presenter) {
-        Add-Step 'application-startup' $false ([ordered]@{
+        $diagnostic = [ordered]@{
             install_dir = $Root
             launcher_pid = [int]$launcher.Id
             engine_found = [bool]$engine
             presenter_found = [bool]$presenter
             observed_processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -like 'HLSDownloader*' } |
-                Select-Object Name, ProcessId, ParentProcessId, SessionId, ExecutablePath)
-        })
+                Select-Object Name, ProcessId, ParentProcessId, SessionId, ExecutablePath, CommandLine)
+            installed_components = [ordered]@{}
+        }
+        foreach ($property in $manifest.components.PSObject.Properties) {
+            $path = Join-Path $Root $property.Name
+            $diagnostic.installed_components[$property.Name] = if (Test-Path -LiteralPath $path -PathType Leaf) {
+                (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            } else { 'missing' }
+        }
+        if (-not $engine) {
+            # Diagnostic only: preserve the failed Launcher -> Presenter -> Core
+            # verdict, then capture the installed Core's own startup error.
+            $stderr = Join-Path $artifacts "$($Scenario.ToLowerInvariant())-startup-core.stderr.log"
+            $stdout = Join-Path $artifacts "$($Scenario.ToLowerInvariant())-startup-core.stdout.log"
+            $probe = Start-Process -FilePath (Join-Path $Root 'app\resources\HLSDownloaderEngine.exe') -WorkingDirectory (Join-Path $Root 'app\resources') -WindowStyle Hidden -RedirectStandardError $stderr -RedirectStandardOutput $stdout -PassThru
+            $exited = $probe.WaitForExit(3000)
+            $diagnostic.direct_core_probe = [ordered]@{ exited = $exited; exit_code = $(if ($exited) { $probe.ExitCode } else { $null }) }
+            if (-not $exited) { Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue }
+            $diagnostic.direct_core_probe.stderr = @(Get-Content -LiteralPath $stderr -Tail 30 -ErrorAction SilentlyContinue)
+        }
+        $coreLog = Join-Path $env:HLS_V7_DATA_DIR 'logs\core.jsonl'
+        $diagnostic.core_runtime_log_tail = @(Get-Content -LiteralPath $coreLog -Tail 20 -ErrorAction SilentlyContinue)
+        Add-Step 'application-startup' $false $diagnostic
     }
     return [ordered]@{ launcher_pid = [int]$launcher.Id; engine_pid = [int]$engine.ProcessId; presenter_pid = [int]$presenter.ProcessId }
 }
