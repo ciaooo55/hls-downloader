@@ -1,0 +1,73 @@
+name: v7 Candidate Installer Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Existing candidate package run whose exact MSI bytes are tested
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  installers:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare checkpoint validation
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check psutil==7.2.2
+      - name: Receive and bind candidate MSI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Candidate run ID must be numeric.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/package-v7-candidate.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Not a candidate package run in this repository.' }
+          $root = 'artifacts/candidate-installer-regression'
+          gh run download $env:CANDIDATE_RUN_ID --name "HLSDownloader-v7-candidate-$($run.head_sha)" --dir "$root/candidate"
+          $manifestPath = "$root/candidate/ARTIFACT-MANIFEST.json"
+          $manifest = Get-Content $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+          if ($manifest.source_commit -ne $run.head_sha) { throw 'Candidate source identity mismatch.' }
+          $msi = Join-Path "$root/candidate" $manifest.artifacts.msi.path
+          if ((Get-FileHash $msi -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.artifacts.msi.sha256) { throw 'MSI hash mismatch.' }
+          [ordered]@{
+            validation_source_commit = $env:GITHUB_SHA
+            candidate_source_commit = $manifest.source_commit
+            candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            candidate_msi_sha256 = $manifest.artifacts.msi.sha256
+            candidate_run_id = $env:CANDIDATE_RUN_ID
+          } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
+      - name: Verify installed upgrade and failure rollback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:HLS_V7_PYTHON = (Get-Command python.exe -ErrorAction Stop).Source
+          foreach ($scenario in @('Upgrade', 'FailureRollback')) {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -ApplicationLaunchMode Wmi -CandidateManifestPath artifacts/candidate-installer-regression/candidate/ARTIFACT-MANIFEST.json
+            if ($LASTEXITCODE -ne 0) { throw "MSI lifecycle failed: $scenario" }
+          }
+      - name: Upload installer lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-installer-regression-${{ github.sha }}
+          path: |
+            artifacts/candidate-installer-regression/identity.json
+            artifacts/v7-productization/msi-lifecycle/*.json
+            artifacts/v7-productization/msi-lifecycle/*.log
+            artifacts/v7-productization/msi-lifecycle/*-checkpoint/*.json
+          if-no-files-found: error
+          retention-days: 14

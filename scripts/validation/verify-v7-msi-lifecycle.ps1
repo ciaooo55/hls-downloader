@@ -95,6 +95,7 @@ function Start-InstalledApplication([string]$Root) {
             ShowWindow = [uint16]0
             CreateFlags = [uint32]0x01000000
             EnvironmentVariables = [string[]]$environment
+            WinstationDesktop = 'winsta0\default'
         }
         $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
             CommandLine = ('"' + $exe + '"')
@@ -116,7 +117,17 @@ function Start-InstalledApplication([string]$Root) {
             $_.Name -eq 'HLSDownloaderPresenter.exe' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase)
         }) | Select-Object -First 1
     } while ((-not $engine -or -not $presenter) -and (Get-Date) -lt $deadline)
-    if (-not $engine -or -not $presenter) { throw 'Installed application did not start its Engine and Presenter processes.' }
+    if (-not $engine -or -not $presenter) {
+        Add-Step 'application-startup' $false ([ordered]@{
+            install_dir = $Root
+            launcher_pid = [int]$launcher.Id
+            engine_found = [bool]$engine
+            presenter_found = [bool]$presenter
+            observed_processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like 'HLSDownloader*' } |
+                Select-Object Name, ProcessId, ParentProcessId, SessionId, ExecutablePath)
+        })
+    }
     return [ordered]@{ launcher_pid = [int]$launcher.Id; engine_pid = [int]$engine.ProcessId; presenter_pid = [int]$presenter.ProcessId }
 }
 
