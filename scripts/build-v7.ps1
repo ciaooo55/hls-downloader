@@ -125,15 +125,15 @@ if ($UiRuntime -eq 'compose') {
     $env:JAVA_HOME=$jdkRoot
     if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env:JAVA_HOME. Run scripts\bootstrap-v7-toolchain.ps1." }
 }
-$libMpvCache = Join-Path $cacheRoot 'libmpv-20260814'
+$libMpvCache = Join-Path $cacheRoot 'libmpv-20261110'
 $sevenZipExe = Join-Path $libMpvCache '7zr.exe'
 $libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
 $libMpvDll = Join-Path $libMpvCache 'libmpv-2.dll'
-$libMpvDllSha256 = 'f709c7ca8b183bec76b8158bf0c45c53018c63366750729352612f228ff7bdea'
+$libMpvDllSha256 = '5feefdced585b98282f9fd1ebe0a14c3b8c0827bff0ebf26fa43e735a789fed1'
 $sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
 $sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
-$libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260814/mpv-dev-x86_64-20260814-git-7b8915bc1d.7z'
-$libMpvArchiveSha256 = '0af22b28e920620036d3ae08fd9283156dc9af0420bf4df84b0e02282094599c'
+$libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261110/mpv-dev-x86_64-20261110-git-a61f6c3abd.7z'
+$libMpvArchiveSha256 = 'f07b97a72f2394a7798d6e1d36d952bbfd63577e25cef051f716751ea5dc9688'
 $vulkanRuntimeVersion = '1.4.363.0'
 $vulkanRuntimeCache = Join-Path $cacheRoot "vulkan-runtime-$vulkanRuntimeVersion"
 $vulkanRuntimeArchive = Join-Path $vulkanRuntimeCache "VulkanRT-X64-$vulkanRuntimeVersion-Components.zip"
@@ -335,6 +335,9 @@ if ($isPackage) {
     }
     New-Item -ItemType Directory -Force -Path $packageResources | Out-Null
     Build-Extension $packageResources
+    # Resolve pinned external tools before expensive Rust compilation.
+    Copy-CurlImpersonate $packageResources
+    Copy-LibMpv $packageResources
 }
 
 $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
@@ -453,8 +456,6 @@ if ($isPackage) {
         $env:PATH = $originalPath
         Remove-Item -LiteralPath $mediaToolCheckRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Copy-CurlImpersonate $resources
-    Copy-LibMpv $resources
     if ($UiRuntime -eq 'native') {
         $nativeAppImage = Join-Path $artifactRoot '.native-image\HLSDownloader'
         Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloader.exe") -Destination (Join-Path $nativeAppImage 'HLSDownloader.exe')

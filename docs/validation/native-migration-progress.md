@@ -291,3 +291,7 @@
 - Rust Security 新报 SQLite 与 Markdown 解析公告，已升级 rusqlite 0.41.1 / libsqlite3-sys 0.39.1 / pulldown-cmark 0.13.6；完整工作区回归在 `workspace-security-final.log`，尚在运行时不计通过。
 - 扩展构建链升级 vitest 5.0.3、fast-uri 3.1.9、node-forge 1.4.1、vite 8.1.6、undici 7.30.1。node-forge 原本地补丁由上游修复替代；deepmerge 4.3.1 对应 GHSA-gcqx-w48m-w2h4 尚无已发布修复，锁定补丁覆盖源码、CJS 与 UMD 分发，将结果属性写入改成数据属性，避免调用原型 setter。未放宽其他依赖公告门禁。
 - `extension-security-final.log`：实际 web-ext 依赖入口的两种合法签名通过、四种畸形签名拒绝、四组原型污染及正常合并回归通过，其他未处理公告为零。`extension-security-tests.log`：升级后 54 文件、592 项测试及 TypeScript 检查通过。
+
+- `b8552764` 的 GitHub v7 CI、Rust Security、Maintenance Security 全部成功，原生 UI 独立严格 Clippy 通过；本地 `workspace-security-final.log` 合计 756 通过、14 忽略、0 失败。本地独立 Clippy 在工具会话中断前未留下完成标记，不计通过；采用相同提交的 CI 严格检查结果。
+- 首次隔离候选构建失败在上游 20260814 libmpv 日构建归档已删除（HTTP 404），并未生成可发布包。重新锁定上游 20261110 / git-a61f6c3abd 的非 v3 x86_64 构建，归档摘要与 GitHub 官方资产 digest 一致，DLL 独立固定摘要。外部 libmpv / curl 准备移到 Rust 编译前，避免编译完成才发现依赖无法下载。`libmpv-headless.json` 通过本机 WAV 的加载、暂停、seek、音量、倍速和停止；不代表真实窗口渲染或播放 UI 通过。
+- 调试增量编译缓存约 46 GiB 的清理被自动审批以“blocked by policy”拒绝，未重试或换工具绕过，缓存仍保留。无 GUI 的打包后回归和最终资产核对尚需新候选。

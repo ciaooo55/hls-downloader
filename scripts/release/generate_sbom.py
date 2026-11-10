@@ -67,7 +67,7 @@ def build_sbom(version: str, ui_runtime: str = "native") -> dict:
         *(compose_components() if ui_runtime == "compose" else []),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
         component("application", "generic", "ffmpeg", "9.0.2"),
-        component("library", "generic", "libmpv", "20260814-git-7b8915bc1d"),
+        component("library", "generic", "libmpv", "20261110-git-a61f6c3abd"),
     ]
     unique = {item["bom-ref"]: item for item in values}
     components = [unique[key] for key in sorted(unique)]

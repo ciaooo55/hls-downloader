@@ -223,7 +223,8 @@
       "passed": 756,
       "failed": 0,
       "ignored": 14,
-      "log": "artifacts/release-native-20261110/workspace-serial-tests.log"
+      "log": "artifacts/release-native-20261110/workspace-security-final.log",
+      "scope": "756 pass, 14 ignored after SQLite/Markdown security upgrades; Workbench Box/QueueSave cleanup covered by exact-SHA CI b8552764"
     },
     "extension_tests": {
       "files": 54,
@@ -284,10 +285,23 @@
         "libsqlite3-sys 0.39.1",
         "pulldown-cmark 0.13.6"
       ],
-      "workspace_revalidation": "running; workspace-security-final.log",
+      "workspace_revalidation": "passed; workspace-security-final.log",
       "extension_regression": "passed; extension-security-final.log",
       "extension_advisories": "GHSA-gcqx-w48m-w2h4 locally patched and runtime-verified; no other unresolved advisories",
-      "remote_ci": "first push exposed presenter Clippy, Compose old source path and new dependency advisories; fixes require new exact-SHA CI"
+      "remote_ci": "b8552764: v7 CI, Rust Security and Maintenance Security all succeeded"
+    },
+    "presenter_strict_clippy": {
+      "status": "passed",
+      "source_commit": "b8552764ad88edcb94ba08559f682e1e74554f6c",
+      "evidence": "https://github.com/ciaooo55/hls-downloader/actions/runs/42683808270",
+      "scope": "UI --bin -D warnings, only while_let_loop allowed; independent of Core allowances"
+    },
+    "packaged_player_dependency": {
+      "version": "20261110-git-a61f6c3abd",
+      "archive_sha256": "f07b97a72f2394a7798d6e1d36d952bbfd63577e25cef051f716751ea5dc9688",
+      "dll_sha256": "5feefdced585b98282f9fd1ebe0a14c3b8c0827bff0ebf26fa43e735a789fed1",
+      "headless_test": "passed; libmpv-headless.json",
+      "gui_acceptance": "pending"
     }
   }
 }
