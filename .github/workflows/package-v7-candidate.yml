@@ -48,6 +48,13 @@ jobs:
           corepack prepare pnpm@11.7.0 --activate
           if ((pnpm --version).Trim() -ne '11.7.0') { throw 'pnpm 11.7.0 activation failed.' }
 
+      - name: Prepare packaged validation dependencies
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check psutil==7.2.2
+          python -c "import psutil; assert psutil.__version__ == '7.2.2'"
+
       - name: Bootstrap pinned FFmpeg
         shell: pwsh
         run: |
