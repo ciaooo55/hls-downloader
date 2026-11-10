@@ -94,7 +94,64 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\smoke-v7-portable-upgrade.ps1 -ArchivePath $archive
           if ($LASTEXITCODE -ne 0) { throw 'Packaged portable upgrade/rollback failed.' }
 
+      - name: Verify packaged components without desktop automation
+        id: headless_validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $packageRoot = 'artifacts\v7-productization\candidate'
+          $manifestPath = Join-Path $packageRoot 'ARTIFACT-MANIFEST.json'
+          $manifest = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($manifest.source_commit -ne $env:GITHUB_SHA) { throw 'Candidate source identity changed.' }
+          $reports = 'artifacts\v7-productization\candidate-validation'
+          New-Item -ItemType Directory -Force -Path $reports | Out-Null
+          $image = Join-Path $env:HLS_V7_BUILD_CACHE 'runtime-validation'
+          if (Test-Path -LiteralPath $image) { throw 'Runtime validation requires a fresh image directory.' }
+          $archive = Join-Path $packageRoot ([string]$manifest.artifacts.portable.path)
+          Expand-Archive -LiteralPath $archive -DestinationPath $image
+          try {
+            $app = Join-Path $image 'HLSDownloader'
+            $resources = Join-Path $app 'app\resources'
+            $engine = Join-Path $resources 'HLSDownloaderEngine.exe'
+            $cli = Join-Path $resources 'HLSDownloaderCli.exe'
+            $hostExe = Join-Path $resources 'HLSDownloaderNativeHost.exe'
+            # These self-tests do not show windows or drive the desktop.
+            & (Join-Path $app 'HLSDownloader.exe') --self-test
+            & (Join-Path $resources 'HLSDownloaderPresenter.exe') --self-test
+            & $engine --self-test
+            python scripts/validation/free_parity_acceptance.py --isolated-engine $engine --isolated-cli $cli --report "$reports/free-functions.json"
+            python scripts/validation/smoke_v7_native_host.py --host $hostExe --engine $engine --concurrent-hosts 4 --report "$reports/native-host.json"
+            python scripts/validation/smoke_v7_transfer_performance.py --engine $engine --report "$reports/transfer-performance.json"
+            python scripts/validation/soak_v7_runtime.py --engine $engine --idle-seconds 60 --stress-requests 18000 --report "$reports/runtime-soak.json"
+            $reportHashes = [ordered]@{}
+            foreach ($name in @('free-functions', 'native-host', 'transfer-performance', 'runtime-soak')) {
+              $reportPath = Join-Path $reports "$name.json"
+              $reportHashes["$name.json"] = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            [ordered]@{
+              schema = 1
+              source_commit = $env:GITHUB_SHA
+              candidate_artifact_manifest_sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              passed = $true
+              scope = 'Packaged headless component tests; no browser, GUI, DPI or accessibility acceptance.'
+              reports = $reportHashes
+            } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$reports/headless-validation.json" -Encoding utf8
+          } finally {
+            Remove-Item -LiteralPath $image -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload packaged component validation
+        if: always() && steps.headless_validation.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-candidate-validation-${{ github.sha }}
+          path: artifacts/v7-productization/candidate-validation/*.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify real MSI upgrade and failure rollback on isolated Windows
+        id: msi_lifecycle
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -105,7 +162,7 @@ jobs:
           }
 
       - name: Upload MSI lifecycle evidence
-        if: always()
+        if: always() && steps.msi_lifecycle.outcome != 'skipped'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: HLSDownloader-v7-msi-lifecycle-${{ github.sha }}
