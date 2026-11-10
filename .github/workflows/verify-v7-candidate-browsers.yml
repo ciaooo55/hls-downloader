@@ -15,7 +15,7 @@ permissions:
 jobs:
   browsers:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Prepare independent browser environment
@@ -89,6 +89,24 @@ jobs:
         timeout-minutes: 10
         shell: pwsh
         run: python scripts/validation/smoke_extension_media.py --browser firefox --extension artifacts/candidate-browser-regression/extensions/firefox-mv3 --browser-binary "$env:HLS_TEST_FIREFOX" --ffmpeg "$env:HLS_TEST_FFMPEG" --report artifacts/candidate-browser-regression/media-firefox.json
+      - name: Check actual Edge request credentials and response ownership
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $resources = "$env:HLS_TEST_RUNTIME/app/resources"
+          python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_firefox_response_takeover.py --browser edge --extension artifacts/candidate-browser-regression/extensions/chrome-mv3 --binary "$env:HLS_TEST_EDGE" --isolated-engine "$resources/HLSDownloaderEngine.exe" --isolated-host "$resources/HLSDownloaderNativeHost.exe" --isolated-presenter "$resources/HLSDownloaderPresenter.exe" --report artifacts/candidate-browser-regression/response-edge.json
+      - name: Check actual Firefox credentials and restart recovery
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $resources = "$env:HLS_TEST_RUNTIME/app/resources"
+          python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_firefox_response_takeover.py --browser firefox --extension artifacts/candidate-browser-regression/extensions/firefox-mv3 --binary "$env:HLS_TEST_FIREFOX" --isolated-engine "$resources/HLSDownloaderEngine.exe" --isolated-host "$resources/HLSDownloaderNativeHost.exe" --isolated-presenter "$resources/HLSDownloaderPresenter.exe" --restart-recovery --report artifacts/candidate-browser-regression/response-firefox.json
       - name: Start actual portable desktop in isolated Windows
         id: desktop
         if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
@@ -142,5 +160,6 @@ jobs:
           path: |
             artifacts/candidate-browser-regression/*.json
             artifacts/candidate-browser-regression/*.png
+            artifacts/candidate-browser-regression/*.log
           if-no-files-found: error
           retention-days: 14

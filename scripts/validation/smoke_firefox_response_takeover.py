@@ -620,8 +620,9 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ('extension', 'binary', 'driver', 'report'):
+    for flag in ('extension', 'binary', 'report'):
         parser.add_argument('--' + flag, type=Path, required=True)
+    parser.add_argument('--driver', type=Path)
     parser.add_argument('--runtime', type=Path)
     for flag in ('isolated-engine', 'isolated-host', 'isolated-presenter'):
         parser.add_argument('--' + flag, type=Path)

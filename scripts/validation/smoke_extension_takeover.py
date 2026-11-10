@@ -529,7 +529,7 @@ def _create_driver(
         options.set_preference('browser.download.dir', str(downloads))
         options.set_preference('browser.download.useDownloadDir', True)
         options.set_preference('browser.helperApps.neverAsk.saveToDisk', 'application/octet-stream')
-        service = FirefoxService(executable_path=str(driver_path),
+        service = FirefoxService(executable_path=str(driver_path) if driver_path else None,
             service_args=['--profile-root', str(profile.parent), '--allow-system-access'],
             log_output=str(profile.parent / 'geckodriver.log'))
         driver = webdriver.Firefox(service=service, options=options)
