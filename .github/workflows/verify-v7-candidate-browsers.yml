@@ -1,0 +1,146 @@
+name: v7 Candidate Browser Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Completed or artifact-uploaded candidate package run
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  browsers:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare independent browser environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check selenium psutil==7.2.2 websocket-client pillow PyYAML
+          $edge = @('C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe', 'C:\Program Files\Microsoft\Edge\Application\msedge.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          $firefox = @('C:\Program Files\Mozilla Firefox\firefox.exe', 'C:\Program Files (x86)\Mozilla Firefox\firefox.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $edge -or -not $firefox) { throw 'Hosted browser validation requires installed Edge and Firefox.' }
+          "HLS_TEST_EDGE=$edge" >> $env:GITHUB_ENV
+          "HLS_TEST_FIREFOX=$firefox" >> $env:GITHUB_ENV
+          $media = & .\scripts\build\bootstrap-v7-media-tools.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "HLS_TEST_FFMPEG=$media/ffmpeg.exe" >> $env:GITHUB_ENV
+      - name: Receive and bind candidate bytes
+        id: receive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Candidate run ID must be numeric.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/package-v7-candidate.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Not a candidate package run in this repository.' }
+          $root = 'artifacts/candidate-browser-regression'
+          gh run download $env:CANDIDATE_RUN_ID --name "HLSDownloader-v7-candidate-$($run.head_sha)" --dir "$root/candidate"
+          $manifestPath = "$root/candidate/ARTIFACT-MANIFEST.json"
+          $manifest = Get-Content $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+          if ($manifest.source_commit -ne $run.head_sha) { throw 'Candidate source identity mismatch.' }
+          $portable = Join-Path "$root/candidate" $manifest.artifacts.portable.path
+          if ((Get-FileHash $portable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.artifacts.portable.sha256) { throw 'Portable hash mismatch.' }
+          Expand-Archive -LiteralPath $portable -DestinationPath '.tool-cache/test-tmp/candidate-browser-image'
+          foreach ($browser in @('Chromium', 'Firefox')) {
+            $entry = $manifest.extensions.$browser
+            $zip = Join-Path "$root/candidate" $entry.path
+            if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.sha256) { throw "$browser hash mismatch." }
+            $name = if ($browser -eq 'Chromium') { 'chrome-mv3' } else { 'firefox-mv3' }
+            Expand-Archive -LiteralPath $zip -DestinationPath "$root/extensions/$name"
+          }
+          $runtime = (Resolve-Path '.tool-cache/test-tmp/candidate-browser-image/HLSDownloader').Path
+          "HLS_TEST_RUNTIME=$runtime" >> $env:GITHUB_ENV
+          "HLS_V7_DATA_DIR=$((Get-Location).Path)/.tool-cache/test-tmp/candidate-browser-data" >> $env:GITHUB_ENV
+          "HLS_V7_DOWNLOAD_DIR=$((Get-Location).Path)/.tool-cache/test-tmp/candidate-browser-downloads" >> $env:GITHUB_ENV
+          "HLS_V7_PIPE=\\.\pipe\HLSHostedBrowser-$env:GITHUB_RUN_ID" >> $env:GITHUB_ENV
+          "HLS_VM_ACCEPTANCE=1" >> $env:GITHUB_ENV
+          [ordered]@{
+            validation_source_commit = $env:GITHUB_SHA
+            candidate_source_commit = $manifest.source_commit
+            candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            candidate_run_id = $env:CANDIDATE_RUN_ID
+            edge_version = (Get-Item $env:HLS_TEST_EDGE).VersionInfo.ProductVersion
+            firefox_version = (Get-Item $env:HLS_TEST_FIREFOX).VersionInfo.ProductVersion
+            release_acceptance = $false
+          } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
+      - name: Check extension popup and overlay in both browsers
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          python scripts/validation/smoke_extension_browsers.py --extension-output artifacts/candidate-browser-regression/extensions --browser both --chrome-binary "$env:HLS_TEST_EDGE" --firefox-binary "$env:HLS_TEST_FIREFOX" --chromium-archive artifacts/candidate-browser-regression/candidate/extensions/HLSDownloader-7.0.4-Chromium.zip --firefox-archive artifacts/candidate-browser-regression/candidate/extensions/HLSDownloader-7.0.4-Firefox.zip
+      - name: Check Edge media recognition
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: python scripts/validation/smoke_extension_media.py --browser edge --extension artifacts/candidate-browser-regression/extensions/chrome-mv3 --browser-binary "$env:HLS_TEST_EDGE" --ffmpeg "$env:HLS_TEST_FFMPEG" --report artifacts/candidate-browser-regression/media-edge.json
+      - name: Check Firefox media recognition
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: python scripts/validation/smoke_extension_media.py --browser firefox --extension artifacts/candidate-browser-regression/extensions/firefox-mv3 --browser-binary "$env:HLS_TEST_FIREFOX" --ffmpeg "$env:HLS_TEST_FFMPEG" --report artifacts/candidate-browser-regression/media-firefox.json
+      - name: Start actual portable desktop in isolated Windows
+        id: desktop
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --register-native-host
+          $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+          $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; CreateFlags = [uint32]0x01000000; EnvironmentVariables = [string[]]$environment; WinstationDesktop = 'winsta0\default' }
+          $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('"' + $env:HLS_TEST_RUNTIME + '\HLSDownloader.exe"'); CurrentDirectory = $env:HLS_TEST_RUNTIME; ProcessStartupInformation = $startup }
+          if ($started.ReturnValue -ne 0) { throw "Actual desktop launch failed: $($started.ReturnValue)" }
+          @'
+          import sys, time
+          sys.path.insert(0, 'scripts/validation')
+          from smoke_v7_portable_app import Pipe
+          for attempt in range(60):
+              try:
+                  p = Pipe()
+                  break
+              except OSError:
+                  time.sleep(.25)
+          else:
+              raise RuntimeError('Installed desktop did not start its Core')
+          r = p.request({'type':'store_settings', 'request_id':1, 'values':{'legal_terms_accepted':True, 'legal_terms_version':'2026-08-06-cn-1', 'download_progress_window_enabled':False, 'download_complete_popup_enabled':False}})
+          p.close()
+          assert r['type'] == 'settings', r
+          '@ | python -
+      - name: Check actual Edge Host and Core handoff
+        if: ${{ !cancelled() && steps.desktop.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: python scripts/validation/smoke_extension_takeover.py --browser edge --extension artifacts/candidate-browser-regression/extensions/chrome-mv3 --browser-binary "$env:HLS_TEST_EDGE" --real-runtime "$env:HLS_TEST_RUNTIME" --report artifacts/candidate-browser-regression/takeover-edge.json
+      - name: Check actual Firefox Host and Core handoff
+        if: ${{ !cancelled() && steps.desktop.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: python scripts/validation/smoke_extension_takeover.py --browser firefox --extension artifacts/candidate-browser-regression/extensions/firefox-mv3 --browser-binary "$env:HLS_TEST_FIREFOX" --real-runtime "$env:HLS_TEST_RUNTIME" --report artifacts/candidate-browser-regression/takeover-firefox.json
+      - name: Stop isolated application helpers
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:HLS_TEST_RUNTIME) {
+            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:HLS_TEST_RUNTIME, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+      - name: Upload actual browser results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-browser-regression-${{ github.sha }}
+          path: |
+            artifacts/candidate-browser-regression/*.json
+            artifacts/candidate-browser-regression/*.png
+          if-no-files-found: error
+          retention-days: 14
