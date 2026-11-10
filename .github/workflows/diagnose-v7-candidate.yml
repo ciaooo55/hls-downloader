@@ -7,6 +7,10 @@ on:
         description: Existing candidate package workflow run to diagnose
         required: true
         type: string
+      rebuild_current_clients:
+        description: Diagnose current CLI/Host builds with the older packaged Engine (not a release package)
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -15,17 +19,29 @@ permissions:
 jobs:
   diagnose:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up Rust for current clients
+        if: inputs.rebuild_current_clients
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+      - name: Build current CLI and Native Host only
+        if: inputs.rebuild_current_clients
+        shell: pwsh
+        run: cargo build --locked -p hls-native-clients --bin HLSDownloaderCli --bin HLSDownloaderNativeHost
       - name: Retrieve existing candidate and diagnose startup
+        timeout-minutes: 10
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          REBUILD_CURRENT_CLIENTS: ${{ inputs.rebuild_current_clients }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check psutil==7.2.2
           if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Candidate run ID must be numeric.' }
           $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
           if ($run.path -ne '.github/workflows/package-v7-candidate.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Not a package run in this repository.' }
@@ -44,16 +60,31 @@ jobs:
             # A nested validation job permits the production breakaway flag,
             # while the outer hosted-runner job retains its original limits.
             python scripts/validation/windows_breakaway_job.py python scripts/validation/diagnose_v7_core_start.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/prepared-startup.json
-            python scripts/validation/windows_breakaway_job.py python scripts/validation/free_parity_acceptance.py --isolated-engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --isolated-cli "$image/HLSDownloader/app/resources/HLSDownloaderCli.exe" --report artifacts/startup-diagnosis/free-functions.json
-            python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_v7_native_host.py --host "$image/HLSDownloader/app/resources/HLSDownloaderNativeHost.exe" --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --concurrent-hosts 4 --profile-startup --report artifacts/startup-diagnosis/native-host.json
-            python scripts/validation/verify_v7_host_job_lifetime.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/host-job-lifetime.json
+            $overlays = [ordered]@{}
+            if ($env:REBUILD_CURRENT_CLIENTS -eq 'true') {
+              foreach ($name in @('HLSDownloaderCli.exe', 'HLSDownloaderNativeHost.exe')) {
+                $source = Join-Path '.tool-cache/build-cache/cargo-target/debug' $name
+                $overlays[$name] = [ordered]@{
+                  source_commit = $env:GITHUB_SHA
+                  profile = 'debug'
+                  sha256 = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
+                  replaced_candidate_sha256 = $manifest.components."app/resources/$name"
+                }
+                Copy-Item -LiteralPath $source -Destination "$image/HLSDownloader/app/resources/$name"
+              }
+              python scripts/validation/windows_breakaway_job.py python scripts/validation/diagnose_v7_core_start.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/current-startup.json
+            }
             [ordered]@{
               validation_source_commit = $env:GITHUB_SHA
               candidate_source_commit = $manifest.source_commit
               candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
               candidate_run_id = $env:CANDIDATE_RUN_ID
+              component_overlays = $overlays
               release_acceptance = $false
-            } | ConvertTo-Json | Set-Content artifacts/startup-diagnosis/identity.json -Encoding utf8
+            } | ConvertTo-Json -Depth 5 | Set-Content artifacts/startup-diagnosis/identity.json -Encoding utf8
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/free_parity_acceptance.py --isolated-engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --isolated-cli "$image/HLSDownloader/app/resources/HLSDownloaderCli.exe" --report artifacts/startup-diagnosis/free-functions.json
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_v7_native_host.py --host "$image/HLSDownloader/app/resources/HLSDownloaderNativeHost.exe" --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --concurrent-hosts 4 --profile-startup --report artifacts/startup-diagnosis/native-host.json
+            python scripts/validation/verify_v7_host_job_lifetime.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/host-job-lifetime.json
           } finally {
             Remove-Item -LiteralPath $image -Recurse -Force -ErrorAction SilentlyContinue
           }

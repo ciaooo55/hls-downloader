@@ -71,29 +71,7 @@ fn connect() -> Result<CoreIpcClient> {
         return Ok(client);
     }
     let root = install_root().ok_or_else(|| Failure(3, "无法定位安装目录".into()))?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{
-            SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        };
-        // A script captures these handles until every writer closes. The
-        // resident Core must not keep the CLI's original capture handles alive.
-        // Command creates its own null standard handles for the Core.
-        for handle in [
-            std::io::stdin().as_raw_handle(),
-            std::io::stdout().as_raw_handle(),
-            std::io::stderr().as_raw_handle(),
-        ] {
-            if !handle.is_null()
-                && handle != INVALID_HANDLE_VALUE
-                && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
-            {
-                return Err(Failure(3, "无法隔离 Core 的标准输入输出句柄".into()));
-            }
-        }
-    }
-    spawn_core(&root).map_err(|_| Failure(3, "无法启动 Core，请检查安装目录".into()))?;
+    spawn_core(&root).map_err(|error| Failure(3, format!("无法启动 Core：{error}")))?;
     CoreIpcClient::connect_existing(Duration::from_secs(15))
         .map_err(|_| Failure(3, "无法连接 Core".into()))
 }

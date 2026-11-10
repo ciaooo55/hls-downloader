@@ -38,6 +38,30 @@ pub fn install_root() -> Option<PathBuf> {
 }
 
 pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{
+            SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+        };
+        // The resident Core must not retain browser/CLI protocol pipes. Null
+        // standard streams on Command alone do not clear the original handles.
+        for handle in [
+            std::io::stdin().as_raw_handle(),
+            std::io::stdout().as_raw_handle(),
+            std::io::stderr().as_raw_handle(),
+        ] {
+            if !handle.is_null()
+                && handle != INVALID_HANDLE_VALUE
+                && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
+            {
+                return Err(format!(
+                    "Unable to isolate download core standard handles: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+    }
     let started = std::time::Instant::now();
     let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
     let executable = locate_core_executable(root)

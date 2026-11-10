@@ -61,11 +61,16 @@ def responses(executable: Path, environment: dict[str, str]) -> tuple[list[dict[
             result.append(parsed)
             if len(result) == 1:
                 first_response_ms = (time.perf_counter() - started) * 1000
+        process.stdin.close()
+        process.wait(timeout=2)
+        if read_exact(process.stdout, 1, 2) != b'':
+            raise RuntimeError('Native Host did not close its protocol output after exit')
         return result, first_response_ms, (time.perf_counter() - started) * 1000, list(diagnostics)
     except Exception as error:
         raise RuntimeError(f"Native Host response failed: {error}; startup diagnostics: {diagnostics}") from error
     finally:
-        process.stdin.close()
+        if not process.stdin.closed:
+            process.stdin.close()
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
