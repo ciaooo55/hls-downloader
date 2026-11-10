@@ -165,7 +165,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:HLS_V7_PYTHON = (Get-Command python.exe -ErrorAction Stop).Source
           foreach ($scenario in @('Upgrade', 'FailureRollback')) {
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -ApplicationLaunchMode Wmi -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
             if ($LASTEXITCODE -ne 0) { throw "MSI lifecycle failed: $scenario" }
           }
 

@@ -11,6 +11,8 @@ param(
     [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.3-r22/HLSDownloader-7.0.3-r22-Windows-x64-unsigned.msi',
     [string]$OldMsiSha256 = '8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8',
     [string]$InstallDir = '',
+    [ValidateSet('Direct', 'Wmi')]
+    [string]$ApplicationLaunchMode = 'Direct',
     [string]$CheckpointPath = '',
     [string]$ReportPath = ''
 )
@@ -84,7 +86,26 @@ function Get-ShortcutState {
 function Start-InstalledApplication([string]$Root) {
     $exe = Join-Path $Root 'HLSDownloader.exe'
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Installed application is missing: $exe" }
-    $launcher = Start-Process -FilePath $exe -WorkingDirectory $Root -PassThru
+    if ($ApplicationLaunchMode -eq 'Wmi') {
+        # Hosted runner jobs forbid breakaway. Start the installed application
+        # through Windows with the fixture environment, preserving the real
+        # Launcher -> Presenter -> Core chain and all production launch flags.
+        $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+        $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{
+            ShowWindow = [uint16]0
+            CreateFlags = [uint32]0x01000000
+            EnvironmentVariables = [string[]]$environment
+        }
+        $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = ('"' + $exe + '"')
+            CurrentDirectory = $Root
+            ProcessStartupInformation = $startup
+        }
+        if ($created.ReturnValue -ne 0) { throw "Installed application WMI launch failed: $($created.ReturnValue)" }
+        $launcher = [pscustomobject]@{ Id = [int]$created.ProcessId }
+    } else {
+        $launcher = Start-Process -FilePath $exe -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+    }
     $deadline = (Get-Date).AddSeconds(60)
     do {
         Start-Sleep -Milliseconds 250
@@ -305,6 +326,7 @@ try {
     if (-not $ReportPath) { $ReportPath = Join-Path $artifacts "$($Scenario.ToLowerInvariant()).json" }
     $report = Resolve-FullPath $ReportPath $repo
     New-Item -ItemType Directory -Force -Path (Split-Path $report -Parent) | Out-Null
+    $result['application_launch_mode'] = $ApplicationLaunchMode
     [IO.File]::WriteAllText($report, ($result | ConvertTo-Json -Depth 8), $utf8NoBom)
     $result | ConvertTo-Json -Depth 8
     $env:HLS_V7_DATA_DIR = $previousDataDir
