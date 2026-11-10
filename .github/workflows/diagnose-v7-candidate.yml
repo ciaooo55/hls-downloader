@@ -41,6 +41,8 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $image
           try {
             python scripts/validation/diagnose_v7_core_start.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/startup.json
+            python scripts/validation/smoke_v7_transfer_performance.py --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --report artifacts/startup-diagnosis/transfer-performance.json
+            python scripts/validation/soak_v7_runtime.py --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --idle-seconds 60 --stress-requests 18000 --report artifacts/startup-diagnosis/runtime-soak.json
             [ordered]@{
               validation_source_commit = $env:GITHUB_SHA
               candidate_source_commit = $manifest.source_commit
