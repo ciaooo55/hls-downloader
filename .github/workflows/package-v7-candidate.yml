@@ -127,12 +127,13 @@ jobs:
             & (Join-Path $app 'HLSDownloader.exe') --self-test
             & (Join-Path $resources 'HLSDownloaderPresenter.exe') --self-test
             & $engine --self-test
-            python scripts/validation/free_parity_acceptance.py --isolated-engine $engine --isolated-cli $cli --report "$reports/free-functions.json"
-            python scripts/validation/smoke_v7_native_host.py --host $hostExe --engine $engine --concurrent-hosts 4 --report "$reports/native-host.json"
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/free_parity_acceptance.py --isolated-engine $engine --isolated-cli $cli --report "$reports/free-functions.json"
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_v7_native_host.py --host $hostExe --engine $engine --concurrent-hosts 4 --profile-startup --report "$reports/native-host.json"
+            python scripts/validation/verify_v7_host_job_lifetime.py --resources $resources --report "$reports/host-job-lifetime.json"
             python scripts/validation/smoke_v7_transfer_performance.py --engine $engine --report "$reports/transfer-performance.json"
             python scripts/validation/soak_v7_runtime.py --engine $engine --idle-seconds 60 --stress-requests 18000 --report "$reports/runtime-soak.json"
             $reportHashes = [ordered]@{}
-            foreach ($name in @('free-functions', 'native-host', 'transfer-performance', 'runtime-soak')) {
+            foreach ($name in @('free-functions', 'native-host', 'host-job-lifetime', 'transfer-performance', 'runtime-soak')) {
               $reportPath = Join-Path $reports "$name.json"
               $reportHashes["$name.json"] = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
             }

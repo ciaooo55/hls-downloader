@@ -1,6 +1,7 @@
 """Diagnose packaged child-process startup on an isolated Windows runner."""
 import argparse
 import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ from native_message_io import frame
 from smoke_v7_native_host import stop_isolated_engine
 from validation_workspace import test_tmp
 from v7_core_ipc import free_port
+from windows_breakaway_job import ExtendedLimits, job_api
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--resources', type=Path, required=True)
@@ -21,10 +23,16 @@ parser.add_argument('--report', type=Path, required=True)
 args = parser.parse_args()
 resources = args.resources.resolve()
 report = {'scope': 'Startup diagnosis only; no GUI/browser acceptance', 'attempts': []}
-in_job = ctypes.c_int()
-kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-kernel.IsProcessInJob(ctypes.c_void_p(-1), None, ctypes.byref(in_job))
+in_job = wintypes.BOOL()
+kernel = job_api()
+if not kernel.IsProcessInJob(kernel.GetCurrentProcess(), None, ctypes.byref(in_job)):
+    raise ctypes.WinError(ctypes.get_last_error())
 report['parent_in_job'] = bool(in_job.value)
+if in_job.value:
+    limits = ExtendedLimits()
+    if not kernel.QueryInformationJobObject(None, 9, ctypes.byref(limits), ctypes.sizeof(limits), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    report['parent_job_limit_flags'] = hex(limits.BasicLimitInformation.LimitFlags)
 with tempfile.TemporaryDirectory(prefix='hls-start-diagnostic-', dir=test_tmp()) as temporary:
     root = Path(temporary)
     for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderCli.exe', 'HLSDownloaderNativeHost.exe', 'vcruntime140.dll'):
@@ -46,20 +54,26 @@ with tempfile.TemporaryDirectory(prefix='hls-start-diagnostic-', dir=test_tmp())
             except OSError as error:
                 attempt.update(error=str(error), winerror=error.winerror)
             report['attempts'].append(attempt)
-        cli = subprocess.run([str(root / 'HLSDownloaderCli.exe'), '--json', 'list'],
-                             env=env, capture_output=True, timeout=25, cwd=root)
+        # A profiled resident Core inherits stderr. A pipe would remain open
+        # after the short-lived CLI/Host exits and make communicate() time out.
+        cli_log = root / 'cli-stderr.log'
+        with cli_log.open('wb') as diagnostics:
+            cli = subprocess.run([str(root / 'HLSDownloaderCli.exe'), '--json', 'list'],
+                                 env=env, stdout=subprocess.PIPE, stderr=diagnostics, timeout=25, cwd=root)
         report['cli'] = {'exit_code': cli.returncode, 'stdout': cli.stdout.decode('utf-8', 'replace'),
-                         'stderr': cli.stderr.decode('utf-8', 'replace')}
+                         'stderr': cli_log.read_text(encoding='utf-8', errors='replace')}
         stop_isolated_engine(engine)
         env.pop('HLS_V7_CORE_TCP', None)
         env.pop('HLS_V7_CORE_BIND', None)
-        host = subprocess.run([str(root / 'HLSDownloaderNativeHost.exe')], env=env,
-                              input=frame({'op': 'ping'}), capture_output=True, timeout=30, cwd=root)
+        host_log = root / 'host-stderr.log'
+        with host_log.open('wb') as diagnostics:
+            host = subprocess.run([str(root / 'HLSDownloaderNativeHost.exe')], env=env,
+                                  input=frame({'op': 'ping'}), stdout=subprocess.PIPE, stderr=diagnostics, timeout=30, cwd=root)
         body = host.stdout
         length = struct.unpack('<I', body[:4])[0] if len(body) >= 4 else 0
         report['host'] = {'exit_code': host.returncode,
                           'response': body[4:4 + length].decode('utf-8', 'replace'),
-                          'stderr': host.stderr.decode('utf-8', 'replace')}
+                          'stderr': host_log.read_text(encoding='utf-8', errors='replace')}
     finally:
         stop_isolated_engine(engine)
         args.report.parent.mkdir(parents=True, exist_ok=True)

@@ -41,8 +41,12 @@ jobs:
           Expand-Archive -LiteralPath $archive -DestinationPath $image
           try {
             python scripts/validation/diagnose_v7_core_start.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/startup.json
-            python scripts/validation/smoke_v7_transfer_performance.py --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --report artifacts/startup-diagnosis/transfer-performance.json
-            python scripts/validation/soak_v7_runtime.py --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --idle-seconds 60 --stress-requests 18000 --report artifacts/startup-diagnosis/runtime-soak.json
+            # A nested validation job permits the production breakaway flag,
+            # while the outer hosted-runner job retains its original limits.
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/diagnose_v7_core_start.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/prepared-startup.json
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/free_parity_acceptance.py --isolated-engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --isolated-cli "$image/HLSDownloader/app/resources/HLSDownloaderCli.exe" --report artifacts/startup-diagnosis/free-functions.json
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_v7_native_host.py --host "$image/HLSDownloader/app/resources/HLSDownloaderNativeHost.exe" --engine "$image/HLSDownloader/app/resources/HLSDownloaderEngine.exe" --concurrent-hosts 4 --profile-startup --report artifacts/startup-diagnosis/native-host.json
+            python scripts/validation/verify_v7_host_job_lifetime.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/host-job-lifetime.json
             [ordered]@{
               validation_source_commit = $env:GITHUB_SHA
               candidate_source_commit = $manifest.source_commit
