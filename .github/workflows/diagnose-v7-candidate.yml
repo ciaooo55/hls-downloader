@@ -1,0 +1,61 @@
+name: v7 Candidate Startup Diagnosis
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Existing candidate package workflow run to diagnose
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Retrieve existing candidate and diagnose startup
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Candidate run ID must be numeric.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/package-v7-candidate.yml' -or $run.event -ne 'workflow_dispatch' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Not a package run in this repository.' }
+          $package = 'artifacts/startup-diagnosis/candidate'
+          gh run download $env:CANDIDATE_RUN_ID --name "HLSDownloader-v7-candidate-$($run.head_sha)" --dir $package
+          $manifestPath = Join-Path $package 'ARTIFACT-MANIFEST.json'
+          $manifest = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($manifest.source_commit -ne $run.head_sha) { throw 'Candidate source identity mismatch.' }
+          $archive = Join-Path $package $manifest.artifacts.portable.path
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.artifacts.portable.sha256) { throw 'Candidate archive hash mismatch.' }
+          $image = '.tool-cache/test-tmp/startup-diagnosis-image'
+          if (Test-Path -LiteralPath $image) { throw 'Diagnosis requires a fresh image.' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $image
+          try {
+            python scripts/validation/diagnose_v7_core_start.py --resources "$image/HLSDownloader/app/resources" --report artifacts/startup-diagnosis/startup.json
+            [ordered]@{
+              validation_source_commit = $env:GITHUB_SHA
+              candidate_source_commit = $manifest.source_commit
+              candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              candidate_run_id = $env:CANDIDATE_RUN_ID
+              release_acceptance = $false
+            } | ConvertTo-Json | Set-Content artifacts/startup-diagnosis/identity.json -Encoding utf8
+          } finally {
+            Remove-Item -LiteralPath $image -Recurse -Force -ErrorAction SilentlyContinue
+          }
+      - name: Upload diagnosis
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-startup-diagnosis-${{ github.sha }}
+          path: artifacts/startup-diagnosis/*.json
+          if-no-files-found: error
+          retention-days: 14
