@@ -1003,16 +1003,10 @@ fn connect_or_start_core() -> Result<CoreIpcClient, String> {
     }
     let root = install_root().ok_or_else(|| "找不到应用安装目录".to_string())?;
     spawn_core(&root)?;
-    // A cold start may spend seconds opening the database or being scanned
-    // by antivirus software, so wait up to 10 s before
-    // failing the presenter outright.
-    for _ in 0..100 {
-        if let Ok(client) = CoreIpcClient::connect() {
-            return Ok(client);
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    Err("下载引擎启动超时".into())
+    // One connection deadline includes all pipe retries. Repeating connect()
+    // would multiply its two-second timeout and hide startup errors for minutes.
+    CoreIpcClient::connect_existing(Duration::from_secs(10))
+        .map_err(|error| format!("下载引擎启动失败：{error}"))
 }
 
 fn command_with_reconnect(
