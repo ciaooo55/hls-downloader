@@ -83,6 +83,42 @@ describe('browser download ownership through registered event listeners', () => 
     vi.restoreAllMocks()
   })
 
+  it.each([
+    { state: 'complete', paused: false },
+    { state: 'interrupted', paused: false },
+    { state: 'interrupted', paused: true },
+  ])('keeps current download state after a stale filename event ($state, paused=$paused)', async ({ state, paused }) => {
+    const filenameEvent = { addListener: vi.fn() }
+    Object.assign(mocks.browser.downloads, { onDeterminingFilename: filenameEvent })
+    try {
+      const background = await import('../entrypoints/background')
+      ;(background.default as unknown as { main(): void }).main()
+      const early = { ...item, filename: 'early.bin', state: 'in_progress', paused: false, bytesReceived: 0 }
+      listener(filenameEvent)(early, vi.fn())
+      item = { ...item, filename: 'final.bin', state, paused, bytesReceived: 1024 }
+      const refreshed = await background.refreshedDownload(item.id, { ...early, filename: '' })
+      expect(refreshed).toMatchObject({ filename: 'final.bin', state, paused: item.paused, bytesReceived: 1024 })
+    } finally {
+      delete (mocks.browser.downloads as Record<string, unknown>).onDeterminingFilename
+    }
+  })
+
+  it('uses a determined filename while the current browser snapshot still has no filename', async () => {
+    const filenameEvent = { addListener: vi.fn() }
+    Object.assign(mocks.browser.downloads, { onDeterminingFilename: filenameEvent })
+    try {
+      const background = await import('../entrypoints/background')
+      ;(background.default as unknown as { main(): void }).main()
+      const early = { ...item, filename: 'determined.bin', state: 'in_progress', bytesReceived: 0 }
+      listener(filenameEvent)(early, vi.fn())
+      item = { ...item, filename: '', bytesReceived: 1024 }
+      const refreshed = await background.refreshedDownload(item.id, early)
+      expect(refreshed).toMatchObject({ filename: 'determined.bin', state: 'complete', bytesReceived: 1024 })
+    } finally {
+      delete (mocks.browser.downloads as Record<string, unknown>).onDeterminingFilename
+    }
+  })
+
   it.each(['navigation', 'close'])('keeps other tabs resource caches during tab %s cleanup', async action => {
     const oldPage = pageResourceKey(1, 'https://site.test/old')
     const nextPage = pageResourceKey(1, 'https://site.test/next')

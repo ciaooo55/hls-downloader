@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "hls-client"
-version = "7.0.4"
+version = "7.0.5"
 dependencies = [
  "hls-protocol",
  "serde",
@@ -2287,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "hls-native-clients"
-version = "7.0.4"
+version = "7.0.5"
 dependencies = [
  "hls-client",
  "serde",
@@ -2298,7 +2298,7 @@ dependencies = [
 
 [[package]]
 name = "hls-native-shell"
-version = "7.0.4"
+version = "7.0.5"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "hls-native-ui"
-version = "7.0.4"
+version = "7.0.5"
 dependencies = [
  "base64 0.23.1",
  "hls-client",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "hls-protocol"
-version = "7.0.4"
+version = "7.0.5"
 dependencies = [
  "serde",
  "serde_json",

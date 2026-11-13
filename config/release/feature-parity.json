@@ -1,6 +1,6 @@
 {
     "schema":  1,
-    "product_version":  "7.0.4",
+    "product_version":  "7.0.5",
     "generated_from":  {
                            "v3":  "git:v3.0.39",
                            "v5":  "git:v5.0.13",
@@ -53,7 +53,7 @@
                                    "reason":  "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
                                }
                            ],
-    "audit_state":  "v7_0_4_implementation_verified_pending_frozen_release_gates",
+    "audit_state":  "v7_0_5_release_ready",
     "current_evidence_table":  "docs/validation/current-evidence.json",
     "features":  [
                      {

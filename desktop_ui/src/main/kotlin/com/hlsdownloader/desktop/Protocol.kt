@@ -61,7 +61,7 @@ private const val CORE_CONNECT_TIMEOUT_MS = 2000
 private const val MAX_TASK_LOG_LINES = 500
 
 object Product {
-    const val version = "7.0.4"
+    const val version = "7.0.5"
     const val engineStarting = "下载引擎 · 启动中"
     const val engineConnected = "下载引擎 · 已连接"
     const val engineReconnecting = "下载引擎 · 重连中"

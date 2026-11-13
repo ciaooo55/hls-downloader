@@ -1497,6 +1497,10 @@ fn refreshed_url_resumes_paused_task_and_publishes_new_response() {
             download_dir: download_dir.to_string_lossy().into_owned(),
             expected_size: Some(body.len() as u64),
             concurrency: 1,
+            headers: BTreeMap::from([
+                ("Cookie".into(), "session=original-site".into()),
+                ("Authorization".into(), "Bearer original-site".into()),
+            ]),
             ..Default::default()
         })
         .unwrap();
@@ -1553,6 +1557,10 @@ fn refreshed_url_resumes_paused_task_and_publishes_new_response() {
         .final_output;
     assert_eq!(fs::read(output).unwrap(), body);
     let _ = fs::remove_dir_all(download_dir);
+    assert!(refreshed.credential_ref.is_none());
+    assert!(!refreshed.headers.keys().any(|name| {
+        name.eq_ignore_ascii_case("cookie") || name.eq_ignore_ascii_case("authorization")
+    }));
 }
 
 #[test]
@@ -1600,6 +1608,30 @@ fn structured_request_refresh_vaults_cookie_and_never_puts_it_in_snapshot() {
     assert!(!serde_json::to_string(&snapshot)
         .unwrap()
         .contains("session=private"));
+    for (url, keep_credential) in [
+        ("https://cdn.test/refreshed.bin?signature=next", true),
+        ("https://other.test/refreshed.bin", false),
+    ] {
+        coordinator
+            .dispatch(CoreCommand::RefreshTaskRequest {
+                task_id: "task-1".into(),
+                url: url.into(),
+                cookie: String::new(),
+                auto_resume: false,
+            })
+            .unwrap();
+        let reference_after_refresh = coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .unwrap()
+            .credential_ref
+            .clone();
+        assert_eq!(
+            reference_after_refresh.as_deref(),
+            keep_credential.then_some(reference.as_str())
+        );
+    }
 }
 
 #[test]

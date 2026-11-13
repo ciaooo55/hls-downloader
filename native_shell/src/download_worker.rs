@@ -1224,23 +1224,7 @@ impl CoreCoordinator {
                 return set_task_speed(self, task_id, limit.parse().unwrap_or(0));
             }
             if let Some(url) = action.strip_prefix("refresh:") {
-                let next_action = self
-                    .tasks()?
-                    .into_iter()
-                    .find(|task| task.task_id == *task_id)
-                    .and_then(|task| {
-                        ["resume", "retry", "start"].into_iter().find(|candidate| {
-                            task.available_actions.iter().any(|item| item == candidate)
-                        })
-                    });
-                let mut events = refresh_task_url(self, task_id, url)?;
-                if let Some(next_action) = next_action {
-                    events.extend(self.dispatch_inner(CoreCommand::TaskAction {
-                        task_id: task_id.clone(),
-                        action: next_action.into(),
-                    })?);
-                }
-                return Ok(events);
+                return refresh_task_request(self, task_id, url, "", true);
             }
             if action == "push_tvbox" {
                 return push_task_tvbox(self, task_id);
@@ -5352,25 +5336,6 @@ fn set_task_speed(
         } else {
             format!("任务限速 {kib} KiB/s")
         },
-    })
-}
-
-fn refresh_task_url(
-    coordinator: &CoreCoordinator,
-    task_id: &str,
-    url: &str,
-) -> Result<Vec<EventEnvelope>, String> {
-    reject_task_url(url)?;
-    let mut spec = coordinator
-        .lock()?
-        .task_spec(task_id)
-        .cloned()
-        .ok_or_else(|| format!("unknown task {task_id}"))?;
-    spec.url = url.trim().to_string();
-    coordinator.lock()?.replace_spec(task_id, spec)?;
-    coordinator.lock()?.emit(CoreEvent::Toast {
-        level: "refresh".into(),
-        message: "已更新下载地址".into(),
     })
 }
 

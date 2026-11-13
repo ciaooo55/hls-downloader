@@ -80,7 +80,13 @@ jobs:
         timeout-minutes: 8
         shell: pwsh
         run: |
-          python scripts/validation/smoke_extension_browsers.py --extension-output artifacts/candidate-browser-regression/extensions --browser both --chrome-binary "$env:HLS_TEST_EDGE" --firefox-binary "$env:HLS_TEST_FIREFOX" --chromium-archive artifacts/candidate-browser-regression/candidate/extensions/HLSDownloader-7.0.4-Chromium.zip --firefox-archive artifacts/candidate-browser-regression/candidate/extensions/HLSDownloader-7.0.4-Firefox.zip
+          $ErrorActionPreference = 'Stop'
+          $candidateRoot = 'artifacts/candidate-browser-regression/candidate'
+          $manifest = Get-Content "$candidateRoot/ARTIFACT-MANIFEST.json" -Raw -Encoding utf8 | ConvertFrom-Json
+          $chromium = Join-Path $candidateRoot $manifest.extensions.Chromium.path
+          $firefox = Join-Path $candidateRoot $manifest.extensions.Firefox.path
+          python scripts/validation/smoke_extension_browsers.py --extension-output artifacts/candidate-browser-regression/extensions --browser both --chrome-binary "$env:HLS_TEST_EDGE" --firefox-binary "$env:HLS_TEST_FIREFOX" --chromium-archive $chromium --firefox-archive $firefox
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check Edge media recognition
         if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
         timeout-minutes: 10

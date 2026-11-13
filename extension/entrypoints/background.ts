@@ -1403,7 +1403,11 @@ export async function refreshedDownload(downloadId: number, original: Browser.do
     })
   }
   const [current] = await browser.downloads.search({ id: downloadId })
-  return { ...original, ...(current || {}), ...(determined || {}) }
+  // The filename event precedes pause/cancel/completion. Only its filename is
+  // a fallback; its old state and byte counts must not replace a fresh search.
+  const refreshed = { ...original, ...(current || {}) }
+  if (!refreshed.filename && determined?.filename) refreshed.filename = determined.filename
+  return refreshed
 }
 
 async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyIfStillParked = false): Promise<boolean> {

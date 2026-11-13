@@ -1,6 +1,6 @@
 [package]
 name = "hls-native-ui"
-version = "7.0.4"
+version = "7.0.5"
 edition = "2021"
 description = "Native Windows presenter for HLS Downloader 7"
 publish = false
