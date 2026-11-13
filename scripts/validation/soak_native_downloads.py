@@ -19,6 +19,24 @@ from soak_v7_runtime import percentile
 from validation_workspace import test_tmp
 
 
+def resource_growth(samples):
+    results = []
+    for pid in sorted({s['pid'] for s in samples}):
+        process = [s for s in samples if s['pid'] == pid]
+        idle = [s for s in process if s['state'] == 'idle']
+        assert len(idle) >= 2, f'No comparable idle checkpoints for PID {pid}'
+        result = {'pid': pid, 'idle_checkpoints': len(idle),
+                  'initial_idle_handles': idle[0]['handles'],
+                  'final_idle_handles': idle[-1]['handles'],
+                  'peak_idle_handle_growth': max(s['handles'] for s in idle)-idle[0]['handles'],
+                  'peak_handles': max(s['handles'] for s in process),
+                  'peak_rss_growth_mib': max(s['rss_mib'] for s in process)-process[0]['rss_mib']}
+        assert result['peak_rss_growth_mib'] <= 256, result
+        assert result['peak_idle_handle_growth'] <= 16, result
+        results.append(result)
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine', type=Path, required=True)
@@ -77,7 +95,7 @@ def main():
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    report = {'schema': 1, 'passed': False, 'requested_seconds': args.seconds,
+    report = {'schema': 2, 'passed': False, 'requested_seconds': args.seconds,
               'engine_sha256': hashlib.sha256(args.engine.read_bytes()).hexdigest(),
               'scope': '1000 persisted paused tasks plus throttled real loopback range downloads; wall-clock duration',
               'samples': [], 'downloads': [], 'restarts': []}
@@ -86,8 +104,9 @@ def main():
     def save():
         args.report.write_text(json.dumps(report, indent=2), encoding='utf-8')
 
-    def sample(core, began):
+    def sample(core, began, active, checkpoint=None):
         return {'elapsed_seconds': time.monotonic()-began, 'pid': core.process.pid,
+                'state': 'active' if active is not None else 'idle', 'checkpoint': checkpoint,
                 'rss_mib': core.ps.memory_info().rss/2**20,
                 'handles': core.ps.num_handles(), 'cpu_seconds': sum(core.ps.cpu_times()[:2])}
 
@@ -96,7 +115,7 @@ def main():
         save()
         with Core(args.engine, root) as core:
             began = time.monotonic()
-            baseline = sample(core, began)
+            baseline = sample(core, began, None, 'startup')
             report['samples'].append(baseline)
             latencies = []
             active = None
@@ -116,18 +135,25 @@ def main():
                 snapshot = core.snapshot()
                 latencies.append((time.perf_counter()-tick)*1000)
                 assert len(snapshot['tasks']) == 1000 + (active is not None), len(snapshot['tasks'])
+                checkpoint = None
                 if active:
                     task = next(t for t in snapshot['tasks'] if t['task_id'] == active)
                     assert task['status'] not in ('failed', 'canceled'), task
                     if task['status'] == 'completed':
+                        assert task['active_workers'] == 0, task
                         path = Path(task['output_path'])
                         assert path.stat().st_size == len(payload)
                         with path.open('rb') as stream:
                             assert hashlib.file_digest(stream, 'sha256').hexdigest() == digest
                         core.command({'kind': 'task_action', 'task_id': active, 'action': 'delete_files'})
+                        assert len(core.snapshot()['tasks']) == 1000
                         report['downloads'].append({'task_id': active, 'bytes': len(payload),
                                                     'sha256': digest, 'elapsed_seconds': elapsed})
                         active = None
+                        checkpoint = 'download_deleted'
+                # Compare resource ownership at business-defined idle boundaries,
+                # never an idle baseline against workers with open sockets/files.
+                report['samples'].append(sample(core, began, active, checkpoint))
                 if not restarted and active is None and elapsed >= args.seconds/2:
                     previous = core.process.pid
                     core.__exit__()
@@ -136,7 +162,7 @@ def main():
                     report['restarts'].append({'previous_pid': previous, 'new_pid': core.process.pid,
                                                'elapsed_seconds': elapsed, 'tasks_preserved': 1000})
                     restarted = True
-                report['samples'].append(sample(core, began))
+                    report['samples'].append(sample(core, began, None, 'restart'))
                 if len(report['samples']) % 15 == 0:
                     save()
                     print(json.dumps({'elapsed_seconds': round(elapsed, 1),
@@ -148,10 +174,9 @@ def main():
             report['snapshot_max_ms'] = max(latencies)
             report['thresholds'] = {'snapshot_p95_ms': 75, 'working_set_growth_mib': 256,
                                     'handle_growth_per_process': 16, 'download_errors': 0}
-            for pid in {s['pid'] for s in report['samples']}:
-                samples = [s for s in report['samples'] if s['pid'] == pid]
-                assert samples[-1]['rss_mib']-samples[0]['rss_mib'] <= 256, samples[-1]
-                assert samples[-1]['handles']-samples[0]['handles'] <= 16, samples[-1]
+            report['samples'].append(sample(core, began, None, 'final'))
+            report['resource_comparison'] = 'peak RSS across all samples; peak handle growth across comparable idle checkpoints per PID; all active samples retained'
+            report['resource_growth'] = resource_growth(report['samples'])
             assert report['actual_seconds'] >= args.seconds
             assert report['downloads'] and report['restarts']
             assert report['snapshot_p95_ms'] <= 75, report['snapshot_p95_ms']

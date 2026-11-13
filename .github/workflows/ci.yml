@@ -108,6 +108,7 @@ jobs:
           }
           python.exe -m unittest discover -s scripts/validation -p test_v7_core_ipc.py
           python.exe -m unittest discover -s scripts/validation -p test_v7_received_regression.py
+          python.exe -m unittest discover -s scripts/validation -p test_native_soak_resources.py
 
   rust_core:
     name: Rust Core

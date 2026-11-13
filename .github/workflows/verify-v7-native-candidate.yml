@@ -90,6 +90,7 @@ jobs:
           $checks = @(@{ script = 'smoke_native_acceptance.py'; report = 'workbench' })
           $checks += @{ script = 'smoke_native_media.py'; report = 'native-media' }
           if ($env:HLS_TEST_FRAMES -eq 'true') { $checks += @{ script = 'benchmark_native_workbench.py'; report = 'native-frames' } }
+          $failures = @()
           foreach ($check in $checks) {
           $report = Join-Path $repo ('artifacts/candidate-native-regression/' + $check.report + '.json')
           $command = '"' + $python + '" "' + $repo + '\scripts\validation\' + $check.script + '" --runtime "' + $env:HLS_TEST_RUNTIME + '" --report "' + $report + '"'
@@ -107,8 +108,9 @@ jobs:
           if ($process) { Stop-Process -Id $started.ProcessId -Force; throw 'Native acceptance timed out.' }
           if (-not (Test-Path -LiteralPath $report)) { throw 'Native acceptance produced no report.' }
           $result = Get-Content $report -Raw -Encoding utf8 | ConvertFrom-Json
-          if (-not $result.passed) { throw $result.error }
+          if (-not $result.passed) { $failures += "$($check.report): $($result.error)" }
           }
+          if ($failures.Count) { throw ($failures -join "`n") }
       - name: Verify default tail splitting and durable recovery
         if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
         shell: pwsh
@@ -174,6 +176,7 @@ jobs:
             .tool-cache/test-tmp/native-frame-benchmark-*/renderer.log
           if-no-files-found: error
           retention-days: 14
+          include-hidden-files: true
       - name: Stop isolated application processes
         if: always()
         shell: pwsh

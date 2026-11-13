@@ -129,8 +129,12 @@ def main():
         rect = field.rectangle()
         mouse.click(coords=((rect.left+rect.right)//2, (rect.top+rect.bottom)//2))
         send_keys('^a')
-        send_keys(text, with_spaces=True, vk_packet=True)
+        for index, line in enumerate(text.split('\n')):
+            if index:
+                send_keys('{ENTER}')
+            send_keys(line, with_spaces=True, vk_packet=True)
         send_keys('{TAB}')
+        assert field.get_value().replace('\r\n', '\n') == text, (name, field.get_value())
 
     def choose_file(path):
         dialog = wait(lambda: next(iter(desktop.windows(process=ui.pid,
@@ -251,8 +255,10 @@ def main():
             press(main_window, '工具')
             press(main_window, '批量添加')
             batch = window('批量添加')
-            control(batch, '下载地址', 'Edit').set_edit_text('\n'.join(
+            type_field(batch, '下载地址', '\n'.join(
                 f'http://127.0.0.1:{server.server_port}/batch-{n}.bin' for n in (1, 2)))
+            report['batch_input'] = control(batch, '下载地址', 'Edit').get_value()
+            save()
             press(batch, '添加任务')
             batch_tasks = wait(lambda: [t for t in core.snapshot()['tasks']
                 if '/batch-' in t['url'] and t['status'] == 'completed'] or None, 30)
