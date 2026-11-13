@@ -132,7 +132,10 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
         $shell = New-Object -ComObject WScript.Shell
         try {
             $link = $shell.CreateShortcut($shortcut)
-            if ($link.TargetPath -ne (Join-Path $ownedInstallDir 'HLSDownloader.exe') -or $link.WorkingDirectory.TrimEnd('\') -ne $ownedInstallDir.TrimEnd('\')) { throw 'Installed Start Menu shortcut points to the wrong location.' }
+            $shortcutState = [ordered]@{ path = $shortcut; target = $link.TargetPath; working_directory = $link.WorkingDirectory; expected_directory = $ownedInstallDir }
+            [IO.File]::WriteAllText((Join-Path $scenarioRoot 'shortcut.json'), ($shortcutState | ConvertTo-Json), $utf8)
+            if (-not (Test-Path -LiteralPath $link.TargetPath -PathType Leaf)) { throw "Installed Start Menu target does not exist: $($link.TargetPath)" }
+            if ((Get-FileHash -LiteralPath $link.TargetPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.components.'HLSDownloader.exe') { throw 'Installed Start Menu target is not the candidate launcher.' }
         } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
         $probeReport = Join-Path $scenarioRoot 'window.json'
         $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | Where-Object { $_.Key -notmatch '^HLS_' } | ForEach-Object { "$($_.Key)=$($_.Value)" }) + @(

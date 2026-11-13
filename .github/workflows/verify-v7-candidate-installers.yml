@@ -7,6 +7,10 @@ on:
         description: Existing candidate package run whose exact EXE and MSI bytes are tested
         required: true
         type: string
+      exe_only:
+        description: Run only the EXE startup regression (MSI evidence is already available)
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -51,6 +55,7 @@ jobs:
             candidate_run_id = $env:CANDIDATE_RUN_ID
           } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
       - name: Verify installed upgrade and failure rollback
+        if: ${{ !inputs.exe_only }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
