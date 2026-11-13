@@ -30,7 +30,7 @@ public static class HlsStartupWindow {
         do {
             $presenter = @(Get-Process -Name HLSDownloaderPresenter -ErrorAction SilentlyContinue | Where-Object {
                 $_.Path -and $_.Path.StartsWith($ProbeInstallDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -and
-                $_.MainWindowTitle -like 'HLS Downloader*' -and [HlsStartupWindow]::IsWindowVisible($_.MainWindowHandle)
+                $_.MainWindowTitle -like 'HLS Downloader [0-9]*' -and [HlsStartupWindow]::IsWindowVisible($_.MainWindowHandle)
             }) | Select-Object -First 1
             if ($presenter) { break }
             Start-Sleep -Milliseconds 200
@@ -129,14 +129,10 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
             if ((Get-FileHash -LiteralPath (Join-Path $ownedInstallDir $component.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $component.Value) { throw "Installed component mismatch: $($component.Name)" }
         }
         $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'HLS Downloader\HLS Downloader.lnk'
-        $shell = New-Object -ComObject WScript.Shell
-        try {
-            $link = $shell.CreateShortcut($shortcut)
-            $shortcutState = [ordered]@{ path = $shortcut; target = $link.TargetPath; working_directory = $link.WorkingDirectory; expected_directory = $ownedInstallDir }
-            [IO.File]::WriteAllText((Join-Path $scenarioRoot 'shortcut.json'), ($shortcutState | ConvertTo-Json), $utf8)
-            if (-not (Test-Path -LiteralPath $link.TargetPath -PathType Leaf)) { throw "Installed Start Menu target does not exist: $($link.TargetPath)" }
-            if ((Get-FileHash -LiteralPath $link.TargetPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.components.'HLSDownloader.exe') { throw 'Installed Start Menu target is not the candidate launcher.' }
-        } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
+        if (-not (Test-Path -LiteralPath $shortcut -PathType Leaf)) { throw 'Installed Start Menu shortcut is missing.' }
+        # Exercise the saved link itself and require its window/Core to belong
+        # to the exact install root. Keep the original link for diagnostics.
+        Copy-Item -LiteralPath $shortcut -Destination (Join-Path $scenarioRoot 'HLS Downloader.lnk')
         $probeReport = Join-Path $scenarioRoot 'window.json'
         $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | Where-Object { $_.Key -notmatch '^HLS_' } | ForEach-Object { "$($_.Key)=$($_.Value)" }) + @(
             "HLS_V7_DATA_DIR=$data", "HLS_V7_DOWNLOAD_DIR=$(Join-Path $scenarioRoot 'downloads')",
