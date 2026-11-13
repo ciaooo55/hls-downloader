@@ -23,6 +23,7 @@ import traceback
 import psutil
 
 from v7_core_ipc import connect, free_port, send_frame, wait_task
+from smoke_v7_resource_boundaries import wait
 
 
 def sha256(path: Path) -> str:
@@ -83,6 +84,8 @@ def main() -> None:
     report = dict(passed=False, scope="real local authenticated HTTP download + libmpv + native workbench",
                   binaries={key: sha256(getattr(args, key)) for key in ("engine", "ui", "ffmpeg", "libmpv")},
                   ui_observations=[], credential_scope="generated local fixture headers, no browser handoff assertion")
+    report['audio_output_devices'] = ctypes.windll.winmm.waveOutGetNumDevs()
+    report['audio_scope'] = 'Real libmpv audio decoding and track selection; no assertion of audible speaker output on the hosted machine'
 
     def save():
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -178,6 +181,12 @@ def main() -> None:
                     def control(action):
                         return request("player_control", session_generation=generation, action=action)
 
+                    def wait_status(predicate):
+                        def matches():
+                            value = status()
+                            return value if predicate(value) else None
+                        return wait(matches, 5)
+
                     try:
                         stream = connect(port)
                         request("store_settings", values=dict(legal_terms_accepted=True,
@@ -242,7 +251,7 @@ def main() -> None:
                         generation = current["session_generation"]
                         assert current["audio_tracks"] >= 2 and current["subtitle_tracks"] >= 1, current
                         control("pause")
-                        before = status()
+                        before = wait_status(lambda value: value['paused'])
                         time.sleep(.35)
                         after = status()
                         report['pause_observation'] = {'before': before, 'after': after}
@@ -254,8 +263,11 @@ def main() -> None:
                         subtitles = [t for t in after["tracks"] if t["kind"] == "sub"]
                         control(f"audio:{audio[-1]['id']}")
                         control(f"subtitle:{subtitles[0]['id']}")
-                        time.sleep(.2)
-                        current = status()
+                        current = wait_status(lambda value: abs(value['position_seconds']-30) < 2
+                            and abs(value['speed']-1.5) < .01 and abs(value['volume']-40) < 1
+                            and any(t['id'] == audio[-1]['id'] and t['selected']
+                                    for t in value['tracks'] if t['kind'] == 'audio'))
+                        report['track_selection_observation'] = current
                         assert abs(current["position_seconds"]-30) < 2 and abs(current["speed"]-1.5) < .01, current
                         assert abs(current["volume"]-40) < 1, current
                         assert any(t["id"] == audio[-1]["id"] and t["selected"] for t in current["tracks"] if t["kind"] == "audio")

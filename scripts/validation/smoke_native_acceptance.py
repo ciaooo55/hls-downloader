@@ -283,7 +283,7 @@ def main():
             r = handles[0].rectangle()
             start = ((r.left+r.right)//2, (r.top+r.bottom)//2)
             mouse.press(coords=start)
-            mouse.move(coords=(start[0], start[1]+64), duration=.4)
+            mouse.move(coords=(start[0], start[1]+64))
             mouse.release(coords=(start[0], start[1]+64))
             expected = [before[1]['task_id'], before[0]['task_id'], before[2]['task_id'], before[3]['task_id']]
             wait(lambda: [t['task_id'] for t in sorted(core.snapshot()['tasks'],
@@ -314,13 +314,13 @@ def main():
                     assert user.GetWindowRect(main_window.handle, ctypes.byref(outer))
                     return outer if outer.right-outer.left == width and outer.bottom-outer.top == height else None
                 outer = wait(resized)
-                bounds = main_window.rectangle()
+                bounds = outer
                 for name in ('新建', '设置', '工具', '导入', '导出'):
                     button = control(main_window, name, 'Button')
                     r = button.rectangle()
                     assert button.is_visible() and bounds.left <= r.left < r.right <= bounds.right and bounds.top <= r.top < r.bottom <= bounds.bottom, (name, bounds, r)
                 main_window.capture_as_image().save(args.report.with_name(f'layout-{width}x{height}.png'))
-                report['layouts'].append({'width': bounds.width(), 'height': bounds.height(),
+                report['layouts'].append({'width': bounds.right-bounds.left, 'height': bounds.bottom-bounds.top,
                                           'native_outer_pixels': [outer.right-outer.left, outer.bottom-outer.top],
                                           'toolbar_accessible_and_inside_window': True})
             report['checks'].append({'name': 'responsive_native_window_sizes', 'passed': True,

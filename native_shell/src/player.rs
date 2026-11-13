@@ -1125,6 +1125,9 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                     let mut options = vec![
                         ("keep-open", "yes".to_string()),
                         ("idle", "yes".into()),
+                        // Keep audio decoding and the timeline alive if the
+                        // device disappears or this machine has no audio endpoint.
+                        ("audio-fallback-to-null", "yes".into()),
                         // mpv 默认软件解码；只尝试其安全列表，设备/格式不支持时仍自动软件解码。
                         ("hwdec", "auto-safe".into()),
                         (

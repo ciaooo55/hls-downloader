@@ -103,7 +103,7 @@ def main():
                         assert user.GetWindowRect(window.handle, ctypes.byref(outer))
                         return outer if outer.right-outer.left == width and outer.bottom-outer.top == height else None
                     outer = wait(resized)
-                    bounds = window.rectangle()
+                    bounds = outer
                     for name in ('新建', '设置', '工具', '导入', '导出'):
                         def find():
                             return next((e for e in window.descendants(control_type='Button')
@@ -114,7 +114,7 @@ def main():
                     window.capture_as_image().save(args.report.with_name(f'scale-{scale}.png'))
                     report['layouts'].append({'slint_scale_factor': scale,
                         'actual_os_window_dpi': user.GetDpiForWindow(window.handle),
-                        'window_pixels': [bounds.width(), bounds.height()],
+                        'window_pixels': [bounds.right-bounds.left, bounds.bottom-bounds.top],
                         'native_outer_pixels': [outer.right-outer.left, outer.bottom-outer.top],
                         'toolbar_accessible_and_inside_window': True})
                     ui.terminate()
