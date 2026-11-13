@@ -31,6 +31,7 @@ def main():
     if os.name != 'nt' or os.environ.get('GITHUB_ACTIONS') != 'true' or not os.environ.get('RUNNER_NAME'):
         raise RuntimeError('Native desktop acceptance is restricted to an isolated GitHub Actions runner')
     from pywinauto import Desktop
+    from pywinauto import mouse
     from pywinauto.keyboard import send_keys
 
     runtime = args.runtime.resolve()
@@ -118,6 +119,14 @@ def main():
         wait(button.is_enabled, 10)
         button.invoke()
 
+    def type_field(window, name, text):
+        field = control(window, name, 'Edit')
+        rect = field.rectangle()
+        mouse.click(coords=((rect.left+rect.right)//2, (rect.top+rect.bottom)//2))
+        send_keys('^a')
+        send_keys(text, with_spaces=True, vk_packet=True)
+        send_keys('{TAB}')
+
     try:
         with Core(engine, root) as core:
             core.call({'type': 'store_settings', 'request_id': 11, 'values': {
@@ -181,7 +190,7 @@ def main():
             settings = window('设置')
             report['settings_tree'] = tree(settings)
             control(settings, '下载', 'TabItem').invoke()
-            control(settings, '默认并发连接数', 'Edit').set_edit_text('3')
+            type_field(settings, '默认并发连接数', '3')
             press(settings, '保存设置')
             wait(lambda: core.call({'type': 'load_settings', 'request_id': 12})['default_concurrency'] == 3)
             press(settings, '取消')
