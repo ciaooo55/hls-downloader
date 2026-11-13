@@ -67,6 +67,23 @@ jobs:
             candidate_run_id = $env:CANDIDATE_RUN_ID
             exact_source = ($env:GITHUB_SHA -eq $manifest.source_commit)
           } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
+      - name: Set up Rust for dependency-gated component regressions
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.98.1'
+      - name: Cache component test dependencies and target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .tool-cache/build-cache/cargo-target
+          key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+      - name: Exercise dependency-gated FFmpeg curl WinHTTP and installer tests
+        shell: pwsh
+        run: |
+          python scripts/validation/verify_native_components.py --runtime "$env:HLS_TEST_RUNTIME" --report artifacts/candidate-native-regression/components.json
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency-gated native component regressions failed.' }
       - name: Prepare protocol and media validation tools
         if: ${{ inputs.extended }}
         shell: pwsh
@@ -119,6 +136,7 @@ jobs:
           path: |
             artifacts/candidate-native-regression/*.json
             artifacts/candidate-native-regression/*.png
+            artifacts/candidate-native-regression/component-*.log
             .tool-cache/test-tmp/native-acceptance-*/presenter.log
             .tool-cache/test-tmp/native-acceptance-*/core.log
             .tool-cache/test-tmp/native-frame-benchmark-*/renderer.log
