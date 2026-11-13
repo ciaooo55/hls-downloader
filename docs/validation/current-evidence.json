@@ -1,6 +1,6 @@
 {
   "source_baseline": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
-  "status": "native_candidate_in_progress",
+  "status": "implementation_verified_pending_frozen_candidate_acceptance",
   "historical_evidence": {
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
@@ -11,39 +11,50 @@
     "base_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
     "scope": "IPv6 地址、来源与 Cookie 处理；原生播放器预取字幕不足时的暂停与恢复。此记录独立于已发布 rc2。",
     "report": "artifacts/regression-20261111/results.json",
-    "core_tests": { "passed": 654, "failed": 0, "ignored": 13 },
+    "core_tests": {
+      "passed": 654,
+      "failed": 0,
+      "ignored": 13
+    },
     "core_test_partition": [
       "http.log: 86 passed, 8 ignored",
       "credentials.log: 17 passed",
       "core-callers.log: 551 passed, 5 ignored; skipped the two preceding modules"
     ],
-    "presenter_tests": { "passed": 36, "failed": 0, "ignored": 0 },
+    "presenter_tests": {
+      "passed": 36,
+      "failed": 0,
+      "ignored": 0
+    },
     "strict_clippy": "Core and presenter --all-targets passed, using only existing lint allowances; core-clippy.log and ui-clippy.log",
     "execution_scope": "命令行测试、独立本机网络与字幕管道夹具；没有操作个人桌面或浏览器。真实云端字幕质量、完整 GUI/DPI 与长期运行未计通过。"
   },
   "published_candidate": {
-    "tag": "v7.0.4-rc2",
-    "source_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
-    "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4-rc2",
+    "tag": "v7.0.4-rc3",
+    "source_commit": "5d2e65f868a3f6d240674421dadfd56b3d7b7de6",
+    "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4-rc3",
     "release_ready": false,
     "candidate_validation_passed": true,
-    "evidence": "artifacts/release-native-20261110/delivery-eb2364eb/VALIDATION.json",
-    "publication": "artifacts/release-native-20261110/delivery-eb2364eb/PUBLICATION.json",
-    "scope": "已发布预览包的限定验收；不包含此后的源码修复，也不代表完整 GUI/DPI/可访问性或长期稳定性验收。",
+    "evidence": "artifacts/v7-productization/received-candidate-43404821455-908cd5ac503d4b14afb6e5f6ee6d495f/VALIDATION.json",
+    "publication": "artifacts/v7-productization/received-candidate-43404821455-908cd5ac503d4b14afb6e5f6ee6d495f/RELEASE-RECEIPT.json",
+    "manifest_sha256": "b8afdf1ef1a15f1b6a869291954e1984a63445554359bfb5419232b67dc03e42",
+    "scope": "rc3 frozen installers and browser regressions; subsequent working source is a separate candidate. GUI business flows, scale/accessibility and sustained populated workload remain open.",
     "checks": {
-      "core": "651 passed, 13 ignored",
-      "msi": "25 upgrade checks; 23 failure rollback checks",
+      "exe_startup": "Fresh default install, custom Chinese path/schema-6 migration, unsupported-schema message/exit/database preservation",
+      "msi": "Real upgrade and failure rollback",
+      "portable": "Upgrade and rollback",
       "browser_media": "Edge and Firefox: 24 scenarios each",
       "browser_credentials_recovery": "Edge: 50 checks; Firefox: 56 checks",
       "browser_handoff": "Edge and Firefox: 34 checks each",
-      "published_assets": "14 assets; remote digests match received local bytes"
+      "published_assets": "13 assets; local sizes and hashes match GitHub digests",
+      "runtime_soak": "60 seconds idle plus burst of 18000 empty snapshots; not a 30-minute soak"
     },
     "workflows": [
-      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494301",
-      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494285",
-      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494480",
-      "https://github.com/ciaooo55/hls-downloader/actions/runs/42847523594",
-      "https://github.com/ciaooo55/hls-downloader/actions/runs/42853589062"
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/43404821455",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/43408211795",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/43404781469",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/43404781492",
+      "https://github.com/ciaooo55/hls-downloader/actions/runs/43404781537"
     ]
   },
   "features": [
@@ -217,9 +228,13 @@
     },
     {
       "id": "package.install_upgrade_rollback",
-      "assessment": "pending_native_release_acceptance",
-      "evidence": [],
-      "remaining": "原生实现和已验证范围见 docs/validation/native-feature-mapping.md；未通过的发布验收不计通过。"
+      "assessment": "verified_on_rc3_frozen_candidate",
+      "evidence": [
+        "artifacts/v7-productization/received-candidate-43404821455-908cd5ac503d4b14afb6e5f6ee6d495f/exe-startup/result.json",
+        "artifacts/v7-productization/received-candidate-43404821455-908cd5ac503d4b14afb6e5f6ee6d495f/msi-lifecycle/upgrade.json",
+        "artifacts/v7-productization/received-candidate-43404821455-908cd5ac503d4b14afb6e5f6ee6d495f/msi-lifecycle/failurerollback.json"
+      ],
+      "remaining": "Re-run for the next frozen candidate after current launch compatibility changes; rc3 installation is no longer an unexecuted gate."
     },
     {
       "id": "free.cli",
@@ -343,5 +358,141 @@
       "headless_test": "passed; libmpv-headless.json",
       "gui_acceptance": "pending"
     }
+  },
+  "previous_published_candidates": [
+    {
+      "tag": "v7.0.4-rc2",
+      "source_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
+      "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4-rc2",
+      "release_ready": false,
+      "candidate_validation_passed": true,
+      "evidence": "artifacts/release-native-20261110/delivery-eb2364eb/VALIDATION.json",
+      "publication": "artifacts/release-native-20261110/delivery-eb2364eb/PUBLICATION.json",
+      "scope": "已发布预览包的限定验收；不包含此后的源码修复，也不代表完整 GUI/DPI/可访问性或长期稳定性验收。",
+      "checks": {
+        "core": "651 passed, 13 ignored",
+        "msi": "25 upgrade checks; 23 failure rollback checks",
+        "browser_media": "Edge and Firefox: 24 scenarios each",
+        "browser_credentials_recovery": "Edge: 50 checks; Firefox: 56 checks",
+        "browser_handoff": "Edge and Firefox: 34 checks each",
+        "published_assets": "14 assets; remote digests match received local bytes"
+      },
+      "workflows": [
+        "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494301",
+        "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494285",
+        "https://github.com/ciaooo55/hls-downloader/actions/runs/42847494480",
+        "https://github.com/ciaooo55/hls-downloader/actions/runs/42847523594",
+        "https://github.com/ciaooo55/hls-downloader/actions/runs/42853589062"
+      ]
+    }
+  ],
+  "source_iteration_20261113": {
+    "scope": "原生工作台、抓站明细刷新、启动兼容与尾块分流；后续待验收候选独立于已发布 rc3。",
+    "source_ci": {
+      "source_commit": "91e44384",
+      "passed": true,
+      "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43421065406",
+      "jobs": [
+        "Rust Core",
+        "Native presenter",
+        "Browser extensions",
+        "Validate contracts",
+        "Compose workbench and distribution"
+      ],
+      "next_source": "48d7230e: Core, presenter, extensions and Compose passed; contracts failed because a unit-test import required psutil; import dependency fixed in c56712f0, final exact-SHA CI still required."
+    },
+    "local_checks": {
+      "native_host_regressions": {
+        "passed": 26,
+        "failed": 0
+      },
+      "client_strict_clippy": "hls-client/hls-native-clients --all-targets -D warnings passed",
+      "native_ui_cargo_check": "passed",
+      "release_report_integrity_tests": {
+        "passed": 6,
+        "failed": 0
+      },
+      "powershell_validation": "61 scripts and release gate/version contract passed",
+      "player_module": {
+        "passed": 3,
+        "failed": 0,
+        "scope": "Compiled current player source; null backend and IPC frame boundaries, not real libmpv playback"
+      },
+      "soak_resource_comparison": {
+        "passed": 4,
+        "failed": 0,
+        "scope": "Idle handle growth budget, active peak RSS and restart baselines"
+      }
+    },
+    "fixes": [
+      "抓站窗口可见时每秒读取当前项目明细，保留按 URL 勾选的资源，不以后台刷新覆盖用户操作",
+      "修复 Native Host 本地单元夹具误启动缓存桌面程序，以及启动器严格 Clippy 失败",
+      "正式发布改用 GitHub hosted Windows；同源浏览器、原生帧/布局、长期下载及媒体解码证据均须绑定候选 manifest 和组件哈希"
+    ],
+    "release_state": "开发诊断所列功能已通过；canonical readiness 只允许进入最终同源发布门禁，不表示正式版已发布。最终冻结提交仍必须重新构建并通过源码、浏览器、原生长期负载和安装验收。",
+    "firefox_distribution": "用户确认当前先交付代码和待签名 ZIP；无 AMO 流程，标准 Firefox 永久安装验收未完成。",
+    "execution_scope": "本机仅 CLI 检查；GUI、浏览器、安装与长时成品验收仅在 GitHub 独立测试机执行，未操作个人桌面。",
+    "development_diagnostics": {
+      "candidate_source_commit": "c42636a4e20910f431f9e99ed779232f18d43a28",
+      "candidate_run": 43418990480,
+      "candidate_passed": true,
+      "candidate_scope": "Portable upgrade/rollback, packaged CLI/Core/Host, transfer performance, actual MSI upgrade/failure rollback, EXE default/custom-path shortcut startup and schema preservation",
+      "native_validation_source_commit": "c56712f04a5a7391d7fb2d2a35ec119faaea06d0",
+      "native_run": 43428228450,
+      "same_source_release_evidence": false,
+      "workbench_checks_passed": 13,
+      "workbench_scope": "Actual UIA/keyboard input, crawl discovery/selection preservation/enqueue, batch creation, Shift/Ctrl selection, queue dragging, Windows file-picker import/export, actual 620x480/960x640/1400x820 resizing",
+      "native_media_passed": true,
+      "native_media_scope": "Authenticated download and real libmpv pause/seek/speed/volume/track selection/thumbnail/late embedding; no audible speaker assertion on the zero-endpoint hosted machine",
+      "frames": {
+        "passed": true,
+        "frame_count": 1196,
+        "measured_seconds": 18.322166,
+        "p95_ms": 15.8766,
+        "max_ms": 21.6023
+      },
+      "scale_scope": "Slint overrides 1/1.25/1.5/2; actual OS DPI 96; does not prove physical multi-monitor switching",
+      "evidence": "artifacts/release-native-20261113/native-diagnostic-43428228450",
+      "failure_history": "Earlier UI overlays failed on unsupported test APIs, transient player state and mixed UIA/Win32 bounds. Failed reports remain in artifacts/release-native-20261113; no failed run was promoted.",
+      "sustained_downloads": {
+        "validation_run": 43424999562,
+        "validation_source_commit": "d51ca74f122099592628baa6583defb11c55c144",
+        "candidate_source_commit": "c42636a4e20910f431f9e99ed779232f18d43a28",
+        "same_source_release_evidence": false,
+        "passed": true,
+        "actual_seconds": 1811.484,
+        "persisted_tasks": 1000,
+        "downloads": 157,
+        "restarts": 1,
+        "peak_rss_mib": 43.41796875,
+        "snapshot_p95_ms": 35.9256,
+        "peak_idle_handle_growth_per_process": 1,
+        "report": "artifacts/release-native-20261113/native-extended-43424999562/artifacts/candidate-native-regression/sustained-downloads.json",
+        "other_passed": [
+          "FTP/SFTP and recovery",
+          "decoded HLS/DASH/live/audio failure recovery",
+          "media track progress",
+          "public HTTPS",
+          "default range tail split and durable recovery"
+        ],
+        "run_scope": "总体工作流因已修复的旧 GUI 测试失败而失败；此记录仅列后续实际通过的检查，不将该工作流标记成功。"
+      }
+    },
+    "superseded_candidate": {
+      "run_id": 43427481258,
+      "source_commit": "48d7230e894aee1792dd6c92f11dd54d19a7ec94",
+      "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43427481258",
+      "scope": "开发构建；后续冻结提交包含验证脚本修复和合同收敛，不作为最终发布候选。"
+    }
+  },
+  "implementation_readiness": {
+    "eligible_for_frozen_release_gates": true,
+    "formal_release_published": false,
+    "meaning": "功能合同在明确范围内完成实现验收；正式交付仍须五项门禁、同源 CI、候选哈希和最终 EXE 启动全部通过。",
+    "distribution_limits": [
+      "Windows 安装包按既有要求不签名；自动更新签名校验保留",
+      "Firefox 提供待 Mozilla 签名 ZIP 与源码",
+      "真实投屏/TVBox 和付费云字幕质量按既有用户排除保留"
+    ]
   }
 }

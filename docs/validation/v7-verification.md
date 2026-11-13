@@ -1,11 +1,11 @@
 # 当前验证状态
 
-本轮从提交 `27fd2d06b8426356ded1372c31d11265ca4c436f` 开始全面收敛。当前验证尚未完成，不能把历史报告计入新源码通过项。
+当前公开版本为原生 `v7.0.4-rc3`。2026-11-13 的桌面业务、安装启动和长期下载开发诊断已完成；最终正式交付仍要求冻结提交的同源成品验收，不能把其他提交的报告直接计入通过项。
 
 - 当前逐项状态：[验证清单](current-evidence.json)。
 - 本轮修改、结果及限制：[收敛记录](convergence.md)。
-- 本轮原始日志与测试矩阵：工作区 `artifacts/convergence-20261031/`。
-- 功能合同：`config/release/feature-parity.json`；正式发布门禁继续保持未就绪。
+- 当前开发诊断：工作区 `artifacts/release-native-20261113/`；较早收敛日志保留在 `artifacts/convergence-20261031/`。
+- 功能合同：`config/release/feature-parity.json`；readiness 只表示实现已可进入冻结发布门禁，正式发布仍需同源 CI、浏览器、原生完整验收和哈希绑定的发布证据。
 
 历史截图、日志和中间候选记录已从当前工作树移除。完整原文仍在上述 Git 提交，例如：
 

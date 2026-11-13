@@ -31,7 +31,7 @@ The recorder retains five candidate-bound gates:
 
 The existing user-approved cloud subtitle quality exclusion also remains explicit. Neither exclusion removes the feature implementation or claims unexecuted tests passed. The legacy self-hosted media-push readiness workflow is outside this release path and must not be dispatched on the operator’s machine.
 
-`build-v7.ps1 -Task package` still requires complete canonical metadata, readiness, a clean source tree and exact current release evidence. The formal workflow then refuses executable components whose hashes differ from the tested candidate. It stages installers, extensions and Firefox sources, provenance, SBOM, evidence and SHA256 sums. Uploaded GitHub asset sizes and digests must match before publication.
+`build-v7.ps1 -Task package -CandidateManifestPath <received-manifest>` requires complete canonical metadata, readiness, a clean source tree and exact current release evidence. Native formal packaging promotes the tested executables and browser ZIPs from the authenticated Portable image: a fresh MSVC link would change PE timestamps, so rebuilding the same source does not prove byte identity. The formal workflow checks executable and extension hashes again, then actually installs the promoted EXE and launches its shortcut. It stages installers, extensions and Firefox sources, provenance, SBOM, evidence (including formal EXE startup) and SHA256 sums. Uploaded GitHub asset sizes and digests must match before publication.
 
 ## Retry behavior
 

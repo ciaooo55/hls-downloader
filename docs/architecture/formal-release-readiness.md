@@ -14,9 +14,9 @@
 
 正式发布以最终冻结的 `main` SHA 为单位。后续任何提交都会产生新的待验证 SHA，包括文档提交；旧 SHA 的 CI 不能直接套用。
 
-流水线要求同 SHA 的 CI、安全工作流和手动候选构建成功，再在专用交互式 Windows runner 上产生 candidate 绑定的 browser、performance、browser_media_push、installer 和 rollback 五项证据。构建正式包前复查远端 main 未移动。
+流水线要求同 SHA 的 CI、安全工作流和手动候选构建成功，再在 GitHub hosted 独立 Windows runner 上产生 candidate 绑定的 browser、performance、browser_media_push、installer 和 rollback 五项证据。构建正式包前复查远端 main 未移动。canonical readiness 表示允许进入这套冻结门禁，不能替代实际门禁结果。
 
-runner、真实 Edge/Firefox、局域网接收端、专用 MSI 生命周期环境及发布权限是外部前提。缺少前提应报告阻塞，不能用模拟设备、直接 Core 调用或跳过门禁冒充真实链路。详见 [runner 合同](../releases/v7-release-runner.md)。
+真实 Edge/Firefox、独立 MSI 生命周期环境及发布权限由 hosted 流程核验。真实投屏/TVBox 与付费云字幕质量按既有用户决定排除，并明确记录未执行；Firefox 按用户决定交付待 Mozilla 签名 ZIP 和源码。不能用模拟设备或直接 Core 调用冒充真实链路。详见 [runner 合同](../releases/v7-release-runner.md)。
 
 ## 信任与授权
 

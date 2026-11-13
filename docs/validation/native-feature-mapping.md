@@ -1,13 +1,13 @@
 # 原生迁移功能映射
 
-源清单：`config/release/feature-parity.json` 的 33 项。这里单独登记原生迁移情况；旧 Compose 的 verified 不继承给原生候选。实现存在、定向验证、候选验收是三个不同状态。构建脚本默认原生入口，历史公开包仍为 Compose，`release_ready=false`。
+源清单：`config/release/feature-parity.json` 的 33 项。这里单独登记原生迁移情况；旧 Compose 的 verified 不继承给原生候选。实现存在、定向验证、候选验收是三个不同状态。构建脚本默认原生入口，公开预发布为原生 `v7.0.4-rc3`，`release_ready=false`。2026-11-13 开发候选和最新实际验收见 [当前验证表](current-evidence.json)；不同源码脚本的诊断不能替代最终同源验收。
 
 | 功能 ID | 原生入口 / 所属模块 | Core 合同 | 原生迁移状态与剩余验收 |
 |---|---|---|---|
 | architecture.single_core | `native_ui/src/workbench.rs`、`crates/client` | Hello、Capabilities、ListTasks、WaitEventBatch | 已拆分；依赖边界通过，候选组合仍待验收 |
 | workbench.geometry | `native_window.rs`、`workbench.slint` | 现有窗口 properties | 工作区夹取、实际 HWND；2026-11-09 窄窗恢复下限与当前 560×360 最小尺寸对齐，避免重开被强制放大。多显示器、混合 DPI、移屏及本次恢复增量未实窗验收 |
 | workbench.foundation_component_architecture | `ui/theme.slint`、`workbench_components.slint` 与页面组件 | 无业务状态所有权 | 保留原 SVG/图案，52 个共享图标、14 类窗口均设置应用图标；共享控件尺寸/圆角/间距并固定 Fluent 样式。38 个计划视图已分轮实窗查看，修正图标偏位、字段/按钮拉伸、投屏初始尺寸、系统页裁切与 PiP 标题栏并复验；截图按实际二进制登记。完整 GUI 业务、混合 DPI 与完整键盘/读屏未验收 |
-| tasks.selection_keyboard_queue | `task_list.rs`、工作台列表和右键菜单 | TaskAction、ReorderQueue、PlaceQueue | Ctrl/Shift、Ctrl+A/Esc、队列动作已接；2026-11-09 实窗确认更多菜单保留两项选择、复制重读两项、单选清除其他勾选与取消选择同步。全部开始包含隐藏暂停任务且不重写成品，完成任务显式重新下载保留；拖动和全部排序未验收 |
+| tasks.selection_keyboard_queue | `task_list.rs`、工作台列表和右键菜单 | TaskAction、ReorderQueue、PlaceQueue | 2026-11-13 c42636a4 成品以真实键盘完成 Ctrl+A/Esc、Shift 范围多选，并以鼠标拖动改变实际 Core 队列顺序；13 项业务验收通过。最终同源候选仍须复验。 |
 | tasks.named_queue_profiles | `queue_editor.rs`、`queues.slint` | StoreSettings、AssignQueue | 此前真实 UI 新增→保存→关闭→重开通过；最新统一样式候选再次真实 UI 新增/保存、主窗显示并经 Core 重读确认；批量分配、计划执行与限额组合待验收 |
 | tasks.details_logs_speed_connections | `DetailsWindow`、`workbench.rs` | GetTaskLog、TaskAction(speed) | 详情、图表、日志、限速已接；图表/连接显示和多窗口压力待验收 |
 | tasks.refresh_signed_url | 详情“更新并继续” | RefreshTaskRequest | 已接；2026-11-10 暂停后刷新地址并发布新响应的真实本机 HTTP 回归通过，保持原 5 秒门槛；新 UI 带凭据失败恢复待验收 |
@@ -15,7 +15,7 @@
 | import.file_picker_and_drop | 文件选择器、winit DroppedFile、共享 Windows 文件交互 | ImportPaths | 2026-11-09 实窗多选复制 2 项经 Windows CF_HDROP 重读确认，Core 后台复制通过；Explorer 三文件粘贴导入两份有效列表，无效列表未新增任务，GUI 明确提示部分成功。OLE 跨窗口拖出与 Esc 取消未验收；旧关机通知已过期 |
 | export.normalized_task_list | 工作台导出 | ExportTasks | 2026-11-09 真实另存为导出 5 项，schema、内容与无合成 Cookie 泄漏检查通过；未将此扩大为所有导出格式通过 |
 | import.exported_task_json | 工作台导入 | ImportPaths | 两份 Core 格式列表经真实 GUI 粘贴导入成功；真实导出内容已检查，导出文件再次导入的完整往返仍待验收 |
-| workbench.automatic_responsive_layout | 工作台、主题设置 | 窗口尺寸、task_sort | 按用户 2026-11-09 要求改为自动布局：删除逐列宽度/显示顺序、工具栏排列及重置入口，窄窗自动收起速度/大小列并压缩工具栏。453–1920 可用宽度范围与伸缩恢复两项回归通过；本轮长队列标题可省略并显示完整 Tooltip，25 项 UI 回归、新 Release 构建与自检通过。上批标题栏 API 证据单独保留。用户禁止桌面操作后未再检查实窗，宽窄布局、外观页与旧布局保存不受影响尚未实窗验收。历史手工布局验收不作为当前设计要求 |
+| workbench.automatic_responsive_layout | 工作台、主题设置 | 窗口尺寸、task_sort | 自动布局保留；2026-11-13 实际 620×480、960×640、1400×820 HWND 尺寸和四档 Slint 缩放通过，工具栏控件在窗口内。实际 OS DPI 为 96，软件缩放不冒充物理多显示器切换。 |
 | media.hls_transfer_parity | 新建 HLS、任务动作 | CreateTask、TaskAction、RefreshTaskRequest | Core 保留；原生 UI HLS/DASH/直播、断点及成品组合待验收 |
 | media.local_player_controls | `media_controller.rs`、`media.slint` | PlayTask、PlayerControl、PlayerEmbed、PlayerThumbnail | 最新样式候选真实鉴权视频哈希、轨道/暂停/seek/倍速/音量/预览通过；同会话主窗/PiP/全屏往返，主窗最小化后的独立 PiP 与返回通过，PiP 标题栏和应用图标已复验。播放未额外请求源；悬停预览增量待验收。2026-11-09 会话换片、停止及成品切换撤销旧本机挂载，真实 HTTP 206→404 回归通过；本轮播放器为 null 后端，未追加 GUI 验收 |
 | media.cast_dlna_chromecast | `cast_tools.rs`、`cast_tools.slint` | DiscoverCastDevices、CastToDevice、ShareMedia、CastControl | 已编译；本机模拟接收端验证了设备选择、来源恢复、代数和停止；DLNA/Chromecast 实机与组播发现按既有排除 |
@@ -31,12 +31,12 @@
 | browser.hot_confirmation_process | `hot_main.rs`、激活管道 | PresentHandoff | 确认、进度、完成与单实例已迁；同包带凭据交接呈现时延未验收 |
 | browser.online_subtitle_translation | 扩展字幕、`ServiceSettingsWindow`、`player_subtitles.rs` | configuration/configure/start/audio/reset/poll/stop | 本地配置、DPAPI 保存、主窗/PiP 字幕 HUD、按需工作线程与 Core 自有字节有界解码已接。2026-11-11 补齐现有预取模式的字幕不足自动暂停、准备完成恢复、用户暂停优先、偏移与速度对应的时间轴、禁用/错误退出及旧会话失效；本轮源码验证见 `native-migration-progress.md`。rc2 包不包含此修复；新包 GUI 和真实云质量未计通过 |
 | accessibility.automation | Slint accessibility、工作台控件与列表标签 | 无 | 已实际读取 UIA 控件树并完成中文搜索和部分操作；输入法组合输入、完整 Tab/读屏未验收 |
-| performance.release_thresholds | Release 构建和性能脚本 | 完整组合 | 2026-11-10 新 Core 的两次 256 MiB 本机下载为 32.58/41.13 MiB/s，哈希正确、发布后额外读取 0，峰值工作集 27.09/27.21 MiB；修正检查点等锁/同步误触发降并发，保留 8 MiB 持久化。60 秒空闲及 18,000 次空任务快照 IPC 通过，p95 0.203 ms、错误 0；四 Host 并发只启动一个 Core，最慢首次回执 968.29 ms。低并发候选的两次性能失败均保留。完整包、千任务及长期运行尚未验收；无同条件 IDM 对照 |
-| package.install_upgrade_rollback | 原生 launcher、WiX、Portable、Updater | 既有更新合同 | 已增加原生 EXE/MSI/Portable 构建路径，默认不使用 Compose/JRE；轻量 WiX 结构夹具通过，支持已公开 Compose 7.0.3 自定义目录迁移。真实安装/升级/失败回滚尚未验收，P6/P7 未完成 |
-| free.cli | `native_clients` CLI | 共享客户端、原有命令 | 已与 Core 库解耦；2026-11-10 与最新 Core 组合完成单 Core 启动、下载/暂停/重启恢复、队列、导入导出、显式删除、stdin 上下文及脱敏的本机成品验收；未扩大为全部命令与退出码组合通过 |
-| free.crawl_sync | `ResourceToolsWindow` 抓站模式 | Crawl 各动作 | 项目创建、列表、暂停、恢复、同步、入队已接；2026-11-10 最新 Core 本机集成验证通过循环/深度边界、预览恢复、跨域请求前拒绝、ETag、失败保留旧文件、队列窗口与定时同步；原生 GUI 往返仍待验收 |
-| free.zip_preview | `ResourceToolsWindow` ZIP 模式 | PreviewZip | 2026-11-09 本地路径经原生 UI 输入并读取，正确显示两项归档内容；远程 ZIP 经真实 Core API 读取通过。远程 GUI 和系统选择器选中 ZIP 仍未验收：owned 弹窗自动化输入/缓存异常，未用 Core 结果替代 GUI 通过 |
-| http.active_tail_split | 现有实验开关、Core RangeScheduler | 调度内部 | 保持默认关闭；新候选正确性、崩溃恢复及收益比较未完成 |
+| performance.release_thresholds | Release 构建和性能脚本 | 完整组合 | c42636a4 成品 Host/IPC/真实传输通过；1000 任务实际重绘 1196 帧、约 18.32 秒、p95 15.88 毫秒。1811.484 秒持续负载完成 157 次下载和一次保留 1000 任务的重启，峰值工作集 43.42 MiB，空闲句柄峰值增长每进程 1。开发诊断不替代最终同源门禁；没有同条件 IDM 性能对照。 |
+| package.install_upgrade_rollback | 原生 launcher、WiX、Portable、Updater | 既有更新合同 | rc3 及 c42636a4 成品均通过真实 EXE 安装/快捷方式启动、MSI 升级/故障回滚、Portable 升级/回滚。旧 schema 迁移通过；不支持 schema 的报错/退出/原数据库字节保全通过。最终正式 EXE 仍须独立安装复验。 |
+| free.cli | `native_clients` CLI | 共享客户端、原有命令 | c42636a4 成品通过单 Core 启动、下载/暂停/重启恢复、队列、导入导出、显式文件删除、stdin 上下文和默认脱敏；不扩大为任意命令和退出码组合保证。 |
+| free.crawl_sync | `ResourceToolsWindow` 抓站模式 | Crawl 各动作 | c42636a4 成品 API 回归通过循环/深度/跨域边界、ETag、失败保留旧文件、队列窗口及定时同步；真实原生 GUI 创建、后台发现、刷新勾选保留及入队下载通过。 |
+| free.zip_preview | `ResourceToolsWindow` ZIP 模式 | PreviewZip | c42636a4 成品远程 ZIP 元数据有界读取、资源变化和 2200 项中央目录回归通过；真实原生窗口输入远程地址并列出归档内容通过。 |
+| http.active_tail_split | 现有实验开关、Core RangeScheduler | 调度内部 | 已校验的 HTTP Range 资源默认启用动态尾块；三轮真实成品比较的均匀场景约 1.44 秒持平，慢尾场景 raw/WinHTTP 代理约从 5.07 秒降至 2.03/2.04 秒，暂停及强杀恢复通过。比较对象、完整报告和额外服务端写入量分别记录；不是同条件 IDM 比较。 |
 | http.coordinated_range_stop | `http_engine.rs` 范围 worker、正文循环及 TCP/WinHTTP/curl 等待 | 调度内部，无协议变化 | 2026-11-09 补齐共享停止到传输层的传播，保留暂停原因与首个错误；单流接收原 200 响应时解除范围停止绑定。2026-11-10 最终 HTTP 83 项通过、8 项忽略，覆盖本机 TCP/WinHTTP 响应头、正文、chunked 停滞及原响应复用。curl 新停止分支未运行专用组件回归；DNS/连接阶段仍有底层超时边界。最新成品验证见实施记录 |
 | http.ipv6_download | `http_engine.rs`、`credentials.rs` | 既有 HTTP 下载与媒体请求 | 2026-11-11 支持方括号 IPv6 字面地址，统一 Host、重定向、连接复用与来源判断；Cookie 域匹配支持压缩/完整/IPv4 映射写法并保持跨源隔离。HTTP 86 项、凭据 17 项回归通过，包含本机 IPv6 TCP/WinHTTP 的真实 Range 与重定向。不支持 zone identifier；未将本机 HTTP 测试记为公网 IPv6 HTTPS 验收。rc2 包不包含此修复 |
 

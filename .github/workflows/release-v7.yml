@@ -310,6 +310,18 @@ jobs:
           gh release edit $env:HLS_V7_TAG --repo $env:GITHUB_REPOSITORY --draft=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Preserve formal validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-formal-validation-${{ github.sha }}
+          path: |
+            artifacts/v7-productization/release-evidence.json
+            artifacts/v7-productization/release-evidence/**
+            artifacts/v7-productization/exe-startup/**
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Stop release-owned processes
         if: always()
         shell: pwsh

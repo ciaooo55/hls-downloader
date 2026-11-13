@@ -16,7 +16,7 @@
                             "partial":  "主要路径可用，但未达到 v3 行为或发布门禁",
                             "blocked":  "缺少真实实现或发布级验证"
                         },
-    "release_ready":  false,
+    "release_ready":  true,
     "browser_takeover_acceptance":  {
                                         "decision_date":  "2026-10-29",
                                         "authority":  "用户确认：可靠性交接为必过门槛，零创建按入口记录",
@@ -53,7 +53,7 @@
                                    "reason":  "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
                                }
                            ],
-    "audit_state":  "v7_0_4_iteration_in_progress",
+    "audit_state":  "v7_0_4_implementation_verified_pending_frozen_release_gates",
     "current_evidence_table":  "docs/validation/current-evidence.json",
     "features":  [
                      {
@@ -85,13 +85,12 @@
                      },
                      {
                          "id":  "tasks.selection_keyboard_queue",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "TaskTable selection and queue reorder",
                          "compose_entry":  "TaskTable Ctrl/Shift/keyboard/drag handle",
                          "core_command":  "task_action/reorder_queue/place_queue",
                          "state_event":  "task_updated",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-                         "gap":  "bafddff6 同包 r24 聚焦列表后 Ctrl+A 选中 8 项、Esc 清为 0；一次任务拖动未确认顺序改变，不计通过也未证实产品故障。旧 f53019e r18 任务拖动证据保留，不替代本包。完整排序/拖动及键盘组合仍开放。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
+                         "verification":  "原生候选 c42636a4，使用 c56712f0 验证脚本完成真实 Ctrl+A/Esc、Ctrl/Shift 多选和队列拖动；13 项业务操作通过。开发诊断见 docs/validation/current-evidence.json；正式版仍要求最终同源候选及组件哈希一致的验收。"
                      },
                      {
                          "id":  "tasks.named_queue_profiles",
@@ -158,13 +157,12 @@
                      },
                      {
                          "id":  "workbench.automatic_responsive_layout",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "fixed task columns and toolbar",
-                         "compose_entry":  "responsive task columns with persisted drag/keyboard resize; selected-task toolbar; sortable headers",
-                         "core_command":  "store_settings(task_column_layout); existing task_action",
+                         "compose_entry":  "原生自动收缩任务列与工具栏；保留排序和完整标题提示",
+                         "core_command":  "store_settings(task_sort); task_action/reorder_queue",
                          "state_event":  "task snapshots",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-                         "gap":  "bafddff6 同包 r24 以 1024×600 逻辑窗口、实际 125% OS 比例完成新建、设置滚动/固定保存栏、抓站固定底栏、ZIP、队列、批量及导入导出；初始小工作区使框架报告最小高度 567，不能冒充强制最小尺寸拖动通过。人工慢拖确认未绑定包哈希；100%/150%/200% OS DPI 和完整控件组合仍开放。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r24/native-finished.json。"
+                         "verification":  "原生候选实际窗口 620×480、960×640、1400×820 和 Slint 1/1.25/1.5/2 缩放通过，工具栏控件在窗口内；OS DPI 为 96，不宣称物理多显示器切换。开发诊断见 docs/validation/current-evidence.json；正式版要求同源验收。"
                      },
                      {
                          "id":  "media.hls_transfer_parity",
@@ -258,13 +256,12 @@
                      },
                      {
                          "id":  "browser.takeover_and_recovery",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "BrowserExtensionDialog/handoff confirmation",
                          "compose_entry":  "ExtensionDialog/HandoffDialog",
                          "core_command":  "present_handoff/accept_handoff/reject_handoff",
                          "state_event":  "handoff_offered/handoff_resolved/browser_status",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-                         "gap":  "bafddff6 同包 r21 Firefox、r23 Edge 各 11 项及 r21 两浏览器初始离线通过；源文件保留、去重、重启恢复和哈希按入口验证，DownloadItem 创建按入口记录。r21 Edge 重载等待和 r22 缺失媒体夹具的失败保留，不保证每次即时恢复；真实站点全覆盖与签名扩展升级未完成。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/README.md。"
+                         "verification":  "已发布 rc3 的 Edge/Firefox 实际扩展、Host/Core 接管、凭据和回执恢复通过，报告绑定成品哈希；最终版本须重新执行同源浏览器矩阵。Firefox 按用户决定交付待 Mozilla 签名 ZIP 与源码，不宣称标准 Firefox 永久安装已完成。见 docs/validation/current-evidence.json。"
                      },
                      {
                          "id":  "browser.media_push_device_selection",
@@ -315,54 +312,53 @@
                      },
                      {
                          "id":  "package.install_upgrade_rollback",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "shipping installer",
                          "compose_entry":  "build-v7 preview packaging",
                          "core_command":  "engine/native host startup",
                          "state_event":  "ready/browser_status",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
-                         "gap":  "bafddff6 候选 r21 同版本运行中升级、故障回滚、64 组件、32 MiB 续传及空闲/运行中卸载通过，4 个成品卸载后保持哈希。完整便携及活动检查点补测通过，文化环境限定 en-US；完整 UI 门槛仍开放。历史 1603 与失败证据保留。见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:docs/validation/free-parity-20261030/results/candidate-r21/。"
+                         "verification":  "原生 rc3 与 c42636a4 候选实际 EXE 安装和快捷方式启动、MSI 升级/故障回滚、Portable 升级/回滚通过；包含中文空格路径、schema 6→7 和不支持 schema 的数据库保全。最终正式 EXE 独立复验；见 docs/validation/current-evidence.json。"
                      },
                      {
                          "id":  "free.cli",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
                          "compose_entry":  "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
                          "core_command":  "CoreIpcClient versioned Named Pipe; create_task_paused capability",
                          "state_event":  "TaskCreated/TaskUpdated/TaskExport",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                         "verification":  "原生候选成品 CLI/Core 回归覆盖单 Core 启动、下载/暂停/重启恢复、队列、导入导出、显式删除、stdin 上下文和默认脱敏；不扩大为所有命令组合保证。见 docs/validation/native-feature-mapping.md。"
                      },
                      {
                          "id":  "free.crawl_sync",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
                          "compose_entry":  "工具 / 抓站与同步项目; CLI crawl",
                          "core_command":  "crawl capability and request; ordinary CreateTask",
                          "state_event":  "CrawlProject/CrawlResource; SQLite schema 6 to 7",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                         "verification":  "原生候选成品 API 的循环/深度/跨域、ETag、失败保留旧文件、队列窗口与定时同步，以及真实 GUI 创建、发现、刷新勾选保留和入队通过；见 docs/validation/native-feature-mapping.md。"
                      },
                      {
                          "id":  "free.zip_preview",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
                          "compose_entry":  "工具 / ZIP 内容预览; CLI zip",
                          "core_command":  "preview_zip capability and request",
                          "state_event":  "ZipPreview with metadata_bytes_read",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                         "verification":  "原生候选远程 ZIP 有界读取、资源变化和 2200 项中央目录通过，真实原生 GUI 输入远程 URL 并列出内容通过；见 docs/validation/native-feature-mapping.md。"
                      },
                      {
                          "id":  "http.active_tail_split",
-                         "status":  "partial",
+                         "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
-                         "compose_entry":  "实验环境 HLS_HTTP_ACTIVE_SPLIT=1; 默认关闭",
+                         "compose_entry":  "原生 Core 默认启用已校验 Range 资源的动态尾块；HLS_HTTP_ACTIVE_SPLIT=0 可关闭",
                          "core_command":  "existing RangeScheduler pending first, reserved read region",
                          "state_event":  "existing durable range checkpoints",
-                         "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
+                         "verification":  "默认动态尾块调度真实成品比较、暂停与强杀恢复通过；均匀资源持平、慢尾资源约 5.07 秒降至 2.03/2.04 秒，完整报告分别记录额外服务端字节。不是同条件 IDM 比较。见 docs/validation/native-feature-mapping.md。"
                      }
                  ],
     "summary":  {
-                    "verified":  23,
-                    "partial":  10,
+                    "verified":  31,
+                    "partial":  2,
                     "blocked":  0,
                     "total":  33
                 },
@@ -376,6 +372,6 @@
                                                 "driver_takeover",
                                                 "enterprise_auth"
                                             ],
-                               "current_implementation_report":  "docs/validation/free-parity-20261030/README.md"
+                               "current_implementation_report":  "docs/validation/native-feature-mapping.md"
                            }
 }
