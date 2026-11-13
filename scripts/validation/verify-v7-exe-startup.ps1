@@ -3,7 +3,8 @@ param(
     [string]$CandidateManifestPath = '',
     [string]$ProbeInstallDir = '',
     [string]$ProbeShortcut = '',
-    [string]$ProbeReport = ''
+    [string]$ProbeReport = '',
+    [switch]$ProbeExpectedFailure
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,7 @@ public static class HlsStartupWindow {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeoutW(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
 }
 '@
         Start-Process -FilePath $ProbeShortcut | Out-Null
@@ -30,26 +32,40 @@ public static class HlsStartupWindow {
         do {
             $presenter = @(Get-Process -Name HLSDownloaderPresenter -ErrorAction SilentlyContinue | Where-Object {
                 $_.Path -and $_.Path.StartsWith($ProbeInstallDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -and
-                $_.MainWindowTitle -like 'HLS Downloader [0-9]*' -and [HlsStartupWindow]::IsWindowVisible($_.MainWindowHandle)
+                $(if ($ProbeExpectedFailure) { $_.MainWindowTitle -eq 'HLS Downloader' } else { $_.MainWindowTitle -like 'HLS Downloader [0-9]*' }) -and
+                [HlsStartupWindow]::IsWindowVisible($_.MainWindowHandle)
             }) | Select-Object -First 1
             if ($presenter) { break }
             Start-Sleep -Milliseconds 200
         } while ((Get-Date) -lt $deadline)
-        if (-not $presenter) { throw 'Installed shortcut did not open a visible workbench within 45 seconds.' }
-        $rect = New-Object HlsStartupWindow+Rect
-        if (-not [HlsStartupWindow]::GetWindowRect($presenter.MainWindowHandle, [ref]$rect)) { throw 'Cannot inspect workbench bounds.' }
-        if (($rect.Right - $rect.Left) -lt 400 -or ($rect.Bottom - $rect.Top) -lt 250) { throw 'Workbench has invalid visible bounds.' }
-        $reply = [UIntPtr]::Zero
-        if ([HlsStartupWindow]::SendMessageTimeoutW($presenter.MainWindowHandle, 0, [UIntPtr]::Zero, [IntPtr]::Zero, 2, 3000, [ref]$reply) -eq [IntPtr]::Zero) { throw 'Visible workbench is unresponsive.' }
-        $core = @(Get-Process -Name HLSDownloaderEngine -ErrorAction SilentlyContinue | Where-Object {
-            $_.Path -and $_.Path.StartsWith($ProbeInstallDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
-        })
-        if ($core.Count -ne 1) { throw "Expected one installed Core, found $($core.Count)." }
+        if (-not $presenter) { throw 'Installed shortcut did not open the expected visible window within 45 seconds.' }
+        if ($ProbeExpectedFailure) {
+            $errorLog = Join-Path $env:HLS_V7_DATA_DIR 'logs\presenter-startup.json'
+            $failure = [IO.File]::ReadAllText($errorLog, [Text.Encoding]::UTF8) | ConvertFrom-Json
+            if (-not $failure.error -or $failure.error.Length -gt 4096) { throw 'Startup error was not recorded within its size limit.' }
+            $probe.startup_failure_reported = $true
+            $probe.error_log = $errorLog
+            $probe.presenter_pid = $presenter.Id
+            if (-not [HlsStartupWindow]::PostMessageW($presenter.MainWindowHandle, 0x0010, [UIntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not dismiss the startup error dialog.' }
+            if (-not $presenter.WaitForExit(5000)) { throw 'Presenter did not exit after its startup error dialog was dismissed.' }
+            $probe.exit_code = $presenter.ExitCode
+            if ($probe.exit_code -ne 1) { throw "Unexpected failed-start exit code: $($probe.exit_code)" }
+        } else {
+            $rect = New-Object HlsStartupWindow+Rect
+            if (-not [HlsStartupWindow]::GetWindowRect($presenter.MainWindowHandle, [ref]$rect)) { throw 'Cannot inspect workbench bounds.' }
+            if (($rect.Right - $rect.Left) -lt 400 -or ($rect.Bottom - $rect.Top) -lt 250) { throw 'Workbench has invalid visible bounds.' }
+            $reply = [UIntPtr]::Zero
+            if ([HlsStartupWindow]::SendMessageTimeoutW($presenter.MainWindowHandle, 0, [UIntPtr]::Zero, [IntPtr]::Zero, 2, 3000, [ref]$reply) -eq [IntPtr]::Zero) { throw 'Visible workbench is unresponsive.' }
+            $core = @(Get-Process -Name HLSDownloaderEngine -ErrorAction SilentlyContinue | Where-Object {
+                $_.Path -and $_.Path.StartsWith($ProbeInstallDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($core.Count -ne 1) { throw "Expected one installed Core, found $($core.Count)." }
+            $probe.presenter_pid = $presenter.Id
+            $probe.engine_pid = $core[0].Id
+            $probe.title = $presenter.MainWindowTitle
+            $probe.window = [ordered]@{ width = $rect.Right - $rect.Left; height = $rect.Bottom - $rect.Top; responsive = $true }
+        }
         $probe.passed = $true
-        $probe.presenter_pid = $presenter.Id
-        $probe.engine_pid = $core[0].Id
-        $probe.title = $presenter.MainWindowTitle
-        $probe.window = [ordered]@{ width = $rect.Right - $rect.Left; height = $rect.Bottom - $rect.Top; responsive = $true }
     } catch { $probe.error = $_.Exception.Message }
     [IO.File]::WriteAllText(($ProbeReport + '.pending'), ($probe | ConvertTo-Json -Depth 4), $utf8)
     Move-Item -LiteralPath ($ProbeReport + '.pending') -Destination $ProbeReport
@@ -99,26 +115,28 @@ try {
     $result.candidate_manifest_sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $result.candidate_exe_sha256 = $exeHash
 
-    foreach ($scenario in @('fresh-default', 'legacy-custom-path')) {
+    foreach ($scenario in @('fresh-default', 'legacy-custom-path', 'unsupported-schema')) {
         $scenarioRoot = Join-Path $artifacts $scenario
         New-Item -ItemType Directory -Force -Path $scenarioRoot | Out-Null
         $ownedInstallDir = if ($scenario -eq 'fresh-default') { Join-Path $env:LOCALAPPDATA 'HLSDownloader' } else { Join-Path $fixture ('custom install\HLS ' + [char]0x4e0b + [char]0x8f7d + [char]0x5668) }
         if (Test-Path -LiteralPath (Join-Path $ownedInstallDir 'HLSDownloader.exe')) { throw 'Refusing to replace an existing installation.' }
-        if ($scenario -eq 'legacy-custom-path') {
+        if ($scenario -ne 'fresh-default') {
             New-Item -Path $nativeKey -Force | Out-Null
             New-ItemProperty -LiteralPath $nativeKey -Name InstallDir -Value $ownedInstallDir -PropertyType String -Force | Out-Null
         }
         $data = Join-Path $scenarioRoot 'data'
         New-Item -ItemType Directory -Force -Path $data | Out-Null
-        if ($scenario -eq 'legacy-custom-path') {
+        if ($scenario -ne 'fresh-default') {
             # Reproduce the old candidate's confirmed schema-6 startup failure.
             @'
 import pathlib, sqlite3, sys
 with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
     connection.executescript(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
-'@ | python - (Join-Path $repo 'native_shell\tests\fixtures\schema-v6.sql') $data
+    connection.execute('pragma user_version = ' + str(int(sys.argv[3])))
+'@ | python - (Join-Path $repo 'native_shell\tests\fixtures\schema-v6.sql') $data $(if ($scenario -eq 'legacy-custom-path') { '6' } else { '8' })
             if ($LASTEXITCODE -ne 0) { throw 'Legacy profile fixture failed.' }
         }
+        $databaseBefore = if ($scenario -eq 'unsupported-schema') { (Get-FileHash -LiteralPath (Join-Path $data 'data.db') -Algorithm SHA256).Hash } else { $null }
         $installed = $true
         $installExit = Invoke-Bundle '/install' (Join-Path $scenarioRoot 'install.log')
         $product = Get-V7InstalledProduct $upgradeCode
@@ -146,6 +164,7 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
             EnvironmentVariables = [string[]]$environment; WinstationDesktop = 'winsta0\default'
         }
         $command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -ProbeInstallDir "' + $ownedInstallDir + '" -ProbeShortcut "' + $shortcut + '" -ProbeReport "' + $probeReport + '"'
+        if ($scenario -eq 'unsupported-schema') { $command += ' -ProbeExpectedFailure' }
         $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $repo; ProcessStartupInformation = $startup }
         if ($created.ReturnValue -ne 0) { throw "Interactive startup probe failed: $($created.ReturnValue)" }
         $deadline = (Get-Date).AddSeconds(65)
@@ -159,6 +178,10 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
             $schema = & python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('pragma user_version').fetchone()[0]); c.close()" (Join-Path $data 'data.db')
             if ($LASTEXITCODE -ne 0 -or $schema -ne '7') { throw "Legacy database was not migrated to schema 7: $schema" }
             $result.scenarios[-1].migrated_schema = [int]$schema
+        }
+        if ($scenario -eq 'unsupported-schema') {
+            if ((Get-FileHash -LiteralPath (Join-Path $data 'data.db') -Algorithm SHA256).Hash -ne $databaseBefore) { throw 'Failed startup modified the unsupported database.' }
+            $result.scenarios[-1].database_bytes_preserved = $true
         }
         $uninstallExit = Invoke-Bundle '/uninstall' (Join-Path $scenarioRoot 'uninstall.log')
         if ($null -ne (Get-V7InstalledProduct $upgradeCode)) { throw 'Bundle uninstall left the product registered.' }
