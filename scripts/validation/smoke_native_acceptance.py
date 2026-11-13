@@ -67,7 +67,10 @@ def main():
             value = self.headers.get('Range')
             if value:
                 first, last = value.removeprefix('bytes=').split('-')
-                start, end = int(first), int(last) if last else end
+                if first:
+                    start, end = int(first), min(int(last), end) if last else end
+                else:
+                    start = max(0, len(data)-int(last))
             self.send_response(206 if value else 200)
             self.send_header('Content-Length', str(end-start+1))
             self.send_header('Content-Type', content_type)

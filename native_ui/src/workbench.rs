@@ -247,11 +247,26 @@ impl Workbench {
         {
             use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
             let weak = controller.window.as_weak();
+            let frame_trace = std::env::var_os("HLS_V7_PRESENTER_FRAME_TRACE");
+            let trace_started = std::time::Instant::now();
+            let mut frame_times = Vec::new();
             controller
                 .window
                 .window()
                 .on_winit_window_event(move |window, event| {
                     match event {
+                        winit::event::WindowEvent::RedrawRequested if frame_trace.is_some() => {
+                            if frame_times.len() < 4096 {
+                                frame_times.push(trace_started.elapsed().as_secs_f64());
+                            }
+                        }
+                        winit::event::WindowEvent::CloseRequested => {
+                            if let Some(path) = frame_trace.as_ref() {
+                                if let Ok(data) = serde_json::to_vec(&frame_times) {
+                                    let _ = std::fs::write(path, data);
+                                }
+                            }
+                        }
                         winit::event::WindowEvent::Resized(size) => {
                             if let Some(ui) = weak.upgrade() {
                                 ui.set_viewport_width(size.width as f32 / window.scale_factor());
