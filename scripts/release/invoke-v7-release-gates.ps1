@@ -109,6 +109,6 @@ Invoke-Gate 'rollback' $rollbackCommand "candidate MSI failure injection; v7.0.0
 
 $aggregate = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
 $evidence = Get-Content -LiteralPath $aggregate -Raw -Encoding UTF8 | ConvertFrom-Json
-$passed = @($evidence.gates | Where-Object { ($_.result -eq 'passed' -or $_.result -eq 'excluded' -and $exclusions.gates -contains $_.id) -and [int]$_.exit_status -eq 0 })
+$passed = @($evidence.gates | Where-Object { ($_.result -eq 'passed' -or ($_.result -eq 'excluded' -and $exclusions.gates -contains $_.id)) -and [int]$_.exit_status -eq 0 })
 if (@($evidence.gates).Count -ne 5 -or $passed.Count -ne 5) { throw 'A required release gate failed or is missing.' }
 Write-Output ([ordered]@{ schema = 1; passed = $true; product_version = [string]$manifest.product_version; source_commit = $currentCommit; gates = @($evidence.gates | ForEach-Object { $_.id }) } | ConvertTo-Json -Compress)

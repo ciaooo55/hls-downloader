@@ -494,5 +494,42 @@
       "Firefox 提供待 Mozilla 签名 ZIP 与源码",
       "真实投屏/TVBox 和付费云字幕质量按既有用户排除保留"
     ]
+  },
+  "frozen_candidate_20261113": {
+    "source_commit": "89c940fe7b790d0dd5a9a137110ed906274bd289",
+    "candidate_run_id": 43431170879,
+    "candidate_manifest_sha256": "8b7d8c71081a446ed57df968efc379faad3e579342591c9a150d2999e5a514b1",
+    "source_ci_run_id": 43431168658,
+    "browser_run_id": 43435625438,
+    "native_run_id": 43435618965,
+    "same_source_candidate_acceptance_passed": true,
+    "rust_tests_passed": 757,
+    "rust_tests_ignored": 14,
+    "extension_tests_passed": 592,
+    "native_workbench_checks": 13,
+    "native_frames": {
+      "count": 1196,
+      "p95_ms": 15.9812
+    },
+    "sustained_downloads": {
+      "passed": true,
+      "actual_seconds": 1806.5,
+      "persisted_tasks": 1000,
+      "downloads": 157,
+      "restarts": 1,
+      "peak_rss_mib": 45.20703125,
+      "snapshot_p95_ms": 33.6228,
+      "peak_idle_handle_growth_per_process": 1
+    },
+    "formal_attempt": {
+      "run_id": 43441544273,
+      "passed": false,
+      "publication_started": false,
+      "cause": "PowerShell -and/-or precedence in final gate aggregate retained only the allowed excluded gate; all five gate records existed, four passed and real casting was explicitly excluded.",
+      "fix": "Group the excluded-result clause. Production-filter regression first reproduced accepted=1 instead of 5, then passed six accepted/rejected gate combinations in PowerShell 5.1 and 7.",
+      "scope": "Release aggregation and its regression only; no desktop, download engine or browser extension implementation changed."
+    },
+    "evidence": "artifacts/release-native-20261113/delivery-89c940fe",
+    "next_release": "The corrected source must pass frozen-source packaging and hosted acceptance before publication; prior successful reports do not certify another SHA."
   }
 }

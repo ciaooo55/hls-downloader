@@ -89,6 +89,41 @@ try {
         throw "Empty-feature failure under $Shell did not expose the fail-closed reason: $($emptyResult.Output)"
     }
 
+    # Exercise the production filter: PowerShell gives -and and -or the same
+    # precedence, so an ungrouped exclusion clause also rejects passed gates.
+    $gateScript = Join-Path $repo 'scripts\release\invoke-v7-release-gates.ps1'
+    $gateAst = [System.Management.Automation.Language.Parser]::ParseFile($gateScript, [ref]$null, [ref]$null)
+    $assignment = @($gateAst.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -eq '$passed'
+    }, $true))
+    if ($assignment.Count -ne 1) { throw 'Release aggregate must have one passed-gate filter.' }
+    $filter = @($assignment[0].Right.FindAll({ param($node)
+        $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst]
+    }, $true))
+    if ($filter.Count -ne 1) { throw 'Release aggregate filter is ambiguous.' }
+    $predicate = $filter[0].ScriptBlock.GetScriptBlock()
+    $exclusions = [pscustomobject]@{ gates = @('browser_media_push') }
+    foreach ($case in @(
+        @{ id = 'browser_media_push'; result = 'passed'; exit = 0; expected = 5 },
+        @{ id = 'browser_media_push'; result = 'excluded'; exit = 0; expected = 5 },
+        @{ id = 'browser'; result = 'excluded'; exit = 0; expected = 4 },
+        @{ id = 'browser_media_push'; result = 'failed'; exit = 0; expected = 4 },
+        @{ id = 'performance'; result = 'passed'; exit = 1; expected = 4 },
+        @{ id = 'browser_media_push'; result = 'excluded'; exit = 1; expected = 4 }
+    )) {
+        $gates = @('browser', 'performance', 'browser_media_push', 'installer', 'rollback') | ForEach-Object {
+            [pscustomobject]@{ id = $_; result = 'passed'; exit_status = 0 }
+        }
+        $changed = $gates | Where-Object id -eq $case.id
+        $changed.result = $case.result
+        $changed.exit_status = $case.exit
+        $accepted = @($gates | Where-Object -FilterScript $predicate)
+        if ($accepted.Count -ne $case.expected) {
+            throw "Release aggregate rejected a valid gate set or accepted a failed gate: $($case | ConvertTo-Json -Compress); accepted=$($accepted.Count)"
+        }
+    }
+
     Write-Output ([ordered]@{
         schema = 1
         passed = $true
