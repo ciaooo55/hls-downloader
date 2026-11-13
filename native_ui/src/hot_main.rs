@@ -152,8 +152,63 @@ impl PresenterSettings {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> std::process::ExitCode {
     install_panic_log();
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = writeln!(std::io::stderr(), "{message}");
+            if !env::args_os().any(|arg| {
+                arg == "--self-test" || arg == "--lock-test" || arg == "--visual-fixture"
+            }) {
+                report_startup_error(&message);
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn report_startup_error(error: &str) {
+    // Launcher disconnects stderr. Keep one bounded local startup record and
+    // show the failure even when the Slint backend cannot create any window.
+    let error: String = error.chars().take(4096).collect();
+    let log = hls_client::default_v7_database_path()
+        .with_file_name("logs")
+        .join("presenter-startup.json");
+    let record = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+        "timestamp_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
+        "error": error,
+    });
+    let logged = log.parent().is_some_and(|directory| {
+        std::fs::create_dir_all(directory)
+            .and_then(|_| std::fs::write(&log, record.to_string()))
+            .is_ok()
+    });
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let title: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
+        let mut message = format!("无法打开 HLS Downloader。\n\n{error}");
+        if logged {
+            message.push_str(&format!("\n\n启动日志：{}", log.display()));
+        }
+        let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = logged;
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     native_window::initialize_app_id();
     // 确认弹窗必须在沙盒、远程桌面和无 OpenGL 驱动的电脑上正常显示。
     #[cfg(windows)]
@@ -315,12 +370,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(error) => {
                         trace(&format!("workbench creation failed: {error}"));
+                        report_startup_error(&error.to_string());
                         return;
                     }
                 }
             }
             if let Some(window) = workbench.borrow().as_ref() {
-                let _ = window.show();
+                if let Err(error) = window.show() {
+                    report_startup_error(&error.to_string());
+                }
             }
         }
     });
