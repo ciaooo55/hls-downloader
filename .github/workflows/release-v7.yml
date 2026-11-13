@@ -186,7 +186,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           $env:HLS_V7_PNPM = (Get-Command pnpm.cmd -ErrorAction Stop).Source
-          & .\scripts\build-v7.ps1 -Task package
+          & .\scripts\build-v7.ps1 -Task package -CandidateManifestPath $env:HLS_V7_CANDIDATE_MANIFEST
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Require formal executables to match tested candidate components
@@ -198,6 +198,9 @@ jobs:
           if ($formal.source_commit -ne $candidate.source_commit -or $formal.source_tree -ne $candidate.source_tree) { throw 'Formal source differs from tested candidate.' }
           foreach ($entry in $candidate.components.PSObject.Properties) {
             if ($formal.components.($entry.Name) -ne $entry.Value) { throw "Formal executable differs from tested candidate: $($entry.Name)" }
+          }
+          foreach ($browser in @('Chromium', 'Firefox')) {
+            if ($formal.extensions.$browser.sha256 -ne $candidate.extensions.$browser.sha256) { throw "Formal extension differs from tested candidate: $browser" }
           }
 
       - name: Build Firefox store source bundle

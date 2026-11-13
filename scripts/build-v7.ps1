@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [ValidateSet('run','test','candidate','package','adversarial')][string]$Task='run',
-    [ValidateSet('native','compose')][string]$UiRuntime='native'
+    [ValidateSet('native','compose')][string]$UiRuntime='native',
+    [string]$CandidateManifestPath=''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
@@ -48,6 +49,8 @@ $packageProvenanceTemp = $null
 $packageStagingRoot = $null
 $packageSwapBackupRoot = $null
 $packageResources = $null
+$candidateRuntime = $null
+$candidateManifest = $null
 $composeSubstDrive = $null
 $previousComposeBuildDir = $env:HLS_COMPOSE_BUILD_DIR
 
@@ -79,6 +82,9 @@ if ($Task -eq 'candidate') {
     }
 }
 if ($Task -eq 'package') {
+    if ($UiRuntime -eq 'native' -and -not $CandidateManifestPath) {
+        throw 'Formal native packaging requires the authenticated tested candidate manifest.'
+    }
     # Formal packages add the release_ready decision after candidate validation.
     $packageProvenanceTemp = Join-Path (Split-Path $packageRoot -Parent) ('.BUILD-PROVENANCE.formal.' + [guid]::NewGuid().ToString('n') + '.tmp')
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\release\verify-v7-feature-parity.ps1" -FeatureParityPath $featureParity -RequireCanonicalComplete -RequireReleaseReady -RequireCleanWorktree -PackageTier formal -ReleaseEvidencePath "$repo\artifacts\v7-productization\release-evidence.json" -ProvenancePath $packageProvenanceTemp
@@ -258,6 +264,17 @@ function Assert-ExtensionManifest($Manifest, [string]$Browser, [string]$Path) {
 }
 
 function Build-Extension([string]$Resources, [switch]$TestOnly) {
+    if ($candidateRuntime -and -not $TestOnly) {
+        $destination = Join-Path $Resources 'extensions'
+        New-Item -ItemType Directory -Force -Path $destination | Out-Null
+        foreach ($browser in @('Chromium', 'Firefox')) {
+            $entry = $candidateManifest.extensions.$browser
+            $source = Join-Path $candidateRuntime ([string]$entry.path)
+            Assert-FileSha256 $source ([string]$entry.sha256) "$browser tested extension"
+            Copy-Item -LiteralPath $source -Destination (Join-Path $destination ([IO.Path]::GetFileName($source)))
+        }
+        return
+    }
     # Use an explicitly selected pnpm executable or PATH.
     $pnpmPath = $env:HLS_V7_PNPM
     if (-not $pnpmPath) {
@@ -321,6 +338,35 @@ function Build-Extension([string]$Resources, [switch]$TestOnly) {
 }
 
 if ($isPackage) {
+    if ($CandidateManifestPath) {
+        if ($Task -ne 'package' -or $UiRuntime -ne 'native') { throw 'Candidate reuse is only valid for formal native packaging.' }
+        $candidatePath = (Resolve-Path -LiteralPath $CandidateManifestPath).Path
+        $candidateManifest = Get-Content -LiteralPath $candidatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
+        $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
+        $releaseEvidence = Get-Content (Join-Path $repo 'artifacts\v7-productization\release-evidence.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($candidateManifest.package_tier -ne 'candidate' -or $candidateManifest.ui_runtime -ne 'native' -or
+            $candidateManifest.source_commit -ne $currentCommit -or $candidateManifest.source_tree -ne $currentTree -or
+            $candidateManifest.product_version -ne $productVersion -or
+            (Get-FileHash $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $releaseEvidence.candidate_artifact_manifest.sha256) {
+            throw 'Formal input is not the same native candidate certified by the release gates.'
+        }
+        $candidateRoot = Split-Path $candidatePath
+        $portableInput = [IO.Path]::GetFullPath((Join-Path $candidateRoot $candidateManifest.artifacts.portable.path))
+        if (-not $portableInput.StartsWith($candidateRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Candidate Portable path escapes its directory.' }
+        Assert-FileSha256 $portableInput $candidateManifest.artifacts.portable.sha256 'tested Portable'
+        $inputRoot = Join-Path $artifactRoot '.candidate-input'
+        Expand-Archive -LiteralPath $portableInput -DestinationPath $inputRoot
+        $candidateRuntime = Join-Path $inputRoot 'HLSDownloader'
+        foreach ($entry in $candidateManifest.components.PSObject.Properties) {
+            $componentPath = [IO.Path]::GetFullPath((Join-Path $candidateRuntime $entry.Name))
+            if (-not $componentPath.StartsWith($candidateRuntime + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Candidate component path escapes its image.' }
+            Assert-FileSha256 $componentPath ([string]$entry.Value) 'tested executable'
+        }
+        foreach ($name in @('HLSDownloader.exe', 'app/resources/HLSDownloaderEngine.exe', 'app/resources/HLSDownloaderNativeHost.exe', 'app/resources/HLSDownloaderUpdater.exe', 'app/resources/HLSDownloaderPresenter.exe', 'app/resources/HLSDownloaderCli.exe')) {
+            if (-not $candidateManifest.components.$name) { throw "Tested component identity is missing: $name" }
+        }
+    }
     if ($UiRuntime -eq 'native') {
         $wixRoot = Join-Path $cacheRoot 'wix-3.14.1'
         $wixArchive = Join-Path $wixRoot 'wix314-binaries.zip'
@@ -353,6 +399,7 @@ if ($Task -eq 'test') {
     Build-Extension -TestOnly
 }
 $engineTarget = if ($isPackage) { 'release' } else { 'debug' }
+if (-not $candidateRuntime) {
 & $cargo build --locked --manifest-path "$repo\Cargo.toml" -p hls-native-shell -p hls-native-clients $(if ($engineTarget -eq 'release') { '--release' }) --bins
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $cargo build --locked --manifest-path "$repo\native_ui\Cargo.toml" $(if ($engineTarget -eq 'release') { '--release' }) --bin hls-downloader-presenter
@@ -367,6 +414,17 @@ $cli = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloaderCli.exe"
 if (!(Test-Path -LiteralPath $cli)) { throw "CLI was not produced: $cli" }
 $presenter = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\hls-downloader-presenter.exe"
 if (!(Test-Path -LiteralPath $presenter)) { throw "v7 presenter was not produced: $presenter" }
+$launcher = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloader.exe"
+} else {
+    # Promote the tested bytes. A second MSVC link embeds a new PE timestamp;
+    # rebuilding the same source cannot establish identical executable hashes.
+    $engine = Join-Path $candidateRuntime 'app/resources/HLSDownloaderEngine.exe'
+    $nativeHost = Join-Path $candidateRuntime 'app/resources/HLSDownloaderNativeHost.exe'
+    $updater = Join-Path $candidateRuntime 'app/resources/HLSDownloaderUpdater.exe'
+    $cli = Join-Path $candidateRuntime 'app/resources/HLSDownloaderCli.exe'
+    $presenter = Join-Path $candidateRuntime 'app/resources/HLSDownloaderPresenter.exe'
+    $launcher = Join-Path $candidateRuntime 'HLSDownloader.exe'
+}
 Push-Location "$repo\desktop_ui"
 try {
 if ($isPackage) {
@@ -458,7 +516,7 @@ if ($isPackage) {
     }
     if ($UiRuntime -eq 'native') {
         $nativeAppImage = Join-Path $artifactRoot '.native-image\HLSDownloader'
-        Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloader.exe") -Destination (Join-Path $nativeAppImage 'HLSDownloader.exe')
+        Copy-Item -LiteralPath $launcher -Destination (Join-Path $nativeAppImage 'HLSDownloader.exe')
         Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $nativeAppImage 'LICENSE')
         Copy-Item -LiteralPath (Join-Path $repo 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $nativeAppImage 'THIRD_PARTY_NOTICES.md')
         $nativeProvenance = Get-Content -LiteralPath $provenanceForBuild -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -547,7 +605,7 @@ $env:HLS_ENGINE_PATH = $engine
                 $componentEvidence[$relativeComponent] = $expectedComponentHash
             }
             if ($UiRuntime -eq 'native') {
-                $launcherHash = (Get-FileHash -LiteralPath (Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloader.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+                $launcherHash = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant()
                 Assert-FileSha256 (Join-Path $portableRoot 'HLSDownloader.exe') $launcherHash 'native launcher'
                 $componentEvidence['HLSDownloader.exe'] = $launcherHash
             }
@@ -665,6 +723,10 @@ $env:HLS_ENGINE_PATH = $engine
             if ((Resolve-Path -LiteralPath $assemblyRoot).Path -ne [IO.Path]::GetFullPath($assemblyRoot)) { throw 'Native assembly path changed unexpectedly.' }
             Remove-Item -LiteralPath $assemblyRoot -Recurse -Force
             $packageResources = $null
+        }
+        if ($candidateRuntime) {
+            Remove-Item -LiteralPath $inputRoot -Recurse -Force
+            $candidateRuntime = $null
         }
         if ($isPackage) {
             # Swap the complete staging directory only after every artifact is ready.
