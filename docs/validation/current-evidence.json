@@ -1,12 +1,12 @@
 {
   "source_baseline": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
-  "status": "implementation_verified_pending_frozen_candidate_acceptance",
+  "status": "formal_release_published",
   "historical_evidence": {
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
   },
-  "scope": "7.0.4 原生候选；本表只列当前验证边界。历史 Compose 记录不作为原生发布门禁。最终包源码身份以 ARTIFACT-MANIFEST.json 为准。",
-  "test_matrix": "artifacts/release-native-20261110/workspace-results.json",
+  "scope": "Native 7.0.4 stable, tested source 8b6fa074; formal_release records current acceptance and public artifact identity. Earlier iteration and candidate sections are historical evidence.",
+  "historical_test_matrix": "artifacts/release-native-20261110/workspace-results.json",
   "source_iteration_20261111": {
     "base_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
     "scope": "IPv6 地址、来源与 Cookie 处理；原生播放器预取字幕不足时的暂停与恢复。此记录独立于已发布 rc2。",
@@ -29,7 +29,7 @@
     "strict_clippy": "Core and presenter --all-targets passed, using only existing lint allowances; core-clippy.log and ui-clippy.log",
     "execution_scope": "命令行测试、独立本机网络与字幕管道夹具；没有操作个人桌面或浏览器。真实云端字幕质量、完整 GUI/DPI 与长期运行未计通过。"
   },
-  "published_candidate": {
+  "historical_published_candidate": {
     "tag": "v7.0.4-rc3",
     "source_commit": "5d2e65f868a3f6d240674421dadfd56b3d7b7de6",
     "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4-rc3",
@@ -57,7 +57,7 @@
       "https://github.com/ciaooo55/hls-downloader/actions/runs/43404781537"
     ]
   },
-  "features": [
+  "historical_native_feature_snapshot": [
     {
       "id": "architecture.single_core",
       "assessment": "pending_native_release_acceptance",
@@ -267,8 +267,8 @@
       "remaining": "工作区 HTTP 回归通过；完整组合和 curl 专用停止分支验收见原生功能映射。"
     }
   ],
-  "native_candidate": {
-    "evidence_scope": "rc2 之前的源码与功能记录；旧 pending 项不能覆盖 published_candidate 中绑定成品的已完成验收。",
+  "historical_native_candidate": {
+    "evidence_scope": "rc2 之前的源码与功能记录；旧 pending 项不能覆盖 historical_published_candidate 及 formal_release 中绑定成品的已完成验收。",
     "product_version": "7.0.4",
     "ui_runtime": "native",
     "release_ready": false,
@@ -487,8 +487,8 @@
   },
   "implementation_readiness": {
     "eligible_for_frozen_release_gates": true,
-    "formal_release_published": false,
-    "meaning": "功能合同在明确范围内完成实现验收；正式交付仍须五项门禁、同源 CI、候选哈希和最终 EXE 启动全部通过。",
+    "formal_release_published": true,
+    "meaning": "Frozen-source acceptance and publication completed within the recorded scope and explicit exclusions; see formal_release. The published tag remains on the tested product commit.",
     "distribution_limits": [
       "Windows 安装包按既有要求不签名；自动更新签名校验保留",
       "Firefox 提供待 Mozilla 签名 ZIP 与源码",
@@ -530,6 +530,266 @@
       "scope": "Release aggregation and its regression only; no desktop, download engine or browser extension implementation changed."
     },
     "evidence": "artifacts/release-native-20261113/delivery-89c940fe",
-    "next_release": "The corrected source must pass frozen-source packaging and hosted acceptance before publication; prior successful reports do not certify another SHA."
+    "next_release": "Historical candidate superseded by the tested and published source recorded in formal_release; failed workflow evidence is retained."
+  },
+  "formal_release": {
+    "tag": "v7.0.4",
+    "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+    "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4",
+    "release_id": 444436936,
+    "published_at_utc": "2026-11-13T16:11:59Z",
+    "latest": true,
+    "prerelease": false,
+    "release_ready": true,
+    "formal_manifest_sha256": "a47e21c80023edf354644dd5b63c3327b0ce126acd1630412062a830263cbba5",
+    "candidate_manifest_sha256": "f157e672b780548c5a5f3bbe1719ffb24183059ea3f068a9b7fa7e1bc0cda8bf",
+    "evidence_directory": "artifacts/release-native-20261113/delivery-8b6fa074",
+    "publication_receipt": "artifacts/release-native-20261113/delivery-8b6fa074/PUBLICATION.json",
+    "validation": "artifacts/release-native-20261113/delivery-8b6fa074/VALIDATION.json",
+    "feature_status": {
+      "source": "https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.4/FEATURE-PARITY.json",
+      "counts": {
+        "verified": 31,
+        "partial": 2
+      },
+      "meaning": "Implementation verification within recorded scope; casting and paid cloud quality exclusions remain in force. This does not certify every physical device, display, site or credential combination.",
+      "remaining": [
+        {
+          "id": "browser.media_push_device_selection",
+          "gap": "真实投屏/TVBox 和局域网设备验收按用户要求排除；不将其计为本轮通过。"
+        },
+        {
+          "id": "browser.online_subtitle_translation",
+          "gap": "真实百炼云端准确率和延迟按用户决定暂不验收；投屏验收也排除。独立 HTTP(S) 点播音轨最多预取 30 秒；MSE/blob、DRM、无法独立读取的跨域资源及明确选中的备用音轨使用实时采集并显示原因。云端能力未标记为实测完成。"
+        }
+      ]
+    },
+    "workflows": {
+      "source_ci": {
+        "run_id": 43443478164,
+        "conclusion": "success",
+        "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43443478164"
+      },
+      "rust_security": {
+        "run_id": 43443478178,
+        "conclusion": "success",
+        "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43443478178"
+      },
+      "maintenance_security": {
+        "run_id": 43443478220,
+        "conclusion": "success",
+        "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43443478220"
+      },
+      "candidate_package": {
+        "run_id": 43443483545,
+        "conclusion": "success",
+        "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43443483545"
+      },
+      "browser_regression": {
+        "run_id": 43448480757,
+        "conclusion": "success",
+        "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43448480757"
+      },
+      "native_acceptance": {
+        "run_id": 43448472807,
+        "conclusion": "success",
+        "source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43448472807"
+      }
+    },
+    "formal_workflow_recovery": {
+      "run_id": 43455016476,
+      "conclusion": "failure",
+      "artifact_validation_passed": true,
+      "formal_exe_startup_passed": true,
+      "failure": "Tag push used an additional Authorization header beside checkout authentication.",
+      "retry_run_id": 43457360853,
+      "retry_conclusion": "failure",
+      "retry_failure": "Existing-tag fetch used an unbraced PowerShell variable before a colon, producing an invalid refspec.",
+      "resolution": "Published verified formal staging with GitHub CLI. All 13 public asset names, sizes and SHA-256 digests match local files. Both workflow failures remain recorded; the annotated tag was not rewritten."
+    },
+    "gates": [
+      {
+        "id": "browser",
+        "result": "passed",
+        "exit_status": 0
+      },
+      {
+        "id": "browser_media_push",
+        "result": "excluded",
+        "exit_status": 0
+      },
+      {
+        "id": "installer",
+        "result": "passed",
+        "exit_status": 0
+      },
+      {
+        "id": "performance",
+        "result": "passed",
+        "exit_status": 0
+      },
+      {
+        "id": "rollback",
+        "result": "passed",
+        "exit_status": 0
+      }
+    ],
+    "checks": {
+      "rust_tests_passed": 757,
+      "rust_tests_ignored": 14,
+      "extension_tests_passed": 592,
+      "native_workbench_operations": 13,
+      "browser_media_per_browser": 24,
+      "browser_credentials_recovery": {
+        "edge": 50,
+        "firefox": 56
+      },
+      "browser_host_core_handoff_per_browser": 34,
+      "msi_upgrade_checks": 25,
+      "msi_failure_rollback_checks": 23,
+      "portable_upgrade_rollback": "passed",
+      "exe_install_startup": "Default and Chinese-space paths, real Start-menu shortcut, schema 6 to 7 migration and unsupported-schema database preservation passed. Formal EXE was independently installed and launched.",
+      "frames": {
+        "populated_tasks": 1000,
+        "count": 1199,
+        "p95_ms": 16.185
+      },
+      "sustained_downloads": {
+        "passed": true,
+        "actual_seconds": 1808.406,
+        "downloads": 156,
+        "restarts": 1,
+        "peak_rss_mib": 46.03515625,
+        "snapshot_p95_ms": 39.479700000129014,
+        "resource_growth": [
+          {
+            "pid": 6060,
+            "idle_checkpoints": 80,
+            "initial_idle_handles": 215,
+            "final_idle_handles": 214,
+            "peak_idle_handle_growth": 1,
+            "peak_handles": 241,
+            "peak_rss_growth_mib": 23.39453125
+          },
+          {
+            "pid": 7568,
+            "idle_checkpoints": 79,
+            "initial_idle_handles": 215,
+            "final_idle_handles": 214,
+            "peak_idle_handle_growth": 1,
+            "peak_handles": 240,
+            "peak_rss_growth_mib": 21.4609375
+          }
+        ]
+      }
+    },
+    "validation_boundaries": {
+      "execution_environment": "Isolated GitHub-hosted Windows; no personal desktop or browser was operated.",
+      "firefox": "Unsigned ZIP and source delivered per user decision; permanent installation in standard Firefox still requires Mozilla signing.",
+      "windows_signing": "Unsigned packages with manual installation; automatic update signature validation remains enabled.",
+      "real_casting_tvbox": "Excluded by user; not recorded as a real-device pass.",
+      "paid_cloud_subtitle_quality": "Excluded by user; not recorded as a cloud-quality pass.",
+      "display": "Slint scales 1, 1.25, 1.5 and 2 and three window sizes passed; OS DPI was 96. Physical mixed-DPI monitor transitions were not tested.",
+      "audio": "libmpv control and session checks passed; hosted machine had no audio output endpoint, so speaker output was not tested."
+    },
+    "public_assets": [
+      {
+        "name": "ARTIFACT-MANIFEST.json",
+        "size": 2064,
+        "sha256": "a47e21c80023edf354644dd5b63c3327b0ce126acd1630412062a830263cbba5",
+        "remote_digest": "sha256:a47e21c80023edf354644dd5b63c3327b0ce126acd1630412062a830263cbba5",
+        "asset_id": 744267835
+      },
+      {
+        "name": "FEATURE-PARITY.json",
+        "size": 29815,
+        "sha256": "76ffa3162c08097cc3013011014967aa8fef21ac40cc8679aacea5d6a59b87ab",
+        "remote_digest": "sha256:76ffa3162c08097cc3013011014967aa8fef21ac40cc8679aacea5d6a59b87ab",
+        "asset_id": 744267836
+      },
+      {
+        "name": "HLSDownloader-7.0.4-Release-Evidence.zip",
+        "size": 1224217,
+        "sha256": "1bc0beadbe5504034b8a91cc994c1f028019944b94e404615db20762f8a79f77",
+        "remote_digest": "sha256:1bc0beadbe5504034b8a91cc994c1f028019944b94e404615db20762f8a79f77",
+        "asset_id": 744267832
+      },
+      {
+        "name": "HLSDownloader-7.0.4-SBOM.cdx.json",
+        "size": 240512,
+        "sha256": "2eb1cf39d1b872ebd653b11c9eede039c23a6e45a561ae01b70536c84c4ae565",
+        "remote_digest": "sha256:2eb1cf39d1b872ebd653b11c9eede039c23a6e45a561ae01b70536c84c4ae565",
+        "asset_id": 744267839
+      },
+      {
+        "name": "HLSDownloader-7.0.4-Windows-x64-Portable.zip",
+        "size": 150456613,
+        "sha256": "be4c5c5c561bc0f0ff673b3cb743cf81228d4c7137ba2e6958637819672e34bf",
+        "remote_digest": "sha256:be4c5c5c561bc0f0ff673b3cb743cf81228d4c7137ba2e6958637819672e34bf",
+        "asset_id": 744267834
+      },
+      {
+        "name": "HLSDownloader-7.0.4-Windows-x64.exe",
+        "size": 123072514,
+        "sha256": "1694b1255cbff71b5aef42faae045a9778f7e9191c20bc5b501d79cbf39be5da",
+        "remote_digest": "sha256:1694b1255cbff71b5aef42faae045a9778f7e9191c20bc5b501d79cbf39be5da",
+        "asset_id": 744267892
+      },
+      {
+        "name": "HLSDownloader-7.0.4-Windows-x64.msi",
+        "size": 122945536,
+        "sha256": "a3138030e04c85520811125582003725156b3742d534e41ccbb610173f3fbf34",
+        "remote_digest": "sha256:a3138030e04c85520811125582003725156b3742d534e41ccbb610173f3fbf34",
+        "asset_id": 744267905
+      },
+      {
+        "name": "HLSDownloader-Extension-7.0.4-Chromium.zip",
+        "size": 336610,
+        "sha256": "1096f0084f2da058ca06d1d73cf0b42d93103ee319a5d611d33a5afcd30b93ea",
+        "remote_digest": "sha256:1096f0084f2da058ca06d1d73cf0b42d93103ee319a5d611d33a5afcd30b93ea",
+        "asset_id": 744267912
+      },
+      {
+        "name": "HLSDownloader-Extension-7.0.4-Firefox-Sources.zip",
+        "size": 298837,
+        "sha256": "b498f0e850ecd5f0315a3c114e21ac6566a447924f8feda1ecdd892eb3c69516",
+        "remote_digest": "sha256:b498f0e850ecd5f0315a3c114e21ac6566a447924f8feda1ecdd892eb3c69516",
+        "asset_id": 744267928
+      },
+      {
+        "name": "HLSDownloader-Extension-7.0.4-Firefox.zip",
+        "size": 336655,
+        "sha256": "26f25403a490f2c22a118510c89a971c2a82759c4bb9b41824f099380b2c010f",
+        "remote_digest": "sha256:26f25403a490f2c22a118510c89a971c2a82759c4bb9b41824f099380b2c010f",
+        "asset_id": 744267983
+      },
+      {
+        "name": "README-7.0.4.txt",
+        "size": 887,
+        "sha256": "1c6e0246506090bfed10b2b98d7daacecf1c5e97903c4a6702f1c903ba8e44d5",
+        "remote_digest": "sha256:1c6e0246506090bfed10b2b98d7daacecf1c5e97903c4a6702f1c903ba8e44d5",
+        "asset_id": 744267990
+      },
+      {
+        "name": "RELEASE-EVIDENCE.json",
+        "size": 25835,
+        "sha256": "798b0fe5089258d950ed911ddc1be127364d57c1251d5516e4847f353deb392f",
+        "remote_digest": "sha256:798b0fe5089258d950ed911ddc1be127364d57c1251d5516e4847f353deb392f",
+        "asset_id": 744268073
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "size": 1213,
+        "sha256": "9057b8ac86574412b4429b6e474269553413959e2e491e229285c62e6efc7259",
+        "remote_digest": "sha256:9057b8ac86574412b4429b6e474269553413959e2e491e229285c62e6efc7259",
+        "asset_id": 744268072
+      }
+    ]
   }
 }

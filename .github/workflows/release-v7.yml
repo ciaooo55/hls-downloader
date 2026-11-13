@@ -62,7 +62,7 @@ jobs:
           $existingTag = ((git ls-remote --tags origin "refs/tags/$tag") -join '').Trim()
           $releaseMode = 'fresh'
           if ($existingTag) {
-            git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+            git fetch --force origin "refs/tags/${tag}:refs/tags/$tag"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $tagType = (git cat-file -t "refs/tags/$tag").Trim()
             if ($tagType -ne 'tag') { throw "Existing release tag is not annotated: $tag" }
@@ -253,12 +253,8 @@ jobs:
           if ($env:HLS_V7_RELEASE_MODE -eq 'fresh') {
             git -c 'user.name=github-actions[bot]' -c 'user.email=41898282+github-actions[bot]@users.noreply.github.com' tag -a $env:HLS_V7_TAG -m "HLS Downloader $env:HLS_V7_VERSION" $head
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $env:HLS_V7_GIT_AUTH_HEADER = 'AUTHORIZATION: basic ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("x-access-token:$env:GH_TOKEN"))
-            try {
-              git --config-env=http.https://github.com/.extraheader=HLS_V7_GIT_AUTH_HEADER push origin $env:HLS_V7_TAG
-            } finally {
-              Remove-Item Env:\HLS_V7_GIT_AUTH_HEADER
-            }
+            # actions/checkout already configures the authenticated Git header.
+            git push origin $env:HLS_V7_TAG
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } elseif ($env:HLS_V7_RELEASE_MODE -notin @('tag-only', 'draft')) {
             throw "Unknown release resume mode: $env:HLS_V7_RELEASE_MODE"

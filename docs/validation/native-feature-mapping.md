@@ -1,6 +1,8 @@
 # 原生迁移功能映射
 
-源清单：`config/release/feature-parity.json` 的 33 项。这里单独登记原生迁移情况；旧 Compose 的 verified 不继承给原生候选。实现存在、定向验证、候选验收是三个不同状态。构建脚本默认原生入口，公开预发布为原生 `v7.0.4-rc3`；当前实现已可进入冻结发布门禁，尚不表示正式版已发布。2026-11-13 开发候选和最新实际验收见 [当前验证表](current-evidence.json)；不同源码脚本的诊断不能替代最终同源验收。
+源清单：`config/release/feature-parity.json` 的 33 项。正式版 [v7.0.4](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4) 已发布，受测源码为 `8b6fa0743db2441c798e5d3d47a96137c4347fc7`；源码 CI、候选打包、浏览器和原生完整验收均绑定此提交。正式包复用受测组件字节，正式 EXE 再次通过安装启动检查；13 项发布附件与本地 SHA-256 一致。最新范围与限制见 [当前验证表](current-evidence.json) 的 `formal_release`。
+
+以下逐项表保留迁移过程中的阶段记录；其中“待验收”描述记录当时的状态，当前结论以顶部正式发布记录、发布附件 `FEATURE-PARITY.json` 和 `RELEASE-EVIDENCE.json` 为准。真实投屏/TVBox、付费云字幕质量仍按用户决定排除；Firefox 交付待签名包，软件缩放测试不代表物理多显示器切换验收。
 
 | 功能 ID | 原生入口 / 所属模块 | Core 合同 | 原生迁移状态与剩余验收 |
 |---|---|---|---|

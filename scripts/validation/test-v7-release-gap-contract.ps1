@@ -89,6 +89,20 @@ try {
         throw "Empty-feature failure under $Shell did not expose the fail-closed reason: $($emptyResult.Output)"
     }
 
+    $workflow = Get-Content (Join-Path $repo '.github\workflows\release-v7.yml') -Raw -Encoding UTF8
+    $fetch = @([regex]::Matches($workflow, '(?m)^\s+git fetch[^\r\n]+'))
+    if ($fetch.Count -ne 1) { throw 'Expected one release tag fetch command.' }
+    $fetchCommand = [scriptblock]::Create($fetch[0].Value.Trim())
+    foreach ($tag in @('v7.0.4', 'v7.0.5-rc1')) {
+        $arguments = @(& {
+            function git { $args }
+            & $fetchCommand
+        })
+        if ($arguments[-1] -ne ('refs/tags/{0}:refs/tags/{0}' -f $tag)) {
+            throw "Release tag interpolation produced an invalid fetch refspec: $($arguments[-1])"
+        }
+    }
+
     # Exercise the production filter: PowerShell gives -and and -or the same
     # precedence, so an ungrouped exclusion clause also rejects passed gates.
     $gateScript = Join-Path $repo 'scripts\release\invoke-v7-release-gates.ps1'
