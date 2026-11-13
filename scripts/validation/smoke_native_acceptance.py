@@ -217,6 +217,29 @@ def main():
             report['zip_tree'] = tree(resources)
             press(resources, '关闭')
             report['checks'].append({'name': 'remote_zip_preview_via_ui', 'passed': True})
+            press(main_window, '工具')
+            press(main_window, '抓站与同步项目')
+            crawl = window('抓站与同步项目')
+            control(crawl, '资源来源', 'Edit').set_edit_text(f'http://127.0.0.1:{server.server_port}/index.html')
+            press(crawl, '读取 / 发现')
+            wait(lambda: any('crawl.bin' in e.element_info.name for e in crawl.descendants()), 30)
+            press(crawl, '全选')
+            press(crawl, '下载所选')
+            wait(lambda: any(t['url'].endswith('/crawl.bin') and t['status'] == 'completed'
+                             for t in core.snapshot()['tasks']), 30)
+            press(crawl, '关闭')
+            report['checks'].append({'name': 'crawl_create_discover_enqueue_via_ui', 'passed': True})
+            press(main_window, '工具')
+            press(main_window, '批量添加')
+            batch = window('批量添加')
+            control(batch, '下载地址', 'Edit').set_edit_text('\n'.join(
+                f'http://127.0.0.1:{server.server_port}/batch-{n}.bin' for n in (1, 2)))
+            press(batch, '添加任务')
+            batch_tasks = wait(lambda: [t for t in core.snapshot()['tasks']
+                if '/batch-' in t['url'] and t['status'] == 'completed'] or None, 30)
+            wait(lambda: len([t for t in core.snapshot()['tasks']
+                             if '/batch-' in t['url'] and t['status'] == 'completed']) == 2)
+            report['checks'].append({'name': 'batch_create_via_ui', 'passed': True})
             main_window.capture_as_image().save(args.report.with_suffix('.png'))
             save()
             report['passed'] = True
