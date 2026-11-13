@@ -303,6 +303,9 @@ impl Workbench {
                         this.send(CoreCommand::ImportPaths { paths });
                     }
                     this.render_details();
+                    if let Some(tools) = this.tools.borrow().as_ref() {
+                        tools.poll();
+                    }
                     if this.window.window().is_visible() {
                         this.render_status();
                     } else if this.ready_to_release() {

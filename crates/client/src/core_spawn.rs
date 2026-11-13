@@ -195,8 +195,8 @@ pub fn spawn_desktop_ui(root: &Path) -> bool {
     command.stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
-        return spawn_with_optional_breakaway(&mut command, 0x00000008 | 0x00000200).is_ok();
         // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        spawn_with_optional_breakaway(&mut command, 0x00000008 | 0x00000200).is_ok()
     }
     #[cfg(not(windows))]
     command.spawn().is_ok()

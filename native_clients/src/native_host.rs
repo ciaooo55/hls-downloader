@@ -39,6 +39,22 @@ enum HostCore {
 }
 
 impl HostCore {
+    fn open_workbench(&mut self) -> Result<(), String> {
+        self.handle(CoreCommand::OpenMain)?;
+        // In-process protocol fixtures must not launch a cached real desktop
+        // binary. Packaged integration tests exercise the remote Core path.
+        #[cfg(test)]
+        if matches!(self, Self::Local(_)) {
+            return Ok(());
+        }
+        if let Some(root) = crate::install_root() {
+            if !crate::spawn_desktop_ui(&root) {
+                return Err("无法启动桌面工作台".into());
+            }
+        }
+        Ok(())
+    }
+
     fn admit_handoff(&mut self, handoff_json: &str) -> Result<crate::CorePipeResponse, String> {
         match self {
             #[cfg(test)]
@@ -241,12 +257,7 @@ impl NativeHostSession {
             }
             "ping" => self.ping(),
             "activate" => {
-                self.core.handle(CoreCommand::OpenMain)?;
-                if let Some(root) = crate::install_root() {
-                    if !crate::spawn_desktop_ui(&root) {
-                        return Err("无法启动桌面工作台".into());
-                    }
-                }
+                self.core.open_workbench()?;
                 Ok(json!({"ok": true, "activated": true}))
             }
             "offer" => self.offer(message, false),
@@ -705,10 +716,7 @@ impl NativeHostSession {
             return;
         }
         self.media_push_ui_request_id = Some(request_id.to_string());
-        let _ = self.core.handle(CoreCommand::OpenMain);
-        if let Some(root) = crate::install_root() {
-            let _ = crate::spawn_desktop_ui(&root);
-        }
+        let _ = self.core.open_workbench();
     }
 
     fn persist_browser_context(

@@ -224,6 +224,11 @@ def main():
             press(crawl, '读取 / 发现')
             wait(lambda: any('crawl.bin' in e.element_info.name for e in crawl.descendants()), 30)
             press(crawl, '全选')
+            press(crawl, '刷新')
+            wait(lambda: control(crawl, '下载所选', 'Button').is_enabled())
+            checkboxes = [e for e in crawl.descendants(control_type='CheckBox')
+                          if '/crawl.bin' in e.element_info.name]
+            assert len(checkboxes) == 1 and checkboxes[0].get_toggle_state() == 1, tree(crawl)
             press(crawl, '下载所选')
             wait(lambda: any(t['url'].endswith('/crawl.bin') and t['status'] == 'completed'
                              for t in core.snapshot()['tasks']), 30)

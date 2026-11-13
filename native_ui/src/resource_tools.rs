@@ -8,6 +8,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 pub struct ResourceTools {
@@ -21,6 +22,9 @@ pub struct ResourceTools {
     waiting_torrent: Cell<bool>,
     creating_project: Cell<bool>,
     listing_projects: Cell<bool>,
+    refresh_pending: Cell<Option<u64>>,
+    next_refresh: Cell<Instant>,
+    rendered_project_id: RefCell<String>,
     request: Rc<dyn Fn(CorePipeRequest) -> bool>,
     batch: Rc<dyn Fn(Vec<CoreCommand>) -> bool>,
     id: Rc<dyn Fn() -> u64>,
@@ -59,6 +63,9 @@ impl ResourceTools {
             waiting_torrent: Cell::new(false),
             creating_project: Cell::new(false),
             listing_projects: Cell::new(false),
+            refresh_pending: Cell::new(None),
+            next_refresh: Cell::new(Instant::now()),
+            rendered_project_id: RefCell::new(String::new()),
             request,
             batch,
             id,
@@ -74,7 +81,7 @@ impl ResourceTools {
         let weak = Rc::downgrade(&this);
         this.window.on_toggle(move |id, selected| {
             if let Some(this) = weak.upgrade() {
-                if let Ok(index) = id.parse() {
+                if let Some(index) = this.rows.iter().position(|row| row.id == id) {
                     if let Some(mut row) = this.rows.row_data(index) {
                         row.selected = selected;
                         this.rows.set_row_data(index, row);
@@ -87,6 +94,7 @@ impl ResourceTools {
             if let Some(this) = weak.upgrade() {
                 this.window.set_project_index(index);
                 this.render_project();
+                this.next_refresh.set(Instant::now());
             }
         });
         if mode == "crawl" {
@@ -130,6 +138,35 @@ impl ResourceTools {
             .enumerate()
             .filter_map(|(index, row)| row.selected.then_some(index))
             .collect()
+    }
+
+    pub fn poll(&self) {
+        if self.window.get_mode() != "crawl"
+            || !self.window.window().is_visible()
+            || self.window.get_creating()
+            || self.pending.get().is_some()
+            || self.refresh_pending.get().is_some()
+            || Instant::now() < self.next_refresh.get()
+        {
+            return;
+        }
+        let Some(project_id) = self
+            .projects
+            .borrow()
+            .get(self.window.get_project_index().max(0) as usize)
+            .map(|p| p.id.clone())
+        else {
+            return;
+        };
+        let id = (self.id)();
+        if (self.request)(CorePipeRequest::Crawl {
+            request_id: id,
+            request: CrawlRequest::Get { project_id },
+        }) {
+            self.refresh_pending.set(Some(id));
+        }
+        self.next_refresh
+            .set(Instant::now() + Duration::from_secs(1));
     }
 
     fn action(&self, action: &str) -> Result<(), String> {
@@ -177,7 +214,9 @@ impl ResourceTools {
                         .get(self.window.get_project_index().max(0) as usize)
                         .map(|p| p.id.clone());
                     let request = match action {
-                        "list" => CrawlRequest::List,
+                        "list" => selected.map_or(CrawlRequest::List, |project_id| {
+                            CrawlRequest::Get { project_id }
+                        }),
                         "inspect" => CrawlRequest::Create {
                             spec: self.crawl_spec()?,
                         },
@@ -212,6 +251,7 @@ impl ResourceTools {
                         }
                         _ => return Ok(()),
                     };
+                    let listing = matches!(request, CrawlRequest::List);
                     if self.send(
                         CorePipeRequest::Crawl {
                             request_id: id,
@@ -220,7 +260,7 @@ impl ResourceTools {
                         id,
                     ) {
                         self.creating_project.set(action == "inspect");
-                        self.listing_projects.set(action == "list");
+                        self.listing_projects.set(listing);
                     }
                 } else if mode == "zip" {
                     if source.is_empty() {
@@ -373,6 +413,24 @@ impl ResourceTools {
         let id = serde_json::to_value(response)
             .ok()
             .and_then(|v| v.get("request_id").and_then(serde_json::Value::as_u64));
+        if id.is_some() && self.refresh_pending.get() == id {
+            self.refresh_pending.set(None);
+            // A user command owns the next visible state. A background response
+            // must not overwrite it or restore a project while creating another.
+            if self.pending.get().is_none() && !self.window.get_creating() {
+                if let CorePipeResponse::Crawl { projects, .. } = response {
+                    let mut current = self.projects.borrow_mut();
+                    for project in projects {
+                        if let Some(item) = current.iter_mut().find(|item| item.id == project.id) {
+                            *item = project.clone();
+                        }
+                    }
+                    drop(current);
+                    self.render_project();
+                }
+            }
+            return;
+        }
         if self.pending.get() != id || id.is_none() {
             return;
         }
@@ -572,6 +630,16 @@ impl ResourceTools {
             self.window.set_summary("尚无项目，可创建抓站项目".into());
             return;
         };
+        let selected: HashSet<_> = if *self.rendered_project_id.borrow() == project.id {
+            self.rows
+                .iter()
+                .filter(|r| r.selected)
+                .map(|r| r.id.to_string())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        *self.rendered_project_id.borrow_mut() = project.id.clone();
         self.window.set_creating(false);
         self.window.set_summary(
             format!(
@@ -583,30 +651,42 @@ impl ResourceTools {
             )
             .into(),
         );
-        self.rows.set_vec(
-            project
-                .resources
+        let rows: Vec<_> = project
+            .resources
+            .iter()
+            .map(|r| ResourceRow {
+                id: r.url.clone().into(),
+                label: crate::safe_display_url(&r.url).into(),
+                detail: format!(
+                    "{} · {} {}",
+                    r.kind,
+                    if r.saved {
+                        "已保存"
+                    } else if r.selected {
+                        "已确认下载"
+                    } else {
+                        "待确认"
+                    },
+                    r.error
+                )
+                .into(),
+                selected: selected.contains(&r.url),
+            })
+            .collect();
+        if self.rows.row_count() == rows.len()
+            && self
+                .rows
                 .iter()
-                .enumerate()
-                .map(|(index, r)| ResourceRow {
-                    id: index.to_string().into(),
-                    label: crate::safe_display_url(&r.url).into(),
-                    detail: format!(
-                        "{} · {} {}",
-                        r.kind,
-                        if r.saved {
-                            "已保存"
-                        } else if r.selected {
-                            "已确认下载"
-                        } else {
-                            "待确认"
-                        },
-                        r.error
-                    )
-                    .into(),
-                    selected: false,
-                })
-                .collect::<Vec<_>>(),
-        );
+                .zip(&rows)
+                .all(|(old, new)| old.id == new.id)
+        {
+            for (index, row) in rows.into_iter().enumerate() {
+                if self.rows.row_data(index).as_ref() != Some(&row) {
+                    self.rows.set_row_data(index, row);
+                }
+            }
+        } else {
+            self.rows.set_vec(rows);
+        }
     }
 }
