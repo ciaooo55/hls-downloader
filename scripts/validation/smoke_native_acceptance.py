@@ -103,7 +103,9 @@ def main():
         return wait(find, 10)
 
     def press(window, name):
-        control(window, name, 'Button').invoke()
+        button = control(window, name, 'Button')
+        wait(button.is_enabled, 10)
+        button.invoke()
 
     try:
         with Core(engine, root) as core:
@@ -122,6 +124,10 @@ def main():
             report['checks'].append({'name': 'accessible_workbench', 'passed': True,
                                      'title': main_window.window_text()})
             save()
+            press(main_window, '设置')
+            settings = window('设置')
+            report['settings_tree'] = tree(settings)
+            press(settings, '取消')
             press(main_window, '新建')
             editor = window('新建下载')
             report['editor_tree'] = tree(editor)
@@ -129,6 +135,9 @@ def main():
             url = f'http://127.0.0.1:{server.server_port}/native-ui.bin'
             control(editor, '下载地址', 'Edit').set_edit_text(url)
             control(editor, '文件名', 'Edit').set_edit_text('原生界面下载.bin')
+            report['editor_values'] = {name: control(editor, name, 'Edit').get_value()
+                                       for name in ('下载地址', '文件名', '保存位置')}
+            save()
             press(editor, '添加任务')
             def completed():
                 tasks = core.snapshot()['tasks']
