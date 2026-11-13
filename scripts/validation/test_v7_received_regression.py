@@ -76,6 +76,7 @@ class ReceivedRegressionTests(unittest.TestCase):
         presenter = self.components['HLSDownloaderPresenter.exe']
         self.write('workbench.json', {'passed': True, 'components': self.components})
         self.write('native-media.json', {'passed': True, 'binaries': {'engine': engine, 'ui': presenter}})
+        self.write('public-https.json', {'passed': True, 'engine_sha256': engine, 'source_commit': 'a'*40})
         self.write('native-frames.json', {'passed': True, 'engine_sha256': engine,
             'presenter_sha256': presenter, 'frame_count': 200, 'frame_p95_ms': 20})
         self.write('range-tail.json', {'passed': True, 'engine_sha256': {'candidate': engine}})

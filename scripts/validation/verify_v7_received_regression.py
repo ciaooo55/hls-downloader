@@ -56,14 +56,17 @@ def verify(kind, manifest_path, evidence, candidate_run_id=None):
     elif kind == 'native':
         workbench = passed('workbench.json')
         media = passed('native-media.json')
+        https = passed('public-https.json')
         frames = passed('native-frames.json')
         tail = passed('range-tail.json')
         soak = passed('sustained-downloads.json')
         if workbench['components'].get('HLSDownloaderEngine.exe') != components['HLSDownloaderEngine.exe'] or workbench['components'].get('HLSDownloaderPresenter.exe') != components['HLSDownloaderPresenter.exe']:
             raise ValueError('Workbench report used other components')
-        for report in (frames, soak):
+        for report in (frames, soak, https):
             if report.get('engine_sha256') != components['HLSDownloaderEngine.exe']:
                 raise ValueError('Native report used another Core')
+        if https.get('source_commit') != manifest['source_commit']:
+            raise ValueError('Public HTTPS report used another frozen source')
         if frames.get('presenter_sha256') != components['HLSDownloaderPresenter.exe']:
             raise ValueError('Native report used another Presenter')
         if media['binaries']['engine'] != components['HLSDownloaderEngine.exe'] or media['binaries']['ui'] != components['HLSDownloaderPresenter.exe']:

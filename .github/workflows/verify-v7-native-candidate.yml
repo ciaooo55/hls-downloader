@@ -107,6 +107,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python scripts/validation/compare_v7_range_tail.py --candidate "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --report artifacts/candidate-native-regression/range-tail.json
           if ($LASTEXITCODE -ne 0) { throw 'Default tail splitting regression failed.' }
+      - name: Verify an actual public HTTPS download
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $manifest = Get-Content artifacts/candidate-native-regression/candidate/ARTIFACT-MANIFEST.json -Raw -Encoding utf8 | ConvertFrom-Json
+          python scripts/validation/smoke_v7_public_https.py --engine "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --source $manifest.source_commit --repository $env:GITHUB_REPOSITORY --report artifacts/candidate-native-regression/public-https.json
+          if ($LASTEXITCODE -ne 0) { throw 'Actual public HTTPS download failed.' }
       - name: Verify 30 minutes of populated Core and real transfers
         if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
         shell: pwsh

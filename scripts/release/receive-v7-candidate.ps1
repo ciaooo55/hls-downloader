@@ -62,7 +62,7 @@ foreach ($entry in $manifest.artifacts.PSObject.Properties) {
     if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value.sha256) { throw "Candidate digest mismatch: $($entry.Name)" }
 }
 $provenance = [ordered]@{ schema = 1; repository = $Repository; run_id = $run[0].id; run_url = $run[0].html_url; source_commit = $sha; source_tree = $tree; candidate_manifest = $manifestPath; msi_evidence = (Join-Path $root 'msi-lifecycle'); browser_evidence = (Join-Path $root 'browser-regression'); native_evidence = (Join-Path $root 'native-regression'); regression_runs = $regressionRuns }
-[IO.File]::WriteAllText((Join-Path $root 'RECEIPT.json'), ($provenance | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $root 'RECEIPT.json'), ($provenance | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 foreach ($scenario in @('Upgrade', 'FailureRollback')) {
     & (Join-Path $PSScriptRoot '..\validation\verify-v7-received-msi.ps1') -Scenario $scenario -CandidateManifestPath $manifestPath -EvidenceRoot $provenance.msi_evidence | Out-Null
 }
@@ -70,4 +70,4 @@ foreach ($kind in @('browser', 'native')) {
     & python.exe (Join-Path $PSScriptRoot '..\validation\verify_v7_received_regression.py') --kind $kind --manifest $manifestPath --evidence (Join-Path $root "$kind-regression") --candidate-run-id $run[0].id
     if ($LASTEXITCODE -ne 0) { throw "Received $kind regression failed identity or result validation." }
 }
-Write-Output ($provenance | ConvertTo-Json -Compress)
+Write-Output ($provenance | ConvertTo-Json -Depth 6 -Compress)
