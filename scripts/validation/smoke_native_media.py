@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import traceback
 
 import psutil
 
@@ -244,7 +245,8 @@ def main() -> None:
                         before = status()
                         time.sleep(.35)
                         after = status()
-                        assert after["paused"] and abs(after["position_seconds"]-before["position_seconds"]) < .15
+                        report['pause_observation'] = {'before': before, 'after': after}
+                        assert after["paused"] and abs(after["position_seconds"]-before["position_seconds"]) < .15, report['pause_observation']
                         control("seek_to:30")
                         control("speed:1.5")
                         control("volume:40")
@@ -328,8 +330,8 @@ def main() -> None:
                         report["process_cleanup"] = dict(engine_stopped=engine.poll() is not None,
                                                          ui_stopped=ui is None or ui.poll() is not None)
         report["workspace_cleanup"] = dict(complete=True)
-    except Exception as error:
-        report.update(passed=False, error=str(error))
+    except Exception:
+        report.update(passed=False, error=traceback.format_exc())
         raise
     finally:
         save()

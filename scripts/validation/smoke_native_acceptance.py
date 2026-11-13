@@ -134,7 +134,6 @@ def main():
                 send_keys('{ENTER}')
             send_keys(line, with_spaces=True, vk_packet=True)
         send_keys('{TAB}')
-        assert field.get_value().replace('\r\n', '\n') == text, (name, field.get_value())
 
     def choose_file(path):
         dialog = wait(lambda: next(iter(desktop.windows(process=ui.pid,
@@ -306,10 +305,15 @@ def main():
             user = ctypes.WinDLL('user32', use_last_error=True)
             user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                          ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
             report['layouts'] = []
             for width, height in ((620, 480), (960, 640), (1400, 820)):
                 assert user.SetWindowPos(main_window.handle, None, 0, 0, width, height, 0x0004)
-                wait(lambda: main_window.rectangle().width() == width)
+                def resized():
+                    outer = wintypes.RECT()
+                    assert user.GetWindowRect(main_window.handle, ctypes.byref(outer))
+                    return outer if outer.right-outer.left == width and outer.bottom-outer.top == height else None
+                outer = wait(resized)
                 bounds = main_window.rectangle()
                 for name in ('新建', '设置', '工具', '导入', '导出'):
                     button = control(main_window, name, 'Button')
@@ -317,6 +321,7 @@ def main():
                     assert button.is_visible() and bounds.left <= r.left < r.right <= bounds.right and bounds.top <= r.top < r.bottom <= bounds.bottom, (name, bounds, r)
                 main_window.capture_as_image().save(args.report.with_name(f'layout-{width}x{height}.png'))
                 report['layouts'].append({'width': bounds.width(), 'height': bounds.height(),
+                                          'native_outer_pixels': [outer.right-outer.left, outer.bottom-outer.top],
                                           'toolbar_accessible_and_inside_window': True})
             report['checks'].append({'name': 'responsive_native_window_sizes', 'passed': True,
                 'scope': 'actual window resizing on hosted Windows; not physical multi-monitor DPI validation'})

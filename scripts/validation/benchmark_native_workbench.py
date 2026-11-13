@@ -60,6 +60,7 @@ def main():
                 user.GetDpiForWindow.restype = wintypes.UINT
                 user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                              ctypes.c_int, ctypes.c_int, wintypes.UINT]
+                user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
                 user.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
                 report['window_dpi'] = user.GetDpiForWindow(window.handle)
                 report['window_title'] = window.window_text()
@@ -84,7 +85,8 @@ def main():
             area = wintypes.RECT()
             assert user.SystemParametersInfoW(0x0030, 0, ctypes.byref(area), 0)
             report['layouts'] = []
-            report['layout_scope'] = 'Slint scale override at 1/1.25/1.5/2 on one hosted display; actual OS DPI recorded separately; no physical monitor-switch assertion'
+            report['layout_scope'] = 'Slint scale override at 1/1.25/1.5/2 in the same logical viewport on one hosted display; window may extend beyond hosted display; OS DPI and work area recorded separately; no physical monitor-switch assertion'
+            report['hosted_work_area_pixels'] = [area.right-area.left, area.bottom-area.top]
             for scale in (1, 1.25, 1.5, 2):
                 env['SLINT_SCALE_FACTOR'] = str(scale)
                 with (root/f'layout-{scale}.log').open('wb') as log:
@@ -93,10 +95,14 @@ def main():
                     window = wait(lambda: next(iter(Desktop(backend='uia').windows(process=ui.pid,
                         title_re=r'HLS Downloader [0-9].*', visible_only=True)), None), 30)
                     wait(lambda: window.descendants(control_type='ListItem'), 15)
-                    width = min(round(960*scale), area.right-area.left)
-                    height = min(round(620*scale), area.bottom-area.top)
+                    width = round(960*scale)
+                    height = round(620*scale)
                     assert user.SetWindowPos(window.handle, None, area.left, area.top, width, height, 0x0004)
-                    wait(lambda: window.rectangle().width() == width)
+                    def resized():
+                        outer = wintypes.RECT()
+                        assert user.GetWindowRect(window.handle, ctypes.byref(outer))
+                        return outer if outer.right-outer.left == width and outer.bottom-outer.top == height else None
+                    outer = wait(resized)
                     bounds = window.rectangle()
                     for name in ('新建', '设置', '工具', '导入', '导出'):
                         def find():
@@ -109,6 +115,7 @@ def main():
                     report['layouts'].append({'slint_scale_factor': scale,
                         'actual_os_window_dpi': user.GetDpiForWindow(window.handle),
                         'window_pixels': [bounds.width(), bounds.height()],
+                        'native_outer_pixels': [outer.right-outer.left, outer.bottom-outer.top],
                         'toolbar_accessible_and_inside_window': True})
                     ui.terminate()
                     ui.wait(timeout=10)
