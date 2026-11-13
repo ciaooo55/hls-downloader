@@ -25,7 +25,7 @@ permissions:
 jobs:
   native:
     runs-on: windows-latest
-    timeout-minutes: 55
+    timeout-minutes: 75
     env:
       PYTHONUTF8: '1'
       HLS_VM_ACCEPTANCE: '1'
@@ -67,6 +67,15 @@ jobs:
             candidate_run_id = $env:CANDIDATE_RUN_ID
             exact_source = ($env:GITHUB_SHA -eq $manifest.source_commit)
           } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
+      - name: Prepare protocol and media validation tools
+        if: ${{ inputs.extended }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check paramiko==3.5.1 pyftpdlib
+          $media = & ./scripts/build/bootstrap-v7-media-tools.ps1
+          "HLS_TEST_FFPROBE=$media/ffprobe.exe" >> $env:GITHUB_ENV
       - name: Exercise actual packaged workbench on isolated desktop
         shell: pwsh
         env:
@@ -107,6 +116,37 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python scripts/validation/compare_v7_range_tail.py --candidate "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --report artifacts/candidate-native-regression/range-tail.json
           if ($LASTEXITCODE -ne 0) { throw 'Default tail splitting regression failed.' }
+      - name: Verify packaged FTP SFTP and protocol recovery
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
+        shell: pwsh
+        run: |
+          python scripts/validation/smoke_v7_protocol_features.py --engine "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --no-firewall-rule --report artifacts/candidate-native-regression/protocols.json
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged protocol/recovery acceptance failed.' }
+      - name: Verify packaged HLS DASH live and audio recovery with decoded output
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
+        shell: pwsh
+        run: |
+          @'
+          import os, sys, uuid
+          from pathlib import Path
+          from types import SimpleNamespace
+          sys.path.insert(0, 'scripts/validation')
+          from smoke_v7_resource_boundaries import Core
+          from validation_workspace import test_tmp
+          from smoke_v7_media_download import run
+          from smoke_v7_media_track_progress import run as tracks
+          runtime = Path(os.environ['HLS_TEST_RUNTIME'])
+          reports = Path('artifacts/candidate-native-regression').resolve()
+          pipe = r'\\.\pipe\HLSHostedMedia-' + uuid.uuid4().hex
+          os.environ['HLS_V7_PIPE'] = pipe
+          root = test_tmp()/('packaged-media-' + uuid.uuid4().hex)
+          with Core(runtime/'app/resources/HLSDownloaderEngine.exe', root, environment={'HLS_V7_PIPE':pipe}):
+              for name, live, failure in [('media-download',False,None), ('media-live',True,None), ('media-audio-failure',False,'all'), ('media-audio-segment',False,'segment')]:
+                  args = SimpleNamespace(runtime=runtime, ffprobe=Path(os.environ['HLS_TEST_FFPROBE']), report=reports/(name+'.json'), live=live, audio_failure=failure)
+                  assert run(args) == 0, name
+              assert tracks(runtime, reports/'media-track-progress.json', Path(os.environ['HLS_TEST_FFPROBE'])) == 0
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Decoded packaged media acceptance failed.' }
       - name: Verify an actual public HTTPS download
         if: ${{ !cancelled() && steps.receive.outcome == 'success' }}
         shell: pwsh

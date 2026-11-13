@@ -77,6 +77,9 @@ class ReceivedRegressionTests(unittest.TestCase):
         self.write('workbench.json', {'passed': True, 'components': self.components})
         self.write('native-media.json', {'passed': True, 'binaries': {'engine': engine, 'ui': presenter}})
         self.write('public-https.json', {'passed': True, 'engine_sha256': engine, 'source_commit': 'a'*40})
+        for name in ('protocols', 'media-download', 'media-live', 'media-audio-failure', 'media-audio-segment'):
+            self.write(name+'.json', {'passed': True, 'engine_sha256': engine})
+        self.write('media-track-progress.json', {'passed': True, 'components': {'app/resources/HLSDownloaderEngine.exe': engine}})
         self.write('native-frames.json', {'passed': True, 'engine_sha256': engine,
             'presenter_sha256': presenter, 'frame_count': 200, 'frame_p95_ms': 20})
         self.write('range-tail.json', {'passed': True, 'engine_sha256': {'candidate': engine}})
