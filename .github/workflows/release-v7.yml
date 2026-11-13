@@ -113,7 +113,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') { throw 'Formal v7 release requires Windows x64.' }
           if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Release validation must not use a personal desktop.' }
-          Get-Command git.exe, python.exe, go.exe, gh.exe -ErrorAction Stop | Out-Null
+          Get-Command git.exe, python.exe, gh.exe -ErrorAction Stop | Out-Null
           python.exe -m pip install --disable-pip-version-check psutil==7.2.2 PyYAML
           python.exe -c "import yaml"
           if ($LASTEXITCODE -ne 0) { throw 'Release runner Python must provide PyYAML for deterministic SBOM generation.' }

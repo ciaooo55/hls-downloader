@@ -1,86 +1,46 @@
-# v7 formal release runner
+# v7 formal release on hosted Windows
 
-`v7 Candidate Package` remains suitable for ordinary GitHub-hosted Windows runners. `.github/workflows/release-v7.yml` targets an on-demand ephemeral self-hosted Windows x64 runner carrying the custom label `hls-release`; readiness uses `hls-readiness`. Both workflows use the sole source directory `A:\Ubuntu\测试\hls-downloader` and do not run `actions/checkout`. The operator prepares that clean local `main` at the dispatched SHA before starting the runner; the workflow checks it against remote `main`.
+Candidate packaging, browser acceptance, native desktop acceptance and formal release run on disposable `windows-latest` machines. The formal workflow checks out the dispatched source and rejects non-main, stale or dirty source. It does not use the operator’s computer or a fixed local directory.
 
-On 2026-10-02 the operator explicitly requested unsigned formal Windows packages because no code-signing certificate is available. Signing tools, certificates and timestamp services are not prerequisites for this release. Unsigned packages require manual installation; the automatic updater retains its signature and signer-trust checks and must reject them.
+Windows EXE/MSI and Portable releases remain unsigned under the operator’s existing instruction. Manual installation is supported. The automatic updater still requires a trusted signature and cannot install these unsigned packages. Firefox is delivered as an unsigned ZIP and source bundle pending Mozilla signing; permanent installation in standard Firefox has not been accepted.
 
-The workflow reads product version and readiness from the canonical feature-parity.json at the frozen dispatched SHA. Candidate provenance and canonical readiness describe different scopes; see [verification status](../validation/v7-verification.md).
+## Frozen-source sequence
 
-The MSI lifecycle gate checks the actual baseline MSI version and accepts a current-version replacement. Browser media-push uses the workspace-local `.tool-cache/test-tmp/browser-media-push` installation. This test constraint does not restrict ordinary MSI installation paths. Browser evidence requires installed Edge/Firefox, an interactive desktop and a real reachable LAN receiver.
+1. Complete implementation and record the actual verification and remaining scope in the canonical feature matrix. Do not set readiness to bypass a failed gate.
+2. Freeze `main`. Require successful exact-SHA push runs of `ci.yml`, `rust-security.yml` and `maintenance-security.yml`.
+3. Dispatch `package-v7-candidate.yml`. It builds native installers/extensions and checks packaged CLI/Core/Host behavior, Host job lifetime, transfers, portable upgrade/rollback, actual MSI upgrade/failure rollback, EXE installation and visible shortcut startup.
+4. Dispatch `verify-v7-candidate-browsers.yml` with that candidate run ID. It checks real Edge/Firefox media recognition, credentials, response ownership/restart recovery and actual Host/Core handoff using isolated test profiles.
+5. Dispatch `verify-v7-native-candidate.yml` with that same run ID, `extended=true` and `frames=true`. It checks actual native business flows, file pickers, keyboard/queue dragging, window sizes, libmpv embedding, native redraw intervals with 1000 persisted tasks, Slint scales 1/1.25/1.5/2, public HTTPS, tail-splitting recovery and 30 wall-clock minutes of populated downloads. Software scale tests record actual OS DPI separately and do not assert physical multi-monitor acceptance.
+6. After all required evidence is successful and canonical non-excluded feature gaps are closed, dispatch `release-v7.yml` from that exact frozen `main`. Keep `publish=false` for a draft, or use the already-authorized `publish=true` publication path.
 
-## Runner contract
+A test-script overlay from another SHA remains useful for development diagnostics. It cannot satisfy formal release: both validation and candidate source identities, candidate manifest hash, component hashes and candidate workflow run ID must match.
 
-The `hls-release` runner must provide:
+## Release inputs and gates
 
-- Windows x64. Test installation directories stay under the project workspace `.tool-cache/test-tmp/`; no dedicated drive is required.
-- An **interactive logged-in Windows desktop session** for browser/Compose evidence. Run the GitHub runner agent from the release user's desktop session, not as a Session-0 Windows service. The media-push readiness workflow fails before toolchain/bootstrap work when the runner process is in Session 0, `UserInteractive` is false, or the current session has no Explorer desktop. Keep the release desktop available/unlocked while the real browser + Java Access Bridge gate is running.
-- Git, GitHub CLI (`gh`), Python with PyYAML, and Go on `PATH`.
-- Edge and Firefox. Standard Program Files locations are auto-detected; non-standard installations can be passed as workflow-dispatch inputs or runner environment variables `HLS_V7_EDGE_BINARY` and `HLS_V7_FIREFOX_BINARY`. Optional pinned matching WebDriver paths can be supplied as `HLS_V7_EDGE_DRIVER` and `HLS_V7_FIREFOX_DRIVER`; otherwise Selenium Manager resolves the driver.
-- A clean HLS Downloader install state before MSI-bound browser validation. The gate refuses to run when a related HLS Downloader product is already installed instead of silently reusing it.
-- Network access to the pinned JDK, FFmpeg, libmpv and curl-impersonate downloads used by the build scripts, plus GitHub for release upload and digest verification.
-- Layer-2/LAN reachability to the configured real TVBox receiver used by the installed-browser media-push gate. Discovery and receiver fetch are hard requirements, not optional smoke coverage.
+The hosted runner supplies Git, GitHub CLI and Python. The workflow installs pinned Rust, Node/pnpm and media tools, plus ordinary Python validation dependencies. Native release does not require the old Compose/JDK/Java Access Bridge environment. A GitHub environment named `v7-release` is retained for repository release controls.
 
-The workflow itself installs the repository-pinned Rust, Node/pnpm, JDK and FFmpeg inputs. Those toolchains do not need to be permanently added to the runner.
+`receive-v7-candidate.ps1` finds successful candidate, browser and native acceptance runs for the frozen SHA. It verifies authenticated GitHub artifact ZIP digests before unpacking, then checks report identities and results. A successful short native run without the frame/layout and sustained-download reports cannot satisfy release acceptance.
 
-## Release environment
+The recorder retains five candidate-bound gates:
 
-Create a GitHub Actions environment named `v7-release` and protect it as appropriate for the repository. Configure these values there or at repository scope:
+- `browser`: authenticated same-source hosted Edge/Firefox media, credentials, recovery and real Host/Core reports;
+- `performance`: native software-renderer evidence, populated sustained downloads and tail recovery, plus actual local Host startup/IPC/transfer thresholds;
+- `installer`: candidate-bound hosted MSI upgrade evidence;
+- `rollback`: candidate-bound hosted MSI failure rollback evidence;
+- `browser_media_push`: the canonical user-approved real casting/TVBox exclusion, recorded as excluded rather than passed. If the exclusion is removed, real receiver acceptance is required again.
 
-- Variable `HLS_V7_TVBOX_EXPECTED_HOST`: exact **private IPv4** address of the dedicated real TVBox receiver on the runner's LAN. The receiver must have its TVBox receive service enabled and must be able to fetch the deterministic media URL served by the runner. Missing, non-private, undiscoverable, wrong-host, or non-fetching receivers fail the readiness/formal media-push gate; there is no skip fallback.
+The existing user-approved cloud subtitle quality exclusion also remains explicit. Neither exclusion removes the feature implementation or claims unexecuted tests passed. The legacy self-hosted media-push readiness workflow is outside this release path and must not be dispatched on the operator’s machine.
 
-Do not configure a signing identity for the current unsigned release. Runtime automatic-update authorization remains unchanged: the updater requires a trusted Authenticode signature and a compiled primary or reviewed rollover signer. Network release metadata cannot add a trusted signer or authorize an unsigned package.
+`build-v7.ps1 -Task package` still requires complete canonical metadata, readiness, a clean source tree and exact current release evidence. The formal workflow then refuses executable components whose hashes differ from the tested candidate. It stages installers, extensions and Firefox sources, provenance, SBOM, evidence and SHA256 sums. Uploaded GitHub asset sizes and digests must match before publication.
 
-## Pre-readiness media-push validation
+## Retry behavior
 
-While canonical `release_ready=false`, `.github/workflows/v7-media-push-readiness.yml` is the approved way to collect the missing installed-browser media-push evidence before the metadata readiness decision. It runs by `workflow_dispatch` on an on-demand ephemeral `hls-readiness` runner in the `v7-release` environment, using the same sole local source directory without checkout. It installs and uninstalls the candidate to collect evidence, but does not change readiness metadata or publish a release.
+A release retry accepts only the same frozen version and source:
 
-The workflow refuses non-`main` or stale source, requires `release_ready=false`, requires `HLS_V7_TVBOX_EXPECTED_HOST`, verifies the interactive desktop contract before expensive build work, builds a fresh candidate from that exact commit, installs the candidate MSI, validates the installed Edge/Firefox Native Messaging registrations, drives the production browser -> Native Host -> Core -> Compose DevicePicker path in both browsers, and requires the configured receiver to fetch the deterministic media fixture. It then reconfirms remote `main` did not move and uploads a source/candidate/browser/receiver-bound readiness attestation.
+- no version tag: create an annotated tag and draft;
+- matching annotated tag with no release: reuse the tag and create the draft;
+- matching annotated tag and existing draft: reject unexpected assets and replace only expected staging assets before digest verification.
 
-This pre-readiness attestation is evidence for the later narrow feature-metadata promotion only. It does **not** set `release_ready=true`, create a tag, sign artifacts, create a GitHub Release, or substitute for the final-SHA formal media-push gate.
+Lightweight tags, tags on other commits, stale source, an already-published canonical release, failed/missing evidence and upload mismatches stop publication. A retry does not rewrite published history or turn failed gates into success.
 
-## What the formal workflow proves
-
-A dispatch from `main` refuses to continue unless the dispatched commit is still the current remote `main` and four exact workflow identities have successful runs for that same `main` SHA:
-
-- `v7 CI` at `.github/workflows/ci.yml`;
-- `v7 Candidate Package` at `.github/workflows/package-v7-candidate.yml` (explicit `workflow_dispatch` from `main`);
-- `Maintenance Security` at `.github/workflows/maintenance-security.yml`;
-- `Rust Security` at `.github/workflows/rust-security.yml`.
-
-Candidate packaging runs only on explicit manual dispatch, not on every merge. The other three prerequisites require `event=push`. Both readiness and formal release use `scripts/release/assert-v7-exact-main-workflows.ps1`, which binds each workflow's display name, canonical path and expected event, plus `head_branch=main` and the exact `GITHUB_SHA`. A renamed, duplicate-name, wrong-event or stale workflow cannot satisfy the gate. After freezing `main`, explicitly run the candidate workflow once and ensure the three push prerequisites succeeded before dispatching readiness.
-
-A fresh release requires no existing canonical-version tag; a retry may reuse only an annotated tag that resolves to that exact same frozen commit and, when a release already exists, only while that release is still a draft. It then:
-
-1. checks that the dispatch is the current `main`, reads/validates the canonical product version, and validates existing tag/draft retry state; this early step does **not** change or bypass `release_ready`;
-2. validates all four exact-SHA prerequisite workflow identities before building release inputs;
-3. verifies the dedicated Windows release runner and bootstraps the pinned toolchains;
-4. receives the frozen `v7-candidate` artifact and isolated MSI lifecycle evidence from `package-v7-candidate.yml` for that exact commit (`scripts/release/receive-v7-candidate.ps1`);
-5. records five candidate-bound release gates against that same candidate manifest: packaged-browser behavior, installed-browser-to-real-LAN media push, performance, installer upgrade, and failure rollback;
-6. rechecks that `main` has not moved;
-7. builds the formal package using that evidence; `build-v7.ps1 -Task package` is where canonical completeness, current release evidence, clean-worktree and `release_ready=true` are enforced;
-8. retains unsigned Windows EXE/MSI and Portable ZIP artifacts according to the operator's 2026-10-02 instruction;
-9. creates the Firefox store source bundle, CycloneDX SBOM, release evidence bundle and `SHA256SUMS.txt`;
-10. uploads the staged files as a retained Actions artifact;
-11. creates or safely resumes the canonical annotated version tag and **Draft** GitHub Release;
-12. compares every uploaded GitHub asset's reported byte size and `sha256:` digest with the local staged file;
-13. publishes the verified draft as Latest only when the dispatch `publish` switch is enabled.
-
-A missing, renamed, path-mismatched, wrong-event, wrong-branch, wrong-SHA, or failed required prerequisite workflow stops the release before candidate build. `release_ready=false`, a residual canonical feature gap, a missing browser, non-interactive desktop, missing/wrong LAN receiver, failed receiver fetch, failed performance threshold, MSI lifecycle regression, changed `main`, mismatched upload digest, or any missing release asset also stops the workflow. No fallback turns those failures into a public release.
-
-## Safe retry semantics
-
-The formal workflow is resumable only for release state that can be proven to belong to the same frozen `main` commit and canonical product version:
-
-- no tag: create a fresh annotated `v<product_version>` tag and draft release;
-- annotated canonical tag on the exact current commit, but no release: reuse the validated tag and create the draft;
-- annotated canonical tag on the exact current commit with an existing draft release: reject unexpected assets, refresh title and notes, and replace only the expected staged assets before digest verification.
-
-A lightweight tag, a tag pointing at any other commit, a mismatched-version tag, or an already-published release is always rejected. This lets an interrupted tag push or draft upload be retried without weakening the source, release-gate, or digest checks.
-
-## Candidate versus formal release
-
-Use the hosted candidate workflow for ordinary development validation and downloadable test packages. Use the formal workflow only on the controlled `hls-release` machine after the canonical source state is actually release-ready. Use the pre-readiness media-push workflow only to collect the candidate-bound real-browser/LAN evidence needed to resolve the remaining media-push feature gap while readiness is still false. This preserves the existing hard release evidence instead of weakening it to fit a generic hosted runner.
-
-Hosted headless CLI/Native Host validation runs inside an additional nested job that permits explicit child breakaway. The outer runner job and its limits are retained. Production launch flags are unchanged: a Core must explicitly request breakaway to outlive its Host. A separate regression places a real packaged Native Host in a named job, checks that the Host belongs to that job and the Core does not, terminates the whole job, then checks that the same Core process remains alive and accepts two reconnect pings. This covers Windows process lifetime separation, not real Firefox/Edge acceptance. Startup diagnostics record both the original runner job and the prepared validation job; supplemental diagnosis of an older candidate does not change the original workflow conclusion or grant formal release readiness.
-
-Read the frozen contract before dispatch. The pre-readiness workflow rejects release_ready=true; a contract set to true cannot use that workflow unchanged. Do not change readiness merely to bypass this precondition. Formal evidence, package provenance and publication authorization remain separate.
+Hosted CLI/Host validation uses a nested job that allows explicit Core breakaway while retaining the outer runner limits. A separate test terminates a real Host’s named kill-on-close job and verifies that the same Core survives and accepts reconnection. This proves process lifetime behavior; the separate browser workflow supplies browser acceptance.

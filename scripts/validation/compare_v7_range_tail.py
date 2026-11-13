@@ -91,6 +91,7 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False, *, split_
         with Core(engine, root, environment=environment) as core:
             origin = f'http://127.0.0.1:{server.server_port}'
             cpu_before = sum(core.ps.cpu_times()[:2])
+            cpu_before_restart = 0
             began = time.perf_counter()
             created = core.command({'kind': 'create_task', 'spec': {
                 'url': origin + '/payload.bin', 'filename': 'payload.bin', 'resource_kind': 'file',
@@ -116,10 +117,12 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False, *, split_
                         except (ValueError, OSError):
                             return None
                     saved_ranges = wait(durable, 10)
+                    cpu_before_restart = sum(core.ps.cpu_times()[:2]) - cpu_before
                     core.process.kill()
                     core.process.wait(timeout=10)
                     core.__exit__()
                     core.__enter__()
+                    cpu_before = sum(core.ps.cpu_times()[:2])
                 else:
                     core.command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
 
@@ -147,7 +150,7 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False, *, split_
 
             task = wait(finished, 45)
             elapsed = time.perf_counter() - began
-            cpu = sum(core.ps.cpu_times()[:2]) - cpu_before
+            cpu = cpu_before_restart + sum(core.ps.cpu_times()[:2]) - cpu_before
             assert task['status'] == 'completed', task
             output = Path(task['output_path'])
             with output.open('rb') as stream:

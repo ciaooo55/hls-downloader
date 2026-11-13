@@ -31,7 +31,7 @@ Historical PR #19 (`windows-sys` 0.59 -> 0.61.2) closed without merge after its 
 
 Action updates may carry security fixes and runner-runtime changes. After selecting an updated action version, workflows must continue to reference immutable commit SHAs rather than mutable major tags.
 
-The repository's merged Actions update (#21) follows this model. Future updates must verify hosted workflow compatibility and, where the formal release workflow is affected, the self-hosted runner requirements as well.
+The repository's merged Actions update (#21) follows this model. Future updates must verify hosted Windows compatibility for candidate packaging, browser/native acceptance and formal release.
 
 ### 4. Compiler, test, and development-tool majors
 
