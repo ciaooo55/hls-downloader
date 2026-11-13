@@ -46,6 +46,8 @@ public static class HlsStartupWindow {
             $probe.startup_failure_reported = $true
             $probe.error_log = $errorLog
             $probe.presenter_pid = $presenter.Id
+            # Get-Process otherwise loses ExitCode after the process exits in PS 5.1.
+            $null = $presenter.Handle
             if (-not [HlsStartupWindow]::PostMessageW($presenter.MainWindowHandle, 0x0010, [UIntPtr]::Zero, [IntPtr]::Zero)) { throw 'Could not dismiss the startup error dialog.' }
             if (-not $presenter.WaitForExit(5000)) { throw 'Presenter did not exit after its startup error dialog was dismissed.' }
             $probe.exit_code = $presenter.ExitCode
