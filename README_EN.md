@@ -37,7 +37,7 @@ Installers, Chromium/Firefox extensions and extension sources are available on t
 
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
 
-Current native implementation, component builds and validation are tracked in the [migration log](docs/validation/native-migration-progress.md) and [feature map](docs/validation/native-feature-mapping.md). The [historical delivery record](docs/validation/convergence.md) does not identify the current source or component builds. `release_ready=false`.
+Current native implementation, component builds and validation are tracked in the [migration log](docs/validation/native-migration-progress.md) and [feature map](docs/validation/native-feature-mapping.md). The [historical delivery record](docs/validation/convergence.md) does not identify the current source or component builds. Canonical readiness permits frozen-source acceptance; formal delivery still requires matching packaged components and installation/startup gates.
 
 ### Requirements
 

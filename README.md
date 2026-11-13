@@ -37,7 +37,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 
-当前原生实现、验证范围与组件构建状态见[原生迁移记录](docs/validation/native-migration-progress.md)，剩余验收见[功能映射](docs/validation/native-feature-mapping.md)。[历史交付记录](docs/validation/convergence.md)不代表当前源码或组件版本。`release_ready=false`，正式发布仍须通过既有门禁。
+当前原生实现、验证范围与组件构建状态见[原生迁移记录](docs/validation/native-migration-progress.md)，逐项范围见[功能映射](docs/validation/native-feature-mapping.md)。[历史交付记录](docs/validation/convergence.md)不代表当前源码或组件版本。功能合同的 readiness 表示实现可进入冻结发布验收，正式交付仍须通过同源成品与安装启动门禁。
 
 ### 系统要求
 
