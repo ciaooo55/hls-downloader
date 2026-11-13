@@ -1,6 +1,7 @@
 import { ScrollView } from "std-widgets.slint";
-import { Tokens, WorkbenchIcon, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea } from "theme.slint";
-export { Tokens } from "theme.slint";
+import { Tokens, WorkbenchIcon, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar } from "theme.slint";
+export { Tokens, SegmentBlock } from "theme.slint";
+
 export { WorkbenchWindow, TaskRow, NavigationRow, TaskMenuRow, TaskColumn, ToolbarItem } from "workbench.slint";
 export { TaskEditorWindow } from "task_editor.slint";
 export { DetailsWindow } from "details.slint";
@@ -251,6 +252,7 @@ export component ProgressWindow inherits Window {
     in-out property <string> speed;
     in-out property <string> stage_label;
     in-out property <float> progress;
+    in-out property <[SegmentBlock]> segments;
     in-out property <string> transferred;
     in-out property <string> remaining;
     in-out property <bool> processing: false;
@@ -310,6 +312,11 @@ export component ProgressWindow inherits Window {
                             background: Tokens.accent;
                             animate width { duration: Tokens.motion; easing: ease-out; }
                         }
+                    }
+                    if root.segments.length > 1: SegmentMapBar {
+                        height: 5px;
+                        border-radius: 2.5px;
+                        segments: root.segments;
                     }
                     Text { text: root.transferred; color: Tokens.muted; font-size: 10px; overflow: elide; }
                 }

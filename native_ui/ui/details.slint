@@ -1,5 +1,5 @@
 import { ScrollView, LineEdit, SpinBox, TextEdit } from "std-widgets.slint";
-import { Tokens, HotButton, FieldLabel } from "theme.slint";
+import { Tokens, HotButton, FieldLabel, SegmentBlock, SegmentMapBar } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component DetailsWindow inherits Window {
@@ -11,6 +11,8 @@ export component DetailsWindow inherits Window {
     in property <string> filename;
     in property <string> status;
     in property <string> transfer;
+    in property <float> progress;
+    in property <[SegmentBlock]> segments;
     in property <string> connections;
     in property <string> diagnostic;
     in property <string> logs;
@@ -34,9 +36,34 @@ export component DetailsWindow inherits Window {
                 width: parent.width / max(root.speed-history.length, 1);
                 x: index * self.width; height: max(1px, (parent.height - 30px) * sample); y: parent.height - self.height;
                 background: Tokens.accent; opacity: 0.6;
+                animate height { duration: Tokens.motion-fast; easing: ease-out; }
             }
         }
-        Text { text: root.connections; color: Tokens.muted; wrap: word-wrap; }
+        Rectangle {
+            background: Tokens.surface; border-radius: 10px; border-width: 1px; border-color: Tokens.line;
+            VerticalLayout {
+                padding: 12px; spacing: 8px;
+                HorizontalLayout {
+                    Text { text: "连接与动态分段视图"; color: Tokens.ink; font-size: 12px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: Math.round(Math.clamp(root.progress, 0, 1) * 100) + "%"; color: Tokens.accent; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                }
+                Rectangle {
+                    height: 6px; border-radius: 3px; background: Tokens.surface-3; clip: true;
+                    Rectangle {
+                        x: 0px; y: 0px; height: parent.height;
+                        width: parent.width * Math.clamp(root.progress, 0, 1);
+                        border-radius: 3px;
+                        background: root.progress >= 1 ? Tokens.done : Tokens.accent;
+                        animate width { duration: Tokens.motion; easing: ease-out; }
+                        animate background { duration: Tokens.motion-fast; }
+                    }
+                }
+                if root.segments.length > 0: SegmentMapBar {
+                    segments: root.segments;
+                }
+                Text { text: root.connections; color: Tokens.muted; font-size: 12px; wrap: word-wrap; }
+            }
+        }
         if root.diagnostic != "": Text { text: root.diagnostic; color: Tokens.warn; wrap: word-wrap; }
         FieldLabel { label: "下载地址"; }
         LineEdit { text <=> root.url; height: Tokens.control-height; accessible-label: "下载地址"; }

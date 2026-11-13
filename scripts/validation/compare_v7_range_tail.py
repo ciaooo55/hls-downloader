@@ -23,11 +23,11 @@ PAYLOAD = random.Random(20261025).randbytes(SIZE)
 EXPECTED = hashlib.sha256(PAYLOAD).hexdigest()
 
 
-def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
+def transfer(engine, root, mode, via_proxy=False, pause_on_help=False, *, split_setting=None, crash_on_help=False):
     requests = []
     helper_seen = threading.Event()
     release_helpers = threading.Event()
-    if not pause_on_help:
+    if not pause_on_help and not crash_on_help:
         release_helpers.set()
 
     class Handler(BaseHTTPRequestHandler):
@@ -71,7 +71,7 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
                     body = PAYLOAD[offset:min(offset + 65536, end + 1)]
                     self.wfile.write(body)
                     request['sent'] += len(body)
-                    if slow and pause_on_help and offset == start:
+                    if slow and (pause_on_help or crash_on_help) and offset == start:
                         self.wfile.flush()
                         request['held_initial_tail_until_helper'] = True
                         if not helper_seen.wait(20):
@@ -87,7 +87,8 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        with Core(engine, root) as core:
+        environment = {'HLS_HTTP_ACTIVE_SPLIT': split_setting} if split_setting is not None else {}
+        with Core(engine, root, environment=environment) as core:
             origin = f'http://127.0.0.1:{server.server_port}'
             cpu_before = sum(core.ps.cpu_times()[:2])
             began = time.perf_counter()
@@ -98,13 +99,29 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
                        if e['event']['kind'] == 'task_created')
 
             resumed = None
-            if pause_on_help:
+            if pause_on_help or crash_on_help:
                 try:
                     wait(helper_seen.is_set, 25)
                 except TimeoutError as error:
                     raise AssertionError({'reason': 'no active tail helper',
                                           'snapshot': core.snapshot(), 'requests': requests}) from error
-                core.command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
+                if crash_on_help:
+                    cache = root/'downloads/.hls-tasks'/tid
+                    def durable():
+                        paths = list(cache.rglob('native-engine.ranges.json'))
+                        if not paths:
+                            return None
+                        try:
+                            return json.loads(paths[0].read_text())['ranges'] or None
+                        except (ValueError, OSError):
+                            return None
+                    saved_ranges = wait(durable, 10)
+                    core.process.kill()
+                    core.process.wait(timeout=10)
+                    core.__exit__()
+                    core.__enter__()
+                else:
+                    core.command({'kind': 'task_action', 'task_id': tid, 'action': 'pause'})
 
                 def paused():
                     task = next(t for t in core.snapshot()['tasks'] if t['task_id'] == tid)
@@ -119,7 +136,10 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
                 resume_index = len(requests)
                 core.command({'kind': 'task_action', 'task_id': tid, 'action': 'resume'})
                 resumed = {'paused_downloaded_bytes': paused_task['downloaded_bytes'],
-                           'durable_checkpoint_preserved': True, 'resume_request_index': resume_index}
+                           'durable_checkpoint_preserved': True, 'resume_request_index': resume_index,
+                           'recovery': 'process-kill' if crash_on_help else 'pause'}
+                if crash_on_help:
+                    resumed['ranges_before_crash'] = saved_ranges
 
             def finished():
                 task = next(t for t in core.snapshot()['tasks'] if t['task_id'] == tid)
@@ -151,15 +171,18 @@ def transfer(engine, root, mode, via_proxy=False, pause_on_help=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--baseline', type=Path, required=True)
+    parser.add_argument('--baseline', type=Path)
     parser.add_argument('--candidate', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
-    engines = {'baseline-a': args.baseline, 'baseline-b': args.baseline, 'candidate': args.candidate}
+    baseline = args.baseline or args.candidate
+    engines = {'baseline-a': baseline, 'baseline-b': baseline, 'candidate': args.candidate}
     root = test_tmp()/('range-tail-' + uuid.uuid4().hex)
+    args.report.parent.mkdir(parents=True, exist_ok=True)
     result = {'passed': False, 'samples': [], 'medians': {},
               'scope': 'Core-only 64MiB loopback HTTP ranges with 4 connections; not TLS/Internet or IDM-AB parity',
+              'settings': {'baseline-a': 'disabled', 'baseline-b': 'disabled', 'candidate': 'default'},
               'engine_sha256': {key: hashlib.sha256(value.read_bytes()).hexdigest()
                                 for key, value in engines.items()}}
 
@@ -175,7 +198,8 @@ def main():
                 transport = 'winhttp-proxy' if proxy else 'raw-http'
                 for label in order:
                     sample = {'round': round_index, 'label': label, 'mode': mode, 'transport': transport}
-                    sample.update(transfer(engines[label], root/f'{round_index}-{mode}-{transport}-{label}', mode, proxy))
+                    sample.update(transfer(engines[label], root/f'{round_index}-{mode}-{transport}-{label}',
+                                           mode, proxy, split_setting='0' if label.startswith('baseline') else None))
                     result['samples'].append(sample)
                     save()
                     print(json.dumps({key: value for key, value in sample.items() if key != 'requests'}), flush=True)
@@ -189,6 +213,10 @@ def main():
             {'transport': 'winhttp-proxy' if proxy else 'raw-http',
              **transfer(args.candidate, root/f'pause-resume-{proxy}', 'slow-last-connection', proxy, True)}
             for proxy in (False, True)]
+        result['crash_recovery_during_tail_help'] = [
+            {'transport': 'winhttp-proxy' if proxy else 'raw-http',
+             **transfer(args.candidate, root/f'crash-recovery-{proxy}', 'slow-last-connection',
+                        proxy, crash_on_help=True)} for proxy in (False, True)]
         result['passed'] = True
         save()
     except Exception:

@@ -1282,10 +1282,20 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     // 续传偏移也为 0，整包 body 可以安全地作为完整资源使用。
     // 失效检查点的残留文件不会复用，也属于从零开始；文件存在本身不代表有效断点。
     let fresh_start = loaded.is_empty() && job.resume_from == 0;
-    let workers = workers.min(pending.len());
-    let mut scheduler = RangeScheduler::new(pending, workers);
-    scheduler.split_minimum =
+    let split_minimum =
         active_split_minimum(job, std::env::var("HLS_HTTP_ACTIVE_SPLIT").ok().as_deref());
+    let max_useful_workers = if let Some(minimum) = split_minimum {
+        pending
+            .iter()
+            .map(|range| ((range.end - range.start + 1) / minimum).max(1) as usize)
+            .sum::<usize>()
+            .max(pending.len())
+    } else {
+        pending.len()
+    };
+    let workers = workers.min(max_useful_workers);
+    let mut scheduler = RangeScheduler::new(pending, workers);
+    scheduler.split_minimum = split_minimum;
     let scheduler = Arc::new(scheduler);
     let downloaded = Arc::new(AtomicU64::new(already));
     let completed = Arc::new(RangeCheckpoints::new(loaded));
@@ -1403,7 +1413,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
 }
 
 fn active_split_minimum(job: &Job, setting: Option<&str>) -> Option<u64> {
-    (setting == Some("1") && !range_validator(job).is_empty()).then_some(256 * 1024)
+    let enabled = !matches!(
+        setting.map(str::trim),
+        Some("0" | "false" | "FALSE" | "off" | "OFF")
+    );
+    (enabled && !range_validator(job).is_empty()).then_some(256 * 1024)
 }
 
 #[derive(Clone, Debug)]
@@ -1702,13 +1716,12 @@ impl RangeScheduler {
         active.retain(|item| item.id != id);
         let active_empty = active.is_empty();
         drop(active);
-        if active_empty
-            && self
-                .pending
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .is_empty()
-        {
+        let pending_empty = self
+            .pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_empty();
+        if (active_empty && pending_empty) || (self.split_minimum.is_some() && !active_empty) {
             self.wake.notify_all();
         }
     }
@@ -2072,10 +2085,14 @@ fn fetch_range(
         }
         // curl's file-backed response has already consumed the original tail.
         // Splitting that transport cannot improve network completion time.
+        let splittable = !matches!(&fetched.body, Body::File { .. });
         progress
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .splittable = !matches!(&fetched.body, Body::File { .. });
+            .splittable = splittable;
+        if splittable && scheduler.split_minimum.is_some() {
+            scheduler.wake.notify_all();
+        }
         let mut reader = fetched.body;
         if file.seek(SeekFrom::Start(cursor)).is_err() {
             return Err(EngineErrorCode::Failed("seek failed".into()));
@@ -4461,7 +4478,7 @@ mod tests {
     }
 
     #[test]
-    fn active_split_requires_explicit_opt_in_and_validated_resources() {
+    fn active_split_defaults_on_only_for_validated_resources() {
         let (mut job, dir) = temp_job("http://127.0.0.1/", false, 1, 2);
         for (etag, modified, enabled) in [
             ("\"v1\"", "", true),
@@ -4475,10 +4492,18 @@ mod tests {
         ] {
             job.etag = etag.into();
             job.last_modified = modified.into();
-            for setting in [None, Some("1"), Some("other"), Some(""), Some("0")] {
+            for (setting, allowed) in [
+                (None, true),
+                (Some("1"), true),
+                (Some("other"), true),
+                (Some(""), true),
+                (Some("0"), false),
+                (Some("false"), false),
+                (Some("off"), false),
+            ] {
                 assert_eq!(
                     active_split_minimum(&job, setting),
-                    (enabled && setting == Some("1")).then_some(256 * 1024),
+                    (enabled && allowed).then_some(256 * 1024),
                     "etag={etag:?}, modified={modified:?}, setting={setting:?}"
                 );
             }

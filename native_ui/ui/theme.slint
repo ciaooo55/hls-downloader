@@ -265,3 +265,39 @@ export component WindowDragArea inherits TouchArea {
         root.drag((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
     }
 }
+
+
+export struct SegmentBlock {
+    width-ratio: float,
+    fill-ratio: float,
+    state: string,
+}
+
+export component SegmentMapBar inherits Rectangle {
+    in property <[SegmentBlock]> segments;
+    height: 7px;
+    border-radius: 3.5px;
+    background: Tokens.surface-3;
+    border-width: 1px;
+    border-color: Tokens.hairline;
+    clip: true;
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        spacing: 1px;
+        for seg in root.segments: Rectangle {
+            horizontal-stretch: seg.width-ratio;
+            height: parent.height;
+            background: seg.state == "done" ? Tokens.done.with-alpha(0.88) : seg.state == "active" ? Tokens.accent.with-alpha(0.28) : Tokens.surface-3;
+            animate background { duration: Tokens.motion-fast; }
+            if seg.state == "active": Rectangle {
+                x: 0px;
+                y: 0px;
+                height: parent.height;
+                width: parent.width * Math.clamp(seg.fill-ratio, 0.0, 1.0);
+                background: Tokens.accent;
+                animate width { duration: Tokens.motion; easing: ease-out; }
+            }
+        }
+    }
+}

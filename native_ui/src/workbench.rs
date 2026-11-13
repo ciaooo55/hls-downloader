@@ -66,6 +66,7 @@ impl Workbench {
         dark: bool,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let window = WorkbenchWindow::new()?;
+        window.set_product_version(env!("CARGO_PKG_VERSION").into());
         crate::native_window::apply_theme(&window, dark);
         let state = Rc::new(RefCell::new(TaskList::default()));
         state.borrow_mut().replace(tasks, sequence);
@@ -1665,20 +1666,11 @@ impl Workbench {
             )
             .into(),
         );
-        window.set_connections(
-            format!(
-                "{} 个连接 · {}/{} 分段\n{}",
-                task.active_workers,
-                task.completed_ranges,
-                task.total_ranges,
-                task.connection_parts
-                    .iter()
-                    .map(|part| format!("{:?}", part))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-            .into(),
-        );
+        window.set_progress(crate::task_progress(task));
+        window.set_segments(ModelRc::new(VecModel::from(crate::build_segment_blocks(
+            task,
+        ))));
+        window.set_connections(crate::format_connection_summary(task).into());
         window.set_diagnostic(
             [
                 task.error_message.clone().unwrap_or_default(),

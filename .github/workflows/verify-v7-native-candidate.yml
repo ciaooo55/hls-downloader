@@ -1,0 +1,105 @@
+name: v7 Native Candidate Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Candidate package run to verify (source differences are recorded)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: '1'
+      HLS_VM_ACCEPTANCE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare native accessibility validation
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check psutil==7.2.2 pywinauto==0.6.9 pillow
+      - name: Receive and verify frozen candidate
+        id: receive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Candidate run ID must be numeric.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+          if ($run.path -ne '.github/workflows/package-v7-candidate.yml' -or $run.head_repository.full_name -ne $env:GITHUB_REPOSITORY) { throw 'Not a candidate package run in this repository.' }
+          $root = 'artifacts/candidate-native-regression'
+          gh run download $env:CANDIDATE_RUN_ID --name "HLSDownloader-v7-candidate-$($run.head_sha)" --dir "$root/candidate"
+          $manifestPath = "$root/candidate/ARTIFACT-MANIFEST.json"
+          $manifest = Get-Content $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+          if ($manifest.source_commit -ne $run.head_sha) { throw 'Candidate source identity mismatch.' }
+          $portable = Join-Path "$root/candidate" $manifest.artifacts.portable.path
+          if ((Get-FileHash $portable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.artifacts.portable.sha256) { throw 'Portable hash mismatch.' }
+          Expand-Archive -LiteralPath $portable -DestinationPath '.tool-cache/test-tmp/candidate-native-image'
+          $runtime = (Resolve-Path '.tool-cache/test-tmp/candidate-native-image/HLSDownloader').Path
+          foreach ($entry in $manifest.components.PSObject.Properties) {
+            if ((Get-FileHash (Join-Path $runtime $entry.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { throw "Packaged component hash mismatch: $($entry.Name)" }
+          }
+          "HLS_TEST_RUNTIME=$runtime" >> $env:GITHUB_ENV
+          "exact_source=$($env:GITHUB_SHA -eq $manifest.source_commit)" >> $env:GITHUB_OUTPUT
+          [ordered]@{
+            validation_source_commit = $env:GITHUB_SHA
+            candidate_source_commit = $manifest.source_commit
+            candidate_manifest_sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            candidate_run_id = $env:CANDIDATE_RUN_ID
+            exact_source = ($env:GITHUB_SHA -eq $manifest.source_commit)
+          } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
+      - name: Exercise actual packaged workbench on isolated desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = (Get-Location).Path
+          $report = Join-Path $repo 'artifacts/candidate-native-regression/workbench.json'
+          $python = (Get-Command python.exe).Source
+          $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+          $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; CreateFlags = [uint32]0x01000000; EnvironmentVariables = [string[]]$environment; WinstationDesktop = 'winsta0\default' }
+          $command = '"' + $python + '" "' + $repo + '\scripts\validation\smoke_native_acceptance.py" --runtime "' + $env:HLS_TEST_RUNTIME + '" --report "' + $report + '"'
+          $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $repo; ProcessStartupInformation = $startup }
+          if ($started.ReturnValue -ne 0) { throw "Native acceptance launch failed: $($started.ReturnValue)" }
+          $deadline = (Get-Date).AddMinutes(12)
+          do {
+            Start-Sleep -Seconds 2
+            $process = Get-Process -Id $started.ProcessId -ErrorAction SilentlyContinue
+          } while ($process -and (Get-Date) -lt $deadline)
+          if ($process) { Stop-Process -Id $started.ProcessId -Force; throw 'Native acceptance timed out.' }
+          if (-not (Test-Path -LiteralPath $report)) { throw 'Native acceptance produced no report.' }
+          $result = Get-Content $report -Raw -Encoding utf8 | ConvertFrom-Json
+          if (-not $result.passed) { throw $result.error }
+      - name: Verify default tail splitting and durable recovery
+        if: ${{ !cancelled() && steps.receive.outputs.exact_source == 'True' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/validation/compare_v7_range_tail.py --candidate "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --report artifacts/candidate-native-regression/range-tail.json
+          if ($LASTEXITCODE -ne 0) { throw 'Default tail splitting regression failed.' }
+      - name: Upload native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-native-acceptance-${{ github.sha }}
+          path: |
+            artifacts/candidate-native-regression/*.json
+            .tool-cache/test-tmp/native-acceptance-*/presenter.log
+            .tool-cache/test-tmp/native-acceptance-*/core.log
+          if-no-files-found: error
+          retention-days: 14
+      - name: Stop isolated application processes
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:HLS_TEST_RUNTIME) {
+            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:HLS_TEST_RUNTIME, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          }

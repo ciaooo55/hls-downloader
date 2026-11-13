@@ -35,20 +35,24 @@ fn main() {
 fn launch() -> Result<(), String> {
     let executable = env::current_exe().map_err(|e| e.to_string())?;
     let root = executable.parent().ok_or("无法确定安装目录")?;
-    let resources = root.join("app/resources");
-    let presenter = resources.join("HLSDownloaderPresenter.exe");
+    let packaged_resources = root.join("app/resources");
+    let resources = if packaged_resources.is_dir() {
+        packaged_resources
+    } else {
+        root.to_path_buf()
+    };
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.iter().any(|arg| arg == "--version") {
         println!("HLS Downloader {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    verify_payload(&resources)?;
+    let presenter = verify_payload(&resources)?;
     if args.iter().any(|arg| arg == "--self-test") {
         return Ok(());
     }
-    let mut command = Command::new(presenter);
+    let mut command = Command::new(&presenter);
     command
-        .current_dir(resources)
+        .current_dir(&resources)
         .args(args)
         .arg("--workbench")
         .stdin(Stdio::null())
@@ -57,18 +61,43 @@ fn launch() -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000 | 0x01000000);
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+        match command.spawn() {
+            Ok(_) => return Ok(()),
+            Err(error) if error.raw_os_error() == Some(5) => {
+                command.creation_flags(CREATE_NO_WINDOW);
+                command
+                    .spawn()
+                    .map_err(|e| format!("无法启动原生界面：{e}"))?;
+                return Ok(());
+            }
+            Err(e) => return Err(format!("无法启动原生界面：{e}")),
+        }
     }
-    command
-        .spawn()
-        .map_err(|e| format!("无法启动原生界面：{e}"))?;
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        command
+            .spawn()
+            .map_err(|e| format!("无法启动原生界面：{e}"))?;
+        Ok(())
+    }
 }
 
-fn verify_payload(resources: &Path) -> Result<(), String> {
+fn verify_payload(resources: &Path) -> Result<std::path::PathBuf, String> {
+    let presenter = ["HLSDownloaderPresenter.exe", "hls-downloader-presenter.exe"]
+        .into_iter()
+        .map(|name| resources.join(name))
+        .find(|path| path.is_file())
+        .ok_or_else(|| "安装组件缺失：HLSDownloaderPresenter.exe，请修复安装".to_string())?;
+    let engine_exists = ["HLSDownloaderEngine.exe", "hls-downloader-engine.exe"]
+        .into_iter()
+        .any(|name| resources.join(name).is_file());
+    if !engine_exists {
+        return Err("安装组件缺失：HLSDownloaderEngine.exe，请修复安装".to_string());
+    }
     for name in [
-        "HLSDownloaderPresenter.exe",
-        "HLSDownloaderEngine.exe",
         "HLSDownloaderNativeHost.exe",
         "HLSDownloaderUpdater.exe",
         "HLSDownloaderCli.exe",
@@ -77,5 +106,5 @@ fn verify_payload(resources: &Path) -> Result<(), String> {
             return Err(format!("安装组件缺失：{name}，请修复安装"));
         }
     }
-    Ok(())
+    Ok(presenter)
 }

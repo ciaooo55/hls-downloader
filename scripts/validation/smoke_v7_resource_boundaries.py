@@ -32,8 +32,9 @@ def wait(predicate, timeout=20):
 
 
 class Core:
-    def __init__(self, engine, root):
+    def __init__(self, engine, root, *, environment=None):
         self.engine, self.root = engine, root
+        self.environment = environment or {}
 
     def __enter__(self):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -44,6 +45,7 @@ class Core:
                'HLS_V7_DOWNLOAD_DIR': str(self.root/'downloads'), 'HLS_V7_CORE_TCP': '1',
                'HLS_V7_CORE_BIND': f'127.0.0.1:{self.port}',
                'HLS_V7_PIPE': rf'\\.\pipe\HLSResource-{uuid.uuid4().hex}'}
+        env.update(self.environment)
         self.log = (self.root/'core.log').open('ab')
         self.process = subprocess.Popen([str(self.engine)], env=env,
             stdout=self.log, stderr=self.log, creationflags=subprocess.CREATE_NO_WINDOW)

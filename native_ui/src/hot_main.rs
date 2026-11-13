@@ -947,6 +947,28 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_speed("18.6 MB/s".into());
             window.set_progress(0.64);
             window.set_progress_known(true);
+            window.set_segments(slint::ModelRc::new(slint::VecModel::from(vec![
+                SegmentBlock {
+                    width_ratio: 0.25,
+                    fill_ratio: 1.0,
+                    state: "done".into(),
+                },
+                SegmentBlock {
+                    width_ratio: 0.25,
+                    fill_ratio: 0.72,
+                    state: "active".into(),
+                },
+                SegmentBlock {
+                    width_ratio: 0.25,
+                    fill_ratio: 1.0,
+                    state: "done".into(),
+                },
+                SegmentBlock {
+                    width_ratio: 0.25,
+                    fill_ratio: 0.45,
+                    state: "active".into(),
+                },
+            ])));
             window.set_transferred("81.9 MB / 128.0 MB · 分片 64 / 100".into());
             window.set_stage_label("正在下载".into());
             window.set_remaining("剩余约 3 秒".into());
@@ -2033,6 +2055,9 @@ fn render_progress_hud(
         .into(),
     );
     item.set_progress(task_progress(snapshot));
+    item.set_segments(slint::ModelRc::new(slint::VecModel::from(
+        build_segment_blocks(snapshot),
+    )));
     item.set_progress_known(
         snapshot.total_bytes.is_some_and(|total| total > 0)
             || (!snapshot.is_live
@@ -2236,6 +2261,107 @@ fn task_progress(task: &TaskSnapshot) -> f32 {
         .clamp(0.0, 1.0)
 }
 
+pub(crate) fn build_segment_blocks(task: &TaskSnapshot) -> Vec<SegmentBlock> {
+    if !task.connection_parts.is_empty() {
+        let total = task
+            .total_bytes
+            .unwrap_or_else(|| {
+                task.connection_parts
+                    .last()
+                    .map(|part| part.end.saturating_add(1))
+                    .unwrap_or(0)
+            })
+            .max(1) as f32;
+        return task
+            .connection_parts
+            .iter()
+            .map(|part| {
+                let span = part.end.saturating_sub(part.start).saturating_add(1).max(1);
+                let width_ratio = span as f32 / total;
+                let fill_ratio = match part.state.as_str() {
+                    "done" => 1.0,
+                    "active" => part.done.min(span) as f32 / span as f32,
+                    _ => 0.0,
+                };
+                SegmentBlock {
+                    width_ratio,
+                    fill_ratio,
+                    state: part.state.clone().into(),
+                }
+            })
+            .collect();
+    }
+    if !task.is_live && task.total_ranges > 1 {
+        let buckets = task.total_ranges.min(32);
+        let done_buckets = ((task.completed_ranges.min(task.total_ranges) * buckets)
+            / task.total_ranges)
+            .min(buckets);
+        let active_buckets =
+            u64::from(task.active_workers).min(buckets.saturating_sub(done_buckets));
+        return (0..buckets)
+            .map(|index| {
+                let (state, fill_ratio) = if index < done_buckets {
+                    ("done", 1.0)
+                } else if index < done_buckets + active_buckets {
+                    ("active", 0.0)
+                } else {
+                    ("queued", 0.0)
+                };
+                SegmentBlock {
+                    width_ratio: 1.0 / buckets as f32,
+                    fill_ratio,
+                    state: state.into(),
+                }
+            })
+            .collect();
+    }
+    Vec::new()
+}
+
+pub(crate) fn format_connection_summary(task: &TaskSnapshot) -> String {
+    let hint = task.connection_hint.trim();
+    let header = if hint.is_empty() {
+        format!(
+            "{} 个活动连接 · 已完成 {}/{} 分段",
+            task.active_workers, task.completed_ranges, task.total_ranges
+        )
+    } else {
+        format!(
+            "{} 个活动连接 · 已完成 {}/{} 分段 · {hint}",
+            task.active_workers, task.completed_ranges, task.total_ranges
+        )
+    };
+    if task.connection_parts.is_empty() {
+        return header;
+    }
+    let max_shown = 16usize;
+    let mut lines = Vec::with_capacity(task.connection_parts.len().min(max_shown) + 2);
+    lines.push(header);
+    for (index, part) in task.connection_parts.iter().enumerate().take(max_shown) {
+        let state_label = match part.state.as_str() {
+            "done" => "已完成",
+            "active" => "传输中",
+            "queued" => "待分配",
+            other => other,
+        };
+        lines.push(format!(
+            "分段 #{:02}  {} – {}（已落盘 {}）· {}",
+            index + 1,
+            format_bytes(part.start),
+            format_bytes(part.end),
+            format_bytes(part.done),
+            state_label
+        ));
+    }
+    if task.connection_parts.len() > max_shown {
+        lines.push(format!(
+            "… 其余 {} 个分段已在上方动态分段条中汇总显示",
+            task.connection_parts.len() - max_shown
+        ));
+    }
+    lines.join("\n")
+}
+
 fn format_speed(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB/s", bytes as f64 / 1024.0 / 1024.0)
@@ -2282,10 +2408,11 @@ fn attach_parent_console() {}
 #[cfg(test)]
 mod tests {
     use super::{
-        confirm_window_logical_size, download_category, file_extension, format_request_details,
-        format_resource_meta, safe_display_url, ActiveTaskHud,
+        build_segment_blocks, confirm_window_logical_size, download_category, file_extension,
+        format_connection_summary, format_request_details, format_resource_meta, safe_display_url,
+        ActiveTaskHud,
     };
-    use hls_client::{ResourceKind, ResourceOffer, TaskSnapshot};
+    use hls_client::{ConnectionPart, ResourceKind, ResourceOffer, TaskSnapshot};
 
     #[test]
     fn confirm_window_size_matches_work_area_height_at_each_dpi() {
@@ -2440,5 +2567,56 @@ mod tests {
             download_category("bundle.7z", "", ResourceKind::File),
             "archive"
         );
+    }
+
+    #[test]
+    fn segment_blocks_and_connection_summary_format_clean_chinese_telemetry() {
+        let task = TaskSnapshot {
+            active_workers: 2,
+            completed_ranges: 1,
+            total_ranges: 3,
+            total_bytes: Some(1024 * 1024),
+            connection_hint: "动态分段传输中".into(),
+            connection_parts: vec![
+                ConnectionPart {
+                    start: 0,
+                    end: 512 * 1024 - 1,
+                    done: 512 * 1024,
+                    state: "done".into(),
+                },
+                ConnectionPart {
+                    start: 512 * 1024,
+                    end: 768 * 1024 - 1,
+                    done: 128 * 1024,
+                    state: "active".into(),
+                },
+                ConnectionPart {
+                    start: 768 * 1024,
+                    end: 1024 * 1024 - 1,
+                    done: 0,
+                    state: "queued".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let blocks = build_segment_blocks(&task);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].state.as_str(), "done");
+        assert_eq!(blocks[1].state.as_str(), "active");
+        assert_eq!(blocks[2].state.as_str(), "queued");
+        assert_eq!(blocks[0].width_ratio, 0.5);
+        assert_eq!(blocks[1].fill_ratio, 0.5);
+        let mut starting = task.clone();
+        starting.connection_parts[1].done = 1;
+        let starting_blocks = build_segment_blocks(&starting);
+        assert_eq!(starting_blocks[1].fill_ratio, 1.0 / (256 * 1024) as f32);
+
+        let summary = format_connection_summary(&task);
+        assert!(summary.contains("2 个活动连接 · 已完成 1/3 分段 · 动态分段传输中"));
+        assert!(summary.contains("分段 #01"));
+        assert!(summary.contains("已完成"));
+        assert!(summary.contains("传输中"));
+        assert!(summary.contains("待分配"));
+        assert!(!summary.contains("ConnectionPart {"));
     }
 }

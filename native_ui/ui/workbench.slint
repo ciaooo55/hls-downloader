@@ -29,13 +29,15 @@ component HeaderCell inherits Rectangle {
     callback clicked;
     height: 40px;
     background: touch.has-hover ? Tokens.surface-3 : Tokens.surface-2;
+    animate background { duration: Tokens.motion-fast; }
     Text { x: 14px; width: parent.width - 20px; text: root.label; color: Tokens.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; }
     Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Tokens.hairline; }
     touch := TouchArea { accessible-role: button; accessible-label: root.label; clicked => { root.clicked(); } }
 }
 
 export component WorkbenchWindow inherits Window {
-    title: "HLS Downloader 7.0.3";
+    in property <string> product-version;
+    title: "HLS Downloader " + root.product-version;
     icon: @image-url("../../assets/app-icon.png");
     default-font-family: Tokens.type-face;
     default-font-size: 13px;
@@ -131,6 +133,7 @@ export component WorkbenchWindow inherits Window {
                     spacing: 0px;
                     Rectangle {
                         width: root.sidebar-width; background: Tokens.rail;
+                        animate width { duration: Tokens.motion; easing: ease-out; }
                         HorizontalLayout {
                             padding-left: root.compact-sidebar ? 14px : 20px; padding-right: 12px; spacing: 10px;
                             Image { source: @image-url("../../assets/app-icon.png"); width: 34px; height: 34px; y: (parent.height - self.height) / 2; image-fit: contain; }
@@ -166,6 +169,8 @@ export component WorkbenchWindow inherits Window {
                         y: (parent.height - self.height) / 2;
                         background: search.has-focus ? Tokens.surface : Tokens.surface-2;
                         border-width: 1px; border-color: search.has-focus ? Tokens.accent : Tokens.hairline; border-radius: 9px;
+                        animate background { duration: Tokens.motion-fast; }
+                        animate border-color { duration: Tokens.motion-fast; }
                         HorizontalLayout {
                             padding-left: 12px; padding-right: 6px; spacing: 8px;
                             WorkbenchIcon { name: "search"; ink: Tokens.faint; width: 17px; height: 17px; y: (parent.height - self.height) / 2; }
@@ -194,6 +199,7 @@ export component WorkbenchWindow inherits Window {
                 spacing: 0px;
                 Rectangle {
                     width: root.sidebar-width; background: Tokens.rail;
+                    animate width { duration: Tokens.motion; easing: ease-out; }
                     VerticalLayout {
                         padding-left: 12px; padding-right: 12px; padding-top: 12px; padding-bottom: 12px; spacing: 12px;
                         ScrollView {
@@ -275,7 +281,8 @@ export component WorkbenchWindow inherits Window {
                         for row[index] in root.tasks: Rectangle {
                             height: 64px;
                             background: row.selected ? Tokens.selected : row-touch.pressed ? Tokens.surface-3 : row-touch.has-hover ? Tokens.surface-2 : Tokens.surface;
-                            Rectangle { x: 0px; y: 0px; width: 3px; height: parent.height; background: row.selected ? Tokens.accent : transparent; }
+                            animate background { duration: Tokens.motion-fast; }
+                            Rectangle { x: 0px; y: 0px; width: 3px; height: parent.height; background: row.selected ? Tokens.accent : transparent; animate background { duration: Tokens.motion-fast; } }
                             Rectangle { height: 1px; x: 16px; y: parent.height - 1px; width: parent.width - 32px; background: Tokens.hairline; }
                             row-touch := TouchArea {
                                 accessible-role: list-item; accessible-label: row.name + " " + row.status;
@@ -311,7 +318,14 @@ export component WorkbenchWindow inherits Window {
                                     padding-left: 14px; padding-right: 14px; spacing: 10px;
                                     Rectangle {
                                         height: 6px; y: (parent.height - self.height) / 2; border-radius: 3px; background: Tokens.surface-3; horizontal-stretch: 1;
-                                        Rectangle { height: parent.height; width: parent.width * row.progress; background: row.status-code == "paused" ? Tokens.warn : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.accent; border-radius: 3px; }
+                                        Rectangle {
+                                            height: parent.height;
+                                            width: parent.width * row.progress;
+                                            background: row.status-code == "paused" ? Tokens.warn : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.accent;
+                                            border-radius: 3px;
+                                            animate width { duration: Tokens.motion; easing: ease-out; }
+                                            animate background { duration: Tokens.motion-fast; }
+                                        }
                                     }
                                     Text { text: round(row.progress * 100) + "%"; width: 38px; color: Tokens.muted; font-size: 11px; font-weight: 500; vertical-alignment: center; }
                                 }
@@ -320,6 +334,7 @@ export component WorkbenchWindow inherits Window {
                                     Rectangle {
                                         width: badge.preferred-width + 20px; height: 25px; border-radius: 6px;
                                         background: row.status-code == "paused" ? Tokens.warn-surface : row.status-code == "completed" || row.status-code == "done" ? Tokens.success-surface : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail-surface : Tokens.surface-2;
+                                        animate background { duration: Tokens.motion-fast; }
                                         badge := Text { text: row.status; color: row.status-code == "paused" ? Tokens.warn : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : Tokens.accent; font-size: 11px; font-weight: 500; vertical-alignment: center; horizontal-alignment: center; }
                                     }
                                     if row.eta != "": Text { text: row.eta; color: Tokens.muted; font-size: 10px; overflow: elide; }
