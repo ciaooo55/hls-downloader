@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Existing candidate package run whose exact MSI bytes are tested
+        description: Existing candidate package run whose exact EXE and MSI bytes are tested
         required: true
         type: string
 
@@ -59,6 +59,11 @@ jobs:
             & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -ApplicationLaunchMode Wmi -CandidateManifestPath artifacts/candidate-installer-regression/candidate/ARTIFACT-MANIFEST.json
             if ($LASTEXITCODE -ne 0) { throw "MSI lifecycle failed: $scenario" }
           }
+      - name: Verify EXE install and visible Start Menu startup
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts/candidate-installer-regression/candidate/ARTIFACT-MANIFEST.json
+          if ($LASTEXITCODE -ne 0) { throw 'EXE installation/startup regression failed.' }
       - name: Upload installer lifecycle evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -69,5 +74,6 @@ jobs:
             artifacts/v7-productization/msi-lifecycle/*.json
             artifacts/v7-productization/msi-lifecycle/*.log
             artifacts/v7-productization/msi-lifecycle/*-checkpoint/*.json
+            artifacts/v7-productization/exe-startup/**
           if-no-files-found: error
           retention-days: 14
