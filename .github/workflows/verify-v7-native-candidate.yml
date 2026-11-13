@@ -111,6 +111,20 @@ jobs:
           if (-not $result.passed) { $failures += "$($check.report): $($result.error)" }
           }
           if ($failures.Count) { throw ($failures -join "`n") }
+      - name: Preserve early workbench diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-native-gui-${{ github.sha }}
+          path: |
+            artifacts/candidate-native-regression/*.json
+            artifacts/candidate-native-regression/*.png
+            .tool-cache/test-tmp/native-acceptance-*/presenter.log
+            .tool-cache/test-tmp/native-acceptance-*/core.log
+            .tool-cache/test-tmp/native-frame-benchmark-*/renderer.log
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: true
       - name: Verify default tail splitting and durable recovery
         if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
         shell: pwsh
