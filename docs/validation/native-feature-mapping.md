@@ -4,6 +4,8 @@
 
 以下逐项表保留迁移过程中的阶段记录；其中“待验收”描述记录当时的状态，当前结论以顶部正式发布记录、发布附件 `FEATURE-PARITY.json` 和 `RELEASE-EVIDENCE.json` 为准。真实投屏/TVBox、付费云字幕质量仍按用户决定排除；Firefox 交付待签名包，软件缩放测试不代表物理多显示器切换验收。
 
+2026-11-14 已追加显式组件补验：常规回归忽略的 13 项依赖功能测试及扫描器超时夹具的父回归全部通过，涵盖打包 FFmpeg/curl、WinHTTP、字幕音频与提权安装器退出码。验证入口已接入原生候选工作流；逐项结果与源码/工具身份见 [当前验证表](current-evidence.json) 的 `dependency_gated_components_20261114`。物理设备与云质量验证范围没有扩大。
+
 | 功能 ID | 原生入口 / 所属模块 | Core 合同 | 原生迁移状态与剩余验收 |
 |---|---|---|---|
 | architecture.single_core | `native_ui/src/workbench.rs`、`crates/client` | Hello、Capabilities、ListTasks、WaitEventBatch | 已拆分；依赖边界通过，候选组合仍待验收 |

@@ -643,6 +643,7 @@
     "checks": {
       "rust_tests_passed": 757,
       "rust_tests_ignored": 14,
+      "ignored_dependency_followup": "dependency_gated_components_20261114",
       "extension_tests_passed": 592,
       "native_workbench_operations": 13,
       "browser_media_per_browser": 24,
@@ -790,6 +791,109 @@
         "remote_digest": "sha256:9057b8ac86574412b4429b6e474269553413959e2e491e229285c62e6efc7259",
         "asset_id": 744268072
       }
+    ]
+  },
+  "dependency_gated_components_20261114": {
+    "passed": true,
+    "workflow_run_id": 43466594238,
+    "workflow_url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43466594238",
+    "validation_source_commit": "04d294d6a670cd667d6bad2913559fd00e72cc28",
+    "product_source_commit": "8b6fa0743db2441c798e5d3d47a96137c4347fc7",
+    "production_sources_unchanged": true,
+    "candidate_run_id": 43443483545,
+    "functional_tests_passed": 13,
+    "timeout_helper_parent_regression_passed": true,
+    "report": "artifacts/regression-20261114/native-components/evidence/artifacts/candidate-native-regression/components.json",
+    "report_sha256": "7fe197da0ea27312b1014253e1c8a1cf46314860e1613f68b77dae3c5e23b719",
+    "checks": [
+      {
+        "name": "av_scan::tests::scanner_timeout_fixture",
+        "passed": true,
+        "classification": "helper exercised by real scanner-timeout regression",
+        "seconds": 0.078
+      },
+      {
+        "name": "download_worker::tests::player_subtitle_audio_reads_owned_bytes_and_rejects_replaced_sessions",
+        "passed": true,
+        "seconds": 0.282
+      },
+      {
+        "name": "http_engine::tests::curl_transport_403_retries_replayed_cookies",
+        "passed": true,
+        "seconds": 0.14
+      },
+      {
+        "name": "http_engine::tests::curl_transport_preserves_browser_cookies_and_rejects_truncated_body",
+        "passed": true,
+        "seconds": 0.047
+      },
+      {
+        "name": "http_engine::tests::curl_transport_range_body_limit_uses_decoded_bytes_and_stops_before_eof",
+        "passed": true,
+        "seconds": 0.281
+      },
+      {
+        "name": "http_engine::tests::curl_transport_stalled_headers_and_body_obey_pause_and_cancel",
+        "passed": true,
+        "seconds": 0.453
+      },
+      {
+        "name": "http_engine::tests::winhttp_403_retries_replayed_cookies",
+        "passed": true,
+        "seconds": 0.047
+      },
+      {
+        "name": "http_engine::tests::winhttp_media_entity_stop_preserves_pause_and_cancel",
+        "passed": true,
+        "seconds": 0.032
+      },
+      {
+        "name": "http_engine::tests::winhttp_proxy_downloads_ranges_posts_and_head_without_changing_bytes",
+        "passed": true,
+        "seconds": 0.25
+      },
+      {
+        "name": "http_engine::tests::winhttp_stalled_headers_body_and_chunked_reads_can_stop",
+        "passed": true,
+        "seconds": 0.656
+      },
+      {
+        "name": "media::merge::tests::real_ffmpeg_pause_and_cancel_reap_the_child",
+        "passed": true,
+        "seconds": 0.437
+      },
+      {
+        "name": "media::merge::tests::real_ffmpeg_replaces_output_only_after_success_and_supports_in_place_mux",
+        "passed": true,
+        "seconds": 0.375
+      },
+      {
+        "name": "subtitle_audio_source::tests::decode_disguised_hls_audio",
+        "passed": true,
+        "seconds": 1.219
+      },
+      {
+        "name": "update_install::tests::elevated_installer_returns_the_real_exit_code",
+        "passed": true,
+        "seconds": 0.641
+      }
+    ],
+    "tools": {
+      "ffmpeg": {
+        "sha256": "513368c81583572ce1d09d5c7ff827feed1a63db352412a5001f4da3a1583d98"
+      },
+      "curl": {
+        "sha256": "dc377941626e298af9041ffb06353b03795908150aa9f5a96078e1a4682c42d8"
+      }
+    },
+    "tools_match_formal_portable": true,
+    "repeated_packaged_acceptance": "13 native workbench operations, libmpv controls/session and public HTTPS download passed on the same hosted runner.",
+    "meaning": "All 13 dependency-gated functional cases were explicitly executed. The 14th ignored entry is a sleeping scanner subprocess fixture; its normal parent regression was executed and passed. Dependency annotations remain so ordinary development runs need not install media tools or request elevation.",
+    "unchanged_boundaries": [
+      "No physical DLNA/Chromecast/TVBox hardware or paid cloud subtitle quality was tested.",
+      "No physical mixed-DPI monitor transitions or audible speaker output was tested.",
+      "The elevated installer result was verified on hosted Windows; an interactive UAC consent prompt on a personal desktop was not tested.",
+      "Firefox package remains unsigned pending Mozilla signing, per the user decision."
     ]
   }
 }
