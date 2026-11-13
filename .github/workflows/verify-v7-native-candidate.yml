@@ -103,6 +103,7 @@ jobs:
           name: HLSDownloader-v7-native-acceptance-${{ github.sha }}
           path: |
             artifacts/candidate-native-regression/*.json
+            artifacts/candidate-native-regression/*.png
             .tool-cache/test-tmp/native-acceptance-*/presenter.log
             .tool-cache/test-tmp/native-acceptance-*/core.log
           if-no-files-found: error

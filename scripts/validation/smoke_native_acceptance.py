@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import threading
 import time
 import traceback
 import uuid
+import zipfile
 
 from smoke_v7_resource_boundaries import Core, wait
 from validation_workspace import test_tmp
@@ -41,31 +43,40 @@ def main():
     args.report.parent.mkdir(parents=True, exist_ok=True)
     ui = None
     payload = b'native workbench download fixture\n'*32768
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
+        output.writestr('docs/readme.txt', 'Native ZIP fixture')
+        output.writestr('media/notes.txt', 'Archive metadata fixture')
+    files = {'/bundle.zip': (archive.getvalue(), 'application/zip'),
+             '/index.html': (b'<a href="/crawl.bin">crawl.bin</a>', 'text/html')}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
 
         def do_HEAD(self):
-            self.send_response(200)
-            self.send_header('Content-Length', str(len(payload)))
-            self.send_header('Accept-Ranges', 'bytes')
-            self.send_header('ETag', '"native-ui-fixture"')
-            self.end_headers()
+            self.reply(False)
 
         def do_GET(self):
-            start, end = 0, len(payload)-1
+            self.reply(True)
+
+        def reply(self, body):
+            data, content_type = files.get(self.path, (payload, 'application/octet-stream'))
+            start, end = 0, len(data)-1
             value = self.headers.get('Range')
             if value:
                 first, last = value.removeprefix('bytes=').split('-')
                 start, end = int(first), int(last) if last else end
             self.send_response(206 if value else 200)
             self.send_header('Content-Length', str(end-start+1))
+            self.send_header('Content-Type', content_type)
+            self.send_header('Accept-Ranges', 'bytes')
             self.send_header('ETag', '"native-ui-fixture"')
             if value:
-                self.send_header('Content-Range', f'bytes {start}-{end}/{len(payload)}')
+                self.send_header('Content-Range', f'bytes {start}-{end}/{len(data)}')
             self.end_headers()
-            self.wfile.write(payload[start:end+1])
+            if body:
+                self.wfile.write(data[start:end+1])
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     server.daemon_threads = True
@@ -150,13 +161,51 @@ def main():
             report['checks'].append({'name': 'create_download_via_ui', 'passed': True,
                 'task_id': task['task_id'], 'sha256': hashlib.sha256(output.read_bytes()).hexdigest()})
             main_window.set_focus()
+            rows = wait(lambda: [e for e in main_window.descendants(control_type='ListItem')
+                                 if e.element_info.name.startswith(task['filename'])])
+            rows[0].click_input()
             send_keys('^a')
+            wait(lambda: any(e.element_info.name == '已选 1 项' for e in main_window.descendants()))
             report['selected_tree'] = tree(main_window)
             send_keys('{ESC}')
+            wait(lambda: not any(e.element_info.name == '已选 1 项' for e in main_window.descendants()))
+            report['checks'].append({'name': 'keyboard_select_all_and_escape', 'passed': True})
+            rows[0].click_input()
+            send_keys('{ENTER}')
+            details = window('任务详情与日志')
+            assert control(details, '下载地址', 'Edit').get_value() == url
+            report['details_tree'] = tree(details)
+            press(details, '关闭')
+            report['checks'].append({'name': 'keyboard_task_details', 'passed': True})
             press(main_window, '设置')
             settings = window('设置')
             report['settings_tree'] = tree(settings)
-            report['checks'].append({'name': 'open_native_settings', 'passed': True})
+            control(settings, '下载', 'TabItem').invoke()
+            control(settings, '默认并发连接数', 'Edit').set_edit_text('3')
+            press(settings, '保存设置')
+            wait(lambda: core.call({'type': 'load_settings', 'request_id': 12})['default_concurrency'] == 3)
+            press(settings, '取消')
+            report['checks'].append({'name': 'save_native_settings_persists_to_core', 'passed': True})
+            press(main_window, '管理队列')
+            queues = window('下载队列')
+            press(queues, '新建队列')
+            control(queues, '队列名称', 'Edit').set_edit_text('原生验收队列')
+            press(queues, '保存队列')
+            profiles = wait(lambda: [p for p in core.call({'type': 'load_settings', 'request_id': 13})['queue_profiles']
+                                    if p['name'] == '原生验收队列'])
+            report['queue_profile'] = profiles[0]
+            press(queues, '取消')
+            report['checks'].append({'name': 'create_named_queue_via_ui', 'passed': True})
+            press(main_window, '工具')
+            press(main_window, 'ZIP 内容预览')
+            resources = window('ZIP 内容预览')
+            control(resources, '资源来源', 'Edit').set_edit_text(f'http://127.0.0.1:{server.server_port}/bundle.zip')
+            press(resources, '读取 / 发现')
+            wait(lambda: any(e.element_info.name == 'docs/readme.txt' for e in resources.descendants()))
+            report['zip_tree'] = tree(resources)
+            press(resources, '关闭')
+            report['checks'].append({'name': 'remote_zip_preview_via_ui', 'passed': True})
+            main_window.capture_as_image().save(args.report.with_suffix('.png'))
             save()
             report['passed'] = True
     except Exception:
