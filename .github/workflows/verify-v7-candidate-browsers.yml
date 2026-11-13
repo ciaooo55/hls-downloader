@@ -74,7 +74,7 @@ jobs:
             candidate_run_id = $env:CANDIDATE_RUN_ID
             edge_version = (Get-Item $env:HLS_TEST_EDGE).VersionInfo.ProductVersion
             firefox_version = (Get-Item $env:HLS_TEST_FIREFOX).VersionInfo.ProductVersion
-            release_acceptance = $false
+            exact_source = ($env:GITHUB_SHA -eq $manifest.source_commit)
           } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
       - name: Check extension popup and overlay in both browsers
         timeout-minutes: 8

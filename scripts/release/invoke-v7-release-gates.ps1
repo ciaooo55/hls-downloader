@@ -2,6 +2,8 @@
 param(
     [string]$CandidateManifestPath = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json',
     [string]$MsiEvidenceRoot = '',
+    [Parameter(Mandatory=$true)][string]$BrowserEvidenceRoot,
+    [Parameter(Mandatory=$true)][string]$NativeEvidenceRoot,
     [string]$EdgeBinary = $env:HLS_V7_EDGE_BINARY,
     [string]$FirefoxBinary = $env:HLS_V7_FIREFOX_BINARY,
     [string]$EdgeDriver = $env:HLS_V7_EDGE_DRIVER,
@@ -47,6 +49,9 @@ function Invoke-Gate([string]$Id, [string]$Command, [string]$InputDescription) {
     if ($gateExitCode -ne 0) { throw "Release gate $Id failed with exit code $gateExitCode." }
 }
 
+$python = (Get-Command $(if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } else { 'python.exe' }) -ErrorAction Stop).Source
+$env:HLS_V7_PYTHON = $python
+if ($exclusions.gates -notcontains 'browser_media_push') {
 $edge = Resolve-Browser $EdgeBinary @(
     (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
     (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe')
@@ -57,30 +62,28 @@ $firefox = Resolve-Browser $FirefoxBinary @(
 ) 'Firefox'
 $ffmpeg = if ($env:HLS_V7_FFMPEG_DIR) { Join-Path $env:HLS_V7_FFMPEG_DIR 'ffmpeg.exe' } else { (Get-Command ffmpeg.exe -ErrorAction Stop).Source }
 if (-not (Test-Path -LiteralPath $ffmpeg -PathType Leaf)) { throw "FFmpeg is missing: $ffmpeg" }
-$go = (Get-Command go.exe -ErrorAction Stop).Source
-$python = (Get-Command $(if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } else { 'python.exe' }) -ErrorAction Stop).Source
-$env:HLS_V7_PYTHON = $python
+}
 
 $evidenceRoot = Join-Path $repo 'artifacts\v7-productization\release-evidence'
 Remove-Item -LiteralPath $evidenceRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $repo 'artifacts\v7-productization\release-evidence.json') -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
+foreach ($entry in @(@{ Source = $BrowserEvidenceRoot; Name = 'browser-hosted' }, @{ Source = $NativeEvidenceRoot; Name = 'native-hosted' })) {
+    Copy-Item -LiteralPath (Resolve-Path -LiteralPath $entry.Source).Path -Destination (Join-Path $evidenceRoot $entry.Name) -Recurse
+}
+$BrowserEvidenceRoot = Join-Path $evidenceRoot 'browser-hosted'
+$NativeEvidenceRoot = Join-Path $evidenceRoot 'native-hosted'
 
-$browserParts = [Collections.Generic.List[string]]::new()
-$browserParts.Add('&')
-$browserParts.Add((Quote-PS (Join-Path $PSScriptRoot '..\validation\verify-v7-candidate-browser.ps1')))
-$browserParts.Add('-CandidateManifestPath'); $browserParts.Add((Quote-PS $manifestFullPath))
-$browserParts.Add('-EdgeBinary'); $browserParts.Add((Quote-PS $edge))
-$browserParts.Add('-FirefoxBinary'); $browserParts.Add((Quote-PS $firefox))
-$browserParts.Add('-Python'); $browserParts.Add((Quote-PS $python))
-$browserParts.Add('-Ffmpeg'); $browserParts.Add((Quote-PS $ffmpeg))
-$browserParts.Add('-Go'); $browserParts.Add((Quote-PS $go))
-Add-OptionalArgument $browserParts '-EdgeDriver' $EdgeDriver
-Add-OptionalArgument $browserParts '-FirefoxDriver' $FirefoxDriver
-Invoke-Gate 'browser' ($browserParts -join ' ') "candidate portable; Edge=$edge; Firefox=$firefox"
+$browserCommand = "& $(Quote-PS $python) $(Quote-PS (Join-Path $PSScriptRoot '..\validation\verify_v7_received_regression.py')) --kind browser --manifest $(Quote-PS $manifestFullPath) --evidence $(Quote-PS $BrowserEvidenceRoot)"
+Invoke-Gate 'browser' $browserCommand 'authenticated same-source hosted Edge/Firefox; media, credentials, response ownership and real Host/Core handoff'
 
-$performanceCommand = "& $(Quote-PS (Join-Path $PSScriptRoot '..\validation\benchmark-v7.ps1')) -CandidateManifestPath $(Quote-PS $manifestFullPath)"
-Invoke-Gate 'performance' $performanceCommand 'candidate Portable; packaged SOFTWARE renderer; local transfer/IPC/host/frame thresholds'
+$performanceCommand = "& $(Quote-PS (Join-Path $PSScriptRoot '..\validation\benchmark-v7.ps1')) -CandidateManifestPath $(Quote-PS $manifestFullPath) -NativeEvidenceRoot $(Quote-PS $NativeEvidenceRoot)"
+Invoke-Gate 'performance' $performanceCommand 'candidate Portable; native software renderer; sustained populated downloads, tail recovery, local transfer/IPC/host/frame thresholds'
 
+if ($exclusions.gates -contains 'browser_media_push') {
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'record-v7-release-gate.ps1') -GateId 'browser_media_push' -Command 'Not executed: user excluded real casting' -GateInput $exclusions.reasons['browser_media_push'] -CandidateManifestPath $manifestFullPath -Exclude
+    if ($LASTEXITCODE -ne 0) { throw 'Recording the media-push exclusion failed.' }
+} else {
 $mediaPushParts = [Collections.Generic.List[string]]::new()
 $mediaPushParts.Add('&')
 $mediaPushParts.Add((Quote-PS (Join-Path $PSScriptRoot '..\validation\verify-v7-browser-media-push.ps1')))
@@ -92,10 +95,6 @@ $mediaPushParts.Add('-Python'); $mediaPushParts.Add((Quote-PS $python))
 $mediaPushParts.Add('-Ffmpeg'); $mediaPushParts.Add((Quote-PS $ffmpeg))
 Add-OptionalArgument $mediaPushParts '-EdgeDriver' $EdgeDriver
 Add-OptionalArgument $mediaPushParts '-FirefoxDriver' $FirefoxDriver
-if ($exclusions.gates -contains 'browser_media_push') {
-    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'record-v7-release-gate.ps1') -GateId 'browser_media_push' -Command 'Not executed: user excluded real casting' -GateInput $exclusions.reasons['browser_media_push'] -CandidateManifestPath $manifestFullPath -Exclude
-    if ($LASTEXITCODE -ne 0) { throw 'Recording the media-push exclusion failed.' }
-} else {
     Invoke-Gate 'browser_media_push' ($mediaPushParts -join ' ') "candidate MSI installed registration + real Edge/Firefox TVBox path; expected receiver=$env:HLS_V7_TVBOX_EXPECTED_HOST"
 }
 

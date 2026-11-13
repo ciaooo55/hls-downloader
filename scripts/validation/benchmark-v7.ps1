@@ -1,5 +1,8 @@
 ﻿[CmdletBinding()]
-param([string]$CandidateManifestPath = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json')
+param(
+    [string]$CandidateManifestPath = 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json',
+    [string]$NativeEvidenceRoot = ''
+)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -24,6 +27,16 @@ New-Item -ItemType Directory -Force $stageRoot | Out-Null
 Expand-Archive $portable $runtime -Force
 $candidate = Join-Path $runtime 'HLSDownloader'
 $resources = Join-Path $candidate 'app\resources'
+$python = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } else { 'python.exe' }
+function Invoke-Checked([string]$File, [string[]]$Arguments) { & $File @Arguments; if ($LASTEXITCODE -ne 0) { throw "$File failed with exit $LASTEXITCODE" } }
+if ([string]$manifest.ui_runtime -eq 'native') {
+    if (-not $NativeEvidenceRoot) { throw 'Native release performance requires authenticated hosted native acceptance evidence.' }
+    Invoke-Checked $python @((Join-Path $PSScriptRoot 'verify_v7_received_regression.py'), '--kind', 'native', '--manifest', $manifestPath, '--evidence', $NativeEvidenceRoot)
+    $frameReport = @(Get-ChildItem -LiteralPath $NativeEvidenceRoot -Recurse -File -Filter 'native-frames.json')
+    if ($frameReport.Count -ne 1) { throw 'Native frame report is missing or ambiguous.' }
+    $frame = Get-Content -LiteralPath $frameReport[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+    $renderApi = 'SLINT_SOFTWARE'
+} else {
 $launcherConfig = Get-ChildItem -LiteralPath $candidate -Filter 'HLSDownloader.cfg' -Recurse -File | Select-Object -First 1
 if (-not $launcherConfig) { throw 'Candidate Compose launcher configuration is missing.' }
 $launcherText = Get-Content -LiteralPath $launcherConfig.FullName -Raw -Encoding UTF8
@@ -31,13 +44,13 @@ $rendererMatch = [regex]::Match($launcherText, '(?m)-Dskiko\.renderApi=([A-Za-z0
 if (-not $rendererMatch.Success) { throw 'Candidate Compose launcher does not declare skiko.renderApi.' }
 $composeRenderApi = $rendererMatch.Groups[1].Value.ToUpperInvariant()
 if ($composeRenderApi -ne 'SOFTWARE') { throw "Candidate performance gate requires packaged SOFTWARE renderer, found $composeRenderApi." }
-$python = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } else { 'python.exe' }
-function Invoke-Checked([string]$File, [string[]]$Arguments) { & $File @Arguments; if ($LASTEXITCODE -ne 0) { throw "$File failed with exit $LASTEXITCODE" } }
 $frameReport = Join-Path $reportDir 'compose-1000-task-frames.json'
 Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'smoke-v7-compose-frames.ps1'),'-ReportPath',$frameReport,'-AppPath',(Join-Path $candidate 'HLSDownloader.exe'))
 $frame = Get-Content $frameReport -Raw -Encoding UTF8 | ConvertFrom-Json
+$renderApi = $composeRenderApi
+}
 $hostReport = Join-Path $reportDir 'native-host-cold-start.json'
-Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_native_host.py'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--stage-root',$stageRoot,'--report',$hostReport)
+Invoke-Checked $python @((Join-Path $PSScriptRoot 'windows_breakaway_job.py'),$python,(Join-Path $PSScriptRoot 'smoke_v7_native_host.py'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--stage-root',$stageRoot,'--report',$hostReport)
 $nativeHostResult = Get-Content $hostReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $soakReport = Join-Path $reportDir 'candidate-runtime-soak.json'
 Invoke-Checked $python @((Join-Path $PSScriptRoot 'soak_v7_runtime.py'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--report',$soakReport,'--idle-seconds','30','--stress-requests','1000')
@@ -46,7 +59,7 @@ $transferReport = Join-Path $reportDir 'real-transfer-latest.json'
 Invoke-Checked $python @((Join-Path $PSScriptRoot 'smoke_v7_transfer_performance.py'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--report',$transferReport)
 $transfer = Get-Content $transferReport -Raw -Encoding UTF8 | ConvertFrom-Json
 $result = [ordered]@{
- schema=1; product_version=[string]$manifest.product_version; candidate_manifest=$manifestPath; candidate_source_commit=[string]$manifest.source_commit; candidate_source_tree=[string]$manifest.source_tree; compose_render_api=$composeRenderApi; measured_at=[DateTime]::UtcNow.ToString('o')
+ schema=1; product_version=[string]$manifest.product_version; candidate_manifest=$manifestPath; candidate_source_commit=[string]$manifest.source_commit; candidate_source_tree=[string]$manifest.source_tree; render_api=$renderApi; measured_at=[DateTime]::UtcNow.ToString('o')
  thousand_task_frame_p95_ms=$frame.frame_p95_ms; ipc_command_p95_ms=$soak.stress.ipc_p95_ms; native_host_cold_start_ms=$nativeHostResult.cold_first_response_ms; native_host_stage_volume=[string]$nativeHostResult.stage_volume
  real_transfer_throughput_mib_s=$transfer.throughput_mib_s; real_transfer_working_set_growth_mib=$transfer.working_set_growth_mib; post_publish_extra_network_bytes=$transfer.post_publish_extra_network_bytes
  thresholds=[ordered]@{ thousand_task_frame_p95_ms=33; ipc_command_p95_ms=75; native_host_cold_start_ms=1500; minimum_local_throughput_mib_s=20; maximum_working_set_growth_mib=256; post_publish_extra_network_bytes=0 }

@@ -74,14 +74,20 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $repo = (Get-Location).Path
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Native UI acceptance requires a hosted disposable desktop.' }
           $python = (Get-Command python.exe).Source
           $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
           $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; CreateFlags = [uint32]0x01000000; EnvironmentVariables = [string[]]$environment; WinstationDesktop = 'winsta0\default' }
           $checks = @(@{ script = 'smoke_native_acceptance.py'; report = 'workbench' })
+          $checks += @{ script = 'smoke_native_media.py'; report = 'native-media' }
           if ($env:HLS_TEST_FRAMES -eq 'true') { $checks += @{ script = 'benchmark_native_workbench.py'; report = 'native-frames' } }
           foreach ($check in $checks) {
           $report = Join-Path $repo ('artifacts/candidate-native-regression/' + $check.report + '.json')
           $command = '"' + $python + '" "' + $repo + '\scripts\validation\' + $check.script + '" --runtime "' + $env:HLS_TEST_RUNTIME + '" --report "' + $report + '"'
+          if ($check.report -eq 'native-media') {
+            $resources = $env:HLS_TEST_RUNTIME + '\app\resources'
+            $command = '"' + $python + '" "' + $repo + '\scripts\validation\smoke_native_media.py" --engine "' + $resources + '\HLSDownloaderEngine.exe" --ui "' + $resources + '\HLSDownloaderPresenter.exe" --ffmpeg "' + $resources + '\ffmpeg.exe" --libmpv "' + $resources + '\libmpv-2.dll" --hold-seconds 3 --report "' + $report + '"'
+          }
           $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $repo; ProcessStartupInformation = $startup }
           if ($started.ReturnValue -ne 0) { throw "Native acceptance launch failed: $($started.ReturnValue)" }
           $deadline = (Get-Date).AddMinutes(12)
@@ -115,6 +121,7 @@ jobs:
           path: |
             artifacts/candidate-native-regression/*.json
             artifacts/candidate-native-regression/*.png
+            artifacts/candidate-native-regression/*.log
             .tool-cache/test-tmp/native-acceptance-*/presenter.log
             .tool-cache/test-tmp/native-acceptance-*/core.log
             .tool-cache/test-tmp/native-frame-benchmark-*/renderer.log

@@ -6,6 +6,8 @@ is only the independent observer of their effects, never a substitute UI path.
 from __future__ import annotations
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
@@ -130,6 +132,18 @@ def main():
         send_keys(text, with_spaces=True, vk_packet=True)
         send_keys('{TAB}')
 
+    def choose_file(path):
+        dialog = wait(lambda: next(iter(desktop.windows(process=ui.pid,
+            class_name='#32770', visible_only=True)), None), 15)
+        report.setdefault('file_dialogs', []).append(tree(dialog))
+        dialog.set_focus()
+        # The hosted Windows common file picker exposes Alt+N for File name.
+        send_keys('%n')
+        send_keys('^a')
+        send_keys(str(path), with_spaces=True, vk_packet=True)
+        send_keys('{ENTER}')
+        wait(lambda: not dialog.is_visible(), 15)
+
     try:
         with Core(engine, root) as core:
             core.call({'type': 'store_settings', 'request_id': 11, 'values': {
@@ -245,6 +259,61 @@ def main():
             wait(lambda: len([t for t in core.snapshot()['tasks']
                              if '/batch-' in t['url'] and t['status'] == 'completed']) == 2)
             report['checks'].append({'name': 'batch_create_via_ui', 'passed': True})
+            main_window.set_focus()
+            rows = sorted(main_window.descendants(control_type='ListItem'), key=lambda r: r.rectangle().top)
+            assert len(rows) == 4, tree(main_window)
+            rows[0].click_input()
+            send_keys('+{DOWN}')
+            wait(lambda: any(e.element_info.name == '已选 2 项' for e in main_window.descendants()))
+            send_keys('^a')
+            wait(lambda: any(e.element_info.name == '已选 4 项' for e in main_window.descendants()))
+            send_keys('{ESC}')
+            report['checks'].append({'name': 'keyboard_shift_range_and_multi_select', 'passed': True})
+            press(main_window, '工具')
+            press(main_window, '队列顺序')
+            before = sorted(core.snapshot()['tasks'], key=lambda t: (t['queue_index'], t['task_id']))
+            handles = sorted([e for e in main_window.descendants(control_type='Button')
+                              if e.element_info.name == '调整任务队列顺序'], key=lambda e: e.rectangle().top)
+            assert len(handles) == 4, tree(main_window)
+            r = handles[0].rectangle()
+            start = ((r.left+r.right)//2, (r.top+r.bottom)//2)
+            mouse.press(coords=start)
+            mouse.move(coords=(start[0], start[1]+64), duration=.4)
+            mouse.release(coords=(start[0], start[1]+64))
+            expected = [before[1]['task_id'], before[0]['task_id'], before[2]['task_id'], before[3]['task_id']]
+            wait(lambda: [t['task_id'] for t in sorted(core.snapshot()['tasks'],
+                key=lambda t: (t['queue_index'], t['task_id']))] == expected)
+            report['checks'].append({'name': 'drag_queue_order_via_ui', 'passed': True, 'order': expected})
+            export = root/'任务 导出.json'
+            control(main_window, '导出', 'Button').click_input()
+            choose_file(export)
+            wait(export.is_file)
+            assert url in export.read_text(encoding='utf-8-sig')
+            links = root/'导入 链接.txt'
+            links.write_text(f'http://127.0.0.1:{server.server_port}/imported.bin\n', encoding='utf-8')
+            control(main_window, '导入', 'Button').click_input()
+            choose_file(links)
+            imported = wait(lambda: next((t for t in core.snapshot()['tasks']
+                if t['url'].endswith('/imported.bin') and t['status'] == 'completed'), None), 30)
+            assert Path(imported['output_path']).read_bytes() == payload
+            report['checks'].append({'name': 'native_file_picker_import_export', 'passed': True})
+            user = ctypes.WinDLL('user32', use_last_error=True)
+            user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                         ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            report['layouts'] = []
+            for width, height in ((620, 480), (960, 640), (1400, 820)):
+                assert user.SetWindowPos(main_window.handle, None, 0, 0, width, height, 0x0004)
+                wait(lambda: main_window.rectangle().width() == width)
+                bounds = main_window.rectangle()
+                for name in ('新建', '设置', '工具', '导入', '导出'):
+                    button = control(main_window, name, 'Button')
+                    r = button.rectangle()
+                    assert button.is_visible() and bounds.left <= r.left < r.right <= bounds.right and bounds.top <= r.top < r.bottom <= bounds.bottom, (name, bounds, r)
+                main_window.capture_as_image().save(args.report.with_name(f'layout-{width}x{height}.png'))
+                report['layouts'].append({'width': bounds.width(), 'height': bounds.height(),
+                                          'toolbar_accessible_and_inside_window': True})
+            report['checks'].append({'name': 'responsive_native_window_sizes', 'passed': True,
+                'scope': 'actual window resizing on hosted Windows; not physical multi-monitor DPI validation'})
             main_window.capture_as_image().save(args.report.with_suffix('.png'))
             save()
             report['passed'] = True

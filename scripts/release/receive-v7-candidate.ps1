@@ -16,10 +16,26 @@ New-Item -ItemType Directory -Force -Path $root | Out-Null
 $artifacts = & gh.exe api "repos/$Repository/actions/runs/$($run[0].id)/artifacts?per_page=100" | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Could not query candidate artifact metadata.' }
 $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'hls-release-receiver' }
-foreach ($entry in @(
+$entries = @(
     @{ Name = "HLSDownloader-v7-candidate-$sha"; Directory = 'candidate' },
     @{ Name = "HLSDownloader-v7-msi-lifecycle-$sha"; Directory = 'msi-lifecycle' }
+)
+$regressionRuns = @{}
+foreach ($check in @(
+    @{ Workflow = 'verify-v7-candidate-browsers.yml'; Artifact = "HLSDownloader-browser-regression-$sha"; Directory = 'browser-regression' },
+    @{ Workflow = 'verify-v7-native-candidate.yml'; Artifact = "HLSDownloader-v7-native-acceptance-$sha"; Directory = 'native-regression' }
 )) {
+    $checks = & gh.exe api "repos/$Repository/actions/workflows/$($check.Workflow)/runs?head_sha=$sha&status=success&per_page=100" | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw "Could not query $($check.Workflow)." }
+    $checkRun = @($checks.workflow_runs | Where-Object { $_.head_sha -eq $sha -and $_.head_branch -eq 'main' -and $_.event -eq 'workflow_dispatch' -and $_.conclusion -eq 'success' } | Sort-Object run_number -Descending | Select-Object -First 1)
+    if ($checkRun.Count -ne 1) { throw "No successful same-source $($check.Workflow) exists for $sha." }
+    $metadata = & gh.exe api "repos/$Repository/actions/runs/$($checkRun[0].id)/artifacts?per_page=100" | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not query regression artifacts.' }
+    $artifacts.artifacts += @($metadata.artifacts)
+    $entries += @{ Name = $check.Artifact; Directory = $check.Directory }
+    $regressionRuns[$check.Directory] = [ordered]@{ run_id = $checkRun[0].id; url = $checkRun[0].html_url; source_commit = $sha }
+}
+foreach ($entry in $entries) {
     $destination = Join-Path $root $entry.Directory
     if (Test-Path -LiteralPath $destination) { throw "Refusing to overwrite received evidence: $destination" }
     $artifact = @($artifacts.artifacts | Where-Object { $_.name -eq $entry.Name -and -not $_.expired })
@@ -45,9 +61,13 @@ foreach ($entry in $manifest.artifacts.PSObject.Properties) {
     if (-not $path.StartsWith($candidateRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Candidate artifact escapes its directory.' }
     if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value.sha256) { throw "Candidate digest mismatch: $($entry.Name)" }
 }
-$provenance = [ordered]@{ schema = 1; repository = $Repository; run_id = $run[0].id; run_url = $run[0].html_url; source_commit = $sha; source_tree = $tree; candidate_manifest = $manifestPath; msi_evidence = (Join-Path $root 'msi-lifecycle') }
+$provenance = [ordered]@{ schema = 1; repository = $Repository; run_id = $run[0].id; run_url = $run[0].html_url; source_commit = $sha; source_tree = $tree; candidate_manifest = $manifestPath; msi_evidence = (Join-Path $root 'msi-lifecycle'); browser_evidence = (Join-Path $root 'browser-regression'); native_evidence = (Join-Path $root 'native-regression'); regression_runs = $regressionRuns }
 [IO.File]::WriteAllText((Join-Path $root 'RECEIPT.json'), ($provenance | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 foreach ($scenario in @('Upgrade', 'FailureRollback')) {
     & (Join-Path $PSScriptRoot '..\validation\verify-v7-received-msi.ps1') -Scenario $scenario -CandidateManifestPath $manifestPath -EvidenceRoot $provenance.msi_evidence | Out-Null
+}
+foreach ($kind in @('browser', 'native')) {
+    & python.exe (Join-Path $PSScriptRoot '..\validation\verify_v7_received_regression.py') --kind $kind --manifest $manifestPath --evidence (Join-Path $root "$kind-regression") --candidate-run-id $run[0].id
+    if ($LASTEXITCODE -ne 0) { throw "Received $kind regression failed identity or result validation." }
 }
 Write-Output ($provenance | ConvertTo-Json -Compress)

@@ -65,15 +65,15 @@ fn launch() -> Result<(), String> {
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
         match command.spawn() {
-            Ok(_) => return Ok(()),
+            Ok(_) => Ok(()),
             Err(error) if error.raw_os_error() == Some(5) => {
                 command.creation_flags(CREATE_NO_WINDOW);
                 command
                     .spawn()
                     .map_err(|e| format!("无法启动原生界面：{e}"))?;
-                return Ok(());
+                Ok(())
             }
-            Err(e) => return Err(format!("无法启动原生界面：{e}")),
+            Err(e) => Err(format!("无法启动原生界面：{e}")),
         }
     }
     #[cfg(not(windows))]
