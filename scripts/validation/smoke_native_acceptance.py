@@ -89,6 +89,9 @@ def main():
     def window(title):
         def find():
             found = desktop.windows(process=ui.pid, title=title, visible_only=True)
+            if not found:
+                found = [e for top in desktop.windows(process=ui.pid, visible_only=True)
+                         for e in top.descendants(control_type='Window') if e.element_info.name == title]
             return found[0] if found else None
         return wait(find, 20)
 

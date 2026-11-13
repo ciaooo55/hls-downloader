@@ -7,6 +7,11 @@ on:
         description: Candidate package run to verify (source differences are recorded)
         required: true
         type: string
+      extended:
+        description: Run default tail splitting and 30-minute sustained downloads (requires new candidate)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -79,12 +84,18 @@ jobs:
           $result = Get-Content $report -Raw -Encoding utf8 | ConvertFrom-Json
           if (-not $result.passed) { throw $result.error }
       - name: Verify default tail splitting and durable recovery
-        if: ${{ !cancelled() && steps.receive.outputs.exact_source == 'True' }}
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           python scripts/validation/compare_v7_range_tail.py --candidate "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --report artifacts/candidate-native-regression/range-tail.json
           if ($LASTEXITCODE -ne 0) { throw 'Default tail splitting regression failed.' }
+      - name: Verify 30 minutes of populated Core and real transfers
+        if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
+        shell: pwsh
+        run: |
+          python scripts/validation/soak_native_downloads.py --engine "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --seconds 1800 --report artifacts/candidate-native-regression/sustained-downloads.json
+          if ($LASTEXITCODE -ne 0) { throw 'Sustained populated Core acceptance failed.' }
       - name: Upload native acceptance evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
