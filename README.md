@@ -33,7 +33,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 发布包可包含 Windows x64 的 **EXE / MSI / Portable ZIP**，以及配套的 **Chromium / Firefox 浏览器扩展**。
 
-当前正式版为 [7.0.4](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4)，提供 EXE、MSI、便携包、Chromium 插件，以及 Firefox 待签名 ZIP 和源码。Windows 安装包未签名，需手动安装更新；自动更新保留受信签名校验。Firefox 在标准正式版浏览器中永久安装仍需 Mozilla 签名 XPI。历史候选保留供追溯，具体受测版本、场景及限制以对应发布说明和验收记录为准。
+当前正式版为 [7.0.5](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.5)，提供 EXE、MSI、便携包、Chromium 插件，以及 Firefox 待签名 ZIP 和源码。Windows 安装包未签名，需手动安装更新；自动更新保留受信签名校验。Firefox 在标准正式版浏览器中永久安装仍需 Mozilla 签名 XPI。历史候选保留供追溯，具体受测版本、场景及限制以对应发布说明和验收记录为准。
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 
@@ -45,13 +45,13 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 | --- | --- |
 | 操作系统 | Windows 10 或 Windows 11（x64） |
 | 处理器架构 | **仅 x64**。播放与部分抓取依赖随包的 x64 原生库（libmpv、curl-impersonate），ARM64 Windows 无法运行 |
-| 运行时 | 7.0.4 原生正式版无需 Java，包内不含 JRE；历史 Compose 版本自带 JRE |
+| 运行时 | 7.0.5 原生正式版无需 Java，包内不含 JRE；历史 Compose 版本自带 JRE |
 | 权限 | MSI 安装或覆盖升级需要管理员权限；便携包以对应发布说明为准 |
 | 浏览器 | Chromium 系（Chrome / Edge）或 Firefox，用于下载接管 |
 | 显示器 | 最低 1024×600；界面跟随系统 DPI 缩放 |
 
 > [!NOTE]
-> **7.0.4 正式版**的受测源码为 `8b6fa074`。`main` 可继续包含发布流程与文档维护；成品身份以发布附件 `ARTIFACT-MANIFEST.json` 为准。带 `candidate` / `pre-release` 标记的历史版本仍是测试版。
+> **7.0.5 正式版**的受测源码为 `23034416`。`main` 可继续包含发布流程与文档维护；成品身份以发布附件 `ARTIFACT-MANIFEST.json` 为准。带 `candidate` / `pre-release` 标记的历史版本仍是测试版。
 
 网页在线字幕的服务、API Key、全局开关、语言、同步模式、原文显示和默认偏移统一在主程序“设置 → 字幕翻译”中配置；Key 由 Core 加密保存。插件仅提供网页开关、播放器选择和开始/停止，默认自动识别到中文。播放器支持本页字幕时间微调、跳到下一句，并对可独立读取的点播音轨最多提前翻译 30 秒。[QwenCloud 配置与使用方法](docs/guides/qwencloud-subtitles.md)包含本机加密备份导入和其他电脑的配置说明。
 
@@ -89,7 +89,7 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 当前源码将点击前识别的明确链接通过 Native Messaging 交给 Core 下载。浏览器已经发出请求的普通文件与音视频文件，以及 POST 表单、Blob/data 生成文件，由浏览器保全原响应，完成后导入桌面任务；导入成功后删除浏览器源副本，拒绝或失败时保留文件。默认自动接管全部文件大小；按住 Alt、关闭接管或命中排除规则时保留浏览器下载。
 
-原响应保全避免对一次性地址再次请求，但这部分文件的网络传输由浏览器完成，桌面确认在完成后出现；保全阶段关闭浏览器可能中断传输。HLS/DASH 媒体清单仍交给 Core 的媒体引擎，不将清单本身当作视频成品。7.0.4 已通过独立 Windows 上的 Edge / Firefox 识别、凭据、回执恢复及实际 Host / Core 接管回归；浏览器下载创建事件仍按入口记录。
+原响应保全避免对一次性地址再次请求，但这部分文件的网络传输由浏览器完成，桌面确认在完成后出现；保全阶段关闭浏览器可能中断传输。HLS/DASH 媒体清单仍交给 Core 的媒体引擎，不将清单本身当作视频成品。7.0.5 已通过独立 Windows 上的 Edge / Firefox 识别、凭据、回执恢复及实际 Host / Core 接管回归；浏览器下载创建事件仍按入口记录。
 
 这意味着浏览器只是入口，而不是下载生命周期的所有者：浏览器崩溃、关闭或扩展重新连接时，已经进入 Core 的任务仍由桌面端自己的持久状态管理。
 
@@ -105,7 +105,7 @@ flowchart LR
     C --> M["Local Player · LAN Cast"]
 ```
 
-**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。7.0.4 正式包采用 Rust / Slint 原生入口；Compose 源码保留作迁移对照。同源验收与发布记录见[当前验证表](docs/validation/current-evidence.json)。
+**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。7.0.5 正式包采用 Rust / Slint 原生入口；Compose 源码保留作迁移对照。同源验收与发布记录见[当前验证表](docs/validation/current-evidence.json)。
 
 ## 📁 项目结构
 
