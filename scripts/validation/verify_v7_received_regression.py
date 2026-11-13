@@ -74,6 +74,8 @@ def verify(kind, manifest_path, evidence, candidate_run_id=None):
             raise ValueError('Sustained populated download run is incomplete')
         if frames.get('frame_p95_ms', float('inf')) > 33 or frames.get('frame_count', 0) < 100:
             raise ValueError('Native frame threshold failed')
+        if {item['slint_scale_factor'] for item in frames.get('layouts', [])} != {1, 1.25, 1.5, 2}:
+            raise ValueError('Native scale/layout acceptance is incomplete')
     else:
         raise ValueError(f'Unknown regression kind: {kind}')
     return {'schema': 1, 'passed': True, 'kind': kind, 'source_commit': manifest['source_commit'],

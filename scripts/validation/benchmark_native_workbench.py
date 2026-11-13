@@ -58,6 +58,9 @@ def main():
                 user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
                 user.GetDpiForWindow.argtypes = [wintypes.HWND]
                 user.GetDpiForWindow.restype = wintypes.UINT
+                user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                             ctypes.c_int, ctypes.c_int, wintypes.UINT]
+                user.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
                 report['window_dpi'] = user.GetDpiForWindow(window.handle)
                 report['window_title'] = window.window_text()
                 time.sleep(args.seconds)
@@ -74,6 +77,41 @@ def main():
                           frame_p50_ms=percentile(intervals, .5), frame_p95_ms=percentile(intervals, .95),
                           frame_max_ms=max(intervals))
             assert report['frame_p95_ms'] <= 33, report['frame_p95_ms']
+            ui.terminate()
+            ui.wait(timeout=10)
+            env.pop('HLS_V7_PRESENTER_FRAME_TRACE')
+            env.pop('SLINT_DEBUG_PERFORMANCE')
+            area = wintypes.RECT()
+            assert user.SystemParametersInfoW(0x0030, 0, ctypes.byref(area), 0)
+            report['layouts'] = []
+            report['layout_scope'] = 'Slint scale override at 1/1.25/1.5/2 on one hosted display; actual OS DPI recorded separately; no physical monitor-switch assertion'
+            for scale in (1, 1.25, 1.5, 2):
+                env['SLINT_SCALE_FACTOR'] = str(scale)
+                with (root/f'layout-{scale}.log').open('wb') as log:
+                    ui = subprocess.Popen([str(presenter), '--workbench'], cwd=presenter.parent,
+                                          env=env, stdout=log, stderr=log)
+                    window = wait(lambda: next(iter(Desktop(backend='uia').windows(process=ui.pid,
+                        title_re=r'HLS Downloader [0-9].*', visible_only=True)), None), 30)
+                    wait(lambda: window.descendants(control_type='ListItem'), 15)
+                    width = min(round(960*scale), area.right-area.left)
+                    height = min(round(620*scale), area.bottom-area.top)
+                    assert user.SetWindowPos(window.handle, None, area.left, area.top, width, height, 0x0004)
+                    wait(lambda: window.rectangle().width() == width)
+                    bounds = window.rectangle()
+                    for name in ('新建', '设置', '工具', '导入', '导出'):
+                        def find():
+                            return next((e for e in window.descendants(control_type='Button')
+                                         if e.element_info.name == name and e.is_visible()), None)
+                        button = wait(find, 10)
+                        r = button.rectangle()
+                        assert bounds.left <= r.left < r.right <= bounds.right and bounds.top <= r.top < r.bottom <= bounds.bottom, (scale, name, bounds, r)
+                    window.capture_as_image().save(args.report.with_name(f'scale-{scale}.png'))
+                    report['layouts'].append({'slint_scale_factor': scale,
+                        'actual_os_window_dpi': user.GetDpiForWindow(window.handle),
+                        'window_pixels': [bounds.width(), bounds.height()],
+                        'toolbar_accessible_and_inside_window': True})
+                    ui.terminate()
+                    ui.wait(timeout=10)
             report['passed'] = True
     except Exception:
         report['error'] = traceback.format_exc()

@@ -78,6 +78,8 @@ Source commit: $currentCommit
 Source tree: $currentTree
 
 This release was built from one frozen source commit. Executed gates and explicit user exclusions are recorded separately in RELEASE-EVIDENCE.json and FEATURE-PARITY.json. Real casting/TVBox and account-dependent cloud subtitle quality were excluded by the operator; their exclusion is not a passed test. Windows release binaries are unsigned. Install updates manually; the automatic updater requires a trusted signature. Verify every downloaded file against SHA256SUMS.txt before redistribution.
+
+Firefox extension ZIP: unsigned package for temporary loading and subsequent Mozilla signing. Permanent installation in standard Firefox requires a signed XPI. This release does not claim that signing or permanent-install acceptance was completed.
 "@
 [IO.File]::WriteAllText($notesPath, $notes.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
 
