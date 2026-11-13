@@ -136,9 +136,9 @@ def main():
         send_keys('{TAB}')
 
     def choose_file(path):
-        dialog = wait(lambda: next(iter(desktop.windows(process=ui.pid,
+        dialog = wait(lambda: next(iter(Desktop(backend='win32').windows(process=ui.pid,
             class_name='#32770', visible_only=True)), None), 15)
-        report.setdefault('file_dialogs', []).append(tree(dialog))
+        report.setdefault('file_dialogs', []).append(tree(desktop.window(handle=dialog.handle)))
         dialog.set_focus()
         # The hosted Windows common file picker exposes Alt+N for File name.
         send_keys('%n')
@@ -290,13 +290,13 @@ def main():
                 key=lambda t: (t['queue_index'], t['task_id']))] == expected)
             report['checks'].append({'name': 'drag_queue_order_via_ui', 'passed': True, 'order': expected})
             export = root/'任务 导出.json'
-            control(main_window, '导出', 'Button').click_input()
+            press(main_window, '导出')
             choose_file(export)
             wait(export.is_file)
             assert url in export.read_text(encoding='utf-8-sig')
             links = root/'导入 链接.txt'
             links.write_text(f'http://127.0.0.1:{server.server_port}/imported.bin\n', encoding='utf-8')
-            control(main_window, '导入', 'Button').click_input()
+            press(main_window, '导入')
             choose_file(links)
             imported = wait(lambda: next((t for t in core.snapshot()['tasks']
                 if t['url'].endswith('/imported.bin') and t['status'] == 'completed'), None), 30)

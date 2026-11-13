@@ -203,6 +203,15 @@ jobs:
             if ($formal.extensions.$browser.sha256 -ne $candidate.extensions.$browser.sha256) { throw "Formal extension differs from tested candidate: $browser" }
           }
 
+      - name: Verify formal EXE installation and shortcut startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & ./scripts/validation/verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts/v7-productization/package/ARTIFACT-MANIFEST.json
+          if ($LASTEXITCODE -ne 0) { throw 'Formal EXE installation and shortcut startup failed.' }
+          Copy-Item -LiteralPath artifacts/v7-productization/exe-startup -Destination artifacts/v7-productization/release-evidence/formal-exe-startup -Recurse
+
       - name: Build Firefox store source bundle
         shell: pwsh
         run: |

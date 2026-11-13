@@ -14,7 +14,6 @@ import time
 import traceback
 import uuid
 
-from smoke_v7_resource_boundaries import Core, seeded_progress, wait
 from soak_v7_runtime import percentile
 from validation_workspace import test_tmp
 
@@ -38,6 +37,8 @@ def resource_growth(samples):
 
 
 def main():
+    from smoke_v7_resource_boundaries import Core, seeded_progress
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
