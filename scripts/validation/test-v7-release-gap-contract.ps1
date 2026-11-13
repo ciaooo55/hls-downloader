@@ -103,6 +103,36 @@ try {
         }
     }
 
+    # Drafts are absent from GET releases/tags/{tag}. Exercise each production
+    # inventory lookup with the matching draft on a later page.
+    $queries = @([regex]::Matches($workflow, '(?m)^\s+\$pages = gh api[^\r\n]+'))
+    $selectors = @([regex]::Matches($workflow, '(?m)^\s+\$release = @\(\$pages[^\r\n]+'))
+    if ($queries.Count -ne 3 -or $selectors.Count -ne 3) { throw 'Expected three draft-aware release lookups.' }
+    $previousTag = $env:HLS_V7_TAG
+    try {
+        $env:HLS_V7_TAG = 'v7.0.5'
+        foreach ($index in 0..2) {
+            $lookup = [scriptblock]::Create($queries[$index].Value.Trim() + "`n" + $selectors[$index].Value.Trim())
+            $found = @(& {
+                function gh {
+                    if (($args -join ' ') -notmatch '/releases\?per_page=100' -or
+                        '--paginate' -notin $args -or '--slurp' -notin $args) {
+                        throw 'Draft lookup must query the authenticated paginated release inventory.'
+                    }
+                    '[[{"tag_name":"v7.0.4","draft":false}],[{"tag_name":"v7.0.5","draft":true,"id":123}]]'
+                }
+                $tag = 'v7.0.5'
+                . $lookup
+                $release
+            })
+            if ($found.Count -ne 1 -or $found[0].id -ne 123 -or -not $found[0].draft) {
+                throw 'Release lookup failed to find the matching unpublished draft.'
+            }
+        }
+    } finally {
+        $env:HLS_V7_TAG = $previousTag
+    }
+
     # Exercise the production filter: PowerShell gives -and and -or the same
     # precedence, so an ungrouped exclusion clause also rejects passed gates.
     $gateScript = Join-Path $repo 'scripts\release\invoke-v7-release-gates.ps1'

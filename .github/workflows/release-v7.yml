@@ -69,22 +69,14 @@ jobs:
             $tagCommit = (git rev-parse "refs/tags/$tag^{}").Trim()
             if ($tagCommit -ne $head) { throw "Existing release tag points at another commit: tag=$tagCommit HEAD=$head" }
 
-            $headers = @{
-              Authorization = "Bearer $env:GH_TOKEN"
-              Accept = 'application/vnd.github+json'
-              'X-GitHub-Api-Version' = '2022-11-28'
-              'User-Agent' = 'hls-downloader-release-workflow'
-            }
-            $release = $null
-            try {
-              $release = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" -Headers $headers
-            } catch {
-              $status = 0
-              if ($_.Exception.Response -and $_.Exception.Response.StatusCode) { $status = [int]$_.Exception.Response.StatusCode }
-              if ($status -ne 404) { throw }
-            }
-            if ($release) {
-              if (-not [bool]$release.draft) { throw "Release already exists and is not a draft: $tag" }
+            # The tag endpoint only finds published releases; the authenticated
+            # release inventory also includes drafts that can be resumed.
+            $pages = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not query release inventory.' }
+            $release = @($pages | ForEach-Object { $_ } | Where-Object { $_.tag_name -eq $tag })
+            if ($release.Count -gt 1) { throw "Multiple releases found for $tag" }
+            if ($release.Count -eq 1) {
+              if (-not [bool]$release[0].draft) { throw "Release already exists and is not a draft: $tag" }
               $releaseMode = 'draft'
             } else {
               $releaseMode = 'tag-only'
@@ -267,9 +259,11 @@ jobs:
           $notes = Join-Path $stage "README-$env:HLS_V7_VERSION.txt"
 
           if ($env:HLS_V7_RELEASE_MODE -eq 'draft') {
-            $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:HLS_V7_TAG" | ConvertFrom-Json
-            if (-not $release.draft) { throw 'Existing release stopped being a draft before resume.' }
-            foreach ($existingAsset in @($release.assets)) {
+            $pages = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not query release inventory.' }
+            $release = @($pages | ForEach-Object { $_ } | Where-Object { $_.tag_name -eq $env:HLS_V7_TAG })
+            if ($release.Count -ne 1 -or -not $release[0].draft) { throw 'Existing release stopped being a draft before resume.' }
+            foreach ($existingAsset in @($release[0].assets)) {
               if ($existingAsset.name -notin $expectedNames) { throw "Draft release contains an unexpected asset: $($existingAsset.name)" }
             }
             gh release edit $env:HLS_V7_TAG --repo $env:GITHUB_REPOSITORY --title "HLS Downloader $env:HLS_V7_VERSION" --notes-file $notes --draft
@@ -285,17 +279,19 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:HLS_V7_TAG" | ConvertFrom-Json
-          if (-not $release.draft) { throw 'Release must remain draft until all uploaded digests are verified.' }
+          $pages = gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not query release inventory.' }
+          $release = @($pages | ForEach-Object { $_ } | Where-Object { $_.tag_name -eq $env:HLS_V7_TAG })
+          if ($release.Count -ne 1 -or -not $release[0].draft) { throw 'Release must remain draft until all uploaded digests are verified.' }
           $stage = (Resolve-Path 'artifacts\v7-productization\release-staging').Path
           foreach ($file in Get-ChildItem -LiteralPath $stage -File) {
-            $asset = @($release.assets | Where-Object { $_.name -eq $file.Name })
+            $asset = @($release[0].assets | Where-Object { $_.name -eq $file.Name })
             if ($asset.Count -ne 1) { throw "Uploaded release asset missing or duplicated: $($file.Name)" }
             $sha = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             if ([int64]$asset[0].size -ne [int64]$file.Length) { throw "Release asset size mismatch: $($file.Name)" }
             if ([string]$asset[0].digest -ne "sha256:$sha") { throw "Release asset digest mismatch: $($file.Name)" }
           }
-          if (@($release.assets).Count -ne @(Get-ChildItem -LiteralPath $stage -File).Count) { throw 'Draft release contains an unexpected asset count.' }
+          if (@($release[0].assets).Count -ne @(Get-ChildItem -LiteralPath $stage -File).Count) { throw 'Draft release contains an unexpected asset count.' }
 
       - name: Publish verified release as Latest
         if: ${{ inputs.publish }}
