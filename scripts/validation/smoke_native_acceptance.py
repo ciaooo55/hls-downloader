@@ -79,9 +79,12 @@ def main():
         pending.replace(args.report)
 
     def tree(window):
+        def bounds(element):
+            r = element.rectangle()
+            return [r.left, r.top, r.right, r.bottom]
         return [{'name': e.element_info.name, 'type': e.element_info.control_type,
                  'enabled': e.is_enabled(), 'visible': e.is_visible(),
-                 'bounds': list(e.rectangle())} for e in window.descendants()]
+                 'bounds': bounds(e)} for e in window.descendants()]
 
     def window(title):
         def find():
