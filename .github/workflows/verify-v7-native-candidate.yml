@@ -12,6 +12,11 @@ on:
         required: true
         type: boolean
         default: false
+      frames:
+        description: Measure populated native workbench redraws (candidate must include frame tracing)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -64,14 +69,19 @@ jobs:
           } | ConvertTo-Json | Set-Content "$root/identity.json" -Encoding utf8
       - name: Exercise actual packaged workbench on isolated desktop
         shell: pwsh
+        env:
+          HLS_TEST_FRAMES: ${{ inputs.frames }}
         run: |
           $ErrorActionPreference = 'Stop'
           $repo = (Get-Location).Path
-          $report = Join-Path $repo 'artifacts/candidate-native-regression/workbench.json'
           $python = (Get-Command python.exe).Source
           $environment = @([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
           $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; CreateFlags = [uint32]0x01000000; EnvironmentVariables = [string[]]$environment; WinstationDesktop = 'winsta0\default' }
-          $command = '"' + $python + '" "' + $repo + '\scripts\validation\smoke_native_acceptance.py" --runtime "' + $env:HLS_TEST_RUNTIME + '" --report "' + $report + '"'
+          $checks = @(@{ script = 'smoke_native_acceptance.py'; report = 'workbench' })
+          if ($env:HLS_TEST_FRAMES -eq 'true') { $checks += @{ script = 'benchmark_native_workbench.py'; report = 'native-frames' } }
+          foreach ($check in $checks) {
+          $report = Join-Path $repo ('artifacts/candidate-native-regression/' + $check.report + '.json')
+          $command = '"' + $python + '" "' + $repo + '\scripts\validation\' + $check.script + '" --runtime "' + $env:HLS_TEST_RUNTIME + '" --report "' + $report + '"'
           $started = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $repo; ProcessStartupInformation = $startup }
           if ($started.ReturnValue -ne 0) { throw "Native acceptance launch failed: $($started.ReturnValue)" }
           $deadline = (Get-Date).AddMinutes(12)
@@ -83,6 +93,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $report)) { throw 'Native acceptance produced no report.' }
           $result = Get-Content $report -Raw -Encoding utf8 | ConvertFrom-Json
           if (-not $result.passed) { throw $result.error }
+          }
       - name: Verify default tail splitting and durable recovery
         if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
         shell: pwsh
@@ -106,6 +117,7 @@ jobs:
             artifacts/candidate-native-regression/*.png
             .tool-cache/test-tmp/native-acceptance-*/presenter.log
             .tool-cache/test-tmp/native-acceptance-*/core.log
+            .tool-cache/test-tmp/native-frame-benchmark-*/renderer.log
           if-no-files-found: error
           retention-days: 14
       - name: Stop isolated application processes
