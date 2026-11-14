@@ -57,6 +57,11 @@ def run(args):
         expected = hashlib.sha256(payload).hexdigest()
         media = root/"payload.bin"
         media.write_bytes(payload)
+        account_media = root/"account-payload.bin"
+        account_payload = bytes(reversed(range(256)))*32768
+        account_media.write_bytes(account_payload)
+        metadata = media.stat()
+        os.utime(account_media, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
         ftp_commands, sftp_reads, http_requests = [], [], []
         broken_enabled = threading.Event()
         broken_enabled.set()
@@ -84,7 +89,10 @@ def run(args):
 
         class Ssh(paramiko.ServerInterface):
             def check_auth_password(self, username, password):
-                return paramiko.AUTH_SUCCESSFUL if (username, password) == ("qa", "test-password") else paramiko.AUTH_FAILED
+                if username in ("qa", "qa-other") and password == "test-password":
+                    self.user = username
+                    return paramiko.AUTH_SUCCESSFUL
+                return paramiko.AUTH_FAILED
 
             def get_allowed_auths(self, username):
                 return "password"
@@ -99,10 +107,14 @@ def run(args):
                 return super().read(offset, length)
 
         class Files(paramiko.SFTPServerInterface):
+            def __init__(self, server, *args, **kwargs):
+                super().__init__(server, *args, **kwargs)
+                self.source = account_media if server.user == "qa-other" else media
+
             def stat(self, path):
                 if path != "/payload.bin":
                     return paramiko.SFTP_NO_SUCH_FILE
-                return paramiko.SFTPAttributes.from_stat(media.stat())
+                return paramiko.SFTPAttributes.from_stat(self.source.stat())
 
             lstat = stat
 
@@ -112,7 +124,7 @@ def run(args):
                 if flags & (os.O_WRONLY | os.O_RDWR):
                     return paramiko.SFTP_PERMISSION_DENIED
                 handle = Handle(flags)
-                handle.readfile = media.open("rb")
+                handle.readfile = self.source.open("rb")
                 return handle
 
         listener = socket.socket()
@@ -288,6 +300,28 @@ def run(args):
                     f"ftp://qa:test-password@127.0.0.1:{ftp_port}/payload.bin", "ftp", ftp_commands))
                 check("real SFTP password login, pinned host key, pause, offset resume and SHA256", lambda: resumed(
                     f"sftp://qa:test-password@127.0.0.1:{sftp_port}/payload.bin", "sftp", sftp_reads))
+
+                def changed_sftp_account():
+                    original, replacement = media.stat(), account_media.stat()
+                    assert (original.st_size, int(original.st_mtime)) == (replacement.st_size, int(replacement.st_mtime))
+                    task = create(f"sftp://qa:test-password@127.0.0.1:{sftp_port}/payload.bin", resource_kind="sftp")
+                    action(task, "start")
+                    wait_task(ipc, task["task_id"], lambda t: t["downloaded_bytes"] >= 262144 or t["status"] == "failed", 4)
+                    action(task, "pause")
+                    paused = wait_task(ipc, task["task_id"], lambda t: t["status"] == "paused" and t["active_workers"] == 0, 5)
+                    assert 0 < paused["downloaded_bytes"] < len(payload), paused
+                    command("refresh_task_request", task_id=task["task_id"],
+                            url=f"sftp://qa-other:test-password@127.0.0.1:{sftp_port}/payload.bin", auto_resume=True)
+                    done = terminal(task)
+                    assert done["status"] == "completed", done
+                    actual = Path(done["output_path"]).read_bytes()
+                    expected_account = hashlib.sha256(account_payload).hexdigest()
+                    assert len(actual) == len(payload) and hashlib.sha256(actual).hexdigest() == expected_account
+                    assert done["task_id"] == task["task_id"]
+                    return {"paused_bytes": paused["downloaded_bytes"], "same_size_and_mtime": True,
+                            "account_replacement_sha256": expected_account, "same_task_id": task["task_id"]}
+
+                check("real SFTP changed login restarts same-size same-mtime resource without mixed bytes", changed_sftp_account)
 
                 def curl():
                     task = next(e["snapshot"] for e in command("import_curl", command=

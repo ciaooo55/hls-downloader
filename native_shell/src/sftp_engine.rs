@@ -25,7 +25,11 @@ pub struct SftpTarget {
 
 impl SftpTarget {
     pub fn resource_key(&self) -> String {
-        format!("sftp://{}:{}{}", self.host, self.port, self.path)
+        // SSH accounts may expose different files at the same host and path.
+        format!(
+            "sftp://{}@{}:{}{}",
+            self.user, self.host, self.port, self.path
+        )
     }
 }
 
@@ -758,7 +762,10 @@ mod tests {
         assert_eq!(target.host, "nas.local");
         assert_eq!(target.port, 2222);
         assert_eq!(target.path, "/video/a.mp4");
-        assert_eq!(target.resource_key(), "sftp://nas.local:2222/video/a.mp4");
+        assert_eq!(
+            target.resource_key(),
+            "sftp://lee@nas.local:2222/video/a.mp4"
+        );
         assert!(target.password.is_empty());
         assert!(parse_sftp_url("sftp://lee@nas.local/video/").is_err());
         assert!(parse_sftp_url("sftp://-oProxyCommand=notepad@nas.local/a.bin").is_err());
@@ -784,6 +791,9 @@ mod tests {
         let debug = format!("{target:?}");
         assert!(debug.contains("***"));
         assert!(!debug.contains("p@ss"));
+        assert!(!target.resource_key().contains("p@ss"));
+        let renewed = parse_sftp_url("sftp://lee:renewed@nas.local/pub/a.bin").unwrap();
+        assert_eq!(target.resource_key(), renewed.resource_key());
     }
 
     #[test]
@@ -904,7 +914,7 @@ mod tests {
             &state_path(&dest),
             &ResumeState {
                 version: STATE_VERSION,
-                resource_key: "sftp://nas.local:22/pub/a.bin".into(),
+                resource_key: "sftp://lee@nas.local:22/pub/a.bin".into(),
                 total: stat.size,
                 mtime: stat.mtime,
                 offset: 30,
@@ -938,7 +948,7 @@ mod tests {
             &state_path(&dest),
             &ResumeState {
                 version: STATE_VERSION,
-                resource_key: "sftp://nas.local:22/pub/a.bin".into(),
+                resource_key: "sftp://lee@nas.local:22/pub/a.bin".into(),
                 total: 10,
                 mtime: "1".into(),
                 offset: 4,
@@ -953,6 +963,37 @@ mod tests {
         std::env::remove_var("HLS_V7_SFTP_FIXTURE");
         std::env::remove_var("HLS_V7_DATA_DIR");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn changed_account_restarts_instead_of_appending_another_users_file() {
+        let root = std::env::temp_dir().join(format!("hls-sftp-account-{}", std::process::id()));
+        fs::create_dir_all(root.join("pub")).unwrap();
+        fs::write(root.join("pub/a.bin"), b"CCCCDDDD").unwrap();
+        let session = FixtureSession { root: root.clone() };
+        let stat = session.stat("/pub/a.bin").unwrap();
+        let original = parse_sftp_url("sftp://alice:old-password@nas.local/pub/a.bin").unwrap();
+        let replacement = parse_sftp_url("sftp://bob:new-password@nas.local/pub/a.bin").unwrap();
+        let dest = root.join("payload.downloading");
+        fs::write(&dest, b"AAAA").unwrap();
+        save_state(
+            &state_path(&dest),
+            &ResumeState {
+                version: STATE_VERSION,
+                resource_key: original.resource_key(),
+                total: stat.size,
+                mtime: stat.mtime,
+                offset: 4,
+            },
+        )
+        .unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let bytes = download_with_session(&replacement, &dest, &control, &session).unwrap();
+        let actual = fs::read(&dest).unwrap();
+        let _ = fs::remove_dir_all(root);
+        assert_eq!(bytes, 8);
+        assert_eq!(actual, b"CCCCDDDD");
     }
 
     #[test]
@@ -981,7 +1022,7 @@ mod tests {
             &state_path(&dest),
             &ResumeState {
                 version: STATE_VERSION,
-                resource_key: format!("sftp://127.0.0.1:{}/pub/a.bin", server.port),
+                resource_key: format!("sftp://lee@127.0.0.1:{}/pub/a.bin", server.port),
                 total: stat.size,
                 mtime: stat.mtime,
                 offset: 25,
