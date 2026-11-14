@@ -81,6 +81,10 @@ This release was built from one frozen source commit. Executed gates and explici
 
 Firefox extension ZIP: unsigned package for temporary loading and subsequent Mozilla signing. Permanent installation in standard Firefox requires a signed XPI. This release does not claim that signing or permanent-install acceptance was completed.
 "@
+$changesPath = Join-Path $repo "docs\releases\v$version.md"
+if (Test-Path -LiteralPath $changesPath -PathType Leaf) {
+    $notes += "`r`n`r`n" + [IO.File]::ReadAllText($changesPath, [Text.Encoding]::UTF8).Trim()
+}
 [IO.File]::WriteAllText($notesPath, $notes.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
 
 $checksumPath = Join-Path $stage 'SHA256SUMS.txt'

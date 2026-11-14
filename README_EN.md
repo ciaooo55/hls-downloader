@@ -35,6 +35,8 @@ Release bundles may include Windows x64 **EXE / MSI / Portable ZIP** packages to
 
 The current stable release is [7.0.5](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.5), with EXE, MSI, portable ZIP, Chromium extension, and unsigned Firefox ZIP plus source. Windows installers are unsigned and require manual installation; automatic updates retain trusted-signature checks. Permanent installation in standard Firefox still requires a Mozilla-signed XPI. Historical candidates remain available for traceability. Consult the release notes and validation records for tested scenarios and limitations.
 
+> `main` currently tracks the **7.0.6** source line. Frozen-source release acceptance is in progress; download published assets for the stable version. See the [7.0.6 changes](docs/releases/v7.0.6.md).
+
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
 
 Current native implementation, component builds and validation are tracked in the [migration log](docs/validation/native-migration-progress.md) and [feature map](docs/validation/native-feature-mapping.md). The [historical delivery record](docs/validation/convergence.md) does not identify the current source or component builds. Canonical readiness permits frozen-source acceptance; formal delivery still requires matching packaged components and installation/startup gates.
