@@ -1,10 +1,10 @@
 # 原生迁移功能映射
 
-源清单：`config/release/feature-parity.json` 的 33 项。正式版 [v7.0.5](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.5) 已发布，受测源码为 `23034416e64e3de11eaf4cde3691d45873e98c4c`；当前成品范围、组件身份及限制见 [当前验证表](current-evidence.json) 的 `formal_release`。之后的源码修复单独记录，不能据此声称已发布安装包包含新改动。
+源清单：`config/release/feature-parity.json` 的 33 项。正式版 [v7.0.6](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6) 已发布，受测源码为 `1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d`；当前成品范围、组件身份及限制见 [当前验证表](current-evidence.json) 的 `formal_release`。之后的源码修复单独记录，不能据此声称已发布安装包包含新改动。
 
 以下逐项表保留迁移过程中的阶段记录；其中“待验收”描述记录当时的状态，当前结论以顶部正式发布记录、发布附件 `FEATURE-PARITY.json` 和 `RELEASE-EVIDENCE.json` 为准。真实投屏/TVBox、付费云字幕质量仍按用户决定排除；Firefox 交付待签名包，软件缩放测试不代表物理多显示器切换验收。
 
-最新修复源码 `c2889635` 的同源候选 `43591366060` 已通过完整安装启动、升级回滚、本体与 Edge/Firefox 验收，3 个桌面包和 2 个插件已接收并校验。实际 SFTP 换账户、17 项协议与异常恢复、HLS/DASH/直播/音轨恢复、尾块暂停与崩溃恢复、公网 HTTPS 均通过；1807.797 秒负载完成 157 次下载，重启保留 1000 个任务；1000 任务重绘 p95 为 16.1219 ms，四档软件缩放通过。全部报告按同源 manifest 与组件哈希绑定，结果与限制见 [当前验证表](current-evidence.json) 的 `source_iteration_20261114_sftp_identity`；此前 `e05ef78b` 和公开正式版保留各自身份，此候选尚未替换公开附件。
+7.0.6 正式包包含 HTTP 重定向与临时响应、FTP/SFTP 续传、重复任务裁决和浏览器请求身份修复。其同源候选 `43598766137` 通过 7.0.5→7.0.6 实际 MSI 升级与故障回滚、EXE 安装启动、17 项协议与异常恢复、HLS/DASH/直播/音轨恢复及完整 Edge/Firefox 验收。1804.781 秒负载完成 157 次下载，重启保留 1000 个任务；1000 任务重绘 1204 帧，p95 为 16.1326 ms，四档软件缩放通过。正式工作流 `43604710167` 复用已验收组件和插件，独立安装正式 EXE 后发布；正式包的 manifest、程序及附件哈希单独登记。此前 `c2889635` 与 `e05ef78b` 候选保留各自验收身份。
 
 2026-11-14 已追加显式组件补验：常规回归忽略的 13 项依赖功能测试及扫描器超时夹具的父回归全部通过，涵盖打包 FFmpeg/curl、WinHTTP、字幕音频与提权安装器退出码。验证入口已接入原生候选工作流；逐项结果与源码/工具身份见 [当前验证表](current-evidence.json) 的 `dependency_gated_components_20261114`。物理设备与云质量验证范围没有扩大。
 

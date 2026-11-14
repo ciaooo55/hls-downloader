@@ -5,7 +5,7 @@
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
   },
-  "scope": "Public Native 7.0.5 remains tested source 23034416, recorded in formal_release. The later c2889635 candidate has passed full acceptance, recorded separately in source_iteration_20261114_sftp_identity; public release assets have not been replaced. Other iteration and candidate sections are historical evidence.",
+  "scope": "Public Native 7.0.6, tested source 1c1dc06b; formal_release records all seven successful same-source workflows, candidate-to-formal component identities, 7.0.5 upgrade/rollback acceptance and verified public assets. Earlier iterations and candidates retain their historical scope.",
   "source_iteration_20261114_sftp_identity": {
     "base_commit": "2cc36c9501acf0ebfaf086810794159d75925dde",
     "source_commit": "c2889635aeb26ad3be95d39e0373424a9b568c34",
@@ -588,21 +588,29 @@
     "next_release": "Historical candidate superseded by the tested and published source recorded in formal_release; failed workflow evidence is retained."
   },
   "formal_release": {
-    "tag": "v7.0.5",
-    "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-    "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.5",
-    "release_id": 444614406,
-    "published_at_utc": "2026-11-13T19:07:03Z",
+    "tag": "v7.0.6",
+    "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+    "source_tree": "dc176038395258601c6f0bb9d41e5b5097443190",
+    "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6",
+    "release_id": 445354526,
+    "published_at_utc": "2026-11-14T14:32:44Z",
     "latest": true,
     "prerelease": false,
+    "formal_manifest_sha256": "cdff8e51663a5eb7251702e34325f40aa1424b6b8677a0ad0985f321c6fa3de0",
+    "candidate_manifest_sha256": "a0b6bea5438d546f886fa770c20ccbedee04dea210dd61375eb3e3448d30ae0c",
     "release_ready": true,
-    "formal_manifest_sha256": "92190a07ac3aa520090018e40bbc9aa15624985249e8f66dc2f0d1c2cbc2aa86",
-    "candidate_manifest_sha256": "159e6ac3f2e5c8fd7d00fcdce4ae99ee5b748c1b303f92b4aaff08862ec15f93",
-    "evidence_directory": "artifacts/release-native-20261114/delivery-23034416",
-    "publication_receipt": "artifacts/release-native-20261114/delivery-23034416/PUBLICATION.json",
-    "validation": "artifacts/release-native-20261114/delivery-23034416/LOCAL-RELEASE-VERIFICATION.json",
+    "evidence_directory": "artifacts/release-native-20261114/v7.0.6",
+    "publication_receipt": "artifacts/release-native-20261114/v7.0.6/PUBLICATION.json",
+    "validation": "artifacts/release-native-20261114/v7.0.6/VALIDATION.json",
+    "previous_release": {
+      "tag": "v7.0.5",
+      "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
+      "url": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.5",
+      "historical_evidence": "git:f710552f054bb3386b7ae79860fd5f6cbc92abad:docs/validation/current-evidence.json",
+      "publication_receipt": "artifacts/release-native-20261114/delivery-23034416/PUBLICATION.json"
+    },
     "feature_status": {
-      "source": "https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.5/FEATURE-PARITY.json",
+      "source": "https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.6/FEATURE-PARITY.json",
       "counts": {
         "verified": 31,
         "partial": 2
@@ -620,50 +628,48 @@
       ]
     },
     "workflows": {
-      "source_ci": {
-        "run_id": 43473530157,
+      "v7 Formal Release": {
+        "run_id": 43604710167,
         "conclusion": "success",
-        "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43473530157"
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43604710167"
       },
-      "rust_security": {
-        "run_id": 43473530401,
+      "v7 Candidate Browser Regression": {
+        "run_id": 43601279122,
         "conclusion": "success",
-        "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43473530401"
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43601279122"
       },
-      "maintenance_security": {
-        "run_id": 43473560002,
+      "v7 Native Candidate Acceptance": {
+        "run_id": 43601273891,
         "conclusion": "success",
-        "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43473560002"
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43601273891"
       },
-      "candidate_package": {
-        "run_id": 43473533522,
+      "v7 Candidate Package": {
+        "run_id": 43598766137,
         "conclusion": "success",
-        "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43473533522"
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43598766137"
       },
-      "browser_regression": {
-        "run_id": 43478594492,
+      "v7 CI": {
+        "run_id": 43598764140,
         "conclusion": "success",
-        "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43478594492"
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43598764140"
       },
-      "native_acceptance": {
-        "run_id": 43478601424,
+      "Maintenance Security": {
+        "run_id": 43598764146,
         "conclusion": "success",
-        "source_commit": "23034416e64e3de11eaf4cde3691d45873e98c4c",
-        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43478601424"
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43598764146"
+      },
+      "Rust Security": {
+        "run_id": 43598764145,
+        "conclusion": "success",
+        "source_commit": "1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d",
+        "url": "https://github.com/ciaooo55/hls-downloader/actions/runs/43598764145"
       }
-    },
-    "formal_workflow_recovery": {
-      "run_id": 43485163686,
-      "conclusion": "failure",
-      "artifact_and_exe_checks_passed": true,
-      "failure": "Draft was queried through published-tag REST endpoint (404)",
-      "recovery": "Authenticated release ID and complete local/remote asset digest verification",
-      "resolution": "Published the exact verified staging with GitHub CLI after all 13 local and remote asset sizes and SHA-256 digests matched. Draft lookup fixed and regression-tested in PowerShell 5.1 and 7. The failed workflow remains recorded as failure; annotated tag was preserved."
     },
     "gates": [
       {
@@ -693,54 +699,61 @@
       }
     ],
     "checks": {
-      "rust_tests_passed": 757,
-      "rust_tests_ignored": 14,
-      "ignored_dependency_followup": "14 entries explicitly exercised in native acceptance: 13 functional cases plus scanner timeout fixture through its parent regression",
-      "extension_tests_passed": 596,
-      "native_workbench_operations": 13,
+      "core_tests_passed": 669,
+      "core_tests_ignored": 16,
+      "client_protocol_tests_passed": 66,
+      "client_protocol_tests_ignored": 1,
+      "native_presenter_tests_passed": 37,
+      "extension_tests_passed": 597,
+      "dependency_functional_tests": 13,
+      "dependency_helper_regressions": 1,
       "browser_media_per_browser": 24,
       "browser_credentials_recovery": {
         "edge": 50,
         "firefox": 56
       },
       "browser_host_core_handoff_per_browser": 34,
+      "msi_baseline": "7.0.5",
       "msi_upgrade_checks": 25,
       "msi_failure_rollback_checks": 23,
       "portable_upgrade_rollback": "passed",
-      "exe_install_startup": "Default and Chinese-space paths, real Start-menu shortcut, schema 6 to 7 migration and unsupported-schema database preservation passed. Formal EXE was independently installed and launched.",
-      "frames": {
-        "populated_tasks": 1000,
-        "count": 1202,
-        "p95_ms": 16.18360000000152
-      },
-      "sustained_downloads": {
-        "passed": true,
-        "actual_seconds": 1809.235,
-        "snapshot_p95_ms": 39.862600000105886,
+      "formal_exe_startup": "All three actual install/shortcut/startup, schema migration and unsupported-schema preservation scenarios passed; formal manifest and published EXE bytes match.",
+      "protocol_checks": 17,
+      "native_load_and_redraw": {
+        "actual_seconds": 1804.781,
+        "completed_downloads": 157,
+        "restarts": [
+          {
+            "previous_pid": 916,
+            "new_pid": 4180,
+            "elapsed_seconds": 906.4060000000001,
+            "tasks_preserved": 1000
+          }
+        ],
+        "peak_rss_mib": 43.133,
         "resource_growth": [
           {
-            "pid": 3136,
+            "pid": 916,
             "idle_checkpoints": 80,
             "initial_idle_handles": 215,
             "final_idle_handles": 214,
             "peak_idle_handle_growth": 1,
-            "peak_handles": 242,
-            "peak_rss_growth_mib": 21.328125
+            "peak_handles": 244,
+            "peak_rss_growth_mib": 20.40234375
           },
           {
-            "pid": 9804,
-            "idle_checkpoints": 79,
+            "pid": 4180,
+            "idle_checkpoints": 80,
             "initial_idle_handles": 215,
             "final_idle_handles": 214,
             "peak_idle_handle_growth": 1,
-            "peak_handles": 240,
-            "peak_rss_growth_mib": 22.69921875
+            "peak_handles": 241,
+            "peak_rss_growth_mib": 19.875
           }
         ],
-        "downloads": 156,
-        "restarts": 1,
-        "peak_rss_mib": 45.21484375,
-        "tasks_preserved": 1000
+        "frame_count": 1204,
+        "frame_p95_ms": 16.132600000000608,
+        "protocol_checks": 17
       }
     },
     "validation_boundaries": {
@@ -756,93 +769,93 @@
       {
         "name": "ARTIFACT-MANIFEST.json",
         "size": 2064,
-        "sha256": "92190a07ac3aa520090018e40bbc9aa15624985249e8f66dc2f0d1c2cbc2aa86",
-        "remote_digest": "sha256:92190a07ac3aa520090018e40bbc9aa15624985249e8f66dc2f0d1c2cbc2aa86",
-        "asset_id": 744790539
+        "sha256": "cdff8e51663a5eb7251702e34325f40aa1424b6b8677a0ad0985f321c6fa3de0",
+        "asset_id": 747749422,
+        "remote_digest": "sha256:cdff8e51663a5eb7251702e34325f40aa1424b6b8677a0ad0985f321c6fa3de0"
       },
       {
         "name": "FEATURE-PARITY.json",
         "size": 29776,
-        "sha256": "b94aa1c08a59c11b49bdd73daf0777e78c3ffaf2a7b4b0d1a34d632e6ec79d9e",
-        "remote_digest": "sha256:b94aa1c08a59c11b49bdd73daf0777e78c3ffaf2a7b4b0d1a34d632e6ec79d9e",
-        "asset_id": 744790537
+        "sha256": "f229763ce38bf1d05a01a14e400a316585fee5be4c528e1edb512ba946aa29fa",
+        "asset_id": 747749424,
+        "remote_digest": "sha256:f229763ce38bf1d05a01a14e400a316585fee5be4c528e1edb512ba946aa29fa"
       },
       {
-        "name": "HLSDownloader-7.0.5-Release-Evidence.zip",
-        "size": 1253116,
-        "sha256": "f1eb51da8ce7bcd827d4b523da1825922b9d957946f55b648324129344b0558e",
-        "remote_digest": "sha256:f1eb51da8ce7bcd827d4b523da1825922b9d957946f55b648324129344b0558e",
-        "asset_id": 744790536
+        "name": "HLSDownloader-7.0.6-Release-Evidence.zip",
+        "size": 1248249,
+        "sha256": "d5b6a6885027cf04530f30f787281528a2f0f0444e5eb31417805715cb9d6d64",
+        "asset_id": 747749421,
+        "remote_digest": "sha256:d5b6a6885027cf04530f30f787281528a2f0f0444e5eb31417805715cb9d6d64"
       },
       {
-        "name": "HLSDownloader-7.0.5-SBOM.cdx.json",
+        "name": "HLSDownloader-7.0.6-SBOM.cdx.json",
         "size": 240512,
-        "sha256": "94438e318c7ffcc1d48e23751e8c5dd871ded148decb75efa22fdade8f9c4eec",
-        "remote_digest": "sha256:94438e318c7ffcc1d48e23751e8c5dd871ded148decb75efa22fdade8f9c4eec",
-        "asset_id": 744790532
+        "sha256": "7ad0aa08cf7cecf7732ce5e91bb6ef15c56046b5047c27ce0cc9c2efeaf71ff5",
+        "asset_id": 747749418,
+        "remote_digest": "sha256:7ad0aa08cf7cecf7732ce5e91bb6ef15c56046b5047c27ce0cc9c2efeaf71ff5"
       },
       {
-        "name": "HLSDownloader-7.0.5-Windows-x64-Portable.zip",
-        "size": 150453087,
-        "sha256": "d344e9f14484dd0a00eb0bd997b7a84e7e84f2b3c339f40ae090c5f9e0e50a7c",
-        "remote_digest": "sha256:d344e9f14484dd0a00eb0bd997b7a84e7e84f2b3c339f40ae090c5f9e0e50a7c",
-        "asset_id": 744790542
+        "name": "HLSDownloader-7.0.6-Windows-x64-Portable.zip",
+        "size": 150469213,
+        "sha256": "da31b0852baccff424bba4fcb16e144abf0b90b6aa297ec7a34d2555cbc6fb7c",
+        "asset_id": 747749420,
+        "remote_digest": "sha256:da31b0852baccff424bba4fcb16e144abf0b90b6aa297ec7a34d2555cbc6fb7c"
       },
       {
-        "name": "HLSDownloader-7.0.5-Windows-x64.exe",
-        "size": 123068879,
-        "sha256": "c7f1e94b653b8d489a689396cb24faaa1db6a0093da810b297bc94af292ff02f",
-        "remote_digest": "sha256:c7f1e94b653b8d489a689396cb24faaa1db6a0093da810b297bc94af292ff02f",
-        "asset_id": 744790561
+        "name": "HLSDownloader-7.0.6-Windows-x64.exe",
+        "size": 123053720,
+        "sha256": "bdd12f88192684bcef3f6db37e2cb1d6f7767ee9f0fef658732e1c6d3491237d",
+        "asset_id": 747749463,
+        "remote_digest": "sha256:bdd12f88192684bcef3f6db37e2cb1d6f7767ee9f0fef658732e1c6d3491237d"
       },
       {
-        "name": "HLSDownloader-7.0.5-Windows-x64.msi",
-        "size": 122941440,
-        "sha256": "d87bd30d874d23d88f69a13add28ff4a87a57ebc06dc5a3ac5af69079facf401",
-        "remote_digest": "sha256:d87bd30d874d23d88f69a13add28ff4a87a57ebc06dc5a3ac5af69079facf401",
-        "asset_id": 744790564
+        "name": "HLSDownloader-7.0.6-Windows-x64.msi",
+        "size": 122925056,
+        "sha256": "dbd250a810a9365f3c20f395694562d7431e121eea60916b81cb7c8b37d2aeb8",
+        "asset_id": 747749464,
+        "remote_digest": "sha256:dbd250a810a9365f3c20f395694562d7431e121eea60916b81cb7c8b37d2aeb8"
       },
       {
-        "name": "HLSDownloader-Extension-7.0.5-Chromium.zip",
-        "size": 336626,
-        "sha256": "e81a995d2fb9408bb03fd94d5d9dba21702b43cdc1adf442dcd9a8d3b6c89370",
-        "remote_digest": "sha256:e81a995d2fb9408bb03fd94d5d9dba21702b43cdc1adf442dcd9a8d3b6c89370",
-        "asset_id": 744790576
+        "name": "HLSDownloader-Extension-7.0.6-Chromium.zip",
+        "size": 336616,
+        "sha256": "c8275c6c1a1f1c5d5a52f3ff0c960ed2f7ec0761bf41e4d408d2a8c91a13b828",
+        "asset_id": 747749472,
+        "remote_digest": "sha256:c8275c6c1a1f1c5d5a52f3ff0c960ed2f7ec0761bf41e4d408d2a8c91a13b828"
       },
       {
-        "name": "HLSDownloader-Extension-7.0.5-Firefox-Sources.zip",
-        "size": 298917,
-        "sha256": "449aa5ae68f9c3d3402a492ba977961f5a67b397e3ec0864830240ff1009bcaa",
-        "remote_digest": "sha256:449aa5ae68f9c3d3402a492ba977961f5a67b397e3ec0864830240ff1009bcaa",
-        "asset_id": 744790577
+        "name": "HLSDownloader-Extension-7.0.6-Firefox-Sources.zip",
+        "size": 298912,
+        "sha256": "e3a578193b6295c444c5ffb35907ad08774e195f1a162cc7b8b67c51968998c9",
+        "asset_id": 747749474,
+        "remote_digest": "sha256:e3a578193b6295c444c5ffb35907ad08774e195f1a162cc7b8b67c51968998c9"
       },
       {
-        "name": "HLSDownloader-Extension-7.0.5-Firefox.zip",
-        "size": 336669,
-        "sha256": "916838cc7462e136612c7cb413bf38edf66786e586dc32b6379d51bf639ae196",
-        "remote_digest": "sha256:916838cc7462e136612c7cb413bf38edf66786e586dc32b6379d51bf639ae196",
-        "asset_id": 744790595
+        "name": "HLSDownloader-Extension-7.0.6-Firefox.zip",
+        "size": 336664,
+        "sha256": "b9167cddfbc526e84560ed0cf2ff5328de9e2fb267163e590ec2c3914875e916",
+        "asset_id": 747749496,
+        "remote_digest": "sha256:b9167cddfbc526e84560ed0cf2ff5328de9e2fb267163e590ec2c3914875e916"
       },
       {
-        "name": "README-7.0.5.txt",
-        "size": 887,
-        "sha256": "80b2495f5f316ce837a50335c2edacc2c79968f2a602692b7758b52f761c92e1",
-        "remote_digest": "sha256:80b2495f5f316ce837a50335c2edacc2c79968f2a602692b7758b52f761c92e1",
-        "asset_id": 744790599
+        "name": "README-7.0.6.txt",
+        "size": 2762,
+        "sha256": "4bc754e61c588ef8a0066f04f553fe25f9536d346737589b7aaa62fca9807907",
+        "asset_id": 747749500,
+        "remote_digest": "sha256:4bc754e61c588ef8a0066f04f553fe25f9536d346737589b7aaa62fca9807907"
       },
       {
         "name": "RELEASE-EVIDENCE.json",
-        "size": 25840,
-        "sha256": "4613fece07c4c73fddfe3ceed2eb0628eb75d1db74cc5e53c8debd1c26583142",
-        "remote_digest": "sha256:4613fece07c4c73fddfe3ceed2eb0628eb75d1db74cc5e53c8debd1c26583142",
-        "asset_id": 744790618
+        "size": 25812,
+        "sha256": "d70054e98d4b452f42a79d25abaef847718763b275974b47c18656604f2fbbfe",
+        "asset_id": 747749531,
+        "remote_digest": "sha256:d70054e98d4b452f42a79d25abaef847718763b275974b47c18656604f2fbbfe"
       },
       {
         "name": "SHA256SUMS.txt",
         "size": 1213,
-        "sha256": "d4239d5b8b48de6006b4f017c9a79432901bbc648ca361e3e166c80a6c669d25",
-        "remote_digest": "sha256:d4239d5b8b48de6006b4f017c9a79432901bbc648ca361e3e166c80a6c669d25",
-        "asset_id": 744790622
+        "sha256": "b239cdd3fde87405ebca1f0f35e6950164a7cd758ec12f8120637c878bdcbab6",
+        "asset_id": 747749534,
+        "remote_digest": "sha256:b239cdd3fde87405ebca1f0f35e6950164a7cd758ec12f8120637c878bdcbab6"
       }
     ]
   },
