@@ -3576,26 +3576,45 @@ fn resolve_location(current: &ParsedUrl, location: &str) -> String {
     {
         return String::new();
     }
-    let lower = location.to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") {
-        return location.to_string();
-    }
-    if has_absolute_scheme(location) {
-        return String::new();
-    }
     let scheme = if current.https { "https" } else { "http" };
-    if let Some(rest) = location.strip_prefix("//") {
-        return format!("{scheme}://{rest}");
-    }
-    let origin = format!("{scheme}://{}", host_header(current));
-    if location.starts_with('/') {
-        return format!("{origin}{location}");
-    }
-    let dir = match current.path.rfind('/') {
-        Some(index) => &current.path[..=index],
-        None => "/",
+    let lower = location.to_ascii_lowercase();
+    let target = if lower.starts_with("http://") || lower.starts_with("https://") {
+        location.to_string()
+    } else if has_absolute_scheme(location) {
+        return String::new();
+    } else if let Some(rest) = location.strip_prefix("//") {
+        format!("{scheme}://{rest}")
+    } else {
+        let origin = format!("{scheme}://{}", host_header(current));
+        let base_path = current.path.split('?').next().unwrap_or("/");
+        if location.starts_with('/') {
+            format!("{origin}{location}")
+        } else if location.starts_with('?') {
+            format!("{origin}{base_path}{location}")
+        } else if location.starts_with('#') {
+            format!("{origin}{}{location}", current.path)
+        } else {
+            let dir = base_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+            format!("{origin}{dir}/{location}")
+        }
     };
-    format!("{origin}{dir}{location}")
+    // RFC 3986: only the path participates in dot-segment removal. Preserve
+    // authority, query bytes and percent escapes for signed request identities.
+    let authority_start = target.find("://").unwrap() + 3;
+    let path_start = target[authority_start..]
+        .find(['/', '?', '#'])
+        .map(|index| authority_start + index)
+        .unwrap_or(target.len());
+    let path_end = target[path_start..]
+        .find(['?', '#'])
+        .map(|index| path_start + index)
+        .unwrap_or(target.len());
+    format!(
+        "{}{}{}",
+        &target[..path_start],
+        crate::harvest::normalize_url_path(&target[path_start..path_end]),
+        &target[path_end..]
+    )
 }
 
 fn has_absolute_scheme(reference: &str) -> bool {
@@ -3673,8 +3692,32 @@ fn http_get(
     };
     let mut buf = Vec::with_capacity(4096);
     let mut block = [0u8; 4096];
-    let mut split = None;
-    while buf.len() < 64 * 1024 {
+    let mut header_start = 0;
+    let mut scan_from = 0;
+    let (split, status) = loop {
+        if let Some(offset) = buf[scan_from..]
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+        {
+            let split = scan_from + offset;
+            let status = String::from_utf8_lossy(&buf[header_start..split])
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|code| code.parse::<u16>().ok())
+                .unwrap_or(0);
+            if (100..200).contains(&status) && status != 101 {
+                // Interim responses have no body; the final headers may already
+                // share this read. Keep one cumulative cap for the entire chain.
+                header_start = split + 4;
+                scan_from = header_start;
+                continue;
+            }
+            break (split, status);
+        }
+        if buf.len() == 64 * 1024 {
+            return Err(EngineError::Failed("response headers truncated".into()));
+        }
         let want = block.len().min(64 * 1024 - buf.len());
         let count = match stream.read(&mut block[..want]) {
             Ok(count) => count,
@@ -3684,28 +3727,14 @@ fn http_get(
             }
         };
         if count == 0 {
-            break;
+            return Err(EngineError::Failed("response headers truncated".into()));
         }
         // 只检查新增字节及跨块边界；同次读取的正文由 Body::Tcp 的 prefix 保留。
-        let scan_from = buf.len().saturating_sub(3);
+        scan_from = buf.len().saturating_sub(3).max(header_start);
         buf.extend_from_slice(&block[..count]);
-        if let Some(offset) = buf[scan_from..]
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-        {
-            split = Some(scan_from + offset);
-            break;
-        }
-    }
-    let split = split.ok_or_else(|| EngineError::Failed("response headers truncated".into()))?;
-    let head = String::from_utf8_lossy(&buf[..split]);
+    };
+    let head = String::from_utf8_lossy(&buf[header_start..split]);
     let leftover = buf[split + 4..].to_vec();
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .unwrap_or(0);
     let meta = parse_header_meta(&head);
     record_download_type(job, status, &head);
     for value in head
@@ -5130,45 +5159,84 @@ mod tests {
 
     #[test]
     fn raw_http_header_boundaries_preserve_the_exact_body_and_size_limit() {
-        for delimiter_at in [4093, 4094, 4095, 8191, 65532, 65533] {
+        let informational = concat!(
+            "HTTP/1.1 100 Continue\r\n\r\n",
+            "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n",
+        );
+        for prefix in ["", informational] {
+            for delimiter_at in [4093, 4094, 4095, 8191, 65532, 65533] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let payload = b"body\0\r\n\r\nbytes";
+                let mut response = format!(
+                    "{prefix}HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"boundary\"\r\nX-Padding: ",
+                    payload.len()
+                )
+                .into_bytes();
+                response.resize(delimiter_at, b'x');
+                response.extend_from_slice(b"\r\n\r\n");
+                response.extend_from_slice(payload);
+                let server = thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let _ = stream.write_all(&response);
+                });
+                let (job, dir) = temp_job(&url, true, 0, 1);
+                let result = http_get(&job, &parse_http_url(&url).unwrap(), None);
+                if delimiter_at == 65533 {
+                    let error = result.err().expect("oversized headers must be rejected");
+                    assert!(error.to_string().contains("response headers truncated"));
+                } else {
+                    let mut response = result.unwrap();
+                    assert_eq!(response.status, 200);
+                    assert_eq!(response.content_length, Some(payload.len() as u64));
+                    assert_eq!(response.etag, "\"boundary\"");
+                    let mut received = Vec::new();
+                    response.body.read_to_end(&mut received).unwrap();
+                    assert_eq!(received, payload, "delimiter at {delimiter_at}");
+                }
+                server.join().unwrap();
+                let _ = fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    #[test]
+    fn raw_http_requires_a_final_response_and_bounds_informational_header_chains() {
+        for response in [
+            "HTTP/1.1 103 Early Hints\r\n\r\n".to_string(),
+            "HTTP/1.1 103 Early Hints\r\n\r\n".repeat(3000),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
-            let payload = b"body\0\r\n\r\nbytes";
-            let mut response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"boundary\"\r\nX-Padding: ",
-                payload.len()
-            )
-            .into_bytes();
-            response.resize(delimiter_at, b'x');
-            response.extend_from_slice(b"\r\n\r\n");
-            response.extend_from_slice(payload);
             let server = thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
                 loop {
                     let mut line = String::new();
                     if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
                         break;
                     }
                 }
-                let _ = stream.write_all(&response);
+                let _ = reader.get_mut().write_all(response.as_bytes());
             });
             let (job, dir) = temp_job(&url, true, 0, 1);
             let result = http_get(&job, &parse_http_url(&url).unwrap(), None);
-            if delimiter_at == 65533 {
-                let error = result.err().expect("oversized headers must be rejected");
-                assert!(error.to_string().contains("response headers truncated"));
-            } else {
-                let mut response = result.unwrap();
-                assert_eq!(response.status, 200);
-                assert_eq!(response.content_length, Some(payload.len() as u64));
-                assert_eq!(response.etag, "\"boundary\"");
-                let mut received = Vec::new();
-                response.body.read_to_end(&mut received).unwrap();
-                assert_eq!(received, payload, "delimiter at {delimiter_at}");
-            }
             server.join().unwrap();
-            let _ = fs::remove_dir_all(dir);
+            fs::remove_dir_all(dir).unwrap();
+            let error = result
+                .err()
+                .expect("informational headers are not a final response");
+            assert!(error.to_string().contains("response headers truncated"));
         }
     }
 
@@ -5770,6 +5838,17 @@ mod tests {
             resolve_location(&current, "HTTPS://other.test/x"),
             "HTTPS://other.test/x"
         );
+        assert_eq!(
+            resolve_location(
+                &current,
+                "https://other.test/dir/../file.bin?token=a%2Fb&x=../"
+            ),
+            "https://other.test/file.bin?token=a%2Fb&x=../"
+        );
+        assert_eq!(
+            resolve_location(&current, "//other.test/dir/../file.bin?token=a&amp;b=2"),
+            "http://other.test/file.bin?token=a&amp;b=2"
+        );
         assert!(resolve_location(&current, "file:///C:/secret").is_empty());
         assert!(resolve_location(&current, "http://cdn.test/x\r\nHost: evil").is_empty());
         assert_eq!(
@@ -5782,6 +5861,133 @@ mod tests {
             resolve_location(&rooted, "next.bin"),
             "http://cdn.test:8080/next.bin"
         );
+        let signed = parse_http_url("https://cdn.test/dir/export.bin?next=/wrong/path").unwrap();
+        for (location, expected) in [
+            ("?token=a%2Fb&x=../", "/dir/export.bin?token=a%2Fb&x=../"),
+            ("#part", "/dir/export.bin?next=/wrong/path#part"),
+            ("next.bin", "/dir/next.bin"),
+            (
+                "../download/./file.bin?sig=a%2Fb&x=../",
+                "/download/file.bin?sig=a%2Fb&x=../",
+            ),
+            ("/dir/../file.bin", "/file.bin"),
+            ("../../file.bin", "/file.bin"),
+            ("../", "/"),
+            ("%2e%2e/file.bin", "/dir/%2e%2e/file.bin"),
+            ("next//file.bin", "/dir/next//file.bin"),
+        ] {
+            assert_eq!(
+                resolve_location(&signed, location),
+                format!("https://cdn.test{expected}"),
+                "{location}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_redirects_preserve_signed_targets_and_scoped_credentials_across_transports() {
+        let mut transports = vec!["raw"];
+        #[cfg(windows)]
+        transports.push("winhttp");
+        if curl_impersonate_exe().is_some() {
+            transports.push("curl");
+        }
+        for transport in transports {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let mut requests = Vec::new();
+                for response in [
+                    "HTTP/1.1 302 Found\r\nLocation: ?token=a%2Fb&b=2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 307 Redirect\r\nLocation: ../download/./file.bin?sig=a%2Fb&x=../\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfile",
+                ] {
+                    let (stream, _) = listener.accept().unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut head = String::new();
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).unwrap() > 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        head.push_str(&line);
+                    }
+                    requests.push(head);
+                    reader.get_mut().write_all(response.as_bytes()).unwrap();
+                }
+                requests
+            });
+            let mut job = post_test_job(
+                format!("{origin}/dir/export.bin?next=/wrong/path"),
+                PathBuf::new(),
+            );
+            job.method = "GET".into();
+            job.headers.clear();
+            if transport == "winhttp" {
+                job.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into();
+            }
+            job.replay_json = serde_json::json!({
+                "_task_url": job.url,
+                "request_contexts": {
+                    origin.clone(): {
+                        "cookies": [
+                            { "name": "dir", "value": "one", "domain": "127.0.0.1", "path": "/dir/" },
+                            { "name": "download", "value": "two", "domain": "127.0.0.1", "path": "/download/" }
+                        ],
+                        "url_contexts": {
+                            format!("{origin}/dir/export.bin?token=a%2Fb&b=2"): {
+                                "request_headers": { "Authorization": "Bearer query" }
+                            },
+                            format!("{origin}/download/file.bin?sig=a%2Fb&x=../"): {
+                                "request_headers": { "Authorization": "Bearer final" }
+                            }
+                        }
+                    }
+                }
+            })
+            .to_string();
+            let mut fetched = if transport == "curl" {
+                fetch_curl_follow(&job, None)
+                    .expect("curl transport available")
+                    .unwrap()
+            } else {
+                fetch_follow(&job, None).unwrap()
+            };
+            assert_eq!(fetched.status, 200, "{transport}");
+            let mut bytes = Vec::new();
+            fetched.body.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"file");
+            let requests = server.join().unwrap();
+            for (head, target) in requests.iter().zip([
+                "/dir/export.bin?next=/wrong/path",
+                "/dir/export.bin?token=a%2Fb&b=2",
+                "/download/file.bin?sig=a%2Fb&x=../",
+            ]) {
+                assert!(
+                    head.starts_with(&format!("GET {target} HTTP/1.1\r\n")),
+                    "{transport}: {head}"
+                );
+            }
+            assert!(
+                requests[1]
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer query\r\n"),
+                "{transport}: {}",
+                requests[1]
+            );
+            let last = requests[2].to_ascii_lowercase();
+            assert!(
+                last.contains("authorization: bearer final\r\n"),
+                "{transport}: {last}"
+            );
+            assert!(
+                last.contains("cookie: download=two\r\n"),
+                "{transport}: {last}"
+            );
+            assert!(!last.contains("dir=one"), "{transport}: {last}");
+        }
     }
 
     #[test]

@@ -6,6 +6,17 @@
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
   },
   "scope": "Native 7.0.5 stable, tested source 23034416; formal_release records current acceptance and public artifact identity. Earlier iteration and candidate sections are historical evidence.",
+  "source_iteration_20261114_http": {
+    "base_commit": "197bb193e4a32ca99d87ccf9e1113d38243c89ec",
+    "status": "source_fixes_validated_not_packaged",
+    "scope": "Relative redirect targets and scoped credentials across raw HTTP/WinHTTP/curl; interim HTTP responses, exact body bytes and cumulative header limits.",
+    "report": "artifacts/regression-20261114/http-redirect/VALIDATION.json",
+    "http_tests": { "passed": 87, "failed": 0, "ignored": 8 },
+    "extension_targeted_tests": { "test_files": 3, "passed": 177, "failed": 0 },
+    "rustfmt": "passed",
+    "clippy": "--locked -p hls-native-shell --lib --tests; warnings denied with the existing three repository allowances",
+    "execution_scope": "CLI and isolated loopback servers only; the public v7.0.5 packages do not include this subsequent source increment. No personal desktop or browser automation."
+  },
   "historical_test_matrix": "artifacts/release-native-20261110/workspace-results.json",
   "source_iteration_20261111": {
     "base_commit": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
