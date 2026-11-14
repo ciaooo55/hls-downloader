@@ -5,7 +5,29 @@
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
   },
-  "scope": "Native 7.0.5 stable, tested source 23034416; formal_release records current acceptance and public artifact identity. Earlier iteration and candidate sections are historical evidence.",
+  "scope": "Public Native 7.0.5 remains tested source 23034416, recorded in formal_release. The later c2889635 candidate has passed full acceptance, recorded separately in source_iteration_20261114_sftp_identity; public release assets have not been replaced. Other iteration and candidate sections are historical evidence.",
+  "source_iteration_20261114_sftp_identity": {
+    "base_commit": "2cc36c9501acf0ebfaf086810794159d75925dde",
+    "source_commit": "c2889635aeb26ad3be95d39e0373424a9b568c34",
+    "status": "source_and_full_candidate_acceptance_passed",
+    "scope": "SFTP resume identity includes the login account. Different accounts on one host/path cannot append each other's bytes; changing a password for the same account retains identity without storing passwords.",
+    "report": "artifacts/regression-20261114/sftp-identity/VALIDATION.json",
+    "sftp_tests": { "passed": 13, "failed": 0 },
+    "core_tests": { "passed": 669, "failed": 0, "ignored": 16 },
+    "client_protocol_tests": { "passed": 66, "failed": 0, "ignored": 1 },
+    "native_presenter_tests": { "passed": 37, "failed": 0 },
+    "extension_tests": { "passed": 597, "failed": 0 },
+    "engine_build_strict_clippy_and_rustfmt": "passed",
+    "ci": "https://github.com/ciaooo55/hls-downloader/actions/runs/43591364998",
+    "security": [43591364982, 43591364930],
+    "candidate": { "run_id": 43591366060, "status": "passed", "manifest_sha256": "e2bfa89df1d13a35749541390ce17d0611f96f60dab887261027f87ef1d70960", "formal_release": false },
+    "browser_acceptance": { "run_id": 43594187637, "status": "passed", "handoff_and_response_checks": 174, "media_cases": 48 },
+    "native_extended_acceptance": { "run_id": 43594184444, "status": "passed", "extended": true, "frames": true, "protocol_checks": 17, "soak_actual_seconds": 1807.797, "completed_downloads": 157, "tasks_preserved_at_restart": 1000, "peak_working_set_mib": 44.711, "peak_idle_handle_growth_per_process": 1, "frame_count": 1196, "frame_p95_ms": 16.1219, "software_scale_factors": [1, 1.25, 1.5, 2], "binding": "artifacts/regression-20261114/sftp-identity/native-bound-verification.json" },
+    "received_candidate": "artifacts/v7-productization/received-candidate-43591366060-c2889635/SOURCE-RECEIPT.json",
+    "packaged_account_change_regression": "Passed real authenticated SFTP account change after pause, same path/size/mtime and different payloads; final SHA-256 checks the replacement account's exact bytes.",
+    "execution_scope": "All six same-source workflows passed: source CI, two security checks, package/install/upgrade/rollback, Edge/Firefox media/response/handoff, and extended native protocol/media/recovery/redraw/30-minute populated download acceptance. Reports and component hashes are bound to the received manifest. Complete application and browser runs used disposable hosted Windows, without personal desktop/browser automation. Firefox remains unsigned; physical receivers, paid subtitle quality, physical mixed-DPI monitor switching and three SSDP multicast integration cases are excluded. This candidate does not replace the public v7.0.5 assets.",
+    "cleanup": "Four old disposable fixture databases and both empty fixture directories removed with exact nonrecursive paths, without Force. Failure evidence and build caches retained."
+  },
   "source_iteration_20261114_core_extension": {
     "base_commit": "e669c831f7b4f10df948d593b6441192d0f30382",
     "source_commit": "e05ef78bee8d36b4ae344311cd3fe7256381362e",
@@ -22,9 +44,10 @@
     "security": [43585574467, 43585574428],
     "candidate": { "run_id": 43585599667, "status": "passed", "manifest_sha256": "314a56999ea04552c6cbe3cadaf9a9a14ebffd28e565d026d0f46eb78b23b643", "formal_release": false },
     "native_acceptance": { "run_id": 43588554623, "status": "passed", "component_functional_tests": 13, "component_helper_regressions": 1, "workbench_checks": 13, "extended": false, "frames": false },
+    "native_extended_acceptance": { "run_id": 43590229504, "status": "passed", "extended": true, "frames": true, "soak_actual_seconds": 1802.187, "binding": "artifacts/regression-20261114/full-code/extended-bound-verification.json" },
     "browser_acceptance": { "run_id": 43588550932, "status": "passed", "handoff_and_response_checks": 174, "media_cases": 48 },
     "received_candidate": "artifacts/v7-productization/received-candidate-43585599667-e05ef78b/SOURCE-RECEIPT.json",
-    "execution_scope": "Local code and controlled component tests; same-source packaged components, EXE startup, MSI/portable upgrade and rollback, workbench, playback, HTTPS and Edge/Firefox handoff passed on disposable GitHub-hosted Windows. Three SSDP multicast cases, extended 30-minute workloads/frame benchmarks, physical receiver/DPI and cloud quality were not rerun. Firefox remains unsigned. Public v7.0.5 packages retain their separately recorded tested identity."
+    "execution_scope": "Local code and controlled component tests; same-source packaged components, EXE startup, MSI/portable upgrade and rollback, workbench, playback, HTTPS and Edge/Firefox handoff passed on disposable GitHub-hosted Windows. Full extended protocol/media/tail, software-scale redraw and 30-minute populated download acceptance also passed for e05ef78b. The later c2889635 SFTP fix is recorded separately. Three SSDP multicast cases, physical receiver/DPI and cloud quality were not rerun. Firefox remains unsigned. Public v7.0.5 packages retain their separately recorded tested identity."
   },
   "source_iteration_20261114_http": {
     "base_commit": "197bb193e4a32ca99d87ccf9e1113d38243c89ec",
