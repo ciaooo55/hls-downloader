@@ -277,8 +277,7 @@ function downloadIdentity(item: Browser.downloads.DownloadItem): { tabId?: numbe
   // Chrome's DownloadItem type has no tab/frame fields, but some browsers expose
   // them at runtime. URL-only fallback is disabled when tabId is absent.
   const runtimeItem = item as Browser.downloads.DownloadItem & { tabId?: unknown, frameId?: unknown }
-  const tabId = Number(runtimeItem.tabId)
-  const frameId = Number(runtimeItem.frameId)
+  const { tabId, frameId } = runtimeItem
   return {
     ...(validDownloadIdentity(tabId) ? { tabId } : {}),
     ...(validDownloadIdentity(frameId) ? { frameId } : {}),

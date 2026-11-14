@@ -24,9 +24,9 @@ export function findEarlyBrowserTakeoverByUrl(
   entries: Iterable<EarlyBrowserTakeover>,
 ): EarlyBrowserTakeover | undefined {
   const wanted = candidates.filter((value): value is string => Boolean(value))
-  const tabId = Number(downloadIdentity.tabId)
+  const tabId = downloadIdentity.tabId
   if (!wanted.length || !validDownloadIdentity(tabId)) return undefined
-  const frameId = Number(downloadIdentity.frameId)
+  const frameId = downloadIdentity.frameId
   let match: EarlyBrowserTakeover | undefined
   for (const entry of entries) {
     if (entry.tabId !== tabId) continue

@@ -1,11 +1,6 @@
 //! 多线程同时经 coordinator 下发命令时，store 必须一条不丢、id 一个不重。
 //!
-//! 为什么值得单独立一个集成测试：`CoreCoordinator` 的 `core` 是
-//! `Arc<Mutex<PersistentCore>>`，类型系统保证了 store 访问串行，
-//! 但**没有任何测试验证过这条通用派发路径**——现有的并发测试只覆盖
-//! 媒体推送、种子选择、重命名发布这几个具体领域。
-//!
-//! 并发安全是"难测但重要"的典型：类型给出保证，运行时的保证没人验过。
+//! 使用公开派发入口和暂停任务，验证调度前的持久化，不启动网络下载。
 
 use hls_native_shell::{CoreCommand, CoreCoordinator, PersistentCore, ResourceKind, TaskSpec};
 use std::collections::{BTreeSet, HashSet};
@@ -33,6 +28,18 @@ fn cleanup(path: &Path) {
 fn concurrent_create_task_never_duplicates_a_task_id_or_loses_a_task() {
     let path = temp_db("create");
     let coordinator = Arc::new(CoreCoordinator::new(PersistentCore::open(&path).unwrap()));
+    coordinator
+        .dispatch(CoreCommand::SetSetting {
+            key: "legal_terms_accepted".into(),
+            value: serde_json::json!(true),
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::SetSetting {
+            key: "download_dir".into(),
+            value: serde_json::json!(std::env::temp_dir()),
+        })
+        .unwrap();
 
     let mut handles = Vec::new();
     for worker in 0..8u32 {
@@ -40,15 +47,14 @@ fn concurrent_create_task_never_duplicates_a_task_id_or_loses_a_task() {
         handles.push(std::thread::spawn(move || {
             for round in 0..8u32 {
                 let spec = TaskSpec {
+                    start_paused: true,
                     url: format!("https://example.test/race-{worker}-{round}.bin"),
                     resource_kind: ResourceKind::Hls,
                     filename: format!("race-{worker}-{round}.bin"),
-                    download_dir: "downloads/audit-race".into(),
+                    download_dir: std::env::temp_dir().to_string_lossy().into_owned(),
                     ..Default::default()
                 };
-                let core_handle = shared.core();
-                let mut core = core_handle.lock().unwrap();
-                core.handle(CoreCommand::CreateTask { spec }).unwrap();
+                shared.dispatch(CoreCommand::CreateTask { spec }).unwrap();
             }
         }));
     }
@@ -71,5 +77,7 @@ fn concurrent_create_task_never_duplicates_a_task_id_or_loses_a_task() {
         "concurrent create: task id sequence not contiguous"
     );
 
+    drop(core);
+    drop(coordinator);
     cleanup(&path);
 }

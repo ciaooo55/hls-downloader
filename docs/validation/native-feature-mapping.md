@@ -1,6 +1,6 @@
 # 原生迁移功能映射
 
-源清单：`config/release/feature-parity.json` 的 33 项。正式版 [v7.0.4](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.4) 已发布，受测源码为 `8b6fa0743db2441c798e5d3d47a96137c4347fc7`；源码 CI、候选打包、浏览器和原生完整验收均绑定此提交。正式包复用受测组件字节，正式 EXE 再次通过安装启动检查；13 项发布附件与本地 SHA-256 一致。最新范围与限制见 [当前验证表](current-evidence.json) 的 `formal_release`。
+源清单：`config/release/feature-parity.json` 的 33 项。正式版 [v7.0.5](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.5) 已发布，受测源码为 `23034416e64e3de11eaf4cde3691d45873e98c4c`；当前成品范围、组件身份及限制见 [当前验证表](current-evidence.json) 的 `formal_release`。之后的源码修复单独记录，不能据此声称已发布安装包包含新改动。
 
 以下逐项表保留迁移过程中的阶段记录；其中“待验收”描述记录当时的状态，当前结论以顶部正式发布记录、发布附件 `FEATURE-PARITY.json` 和 `RELEASE-EVIDENCE.json` 为准。真实投屏/TVBox、付费云字幕质量仍按用户决定排除；Firefox 交付待签名包，软件缩放测试不代表物理多显示器切换验收。
 

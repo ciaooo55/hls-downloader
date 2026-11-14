@@ -390,7 +390,7 @@ $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 if ($Task -eq 'test') {
     # Player fixtures change process-wide backend state, as in the CI serial gate.
-    & $cargo test --locked --manifest-path "$repo\native_shell\Cargo.toml" --lib -- --test-threads=1
+    & $cargo test --locked --manifest-path "$repo\native_shell\Cargo.toml" --lib --tests -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $cargo test --locked --manifest-path "$repo\Cargo.toml" -p hls-protocol -p hls-client -p hls-native-clients -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

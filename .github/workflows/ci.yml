@@ -140,7 +140,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           cargo fmt --all -- --check
           # Player tests intentionally toggle process-wide backend env hooks; serial execution prevents cross-test contamination.
-          cargo test --locked --lib -- --test-threads=1
+          cargo test --locked --lib --tests -- --test-threads=1
           # The updater binary owns runtime release-signer authorization tests, including the Windows WinTrust path.
           cargo test --locked -p hls-protocol -p hls-client -p hls-native-clients -- --test-threads=1
           cargo build --locked -p hls-native-clients --bins

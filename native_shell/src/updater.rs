@@ -3,8 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-// MSI 保留三段产品版本；发布修订用于比较同一产品版本的修复包。
-pub const CURRENT_VERSION: &str = "7.0.3-r5";
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LATEST_API: &str = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -352,6 +351,21 @@ mod tests {
         assert_eq!(
             info.installer_url,
             "https://github.com/ciaooo55/hls-downloader/releases/download/v7.1.0/HLSDownloader.msi"
+        );
+    }
+
+    #[test]
+    fn compiled_release_is_current_and_does_not_offer_its_own_installer() {
+        let version = env!("CARGO_PKG_VERSION");
+        let payload = serde_json::json!({
+            "tag_name": format!("v{version}"),
+            "assets": [],
+        });
+        let info = parse_github_release(&payload.to_string(), CURRENT_VERSION).unwrap();
+        assert_eq!(info.current, version);
+        assert!(
+            !info.newer,
+            "the installed release must not offer itself as an upgrade"
         );
     }
 

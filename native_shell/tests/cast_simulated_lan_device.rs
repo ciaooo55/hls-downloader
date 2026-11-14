@@ -12,10 +12,9 @@
 //! 以及局域网媒体 URL 在电视侧能否真正播放。这条边界在
 //! `docs/architecture/browser-media-push-release-gate.md` 里单独记账。
 //!
-//! 运行前提：假设备必须监听 UDP 1900（SSDP 多播组端口）。Windows 的 SSDPSRV
-//! （SSDP Discovery 服务）常驻时会独占 1900，那种机器上链路无从跑起——
-//! 设备用例**跳过并打印原因**，而不是带着 panic 把整个测试二进制染红；
-//! 纯解析用例（无 socket）不受影响，始终执行。
+//! 三项多播设备用例默认忽略，只在隔离的 SSDP 测试环境显式使用 `--ignored`。
+//! 它们必须实际收到 M-SEARCH；端口被占用或多播不可达时明确失败。
+//! 纯解析和地址校验用例不需要设备，常规检查始终执行。
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, UdpSocket};
@@ -48,8 +47,7 @@ struct SimulatedCastDevice {
 }
 
 impl SimulatedCastDevice {
-    /// 起假设备。`None` = UDP 1900 被占用（典型：Windows SSDPSRV），调用方跳过用例。
-    fn start() -> Option<SimulatedCastDevice> {
+    fn start() -> SimulatedCastDevice {
         // 1) description + control 端点
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind device http");
         listener
@@ -60,15 +58,8 @@ impl SimulatedCastDevice {
         let m_searches = Arc::new(AtomicUsize::new(0));
         // 2) SSDP 响应者：加入 SSDP 多播组，收到 M-SEARCH 就单播回 LOCATION。
         //    先绑 UDP 再起任何线程——失败时不留孤儿线程。
-        let ssdp = match UdpSocket::bind(("0.0.0.0", 1900)) {
-            Ok(socket) => socket,
-            Err(error) => {
-                eprintln!(
-                    "skip: UDP 1900 unavailable ({error}); the simulated SSDP device cannot listen"
-                );
-                return None;
-            }
-        };
+        let ssdp = UdpSocket::bind(("0.0.0.0", 1900))
+            .expect("isolated SSDP test requires UDP 1900 to be available");
         ssdp.set_nonblocking(true).expect("set_nonblocking ssdp");
         let group: std::net::Ipv4Addr = "239.255.255.250".parse().expect("ssdp group");
         // 关键：多播组必须按"发现流程真正会用的那个物理局域网口"加入。
@@ -129,12 +120,12 @@ impl SimulatedCastDevice {
             }
         });
 
-        Some(SimulatedCastDevice {
+        SimulatedCastDevice {
             port,
             log,
             shutdown: shutdown_tx,
             m_searches,
-        })
+        }
     }
 
     fn location(&self) -> String {
@@ -250,11 +241,10 @@ fn soap_bodies(log: &Arc<Mutex<DeviceLog>>) -> Vec<String> {
 }
 
 #[test]
+#[ignore = "requires an isolated SSDP multicast environment; run with --ignored"]
 fn a_simulated_lan_device_can_be_discovered_from_ssdp_and_description() {
     let _ssdp = SSDP_GUARD.lock().unwrap_or_else(|error| error.into_inner());
-    let Some(device) = SimulatedCastDevice::start() else {
-        return;
-    };
+    let device = SimulatedCastDevice::start();
     // 两次 M-SEARCH 轮次 + description 抓取，给足 4 秒。同一进程里 mDNS/TVBox 扫描并行跑，
     // 不设 HLS_V7_CAST_NULL（那会把整个发现流程短路掉，本测试要的就是真实流程）。
     let started = Instant::now();
@@ -263,12 +253,10 @@ fn a_simulated_lan_device_can_be_discovered_from_ssdp_and_description() {
 
     let found = found.expect("discover_cast_devices should succeed");
 
-    if device.m_searches() == 0 {
-        eprintln!(
-            "skip: the simulated device received no M-SEARCH in the scan window (the OS SSDP stack owns 239.255.255.250:1900 here); this run proves nothing"
-        );
-        return;
-    }
+    assert!(
+        device.m_searches() > 0,
+        "simulated device received no M-SEARCH"
+    );
     println!("discovery took {elapsed:?}");
     let mine: Vec<_> = found
         .iter()
@@ -303,19 +291,16 @@ fn a_simulated_lan_device_can_be_discovered_from_ssdp_and_description() {
 }
 
 #[test]
+#[ignore = "requires an isolated SSDP multicast environment; run with --ignored"]
 fn play_on_device_sends_real_soap_actions_and_remembers_the_session() {
     let _ssdp = SSDP_GUARD.lock().unwrap_or_else(|error| error.into_inner());
-    let Some(device) = SimulatedCastDevice::start() else {
-        return;
-    };
+    let device = SimulatedCastDevice::start();
     let found = discover_devices_for_mode(Duration::from_secs(4), "cast").expect("discovery");
 
-    if device.m_searches() == 0 {
-        eprintln!(
-            "skip: the simulated device received no M-SEARCH in the scan window (the OS SSDP stack owns 239.255.255.250:1900 here); this run proves nothing"
-        );
-        return;
-    }
+    assert!(
+        device.m_searches() > 0,
+        "simulated device received no M-SEARCH"
+    );
     let mine = found
         .iter()
         .find(|item| item.location == device.location())
@@ -361,32 +346,22 @@ fn play_on_device_sends_real_soap_actions_and_remembers_the_session() {
 /// 会向上层 UI 假设备是否存在：扫描时另一台设备（例如 Chromecast/TVBox）也在响应，
 /// 不该影响我这一台被发现、被选中、被推送。
 #[test]
+#[ignore = "requires an isolated SSDP multicast environment; run with --ignored"]
 fn simulated_device_survives_a_second_scan_round() {
     let _ssdp = SSDP_GUARD.lock().unwrap_or_else(|error| error.into_inner());
-    let Some(device) = SimulatedCastDevice::start() else {
-        return;
-    };
+    let device = SimulatedCastDevice::start();
     let first = discover_devices_for_mode(Duration::from_secs(3), "cast").expect("first scan");
-    if device.m_searches() == 0 {
-        eprintln!(
-            "skip: the simulated device received no M-SEARCH in the scan window (the OS SSDP stack owns 239.255.255.250:1900 here); this run proves nothing"
-        );
-        return;
-    }
+    assert!(
+        device.m_searches() > 0,
+        "simulated device received no M-SEARCH"
+    );
     let searches_after_first = device.m_searches();
     let second = discover_devices_for_mode(Duration::from_secs(3), "cast").expect("second scan");
     let searches_after_second = device.m_searches();
-    if searches_after_second == searches_after_first {
-        // 第一轮收到了 M-SEARCH 不代表第二轮也收得到：同一个 239.255.255.250:1900
-        // 被 Windows SSDPSRV 抢走的机器上，多播是"时有时无"的。这一轮没收到就是
-        // 一次证明不了任何事的运行（和上面第一轮的同款原因），按本文件开头的既定
-        // 策略打印原因跳过，而不是把整条链路的失败记成回归。
-        eprintln!(
-            "skip: the simulated device received no M-SEARCH during the second scan window ({} before, {} after); the OS SSDP stack owns 239.255.255.250:1900 here, so this run proves nothing",
-            searches_after_first, searches_after_second
-        );
-        return;
-    }
+    assert!(
+        searches_after_second > searches_after_first,
+        "simulated device received no M-SEARCH during the second scan"
+    );
     let in_first = first
         .iter()
         .filter(|i| i.location == device.location())

@@ -971,12 +971,6 @@ impl CoreCoordinator {
             let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
-                if spec.local_source_path.is_none() && !spec.allow_duplicate {
-                    if let Some((task_id, status)) = self.duplicate_of(&spec)? {
-                        events.extend(self.reuse_duplicate(task_id, &status)?);
-                        continue;
-                    }
-                }
                 events.extend(self.dispatch_created(spec)?);
             }
             self.start_next_queued(false)?;
@@ -1087,7 +1081,21 @@ impl CoreCoordinator {
 
     fn dispatch_created(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
         let spec = seal_spec_secrets(self, spec)?;
-        self.dispatch_inner(CoreCommand::CreateTask { spec })
+        let (task_id, status) = {
+            let mut core = self.lock()?;
+            let duplicate = if spec.local_source_path.is_none() && !spec.allow_duplicate {
+                Self::duplicate_of(&core, &spec)
+            } else {
+                None
+            };
+            // Duplicate lookup and durable creation share one lock. Concurrent
+            // clients must not both commit after observing an absent task.
+            match duplicate {
+                Some(duplicate) => duplicate,
+                None => return core.handle(CoreCommand::CreateTask { spec }),
+            }
+        };
+        self.reuse_duplicate(task_id, &status)
     }
 
     fn import_curl_command(
@@ -1806,22 +1814,21 @@ impl CoreCoordinator {
             && incoming.preferred_audio == stored.preferred_audio
     }
 
-    fn duplicate_of(&self, spec: &TaskSpec) -> Result<Option<(String, String)>, String> {
+    fn duplicate_of(core: &PersistentCore, spec: &TaskSpec) -> Option<(String, String)> {
         let want = crate::duplicate::canonicalize_url(&spec.url);
         if want.is_empty() {
-            return Ok(None);
+            return None;
         }
-        let core = self.lock()?;
         for task in core.tasks() {
             if let Some(stored) = core.task_spec(&task.task_id) {
                 if crate::duplicate::canonicalize_url(&stored.url) == want
                     && Self::duplicate_request_identity_matches(spec, stored)
                 {
-                    return Ok(Some((task.task_id, task.status)));
+                    return Some((task.task_id, task.status));
                 }
             }
         }
-        Ok(None)
+        None
     }
 
     fn reuse_duplicate(&self, task_id: String, status: &str) -> Result<Vec<EventEnvelope>, String> {

@@ -1,4 +1,4 @@
-//! FTP / FTPS single-stream download with SIZE+REST resume.
+//! FTP / FTPS single-stream download with version-checked SIZE+MDTM+REST resume.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -77,6 +77,18 @@ pub struct FtpTarget {
     pub password: String,
     pub path: String,
     pub tls: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq)]
+struct ResumeState {
+    version: u32,
+    host: String,
+    port: u16,
+    user: String,
+    path: String,
+    tls: bool,
+    total: u64,
+    modified: String,
 }
 
 pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
@@ -194,30 +206,52 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     let reply = command(&mut ctrl, "TYPE I")?;
     require_reply_code(&reply, &[200], "TYPE I")?;
     let size_reply = command(&mut ctrl, &format!("SIZE {}", target.path))?;
-    let size = if reply_code(&size_reply) == Some(213) {
+    let remote_size = if reply_code(&size_reply) == Some(213) {
         size_reply
             .split_whitespace()
             .nth(1)
             .and_then(|value| value.parse().ok())
-            .unwrap_or(0)
     } else {
-        0
+        None
     };
-    let mut resume_from = if resume && output.exists() {
+    let size = remote_size.unwrap_or(0);
+    let modified_reply = command(&mut ctrl, &format!("MDTM {}", target.path))?;
+    let modified = if reply_code(&modified_reply) == Some(213) {
+        modified_reply.split_whitespace().nth(1).filter(|value| {
+            let (seconds, fraction) = value.split_once('.').unwrap_or((value, "0"));
+            seconds.len() == 14
+                && seconds.bytes().all(|byte| byte.is_ascii_digit())
+                && !fraction.is_empty()
+                && fraction.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    } else {
+        None
+    };
+    let state_path = output.with_extension("ftp-state.json");
+    let state = modified.filter(|_| size > 0).map(|modified| ResumeState {
+        version: 1,
+        host: target.host.to_ascii_lowercase(),
+        port: target.port,
+        user: target.user.clone(),
+        path: target.path.clone(),
+        tls: target.tls,
+        total: size,
+        modified: modified.to_string(),
+    });
+    let saved_state = std::fs::read(&state_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ResumeState>(&bytes).ok());
+    // A matching length alone cannot distinguish a replaced remote file. Missing
+    // or invalid metadata must never authorize appending to existing bytes.
+    let mut resume_from = if resume && state.is_some() && saved_state == state {
         std::fs::metadata(output)
             .map(|meta| meta.len())
             .unwrap_or(0)
     } else {
         0
     };
-    if size > 0 {
-        if resume_from == size {
-            crate::http_engine::write_progress(&progress, size, size, 0.0, "completed");
-            return Ok(size);
-        }
-        if resume_from > size {
-            resume_from = 0;
-        }
+    if resume_from >= size {
+        resume_from = 0;
     }
     let pasv = command(&mut ctrl, "PASV")?;
     require_reply_code(&pasv, &[227], "PASV")?;
@@ -234,7 +268,11 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     // REST 必须紧挨 RETR；中间发送 PASV 会让部分服务器取消续传偏移。
     if resume_from > 0 {
         let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
-        require_reply_code(&reply, &[350], "REST")?;
+        match reply_code(&reply) {
+            Some(350) => {}
+            Some(500 | 501 | 502 | 504) => resume_from = 0,
+            _ => require_reply_code(&reply, &[350], "REST")?,
+        }
     }
     // 服务器在收到 RETR 后才启动数据通道 TLS；先握手会让客户端与服务器互相等待。
     let reply = command(&mut ctrl, &format!("RETR {}", target.path))?;
@@ -255,6 +293,14 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         }
         std::fs::File::create(output).map_err(|error| error.to_string())?
     };
+    // Persist identity only after the output has been opened/truncated. Otherwise
+    // a failed fresh transfer could incorrectly label old bytes as the new file.
+    if let Some(state) = state {
+        let bytes = serde_json::to_vec(&state).map_err(|error| error.to_string())?;
+        std::fs::write(&state_path, bytes).map_err(|error| error.to_string())?;
+    } else if state_path.exists() {
+        std::fs::remove_file(&state_path).map_err(|error| error.to_string())?;
+    }
     let stop_reader = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_reader_worker = std::sync::Arc::clone(&stop_reader);
     let progress_for_reader = progress.clone();
@@ -344,11 +390,12 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     };
     let reply = read_reply(&mut ctrl)?;
     require_reply_code(&reply, &[226, 250], "transfer completion")?;
-    if size > 0 && downloaded != size {
+    if remote_size.is_some_and(|size| downloaded != size) {
         return Err(format!(
             "FTP transfer size mismatch: expected {size}, received {downloaded}"
         ));
     }
+    let _ = std::fs::remove_file(state_path);
     Ok(downloaded)
 }
 
@@ -584,6 +631,195 @@ mod tests {
         assert!(require_reply_code("425 No data connection\r\n", &[227], "PASV").is_err());
     }
 
+    #[test]
+    fn resumes_only_the_saved_ftp_resource_version() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        for (case, mtime, body, expect_rest) in [
+            (
+                "unchanged",
+                Some("20261114000100"),
+                b"AAAABBBB".as_slice(),
+                true,
+            ),
+            (
+                "changed-time",
+                Some("20261114000200"),
+                b"CCCCDDDD".as_slice(),
+                false,
+            ),
+            ("no-mdtm", None, b"CCCCDDDD".as_slice(), false),
+            (
+                "invalid-mdtm",
+                Some("invalid"),
+                b"CCCCDDDD".as_slice(),
+                false,
+            ),
+            (
+                "no-size",
+                Some("20261114000100"),
+                b"CCCCDDDD".as_slice(),
+                false,
+            ),
+            (
+                "missing-state",
+                Some("20261114000100"),
+                b"CCCCDDDD".as_slice(),
+                false,
+            ),
+            (
+                "corrupt-state",
+                Some("20261114000100"),
+                b"CCCCDDDD".as_slice(),
+                false,
+            ),
+            (
+                "different-path",
+                Some("20261114000100"),
+                b"CCCCDDDD".as_slice(),
+                false,
+            ),
+            (
+                "changed-size",
+                Some("20261114000100"),
+                b"CCCCDDDDEEEE".as_slice(),
+                false,
+            ),
+            (
+                "rest-unsupported",
+                Some("20261114000100"),
+                b"AAAABBBB".as_slice(),
+                true,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let mut requests = Vec::new();
+                for pass in 0..2 {
+                    let (mut ctrl, _) = listener.accept().unwrap();
+                    ctrl.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    ctrl.write_all(b"220 Ready\r\n").unwrap();
+                    let mut reader = BufReader::new(ctrl.try_clone().unwrap());
+                    let mut data_listener = None;
+                    let mut offset = 0;
+                    let mut commands = Vec::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 {
+                            break;
+                        }
+                        let command = line.trim_end();
+                        commands.push(command.to_string());
+                        if command.starts_with("USER ") {
+                            ctrl.write_all(b"230 Logged in\r\n").unwrap();
+                        } else if command == "TYPE I" {
+                            ctrl.write_all(b"200 Type set\r\n").unwrap();
+                        } else if command.starts_with("SIZE ") {
+                            if case == "no-size" {
+                                ctrl.write_all(b"502 SIZE unsupported\r\n").unwrap();
+                            } else {
+                                let size = if pass == 0 { 8 } else { body.len() };
+                                write!(ctrl, "213 {size}\r\n").unwrap();
+                            }
+                        } else if command.starts_with("MDTM ") {
+                            if let Some(mtime) = mtime {
+                                let mtime = if pass == 0 { "20261114000100" } else { mtime };
+                                write!(ctrl, "213 {mtime}\r\n").unwrap();
+                            } else {
+                                ctrl.write_all(b"502 MDTM unsupported\r\n").unwrap();
+                            }
+                        } else if command == "PASV" {
+                            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                            let port = listener.local_addr().unwrap().port();
+                            data_listener = Some(listener);
+                            write!(
+                                ctrl,
+                                "227 Passive (127,0,0,1,{},{})\r\n",
+                                port / 256,
+                                port % 256
+                            )
+                            .unwrap();
+                        } else if let Some(value) = command.strip_prefix("REST ") {
+                            if case == "rest-unsupported" {
+                                ctrl.write_all(b"502 REST unsupported\r\n").unwrap();
+                            } else {
+                                offset = value.parse::<usize>().unwrap();
+                                ctrl.write_all(b"350 Restarting\r\n").unwrap();
+                            }
+                        } else if command.starts_with("RETR ") {
+                            ctrl.write_all(b"150 Opening data\r\n").unwrap();
+                            let (mut data, _) = data_listener.take().unwrap().accept().unwrap();
+                            data.write_all(if pass == 0 { b"AAAA" } else { &body[offset..] })
+                                .unwrap();
+                            drop(data);
+                            ctrl.write_all(if pass == 0 {
+                                b"426 Transfer aborted\r\n"
+                            } else {
+                                b"226 Transfer complete\r\n"
+                            })
+                            .unwrap();
+                            break;
+                        } else {
+                            panic!("unexpected FTP command: {command}");
+                        }
+                    }
+                    requests.push(commands);
+                }
+                requests
+            });
+            let root =
+                std::env::temp_dir().join(format!("hls-ftp-resume-{}-{case}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = root.join("payload.downloading");
+            let control = root.join("control");
+            std::fs::write(&control, "run").unwrap();
+            let url = format!("ftp://alice:secret@{address}/file.bin");
+            let first = download_ftp(&url, &output, &control, true);
+            assert!(
+                first.is_err(),
+                "first response was deliberately interrupted"
+            );
+            assert_eq!(std::fs::read(&output).unwrap(), b"AAAA");
+            let state_path = output.with_extension("ftp-state.json");
+            if case == "missing-state" {
+                let _ = std::fs::remove_file(&state_path);
+            } else if case == "corrupt-state" {
+                std::fs::write(&state_path, "{broken").unwrap();
+            }
+            let state = std::fs::read_to_string(&state_path).unwrap_or_default();
+            let next_url = if case == "different-path" {
+                url.replace("file.bin", "other.bin")
+            } else {
+                url
+            };
+            let result = download_ftp(&next_url, &output, &control, true);
+            let requests = server.join().unwrap();
+            let received = std::fs::read(&output).unwrap();
+            let state_remains = state_path.exists();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(result.unwrap(), body.len() as u64, "{case}");
+            assert_eq!(
+                received, body,
+                "{case}: must not splice old and new file bytes"
+            );
+            assert_eq!(
+                requests[1].iter().any(|line| line == "REST 4"),
+                expect_rest,
+                "{case}"
+            );
+            assert!(
+                !state.contains("secret"),
+                "resume metadata must not persist FTP passwords"
+            );
+            assert!(
+                !state_remains,
+                "{case}: completed transfer must remove resume metadata"
+            );
+        }
+    }
+
     fn spawn_stalled_ftp_server() -> (
         u16,
         std::sync::mpsc::Receiver<()>,
@@ -610,6 +846,8 @@ mod tests {
                     ctrl.write_all(b"200 Type set\r\n").unwrap();
                 } else if command.starts_with("SIZE ") {
                     ctrl.write_all(b"213 4\r\n").unwrap();
+                } else if command.starts_with("MDTM ") {
+                    ctrl.write_all(b"502 MDTM unsupported\r\n").unwrap();
                 } else if command == "PASV" {
                     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
                     let data_port = listener.local_addr().unwrap().port();

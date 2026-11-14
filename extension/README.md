@@ -1,6 +1,6 @@
 # HLS Downloader 浏览器插件
 
-版本：7.0.4。适用于 Firefox，以及 Chrome、Edge 等 Chromium 浏览器。插件通过 Native Messaging 连接 Windows 上的 HLS Downloader 桌面程序。
+版本：7.0.5。适用于 Firefox，以及 Chrome、Edge 等 Chromium 浏览器。插件通过 Native Messaging 连接 Windows 上的 HLS Downloader 桌面程序。
 
 插件提供网页媒体识别、HLS/DASH 清晰度和音轨选择、普通下载接管、独立桌面确认、桌面离线回退、右键下载、选中链接批量发送，以及在线字幕的采集和控制。站点 Cookie 需要用户单独授权；在线字幕默认关闭，需要用户自行配置 QwenCloud 或百炼服务，见 [字幕配置](../docs/guides/qwencloud-subtitles.md)。
 

@@ -200,6 +200,47 @@ fn duplicate_identity_requires_same_safe_request_shape() {
     ));
 }
 
+#[test]
+fn concurrent_stale_duplicate_lookups_commit_one_task_unless_explicitly_allowed() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    let spec = TaskSpec {
+        url: "https://example.test/same-resource.bin".into(),
+        scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+        ..Default::default()
+    };
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let shared = coordinator.clone();
+            let spec = spec.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                // Both clients finish lookup before either can commit, as can
+                // happen between the old dispatcher's separate critical sections.
+                let missing =
+                    CoreCoordinator::duplicate_of(&shared.lock().unwrap(), &spec).is_none();
+                barrier.wait();
+                assert!(missing);
+                shared.dispatch_created(spec).unwrap();
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(coordinator.tasks().unwrap().len(), 1);
+    coordinator
+        .dispatch_created(TaskSpec {
+            allow_duplicate: true,
+            ..spec
+        })
+        .unwrap();
+    assert_eq!(coordinator.tasks().unwrap().len(), 2);
+}
+
 fn spec() -> TaskSpec {
     TaskSpec {
         url: "https://example.test/path/file.bin".into(),

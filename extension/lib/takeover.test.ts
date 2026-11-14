@@ -183,6 +183,18 @@ describe('browser download takeover helpers', () => {
     expect(browserCleanupAction('interrupted')).toBe('cancel')
   })
 
+  it('does not turn missing or malformed tab identity into tab zero', () => {
+    const entry: EarlyBrowserTakeover = {
+      requestId: 'tab-zero', startedAt: 1,
+      urls: ['https://cdn.test/shared.zip'], tabId: 0, frameId: 0,
+      promise: Promise.resolve(null),
+    }
+    for (const tabId of [null, false, '', '0', [], {}, -1, NaN, Infinity]) {
+      expect(findEarlyBrowserTakeoverByUrl(entry.urls, { tabId }, [entry])).toBeUndefined()
+    }
+    expect(findEarlyBrowserTakeoverByUrl(entry.urls, { tabId: 0 }, [entry])).toBe(entry)
+  })
+
   it('observes live browser downloads and paused transient interruptions', () => {
     expect(canContinueTakeover('in_progress')).toBe(true)
     expect(canContinueTakeover('complete')).toBe(true)
