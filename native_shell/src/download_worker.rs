@@ -3687,40 +3687,33 @@ fn remember_published(paths: &TaskPaths, published: &Path) {
     );
 }
 
-fn resolve_published(paths: &TaskPaths) -> PathBuf {
-    let marker = paths.task_dir().join("published.path");
-    if marker.is_file() {
-        if let Ok(text) = fs::read_to_string(marker) {
-            let candidate = PathBuf::from(text.trim());
-            // 已记录的文件丢失时仍保留其路径，不能回退到其他任务的同名成品。
-            if published_path_allowed(&candidate, paths) {
-                return candidate;
-            }
-        }
-        return paths.output.clone();
-    }
-    if paths.final_output.exists() {
-        paths.final_output.clone()
-    } else {
-        paths.output.clone()
-    }
-}
-
 fn resolved_task_output(core: &PersistentCore, task_id: &str, paths: &TaskPaths) -> PathBuf {
     resolved_snapshot_output(core.snapshot(task_id), paths)
 }
 
 fn resolved_snapshot_output(task: Option<&crate::TaskSnapshot>, paths: &TaskPaths) -> PathBuf {
-    if !paths.task_dir().join("published.path").exists() {
-        if let Some(task) = task.filter(|task| matches!(task.status.as_str(), "completed" | "done"))
-        {
-            let saved = PathBuf::from(&task.output_path);
-            if !task.output_path.is_empty() && published_path_allowed(&saved, paths) {
-                return saved;
-            }
+    // 清理线程可在快照读取期间删除 marker；一次读取失败后仍须使用已持久化的成品路径。
+    let marker = fs::read_to_string(paths.task_dir().join("published.path"));
+    if let Ok(text) = &marker {
+        let candidate = PathBuf::from(text.trim());
+        // 成品丢失时也保留原路径，不能改指向其他任务的同名文件。
+        if published_path_allowed(&candidate, paths) {
+            return candidate;
         }
     }
-    resolve_published(paths)
+    if let Some(task) = task.filter(|task| matches!(task.status.as_str(), "completed" | "done")) {
+        let saved = PathBuf::from(&task.output_path);
+        if !task.output_path.is_empty() && published_path_allowed(&saved, paths) {
+            return saved;
+        }
+    }
+    if matches!(marker, Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        && paths.final_output.exists()
+    {
+        paths.final_output.clone()
+    } else {
+        paths.output.clone()
+    }
 }
 
 fn enrich_task_snapshots(tasks: &mut [crate::TaskSnapshot], specs: &HashMap<String, TaskSpec>) {

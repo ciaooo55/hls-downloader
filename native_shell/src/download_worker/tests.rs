@@ -3498,7 +3498,7 @@ fn deleting_task_files_preserves_other_same_named_outputs() {
     let renamed = paths.publish_with("rename", false).unwrap();
     remember_published(&paths, &renamed);
     assert_ne!(renamed, paths.final_output);
-    assert_eq!(resolve_published(&paths), renamed);
+    assert_eq!(resolved_snapshot_output(None, &paths), renamed);
     coordinator.delete_task_files(&task_id).unwrap();
     assert!(!renamed.exists());
     assert_eq!(
@@ -3507,7 +3507,7 @@ fn deleting_task_files_preserves_other_same_named_outputs() {
     );
     paths.prepare().unwrap();
     remember_published(&paths, &renamed);
-    assert_eq!(resolve_published(&paths), renamed);
+    assert_eq!(resolved_snapshot_output(None, &paths), renamed);
     coordinator.delete_task_files(&task_id).unwrap();
     assert_eq!(
         fs::read(&paths.final_output).unwrap(),
@@ -3539,12 +3539,32 @@ fn published_path_outside_download_root_is_ignored() {
         outside.to_string_lossy().as_bytes(),
     )
     .unwrap();
-    let resolved = resolve_published(&paths);
+    let resolved = resolved_snapshot_output(None, &paths);
     assert_ne!(resolved, outside);
     let outside_canon = logical_canonical(&outside);
     assert_ne!(logical_canonical(&resolved), outside_canon);
     let _ = fs::remove_file(&outside);
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn completed_snapshot_keeps_its_saved_output_when_marker_is_unreadable_or_removed() {
+    let (core, paths, published, root) = published_task_fixture("marker-cleanup-race");
+    let renamed = root.join("movie_1.mp4");
+    fs::rename(&published, &renamed).unwrap();
+    let task_id = core.lock().unwrap().tasks()[0].task_id.clone();
+    let spec = task_spec_for(&core, &task_id);
+    finish_published_task(&core, &task_id, &paths, &renamed, None, &spec, false).unwrap();
+    let snapshot = core.lock().unwrap().snapshot(&task_id).unwrap().clone();
+    let marker = paths.task_dir().join("published.path");
+    // 无效 UTF-8 模拟读取 marker 失败，不依靠随机删除时序复现。
+    fs::write(&marker, [0xff]).unwrap();
+    assert_eq!(resolved_snapshot_output(Some(&snapshot), &paths), renamed);
+    fs::remove_file(&marker).unwrap();
+    fs::remove_file(&renamed).unwrap();
+    fs::write(&paths.final_output, b"another file at the original name").unwrap();
+    assert_eq!(resolved_snapshot_output(Some(&snapshot), &paths), renamed);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -4953,7 +4973,7 @@ fn completed_media_cleans_segments_and_keeps_published_files() {
         assert_eq!(core.lock().unwrap().tasks()[0].status, "completed");
         assert_eq!(fs::read(&original).unwrap(), b"a complete payload");
         assert_eq!(fs::read(&published).unwrap(), b"temporary media");
-        assert_eq!(resolve_published(&paths), published);
+        assert_eq!(resolved_snapshot_output(None, &paths), published);
         assert!(root.join("movie_1.zh.srt").is_file());
         assert!(!paths.progress.exists());
         assert!(root.join("user-notes.txt").is_file());

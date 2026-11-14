@@ -1834,9 +1834,9 @@ fn range_worker(
             &stop,
             fresh,
         );
-        scheduler.complete(active.id);
         match result {
             Ok(None) => {
+                scheduler.complete(active.id);
                 scheduler.note_success();
             }
             Ok(Some(response)) => {
@@ -1848,8 +1848,12 @@ fn range_worker(
                         "server ignored Range and returned 200".into(),
                     ));
                     stop.store(true, Ordering::SeqCst);
+                    drop(slot);
+                    scheduler.complete(active.id);
                     return Some(response);
                 }
+                drop(slot);
+                scheduler.complete(active.id);
                 return None;
             }
             Err(error) => {
@@ -1858,6 +1862,8 @@ fn range_worker(
                     *slot = Some(error);
                 }
                 stop.store(true, Ordering::SeqCst);
+                drop(slot);
+                scheduler.complete(active.id);
                 return None;
             }
         }
@@ -2083,6 +2089,20 @@ fn fetch_range(
                 other => EngineErrorCode::Failed(other.to_string()),
             });
         }
+        // A capped response is valid, but its declared span must bound every
+        // byte written. Content-Length describes that span, not the whole job.
+        let response_end = parse_content_range(fetched.content_range.as_deref().unwrap_or(""))
+            .expect("validated Content-Range")
+            .1;
+        if response_end > target_end
+            || fetched
+                .content_length
+                .is_some_and(|length| length != response_end - cursor + 1)
+        {
+            return Err(EngineErrorCode::RangeUnsupported(
+                "Content-Range response length mismatch".into(),
+            ));
+        }
         // curl's file-backed response has already consumed the original tail.
         // Splitting that transport cannot improve network completion time.
         let splittable = !matches!(&fetched.body, Body::File { .. });
@@ -2113,6 +2133,7 @@ fn fetch_range(
                 let mut state = progress.lock().unwrap_or_else(|err| err.into_inner());
                 let limit = state
                     .stop
+                    .min(response_end)
                     .saturating_add(1)
                     .saturating_sub(cursor)
                     .min(buffer.len() as u64) as usize;
@@ -2172,7 +2193,7 @@ fn fetch_range(
                 )?);
                 durable_cursor = cursor;
             }
-            if cursor > current_stop {
+            if cursor > current_stop.min(response_end) {
                 break;
             }
         }
@@ -6272,6 +6293,44 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn range_worker_rejects_inconsistent_partial_response_before_checkpoint() {
+        for (range, length) in [("0-3/10", 10), ("0-9/10", 4), ("0-9/10", 0)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                let _ = write!(stream,
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {range}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n");
+                let _ = stream.write_all(&b"abcdefghij"[..length]);
+            });
+            let (job, dir) = temp_job(&url, false, 10, 1);
+            let result = run_job(&job);
+            server.join().unwrap();
+            let saved = load_completed_ranges(&job).unwrap_or_default();
+            fs::remove_dir_all(dir).unwrap();
+            assert!(
+                matches!(result, Err(EngineError::RangeUnsupported(_))),
+                "{range}, length={length}: {result:?}"
+            );
+            assert!(
+                saved.is_empty(),
+                "invalid metadata must never become a durable range"
+            );
+        }
+    }
+
     fn serve_chunked(body: &'static [u8]) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -6544,7 +6603,7 @@ mod tests {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 let mut stream = reader.into_inner();
                 let header = format!(
-                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nConnection: close\r\n\r\n"
                 );
                 let _ = stream.write_all(header.as_bytes());
             }

@@ -78,8 +78,14 @@ export function shouldReportMediaResponse(url: string, mimeType = ''): boolean {
 
 export function detectManifestKind(prefix: string): ManifestKind | null {
   let value = String(prefix || '').replace(/^\s*\uFEFF/, '').trimStart()
-  if (value.startsWith('#EXTM3U')) return 'hls'
+  if (/^#EXTM3U[\t ]*(?:\r?\n|$)/.test(value)) return 'hls'
   value = value.replace(/^<\?xml(?:\s+[^?]*?)?\?>\s*/i, '')
+  // Only skip the XML prolog; a marker inside an HTML/error body is not media.
+  while (value.startsWith('<!--')) {
+    const end = value.indexOf('-->', 4)
+    if (end < 0) return null
+    value = value.slice(end + 3).trimStart()
+  }
   if (/^<(?:[A-Za-z_][\w.-]*:)?MPD(?:\s|>)/i.test(value)) return 'dash'
   return null
 }

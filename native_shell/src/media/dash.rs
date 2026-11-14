@@ -32,83 +32,78 @@ pub struct Representation {
 }
 
 pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
-    if !xml.contains("<MPD") && !xml.contains("<mpd") {
+    let document =
+        roxmltree::Document::parse(xml).map_err(|error| format!("invalid DASH XML: {error}"))?;
+    let root = document.root_element();
+    if !root.tag_name().name().eq_ignore_ascii_case("MPD") {
         return Err("not a DASH manifest".into());
     }
-    let root = &xml[xml.find("<MPD").or_else(|| xml.find("<mpd")).unwrap()..];
-    let opening = &root[..root.find('>').ok_or("truncated MPD")?];
-    let dynamic = attr(opening, "type").as_deref() == Some("dynamic");
-    let period_count = xml
-        .matches("<Period")
-        .count()
-        .max(xml.matches("<period").count());
+    let dynamic = root.attribute("type") == Some("dynamic");
+    let period_count = root
+        .children()
+        .filter(|node| mpd_element(*node, "Period", root))
+        .count();
     if period_count > 1 {
         return Err("unsupported multi-period DASH: cannot preserve all periods".into());
     }
     for element in ["Initialization", "SegmentURL"] {
-        for tail in xml.split(&format!("<{element}")).skip(1) {
-            let tag = &tail[..tail.find('>').unwrap_or(tail.len())];
+        for node in root
+            .descendants()
+            .filter(|node| mpd_element(*node, element, root))
+        {
             let field = if element == "Initialization" {
                 "range"
             } else {
                 "mediaRange"
             };
-            if attr(tag, field).is_some() {
+            if node.attribute(field).is_some() {
                 return Err("unsupported DASH SegmentList byte ranges".into());
             }
         }
     }
     let mut representations = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find("<Representation") {
-        let after_tag = rest
-            .as_bytes()
-            .get(start + "<Representation".len())
-            .copied();
-        if !matches!(after_tag, Some(b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/')) {
-            rest = &rest[start + "<Representation".len()..];
-            continue;
-        }
-        let absolute = xml.len() - rest.len() + start;
-        let period_duration = period_duration_seconds(xml, absolute);
-        let after = &rest[start..];
-        let opening_end = after
-            .find('>')
-            .ok_or_else(|| "truncated Representation".to_string())?;
-        // 自闭合视频轨不能吞入后面的音轨，否则会继承音频分片模板并请求错误地址。
-        let end = if after[..opening_end].trim_end().ends_with('/') {
-            opening_end + 1
-        } else {
-            after
-                .find("</Representation>")
-                .map(|index| index + "</Representation>".len())
-                .ok_or_else(|| "truncated Representation".to_string())?
-        };
-        let block = &after[..end];
-        let id = attr(block, "id").unwrap_or_else(|| "0".into());
-        let bandwidth = attr(block, "bandwidth")
+    for node in root
+        .descendants()
+        .filter(|node| mpd_element(*node, "Representation", root))
+    {
+        let period = node
+            .ancestors()
+            .find(|node| mpd_element(*node, "Period", root));
+        let set = node
+            .ancestors()
+            .find(|node| mpd_element(*node, "AdaptationSet", root));
+        let period_duration = period.and_then(|period| period_duration_seconds(period, root));
+        let id = node.attribute("id").unwrap_or("0").to_string();
+        let bandwidth = node
+            .attribute("bandwidth")
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
-        let height = attr(block, "height")
+        let height = node
+            .attribute("height")
             .and_then(|value| value.parse().ok())
             .unwrap_or(0);
-        let mime = {
-            let mut mime = attr(block, "mimeType").unwrap_or_default();
-            if mime.is_empty() {
-                mime = enclosing_adaptation_set(xml, absolute)
-                    .and_then(|set| attr(&set, "mimeType"))
-                    .unwrap_or_default();
-            }
-            mime
+        let inherited = |key: &str| {
+            node.attribute(key)
+                .or_else(|| set.and_then(|set| set.attribute(key)))
+                .unwrap_or_default()
+                .to_string()
         };
-        let (lang, codecs, content_type, label) = set_meta(block, xml, absolute);
-        let period = enclosing_block(xml, absolute, "Period");
-        let set = enclosing_adaptation_set(xml, absolute);
+        let mime = node
+            .attribute("mimeType")
+            .filter(|value| !value.is_empty())
+            .or_else(|| set.and_then(|set| set.attribute("mimeType")))
+            .unwrap_or_default()
+            .to_string();
         // 每层只取直接子节点，避免把相邻 Representation 的 CDN 地址串到当前轨道。
-        let scopes = [Some(root), period, set.as_deref(), Some(block)];
+        let scopes = [Some(root), period, set, Some(node)];
         let mut base_url = base.to_string();
         for scope in scopes.into_iter().flatten() {
-            if let Some(value) = tag_text(scope, "BaseURL") {
+            if let Some(child) = mpd_child(scope, "BaseURL") {
+                let value: String = child
+                    .children()
+                    .filter(|node| node.is_text())
+                    .filter_map(|node| node.text())
+                    .collect();
                 base_url = resolve(&base_url, &value);
                 if base_url.is_empty() {
                     return Err("invalid DASH BaseURL".into());
@@ -118,28 +113,29 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let mut segment_list = None;
         let mut templates = Vec::new();
         for scope in scopes.into_iter().rev().flatten() {
-            if let Some(list) = direct_child(scope, "SegmentList") {
+            if let Some(list) = mpd_child(scope, "SegmentList") {
                 if templates.is_empty() {
                     segment_list = Some(list);
                 }
                 break;
             }
-            if let Some(template) = direct_child(scope, "SegmentTemplate") {
+            if let Some(template) = mpd_child(scope, "SegmentTemplate") {
                 templates.push(template);
             }
         }
-        let template_attr = |key: &str| templates.iter().find_map(|template| attr(template, key));
+        let template_attr = |key: &str| {
+            templates
+                .iter()
+                .find_map(|template| template.attribute(key))
+        };
         let has_timeline = templates
             .iter()
-            .any(|template| direct_child(template, "SegmentTimeline").is_some());
+            .any(|template| mpd_child(*template, "SegmentTimeline").is_some());
         let init = template_attr("initialization")
-            .or_else(|| attr(block, "initialization"))
+            .or_else(|| node.attribute("initialization"))
             .or_else(|| {
-                segment_list.and_then(|list| {
-                    let start = list.find("<Initialization")?;
-                    let tag = &list[start..];
-                    attr(&tag[..tag.find('>')?], "sourceURL")
-                })
+                segment_list
+                    .and_then(|list| mpd_child(list, "Initialization")?.attribute("sourceURL"))
             })
             .map(|value| resolve(&base_url, &apply_template(&value, &id, 0, 0, bandwidth)));
         // SegmentURL 的 media 是显式地址，不能当作 SegmentTemplate 重复展开。
@@ -161,21 +157,21 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 &mut media_durations,
             )?);
         }
-        // Only look at the chunks AFTER `<SegmentURL`: chunk 0 is the text
-        // before it, which for a Representation-level `<SegmentTemplate ...>`
-        // still carries that template's own `media` attribute.  Taking it
-        // pushed the raw, unexpanded `$RepresentationID$/$Number%05d$.m4s`
-        // into the segment list, so `download_dash_selected` fetched a literal
-        // `$...$` URL and aborted the whole download.
-        for line in segment_list.unwrap_or(block).split("<SegmentURL").skip(1) {
-            if let Some(source) = attr(line, "media") {
+        let list = segment_list.unwrap_or(node);
+        for child in list
+            .children()
+            .filter(|child| mpd_element(*child, "SegmentURL", root))
+        {
+            if let Some(source) = child.attribute("media") {
                 media.push(resolve(&base_url, &source));
             }
         }
         if let Some(list) = segment_list {
-            let opening = &list[..list.find('>').unwrap_or(list.len())];
-            let duration = attr(opening, "duration").and_then(|value| value.parse::<f64>().ok());
-            let timescale = attr(opening, "timescale")
+            let duration = list
+                .attribute("duration")
+                .and_then(|value| value.parse::<f64>().ok());
+            let timescale = list
+                .attribute("timescale")
                 .and_then(|value| value.parse::<f64>().ok())
                 .unwrap_or(1.0);
             if let Some(seconds) = duration
@@ -190,16 +186,15 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             bandwidth,
             height,
             mime,
-            lang,
-            codecs,
-            content_type,
-            label,
+            lang: inherited("lang"),
+            codecs: inherited("codecs"),
+            content_type: inherited("contentType"),
+            label: inherited("label"),
             base_url,
             init: init.filter(|url| !url.is_empty()),
             media: media.into_iter().filter(|url| !url.is_empty()).collect(),
             media_durations,
         });
-        rest = &after[end..];
     }
     if representations.is_empty() {
         return Err("DASH manifest has no representations".into());
@@ -1102,139 +1097,18 @@ fn resume_or_fetch(
     Ok(dest.to_path_buf())
 }
 
-fn attr(block: &str, key: &str) -> Option<String> {
-    for (index, _) in block.match_indices(key) {
-        if index > 0 && !block[..index].ends_with(char::is_whitespace) {
-            continue;
-        }
-        let tail = block[index + key.len()..].trim_start();
-        let Some(value) = tail.strip_prefix('=') else {
-            continue;
-        };
-        let value = value.trim_start();
-        let Some(quote @ ('\'' | '"')) = value.chars().next() else {
-            continue;
-        };
-        let value = &value[1..];
-        if let Some(end) = value.find(quote) {
-            return Some(decode_xml_text(&value[..end]));
-        }
-    }
-    None
+fn mpd_element(node: roxmltree::Node<'_, '_>, name: &str, scope: roxmltree::Node<'_, '_>) -> bool {
+    node.is_element()
+        && node.tag_name().name() == name
+        && node.tag_name().namespace() == scope.tag_name().namespace()
 }
 
-fn tag_text(block: &str, tag: &str) -> Option<String> {
-    let child = direct_child(block, tag)?;
-    let start = child.find('>')? + 1;
-    let end = child.rfind("</")?;
-    let text = child[start..end].trim();
-    Some(
-        if let Some(text) = text
-            .strip_prefix("<![CDATA[")
-            .and_then(|text| text.strip_suffix("]]>"))
-        {
-            text.to_string()
-        } else {
-            decode_xml_text(text)
-        },
-    )
-}
-
-fn direct_child<'a>(block: &'a str, wanted: &str) -> Option<&'a str> {
-    let mut rest = block.get(block.find('>')? + 1..)?;
-    let mut depth = 0usize;
-    let mut selected = None;
-    while let Some(start) = rest.find('<') {
-        rest = &rest[start..];
-        if rest.starts_with("<!--") {
-            rest = &rest[rest.find("-->")? + 3..];
-            continue;
-        }
-        if rest.starts_with("<![CDATA[") {
-            rest = &rest[rest.find("]]>")? + 3..];
-            continue;
-        }
-        let mut quote = None;
-        let end = rest.char_indices().skip(1).find_map(|(index, character)| {
-            if let Some(delimiter) = quote {
-                if character == delimiter {
-                    quote = None;
-                }
-            } else if matches!(character, '\'' | '"') {
-                quote = Some(character);
-            } else if character == '>' {
-                return Some(index);
-            }
-            None
-        })?;
-        let tag = &rest[1..end];
-        let closing = tag.starts_with('/');
-        let name = tag
-            .trim_start_matches('/')
-            .split([' ', '\t', '\r', '\n', '/'])
-            .next()?;
-        if closing {
-            if depth == 0 {
-                return None;
-            }
-            depth -= 1;
-            if depth == 0 {
-                if let Some(selected) = selected.take() {
-                    return Some(&block[selected..block.len() - rest.len() + end + 1]);
-                }
-            }
-        } else if !tag.starts_with(['!', '?']) {
-            if depth == 0 && name == wanted {
-                let start = block.len() - rest.len();
-                if tag.trim_end().ends_with('/') {
-                    return Some(&block[start..start + end + 1]);
-                }
-                selected = Some(start);
-            }
-            if !tag.trim_end().ends_with('/') {
-                depth += 1;
-            }
-        }
-        rest = &rest[end + 1..];
-    }
-    None
-}
-
-fn decode_xml_text(value: &str) -> String {
-    let mut decoded = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(start) = rest.find('&') {
-        decoded.push_str(&rest[..start]);
-        rest = &rest[start..];
-        let Some(end) = rest.find(';') else {
-            decoded.push_str(rest);
-            return decoded;
-        };
-        let name = &rest[1..end];
-        let character = match name {
-            "amp" => Some('&'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            _ => name
-                .strip_prefix("#x")
-                .and_then(|digits| u32::from_str_radix(digits, 16).ok())
-                .or_else(|| {
-                    name.strip_prefix('#')
-                        .and_then(|digits| digits.parse().ok())
-                })
-                .and_then(char::from_u32),
-        };
-        if let Some(character) = character {
-            decoded.push(character);
-        } else {
-            decoded.push_str(&rest[..=end]);
-        }
-        rest = &rest[end + 1..];
-    }
-    decoded.push_str(rest);
-    decoded
+fn mpd_child<'a, 'input>(
+    node: roxmltree::Node<'a, 'input>,
+    name: &str,
+) -> Option<roxmltree::Node<'a, 'input>> {
+    node.children()
+        .find(|child| mpd_element(*child, name, node))
 }
 
 fn resolve(base: &str, reference: &str) -> String {
@@ -1242,7 +1116,11 @@ fn resolve(base: &str, reference: &str) -> String {
 }
 
 fn minimum_update_period(xml: &str) -> Option<f64> {
-    attr(xml, "minimumUpdatePeriod").and_then(|value| parse_duration_seconds(&value))
+    let document = roxmltree::Document::parse(xml).ok()?;
+    document
+        .root_element()
+        .attribute("minimumUpdatePeriod")
+        .and_then(parse_duration_seconds)
 }
 
 fn parse_duration_seconds(value: &str) -> Option<f64> {
@@ -1413,38 +1291,6 @@ fn playlist_leaf(path: &Path) -> String {
     } else {
         "seg.bin".into()
     }
-}
-
-fn enclosing_adaptation_set(xml: &str, at: usize) -> Option<String> {
-    enclosing_block(xml, at, "AdaptationSet").map(str::to_string)
-}
-
-fn enclosing_block<'a>(xml: &'a str, at: usize, tag: &str) -> Option<&'a str> {
-    let prefix = xml.get(..at.min(xml.len()))?;
-    let start = prefix.rfind(&format!("<{tag}"))?;
-    let from = &xml[start..];
-    let close = format!("</{tag}>");
-    let end = from.find(&close)? + close.len();
-    (at < start + end).then_some(&from[..end])
-}
-
-fn set_meta(block: &str, xml: &str, absolute: usize) -> (String, String, String, String) {
-    let set = enclosing_adaptation_set(xml, absolute);
-    let from_set = |key: &str| set.as_ref().and_then(|value| attr(value, key));
-    (
-        attr(block, "lang")
-            .or_else(|| from_set("lang"))
-            .unwrap_or_default(),
-        attr(block, "codecs")
-            .or_else(|| from_set("codecs"))
-            .unwrap_or_default(),
-        attr(block, "contentType")
-            .or_else(|| from_set("contentType"))
-            .unwrap_or_default(),
-        attr(block, "label")
-            .or_else(|| from_set("label"))
-            .unwrap_or_default(),
-    )
 }
 
 fn is_subtitle(item: &Representation) -> bool {
@@ -1688,24 +1534,26 @@ fn download_dash_subtitle_track(
     Ok(vtt_path)
 }
 
-fn period_duration_seconds(xml: &str, at: usize) -> Option<f64> {
-    let start = xml.get(..at)?.rfind("<Period")?;
-    let period = &xml[start..];
-    let opening = &period[..period.find('>')?];
-    if let Some(duration) = attr(opening, "duration") {
-        return parse_duration_seconds(&duration);
+fn period_duration_seconds(
+    period: roxmltree::Node<'_, '_>,
+    root: roxmltree::Node<'_, '_>,
+) -> Option<f64> {
+    if let Some(duration) = period.attribute("duration") {
+        return parse_duration_seconds(duration);
     }
-    let period_start = attr(opening, "start")
-        .and_then(|value| parse_duration_seconds(&value))
+    let period_start = period
+        .attribute("start")
+        .and_then(parse_duration_seconds)
         .unwrap_or(0.0);
-    let after = &period[opening.len()..];
-    let end = if let Some(next) = after.find("<Period") {
-        let next = &after[next..];
-        attr(&next[..next.find('>')?], "start").and_then(|value| parse_duration_seconds(&value))?
+    let end = if let Some(next) = period
+        .next_siblings()
+        .skip(1)
+        .find(|node| mpd_element(*node, "Period", root))
+    {
+        next.attribute("start").and_then(parse_duration_seconds)?
     } else {
-        let root = &xml[xml.find("<MPD")?..];
-        attr(&root[..root.find('>')?], "mediaPresentationDuration")
-            .and_then(|value| parse_duration_seconds(&value))?
+        root.attribute("mediaPresentationDuration")
+            .and_then(parse_duration_seconds)?
     };
     let duration = end - period_start;
     (duration.is_finite() && duration > 0.0).then_some(duration)
@@ -1722,7 +1570,7 @@ fn ceil_segment_units(value: f64) -> f64 {
 }
 
 fn expand_timeline(
-    templates: &[&str],
+    templates: &[roxmltree::Node<'_, '_>],
     template: &str,
     base_url: &str,
     id: &str,
@@ -1730,10 +1578,14 @@ fn expand_timeline(
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
 ) -> Result<Vec<String>, String> {
-    let template_attr = |key: &str| templates.iter().find_map(|template| attr(template, key));
+    let template_attr = |key: &str| {
+        templates
+            .iter()
+            .find_map(|template| template.attribute(key))
+    };
     let timeline = templates
         .iter()
-        .find_map(|template| direct_child(template, "SegmentTimeline"));
+        .find_map(|template| mpd_child(*template, "SegmentTimeline"));
     let start_number = template_attr("startNumber")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1);
@@ -1773,40 +1625,34 @@ fn expand_timeline(
         }
         return Ok(media);
     }
-    let mut rest = timeline.unwrap();
+    let timeline = timeline.unwrap();
     let timescale = template_attr("timescale")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
         .max(1);
-    while let Some(index) = rest.find("<S") {
-        let after = &rest[index + 2..];
-        if !(after.starts_with(char::is_whitespace) || after.starts_with('>')) {
-            rest = after;
-            continue;
-        }
-        let end = after.find('>').ok_or("truncated DASH timeline entry")?;
-        let tag = &after[..end];
-        let duration = attr_unquoted_or_quoted(tag, "d")
+    for entry in timeline
+        .children()
+        .filter(|node| mpd_element(*node, "S", timeline))
+    {
+        let duration = entry
+            .attribute("d")
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|duration| *duration > 0)
             .ok_or("invalid DASH timeline duration")?;
-        let time = attr_unquoted_or_quoted(tag, "t")
+        let time = entry
+            .attribute("t")
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(clock);
-        let repeat = attr_unquoted_or_quoted(tag, "r")
+        let repeat = entry
+            .attribute("r")
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(0);
         let repeat = if repeat == -1 {
-            let following = &after[end + 1..];
-            let next_tag = following
-                .split("<S")
+            let next_time = entry
+                .next_siblings()
                 .skip(1)
-                .find(|tail| tail.starts_with(char::is_whitespace) || tail.starts_with('>'));
-            let next_time = next_tag.and_then(|next| {
-                attr_unquoted_or_quoted(&next[..next.find('>')?], "t")?
-                    .parse::<u64>()
-                    .ok()
-            });
+                .find(|node| mpd_element(*node, "S", timeline))
+                .and_then(|next| next.attribute("t")?.parse::<u64>().ok());
             let boundary = next_time
                 .or_else(|| {
                     period_duration.map(|seconds| {
@@ -1839,7 +1685,6 @@ fn expand_timeline(
                 .checked_add(duration)
                 .ok_or("DASH timeline overflow")?;
         }
-        rest = &after[end.saturating_add(1)..];
     }
     Ok(media)
 }
@@ -1871,19 +1716,45 @@ fn apply_template(template: &str, id: &str, number: u64, time: u64, bandwidth: u
     out
 }
 
-fn attr_unquoted_or_quoted(block: &str, key: &str) -> Option<String> {
-    attr(block, key).or_else(|| {
-        let pattern = format!("{key}=");
-        let start = block.find(&pattern)?;
-        let rest = &block[start + pattern.len()..];
-        let end = rest.find([' ', '/', '>']).unwrap_or(rest.len());
-        Some(rest[..end].trim_matches('"').to_string())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mpd_xml_namespaces_comments_and_signed_urls_keep_the_same_tracks() {
+        let plain = r#"<MPD mediaPresentationDuration="PT4S"><Period><AdaptationSet mimeType="video/mp4">
+<BaseURL>https://cdn.test/video/</BaseURL><SegmentTemplate initialization="init.mp4?key=a&amp;sig=b" media="$Number$.m4s?key=a&amp;sig=b" duration="2"/>
+<Representation id="v" bandwidth="1000" height="720"/>
+</AdaptationSet><AdaptationSet mimeType="audio/mp4" lang="zh"><Representation id="a"><BaseURL>audio.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>"#;
+        let namespaced = plain.replace('<', "<d:").replace("<d:/", "</d:").replacen(
+            "<d:MPD ",
+            "<d:MPD xmlns:d=\"urn:mpeg:dash:schema:mpd:2011\" ",
+            1,
+        );
+        let namespaced = format!(
+            "<?xml version=\"1.0\"?><!-- <Period><Representation id=\"fake\"/> -->{namespaced}"
+        );
+        let expected = parse_mpd(plain, "https://origin.test/manifest.mpd").unwrap();
+        assert_eq!(
+            parse_mpd(&namespaced, "https://origin.test/manifest.mpd").unwrap(),
+            expected
+        );
+        assert_eq!(
+            expected.representations[0].media,
+            [
+                "https://cdn.test/video/1.m4s?key=a&sig=b",
+                "https://cdn.test/video/2.m4s?key=a&sig=b",
+            ]
+        );
+        assert_eq!(expected.representations[1].lang, "zh");
+        for xml in [
+            format!("<html>{plain}</html>"),
+            format!("<!-- {plain} -->"),
+            plain.replace("</MPD>", ""),
+        ] {
+            assert!(parse_mpd(&xml, "https://origin.test/manifest.mpd").is_err());
+        }
+    }
 
     #[test]
     fn core_completion_dash_inherits_bases_lists_and_decodes_signed_urls() {

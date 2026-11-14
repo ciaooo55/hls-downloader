@@ -452,11 +452,14 @@ describe('browser download ownership through registered event listeners', () => 
     return { blocked: listener(mocks.browser.webRequest.onBeforeSendHeaders)(details) }
   }
 
-  it('hands a Firefox attachment to the desktop before sending its original request with exact credentials', async () => {
+  it.each([
+    { url: 'https://site.test/export.zip?token=a%2Fb+z', intent: {} },
+    { url: 'https://site.test/export?token=a%2Fb+z', intent: { downloadAttribute: true, filename: '报表 2026.csv' } },
+  ])('hands a Firefox download to the desktop before sending its original request with exact credentials: $url', async ({ url, intent }) => {
     local.authorizedCookieHosts = ['site.test']
     mocks.browser.cookies.getAll.mockResolvedValue([{ name: 'sid', value: 'this-request', domain: 'site.test',
       path: '/', hostOnly: true, secure: true }])
-    const { blocked } = await firefoxFileRequest()
+    const { blocked } = await firefoxFileRequest({ url }, intent)
     await vi.advanceTimersByTimeAsync(1500)
     expect(await blocked).toEqual({ cancel: true })
     const payload = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource
@@ -465,9 +468,33 @@ describe('browser download ownership through registered event listeners', () => 
     expect(payload.request_headers).toMatchObject({ authorization: 'Bearer this-request',
       referer: 'https://site.test/original', origin: 'https://site.test', 'user-agent': 'Browser request UA' })
     expect(payload.request_contexts['https://site.test'].url_contexts[item.url].request_headers.authorization).toBe('Bearer this-request')
+    if ('filename' in intent) expect(payload.filename).toBe(intent.filename)
     expect(payload.request_body).toBeUndefined()
     expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+  })
+
+  it.each([
+    { url: 'https://site.test/export', intent: {} },
+    { url: 'https://other.test/export', intent: { downloadAttribute: true } },
+    { url: 'https://site.test/export', intent: { downloadAttribute: true, altBypass: true } },
+    { url: 'https://site.test/export', intent: { downloadAttribute: true, href: 'https://site.test/another-export' } },
+  ])('keeps extensionless Firefox navigation without an eligible same-origin download link in the browser: %j', async ({ url, intent }) => {
+    const { blocked } = await firefoxFileRequest({ url, requestHeaders: [] }, intent)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it('does not block ordinary Firefox navigation when the download journal cannot be read', async () => {
+    mocks.browser.storage.local.get.mockImplementation(async key => {
+      if (key === 'pending-direct-offers-v1') throw new Error('journal unavailable')
+      return { ...local }
+    })
+    const { blocked } = await firefoxFileRequest({ url: 'https://site.test/settings', requestHeaders: [] }, null)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await blocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
   })
 
   it.each([{ enabled: false }, { minimumBytes: 1024 }])('keeps Firefox pre-request navigation under policy %j', async config => {
@@ -486,7 +513,10 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
   })
 
-  it('does not issue an original Firefox request or a second offer when its pre-request receipt is uncertain', async () => {
+  it.each([
+    { url: 'https://site.test/export.zip', intent: {} },
+    { url: 'https://site.test/export', intent: { downloadAttribute: true, filename: 'report.csv' } },
+  ])('does not issue an original Firefox request or a second offer when its pre-request receipt is uncertain: $url', async ({ url, intent }) => {
     let recovered = false
     mocks.native.mockImplementation(async message => {
       if (message.op === 'ping') return { ok: true }
@@ -495,13 +525,13 @@ describe('browser download ownership through registered event listeners', () => 
       throw new Error('receipt unavailable')
     })
     for (const requestId of ['first', 'second']) {
-      const { blocked } = await firefoxFileRequest({ requestId, requestHeaders: [] })
+      const { blocked } = await firefoxFileRequest({ url, requestId, requestHeaders: [] }, intent)
       await vi.advanceTimersByTimeAsync(1500)
       expect(await blocked).toEqual({ cancel: true })
     }
     const originalId = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource.client_request_id
     recovered = true
-    const { blocked } = await firefoxFileRequest({ requestId: 'third', requestHeaders: [] })
+    const { blocked } = await firefoxFileRequest({ url, requestId: 'third', requestHeaders: [] }, null)
     await vi.advanceTimersByTimeAsync(1500)
     expect(await blocked).toEqual({ cancel: true })
     expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)

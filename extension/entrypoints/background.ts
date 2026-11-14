@@ -1772,8 +1772,7 @@ const preparingFirefoxFileRequests = new Map<string, Promise<{ cancel: boolean }
 function interceptFirefoxFileRequest(details: any) {
   if (details.method !== 'GET' || !['main_frame', 'sub_frame'].includes(details.type)
     || !validDownloadIdentity(details.tabId)
-    || (details.proxyInfo && details.proxyInfo.type !== 'direct')
-    || !isDirectDownloadLink(details.url, '', false)) return undefined
+    || (details.proxyInfo && details.proxyInfo.type !== 'direct')) return undefined
   const chain = requestChains.observeRequest(details)
   // An authentication retry or redirect has already reached the server. Keep
   // that browser transfer and its original response on the existing path.
@@ -1791,10 +1790,14 @@ function interceptFirefoxFileRequest(details: any) {
 }
 
 async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
+  const directFileLink = isDirectDownloadLink(details.url, '', false)
+  let intent: DownloadClickIntent | undefined
   const browserFallback = async () => {
+    let knownOffer = false
     try {
       const key = `${chain.tabId}:${resourceFingerprint({ url: details.url, kind: 'file' })}`
       const active = activeDownloadOffers.get(key)
+      knownOffer = Boolean(active)
       let response = active ? await active : undefined
       if (!response || response.ownership_uncertain) {
         const digest = await localDownloadIntentUrl(key)
@@ -1802,33 +1805,40 @@ async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
         const records = stored[DIRECT_OFFERS_STORAGE_KEY] as Array<{ key: string, clientRequestId: string }> | undefined
         const requestId = response?.client_request_id || records?.find(item => item.key === digest)?.clientRequestId
         if (!requestId) return undefined
+        knownOffer = true
         try { response = await native({ op: 'handoff_status', client_request_id: requestId }, 2_500) } catch {}
         if (!response?.ok || !response.handoff?.id) response = uncertainOffer(requestId)
       }
       if (response.ownership_uncertain) await reportDownloadError(chain.tabId, response.error)
       return desktopAcceptedHandoff(response) || response.ownership_uncertain ? { cancel: true } : undefined
     } catch (error) {
+      // A journal read failure is not evidence that an ordinary page belongs
+      // to Core. Only hold an identified download or an existing offer.
+      if (!directFileLink && !intent?.downloadAttribute && !knownOffer) return undefined
       await reportDownloadError(chain.tabId, '无法确认已有下载交接，请检查主程序后重试')
       return { cancel: true }
     }
   }
   let resource: MediaResource
   let resourceCookies: ReplayCookie[]
-  let intent: DownloadClickIntent | undefined
   try {
     const config = await settings()
     if (config.minimumBytes > 0) return browserFallback()
-    const pageUrl = await topLevelPageUrl(chain.tabId, chain.pageUrl)
-    intent = await waitForClickIntent(details.url, details.url, pageUrl, chain, 4)
+    // Extensionless exports need a same-origin download attribute. Ordinary
+    // navigations get one lookup, without polling or waiting for a new click.
+    intent = await waitForClickIntent(details.url, details.url, chain.pageUrl, chain,
+      directFileLink ? 4 : 1, !directFileLink)
     // Pointerdown/click deduplication can leave a second navigation without a
     // fresh intent. Existing ownership still applies, including after reload.
     if (!intent) return browserFallback()
     // Generic controls can match a later response; pre-request ownership needs
     // the exact link the user chose, before the server has identified a file.
-    if (pageIdentity(intent.href) !== pageIdentity(details.url)) {
+    if (pageIdentity(intent.href) !== pageIdentity(details.url)
+      || !isDirectDownloadLink(details.url, intent.pageUrl, Boolean(intent.downloadAttribute))) {
       await clickIntentStore.remember(intent)
       return browserFallback()
     }
+    const pageUrl = await topLevelPageUrl(chain.tabId, chain.pageUrl)
     if (!shouldTakeover({ url: details.url, sourcePageUrl: pageUrl, ...config, ...intent, explicitClick: true })
       || (!intent.ctrlForce && isHandoffSuppressed(config.suppressions, pageUrl, 'file'))) {
       await clickIntentStore.remember(intent)
@@ -1845,6 +1855,8 @@ async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
     resource = {
       id: resourceId(details.url), url: details.url, kind: 'file', pageUrl,
       tabId: chain.tabId, frameId: chain.frameId, method: 'GET',
+      filename: intent.downloadAttribute && new URL(intent.pageUrl).origin === new URL(details.url).origin
+        ? intent.filename : undefined,
       requestHeaders: chain.requestHeaders, seenAt: Date.now(),
       evidence: ['trusted_download_link', 'request_chain'], confidence: 0.99,
       replayContext: { method: 'GET', request_id: chain.requestId },
@@ -2353,6 +2365,7 @@ export default defineBackground(() => {
         opensNewTab: Boolean(message.opensNewTab),
         controlHint: Boolean(message.controlHint),
         downloadAttribute: Boolean(message.downloadAttribute),
+        filename: String(message.filename || ''),
         at: Date.now(),
       })
         .then(() => sendResponse({ ok: true }))

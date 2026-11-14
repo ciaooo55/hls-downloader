@@ -193,9 +193,12 @@ def main():
         args.report.write_text(json.dumps(result, indent=2), encoding='utf-8')
 
     try:
-        for round_index, order in enumerate((('baseline-a', 'baseline-b', 'candidate'),
-                                            ('baseline-b', 'candidate', 'baseline-a'),
-                                            ('candidate', 'baseline-a', 'baseline-b')), 1):
+        orders = (('baseline-a', 'baseline-b', 'candidate'),
+                  ('baseline-b', 'candidate', 'baseline-a'),
+                  ('candidate', 'baseline-a', 'baseline-b'))
+        result['rounds_per_scenario'] = 5
+        for round_index in range(1, 6):
+            order = orders[(round_index - 1) % len(orders)]
             for mode, proxy in (('uniform', False), ('slow-last-connection', False),
                                 ('slow-last-connection', True)):
                 transport = 'winhttp-proxy' if proxy else 'raw-http'

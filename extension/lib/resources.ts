@@ -89,6 +89,7 @@ export interface DownloadClickIntent {
   opensNewTab?: boolean
   controlHint?: boolean
   downloadAttribute?: boolean
+  filename?: string
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i

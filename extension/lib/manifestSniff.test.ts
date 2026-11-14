@@ -19,6 +19,22 @@ describe('extensionless manifest sniffing', () => {
     expect(manifestMimeType('dash')).toBe('application/dash+xml')
   })
 
+  it('requires a complete HLS header line rather than an embedded marker', () => {
+    expect(detectManifestKind('#EXTM3UX\n#EXTINF:2,\nsegment.ts')).toBeNull()
+    expect(detectManifestKind('#EXTM3U extra\nsegment.ts')).toBeNull()
+    expect(detectManifestKind('<html>#EXTM3U\nsegment.ts</html>')).toBeNull()
+    expect(detectManifestKind('#EXTM3U\r\n#EXTINF:2,\nsegment.ts')).toBe('hls')
+    expect(detectManifestKind('#EXTM3U')).toBe('hls')
+  })
+
+  it('recognizes DASH after XML comments without searching inside other documents', () => {
+    expect(detectManifestKind('<?xml version="1.0"?>\n<!-- generated manifest -->\n<!-- CDN -->\n<MPD type="static">')).toBe('dash')
+    expect(detectManifestKind('<!-- manifest -->\n<d:MPD xmlns:d="urn:mpeg:dash:schema:mpd:2011">')).toBe('dash')
+    expect(detectManifestKind('<!-- unfinished <MPD>')).toBeNull()
+    expect(detectManifestKind('<html><!-- hint --><MPD>')).toBeNull()
+    expect(detectManifestKind('<!-- <MPD> -->\n<html>error</html>')).toBeNull()
+  })
+
   it('does not wake the isolated media UI for ordinary page traffic', () => {
     expect(shouldReportMediaResponse('https://api.test/events', 'application/json')).toBe(false)
     expect(shouldReportMediaResponse('https://static.test/app.js', 'text/javascript')).toBe(false)

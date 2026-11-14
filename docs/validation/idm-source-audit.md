@@ -4,6 +4,8 @@
 
 下文的 119 模块、109 脚本及编译结果属于当时快照。2026-11-09 的增量复核见文末；最新恢复注释已更正动态切分函数地址，不再沿用旧地址冲突作为当前缺陷。
 
+2026-11-14 的 Rust 实施与逐模块对应表见文末「逐模块实施」。历史快照中的“默认不启用动态切分”已过时；当前仅在具备资源校验器且未显式关闭时默认启用，不将历史结论当作现状。
+
 ## 结论与检查范围
 
 本地材料已经提供了大量可以追到原函数的证据，尤其是浏览器请求关联、凭据传递、接管裁决、HTTP 工作线程及媒体对象的生命周期。但当前不能认定“原版全部成功反编译”“119 个 C 模块完整等价于原版核心”或“完整原生下载器与插件已通过真实浏览器验收”。
@@ -256,3 +258,53 @@ HLS 本轮采用的是具体的资源生命周期优化：首次领取范围后�
 - 原 worker 在 `Stop HTTPC 7495` 路径调用 `0x00584860` 后检查连接状态，case 7 还调用协调器 `0x00560610`。这些路径支持继续核查读取、停止与区间交接的联系，但不能据此认定 HLS 的共享原子停止标记与 IDM 逐行等价。
 - 恢复代码将状态 38（`0x26`）命名为 `SEGMENT_FLUSH`，原反编译的该分支却包含 SSPI/TLS 处理和 `0x005f6d60` 调用；现有证据不足以将其直接认定为落盘阶段。恢复模块的简化状态跳转不能替代真实传输状态机。
 - HLS 自身调用路径暴露的问题是：范围请求开始前检查共享停止，正在读取 206 正文和等待限速时却没有检查。该问题应在 HLS 现有调度和检查点机制内修复，并验证首次错误、暂停、取消及续传语义；不需要更换 UI、协议或重复引入下载架构。实施和实测结果见 [原生化实施记录](native-migration-progress.md)。
+
+## 逐模块实施（2026-11-14）
+
+基线为 `7636ad417afec41cce81cf078af0a40598db1fff` 加工作区已有 Firefox 修复；这些修改保持原样并继续进入回归。参考输入身份见 `artifacts/idm-port-20261114/reference.json`。参考目录只读，不执行 IDM，不链接恢复 C 或私有 DLL，不引入第二套引擎。
+
+下表状态针对已列出的行为，不能扩展为整个 IDM 模块逐字节等价。“已适配”表示进入现有 Rust/MV3 生产路径；“有意不同”表示保留 HLS 的明确合同；运行时、性能与原版对照分别列出，不由静态相似推断。
+
+| IDM 原函数及调用方 | 已确认行为 | HLS 实际路径 | 差异与修改 | 状态及验收依据 |
+| --- | --- | --- | --- | --- |
+| 插件 `Ka/Cb/Fb → nc/Y → X`；原生 `0x0042cf20 → 0x0042a180` | 请求、响应头、请求正文与 tab/frame 请求序号一起进入候选；裁决后决定取消；桌面异步投递可先返回成功 | `background.ts` 的 `prepareFirefoxFileRequest`、响应候选、`offerDownload` 与恢复查询；`clickIntentStore` | 补齐同源 `download` 属性的无后缀链接、指定文件名和会话恢复；保留精确 URL、方法、正文及凭据。Chromium MV3 无全局阻塞 webRequest 能力，不能强行声称所有请求都可发送前截获 | 已适配；`downloadOwnership.test.ts` 注册事件回归覆盖新点击、普通导航、存储失败和丢回执恢复；完整插件测试另见本轮报告 |
+| 同上裁决链；网络模块 `0x10021300` | ACK 与下载裁决不同；主程序接收和用户操作不是同一时刻 | NativeBridge、Core 持久 handoff、`desktopAcceptedHandoff` | HLS 要求持久接收且可呈现后才转移责任；按原 ID 查结果，用户取消终止本次下载。这比已确认的 IDM 异步成功返回有更强的持久约束，继续保留 | 有意不同；所有权、重启恢复与凭据回归，不把 ACK 当持久接收 |
+| 插件响应分类及页面元素关联 | MIME、附件响应头、请求与页面共同决定媒体候选，不能仅依赖后缀 | `manifestSniff` → MAIN-world 有界前缀观察 → 后台资源 → Core HLS/DASH | 修复 `#EXTM3UX` 误识别和 XML 注释后 DASH 漏识别；不扫描 HTML 内的伪标记，不新增全页面响应复制 | 已适配；扩展伪头、错误页、截断注释、命名空间及普通页面流量回归 |
+| `0x00560610 → 0x00559d00`；HTTP worker `0x00590000 → 0x0055b060/0x00560610` | 普通模式选择扣除已接收、缓冲和预留后的剩余区间；开连接受剩余量门槛控制；ZIP 有单独 finder | `RangeScheduler::claim`、`ActiveProgress`、`AdaptiveConnectionController` | 已有最大安全尾部切分，响应身份校验后才允许切；保留播放 seek 优先和资源身份门槛。HLS 最小切分 256 KiB、初始最多 2 连接及拥堵退避，不照搬原对象 `+0xC0` 的 `2*x+3` 或旧机器常量 | 已适配；`active_split_*`、`adaptive_scheduler_*`、播放区间覆盖回归。当前默认按校验器开启，显式 0/false/off 关闭 |
+| `0x00590000 → 0x00584860` | 完成时同时调整连接状态、块记账及后续调度；存在相邻连接交接 | `range_worker` → `fetch_range` → `persist_range_progress` → `RangeScheduler::complete` | 调整终态顺序：先保存失败/整包转交流程的停止状态，再释放活动范围和通知。继续使用 Rust 所有权管理 worker，不移植原对象内存布局或停止其他线程的私有调用 | 已适配；范围忽略、唯一整包响应保全、共享停止、暂停、取消、并发检查点回归 |
+| `0x00584e80 → 0x00582990` | 读取 Content-Length、Content-Range 起点、终点和总长；调用方比较字段，存在站点及模式分支 | `fetch_range` 的真实 HTTP 206 路径 | 复现 HLS 可把 `bytes 0-3/10` 加 10 字节正文判成功；新增终点/Content-Length 一致性检查和按响应终点限制读取。合法短区间继续从下一字节请求，错误元数据不进入检查点。不能把原调用方特殊分支推广成 IDM 所有响应都作相同验证 | 已适配；新增本地 TCP 反例、短区间、空响应有界重试、身份变化及最终字节一致性回归 |
+| `0x00578290 → 0x00573e20`；`0x00577f50 → 0x00573fa0/0x00574f60` | 非零偏移发 REST；检查 REST 回复；PASV 解析数据端点；不以收到控制回复代表数据完成 | `ftp_engine::download_ftp` → SIZE/MDTM → REST → EPSV/PASV → RETR | 保留 SIZE+MDTM 资源版本续传、精确 350 回复、EPSV 优先、PASV 仅采端口而使用控制连接 peer；失败不续写旧资源。当前单流，不宣称具备 IDM 的 FTP 多连接/主动 PORT 模式 | 已适配（被动单流合同）；`resumes_only_the_saved_ftp_resource_version`、PASV、停止回归。FTP 多连接和主动模式列为尚未完成的对标差异，不假装已移植 |
+| `0x1003f5b0 → 0x1003ede0` | 逐行消费 HLS、按 tag 分派并携带段、密钥及初始化信息 | `hls::parse_playlist` → 分片下载 → 现有 FFmpeg 封装 | 首个实际行必须是完整 `#EXTM3U`，继续容忍 BOM/前导空白；隐式 BYTERANGE 只能延续相邻同资源，LL-HLS part 与完整段分别记偏移，避免跨资源或跨类型复用旧偏移。保留 LL-HLS、字幕、广告跳过和播放优先 | 已适配；伪清单、byte range、轮换密钥、init map、gap、直播等回归；首行和相邻偏移约束同时依据 RFC 8216，未声称是原版逐字相同策略 |
+| 原媒体解析链；`0x1002c598 → 0x1003fb70 → 0x1003fa40` | fMP4 box 长度有界读取，提取轨道与时长；该函数是 MP4 读取器，不能误当 XML MPD 解析器 | `dash::parse_mpd` → 时间轴/轨道下载 → `mux_av` | 以项目已有 roxmltree 替换字符串扫 XML，识别命名空间、忽略注释伪节点、按父节点继承轨道属性和模板；保留签名 URL 解码、时间轴与分片上限；删除被替代的字符串 XML 扫描助手。仍明确拒绝多 Period 与 SegmentList byte ranges，不能声称完整复刻 IDM 所有 DASH 变体 | 已适配（当前支持的 DASH）；命名空间/注释/签名 URL、独立音轨、继承、自闭合、固定时长和负重复回归；不以恢复文件名代替原函数证据 |
+| 原 TS/MP4 转换与音频状态；恢复模块中部分 descriptor 仍标未实测 | 原版有完整解复用和封装调用链；恢复 C 单个 CRC/probe 不等于成品 MP4 | `media::merge`、FFmpeg `-c copy`、同目录暂存和原子替换 | 保留现有完整封装路径，不替换成模拟 I/O 或随机字节串接；失败、暂停不发布残缺成品 | 有意不同；真实合法媒体验证需解码、轨道、时长和帧哈希；CRC/probe 不能作为替代 |
+| 插件 `Wb/Ub/Zb/rb` 及媒体元素生命周期 | 元素/frame 关联、可见性及几何变化决定浮窗生命周期 | `mediaOverlay`、`content.ts` 的 Resize/Intersection/MutationObserver 与 shadow root 注册 | 现有 DOM 浮窗保留；只观察已注册根和媒体相关属性，隐藏或移除后清理。原生 IDMBRBTN 绘制 DLL 未接入，UI 不改为 IDM 外观 | 已适配（关联和生命周期）／有意不同（绘制）；现有几何、遮挡、shadow、销毁测试；未做本轮个人浏览器运行验证 |
+| 连接、缓冲及媒体子进程生命周期 | 按需分配、结束后释放；不能从恢复程序体积推断完整引擎占用 | 领取首个范围后才打开文件和分配 writer；已有流式网络与按需 FFmpeg | 保留已有惰性 writer 和复用缓冲；本轮 DASH 删除重复字符串扫描。没有为了“看似原生”重复引入恢复 C 或第二套 runtime | 已适配；现有资源生命周期回归通过。五轮中位数采集脚本已补齐，但本轮尚未运行；没有同条件原版 IDM 性能证据 |
+
+### 保留的功能与未闭环项目
+
+SFTP、BT、字幕、播放、投屏、TVBox、队列、计划任务和站点同步继续通过现有 Core；本轮没有重新建立平行服务，也没有改 UI 或迁移数据库。
+
+已知对标差异包括 FTP 多连接/主动模式、DASH 多 Period/SegmentList byte ranges、自制完整封装器和 IDM 原生浏览器浮窗。前两项尚未完成；后两项按本轮约定保留现有实现。未读取清楚的原版调用链不标“已等效”。原版同条件吞吐、CPU、内存与异常恢复比较仍未执行，不能写“达到 IDM”。本轮的本地回归和构建结果不替代独立桌面/浏览器、安装升级或 Mozilla 签名验收；新增媒体隔离验收脚本仅通过语法检查，未运行产品流程。
+
+首行与相邻 byte range 的规范依据：[RFC 8216 §4.3.1.1、§4.3.2.2](https://www.rfc-editor.org/rfc/rfc8216.html)。
+
+### 本轮回归与交付证据（2026-11-15）
+
+完整回归额外发现成品路径与缓存清理之间的竞态：`published.path` 在两次查询之间被清理时，已完成任务可能显示临时 payload 路径。本轮改为一次读取 marker；读取失败时采用完成快照已持久化的合法成品路径，原成品丢失也不改指向其他任务的同名文件。确定性回归覆盖不可读 marker、删除 marker 以及原名称被其他文件占用。删除已无生产调用的包装函数，所有测试直接验证实际解析路径。
+
+| 实际执行 | 结果 | 证据及边界 |
+| --- | --- | --- |
+| `cargo test -p hls-native-shell -p hls-client -p hls-protocol --lib` | 723 通过，14 忽略，0 失败 | `rust-regression-final.log`；Core 664、client 48、protocol 11。忽略项包含 UAC、Sandbox 传输与真实 FFmpeg 场景，不能当作通过 |
+| 删除旧包装函数后的 `cargo test --locked -p hls-native-shell --lib download_worker::tests` | 103 通过，1 忽略，0 失败 | `publication-final-regression.log`；为上述全套的子集，不重复累计测试数 |
+| 扩展 `pnpm test` | WXT 类型生成、TypeScript 类型检查、54 文件 606 测试通过 | 浏览器事件与 Native Messaging 使用模拟环境，未操作个人浏览器 |
+| `pnpm run package:store` | Chromium、Firefox 及 Firefox 源码 ZIP 生成成功 | `extension-packaging.log`；Firefox 包尚未签名，不是永久安装包 |
+| `cargo build --locked --release -p hls-native-shell --bin hls-downloader-engine` | 最终构建成功，无编译警告 | `core-release-final-build.log`；生成当前工作区 Core，未重建或验收整套安装包 |
+| 最终 Core `--self-test` | 退出码 0，输出 `HLSDownloaderEngine 7.0.6 self-test ok` | `core-self-test.json`；仅建立内存 Core，不创建托盘、注册项或生产 IPC，不代表真实下载成品验收 |
+| 四份修改的 Python 验收脚本 | AST/语法编译通过 | `python-syntax.json`；没有执行产品运行流程 |
+| 当前代码与输入身份 | 333 份项目代码/配置哈希、21 份参考输入哈希已记录 | `source-files.json`、`reference.json`；Firefox 源码包内 74 份对应文件哈希与工作区一致 |
+
+DASH XML 改造后的首次全套回归曾发现时间轴边界错误，原因是 roxmltree 的 `next_siblings()` 包含当前节点；两个实际调用处已跳过当前节点。修改后 DASH 定向及上述完整回归均通过，首次失败日志保存在 `rust-regression.log`。HTTP 矛盾 206、清单伪头与成品路径竞态均先实际复现，再修复。
+
+最终 Core 构建、自检、产物哈希和未执行范围见 [源码验证记录](idm-port-validation.md)。原始日志和开发构建保留在本地忽略目录 `artifacts/idm-port-20261114/`；源码仓库不混入安装包、缓存或私有凭据。产物为未发布开发构建，没有将旧安装包验收改记为本轮通过。
+
+本轮临时资源未完全清除：旧 Core 提取副本约 15 MB，以及测试临时目录内两份共 28 字节的夹具仍保留。两次 PowerShell 清理均在执行前被自动审批以 `blocked by policy` 拒绝，没有更换工具或删除方式绕过；确切路径与预检记录见 `cleanup.json`、`cleanup-preflight.json`、`cleanup-temp-preflight.json`。没有本轮常驻 Core 或编译进程继续运行。

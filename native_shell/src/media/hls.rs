@@ -77,7 +77,10 @@ pub struct MediaKey {
 }
 
 pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
-    if !text.contains("#EXTM3U") {
+    let mut lines = text
+        .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+        .lines();
+    if lines.next().map(str::trim) != Some("#EXTM3U") {
         return Err("not an HLS playlist".into());
     }
     let mut playlist = Playlist {
@@ -102,6 +105,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     let mut pending_duration = 0.0;
     let mut pending_range: Option<(Option<u64>, u64)> = None;
     let mut media_range_ends = HashMap::new();
+    let mut part_range_ends = HashMap::new();
     let mut map_range_ends = HashMap::new();
     let mut current_key: Option<MediaKey> = None;
     let mut current_map: Option<InitMap> = None;
@@ -111,7 +115,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     let mut pending_gap = false;
     let mut ad_cue_active = false;
     let mut pending_daterange_ad = false;
-    for raw in text.lines() {
+    for raw in lines {
         let line = raw.trim();
         if line.is_empty() {
             continue;
@@ -233,9 +237,12 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                         Some(value) => Some(resolve_byterange(
                             parse_byterange(&value)?,
                             &resolved,
-                            &mut media_range_ends,
+                            &mut part_range_ends,
                         )?),
-                        None => None,
+                        None => {
+                            part_range_ends.clear();
+                            None
+                        }
                     },
                     is_part: true,
                     is_ad: ad_cue_active || pending_daterange_ad || url_is_ad(&resolved),
@@ -290,6 +297,9 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     .take()
                     .map(|range| resolve_byterange(range, &uri, &mut media_range_ends))
                     .transpose()?;
+                if byterange.is_none() {
+                    media_range_ends.clear();
+                }
                 playlist.segments.push(Segment {
                     is_ad: ad_cue_active || pending_daterange_ad || url_is_ad(&uri),
                     uri,
@@ -2548,6 +2558,8 @@ fn resolve_byterange(
     let end = offset
         .checked_add(length)
         .ok_or_else(|| "BYTERANGE 超出范围".to_string())?;
+    // An implicit offset follows the immediately preceding range of this kind.
+    previous_ends.clear();
     previous_ends.insert(uri.to_string(), end);
     Ok((offset, length))
 }
@@ -2631,6 +2643,30 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn playlist_requires_header_before_segment_or_document_content() {
+        for text in [
+            "<html>#EXTM3U\n#EXTINF:2,\nsegment.ts\n</html>",
+            "#EXTM3UX\n#EXTINF:2,\nsegment.ts",
+            "#EXTM3U extra\n#EXTINF:2,\nsegment.ts",
+            "# error page containing #EXTM3U\nsegment.ts",
+            "segment.ts\n#EXTM3U",
+        ] {
+            assert!(
+                parse_playlist(text, "https://cdn.test/live/").is_err(),
+                "{text}"
+            );
+        }
+        let playlist = parse_playlist(
+            "\u{feff} \r\n  #EXTM3U\r\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST",
+            "https://cdn.test/live/",
+        )
+        .unwrap();
+        assert_eq!(playlist.segments.len(), 1);
+        assert_eq!(playlist.segments[0].uri, "https://cdn.test/live/segment.ts");
+        assert!(playlist.end_list);
+    }
 
     #[test]
     fn init_map_failure_never_becomes_a_reusable_cache_entry() {
@@ -3267,6 +3303,14 @@ mod tests {
         )
         .unwrap_err()
         .contains("缺少起始偏移"));
+        for middle in [
+            "#EXTINF:1,\nother.ts\n",
+            "#EXTINF:1,\n#EXT-X-BYTERANGE:2@0\nother.mp4\n",
+            "#EXTINF:1,\nmedia.mp4\n",
+        ] {
+            let text = format!("#EXTM3U\n#EXTINF:1,\n#EXT-X-BYTERANGE:4@100\nmedia.mp4\n{middle}#EXTINF:1,\n#EXT-X-BYTERANGE:3\nmedia.mp4\n");
+            assert!(parse_playlist(&text, "https://cdn.test/index.m3u8").is_err());
+        }
     }
 
     #[test]

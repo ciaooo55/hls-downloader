@@ -85,6 +85,7 @@ export class ClickIntentStore {
             opensNewTab: Boolean(item.opensNewTab),
             controlHint: Boolean(item.controlHint),
             downloadAttribute: Boolean(item.downloadAttribute),
+            filename: String(item.filename || ''),
             at: Number(item.at) || now,
           }))
         this.intents = normalizeIntents([...this.intents, ...restored], now)

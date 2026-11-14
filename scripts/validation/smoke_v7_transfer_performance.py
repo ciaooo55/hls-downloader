@@ -16,6 +16,8 @@ from validation_workspace import test_tmp
 import threading
 import time
 
+import psutil
+
 from v7_core_ipc import free_port, send_frame
 
 
@@ -191,6 +193,7 @@ def main() -> int:
     )
     if args.profile_io:
         environment['HLS_HTTP_IO_PROFILE'] = '1'
+    startup_started = time.perf_counter()
     engine = subprocess.Popen(
         [str(engine_path)],
         env=environment,
@@ -199,6 +202,8 @@ def main() -> int:
     )
     try:
         ipc = wait_for_core(core_port, time.monotonic() + 10)
+        startup_ms = (time.perf_counter() - startup_started) * 1000
+        engine_process = psutil.Process(engine.pid)
         baseline_memory = working_set_bytes(engine.pid)
         settings = send_frame(
             ipc,
@@ -279,6 +284,7 @@ def main() -> int:
         with state.lock:
             bytes_after_settle = state.bytes_sent
         settled_memory = working_set_bytes(engine.pid)
+        cpu_times = engine_process.cpu_times()
         throughput_mib_s = PAYLOAD_SIZE / elapsed / (1024 * 1024)
         covered = bytearray(PAYLOAD_SIZE)
         requested_bytes = 0
@@ -289,6 +295,9 @@ def main() -> int:
         result = {
             "schema": 1,
             "engine_sha256": hashlib.sha256(engine_path.read_bytes()).hexdigest(),
+            "engine_bytes": engine_path.stat().st_size,
+            "startup_ms": round(startup_ms, 2),
+            "cpu_seconds": round(cpu_times.user + cpu_times.system, 4),
             "stage_volume": str(root.resolve().drive).upper(),
             "payload_bytes": PAYLOAD_SIZE,
             "elapsed_ms": round(elapsed * 1000, 2),

@@ -87,10 +87,10 @@ describe('persistent click-intent store', () => {
   it('reserves early offers for persisted same-origin download links without consuming ordinary or cross-origin clicks', async () => {
     const storage = new MemoryStorage()
     const store = new ClickIntentStore(storage, 'intents', () => 10_100)
-    await store.remember(intent({ downloadAttribute: true }))
+    await store.remember(intent({ downloadAttribute: true, filename: '报表 2026.csv' }))
     const restored = new ClickIntentStore(storage, 'intents', () => 10_100)
     expect(await restored.consume({ ...matchingDownload(), downloadAttributeOnly: true }))
-      .toMatchObject({ downloadAttribute: true })
+      .toMatchObject({ downloadAttribute: true, filename: '报表 2026.csv' })
 
     for (const click of [intent({ altBypass: true }), intent({ href: 'https://cdn.test/file.zip', downloadAttribute: true })]) {
       await restored.remember(click)

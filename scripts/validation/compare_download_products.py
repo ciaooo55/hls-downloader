@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from validation_workspace import test_tmp
 import subprocess
+import statistics
 import threading
 import time
 import uuid
@@ -279,7 +280,8 @@ def transfer(product, round_index, scenario, server):
     for _, delta in boundaries:
         active += delta
         maximum = max(maximum, active)
-    sample = {'product': product, 'round': round_index, 'scenario': scenario, 'payload_bytes': size, 'submission_ms': submit_ms, 'first_byte_ms': (state['first_byte'] - began) * 1000, 'verified_output_ms': (finished - began) * 1000, 'last_ten_percent_ms': (finished - t90) * 1000 if t90 else None, 'sha256': expected, 'before': before, 'peak': peak, 'after': after, 'cpu_seconds': sampled_cpu_seconds, 'cpu_live_process_delta': after['cpu'] - before['cpu'], 'requests': requests, 'server_bytes_sent': sum(r['sent'] for r in requests), 'unique_server_bytes': coverage(state)}
+    sample = {'product': product, 'round': round_index, 'scenario': scenario, 'payload_bytes': size, 'submission_ms': submit_ms, 'first_byte_ms': (state['first_byte'] - began) * 1000, 'verified_output_ms': (finished - began) * 1000, 'last_ten_percent_ms': (finished - t90) * 1000 if t90 else None, 'sha256': expected, 'before': before, 'peak': peak, 'after': after, 'cpu_seconds': sampled_cpu_seconds, 'cpu_live_process_delta': after['cpu'] - before['cpu'], 'requests': requests, 'request_count': len(requests), 'server_bytes_sent': sum(r['sent'] for r in requests), 'unique_server_bytes': coverage(state)}
+    sample['throughput_mib_s'] = size / (finished - began) / 2**20
     REPORT['samples'].append(sample)
     sample['peak_overlapping_response_bodies'] = maximum
     save()
@@ -304,7 +306,10 @@ def main():
     REPORT['binaries'] = {k: {'path': str(v), 'sha256': hashlib.file_digest(v.open('rb'), 'sha256').hexdigest()} for k, v in APPS.items()}
     save()
     try:
-        for round_index, order in enumerate([['hls', 'ab', 'idm'], ['ab', 'idm', 'hls'], ['idm', 'hls', 'ab']], 1):
+        orders = [['hls', 'ab', 'idm'], ['ab', 'idm', 'hls'], ['idm', 'hls', 'ab']]
+        REPORT['rounds_per_scenario'] = 5
+        for round_index in range(1, 6):
+            order = orders[(round_index - 1) % len(orders)]
             for product in order:
                 try:
                     idle = start(product, round_index)
@@ -317,7 +322,29 @@ def main():
                     save()
                 finally:
                     stop(product)
-        REPORT['passed'] = len(REPORT['samples']) == 18 and not REPORT['errors']
+        REPORT['medians'] = {
+            f'{product}/{scenario}': {
+                field: statistics.median(sample[field] for sample in REPORT['samples']
+                                         if sample['product'] == product and sample['scenario'] == scenario)
+                for field in ('verified_output_ms', 'first_byte_ms', 'throughput_mib_s', 'cpu_seconds',
+                              'request_count', 'server_bytes_sent')
+            }
+            for product in APPS for scenario in ('fast', 'limited')
+            if sum(sample['product'] == product and sample['scenario'] == scenario for sample in REPORT['samples']) == 5
+        }
+        for product in APPS:
+            idle = [sample for sample in REPORT.get('idle', []) if sample['product'] == product]
+            if len(idle) == 5:
+                REPORT.setdefault('startup_medians', {})[product] = statistics.median(
+                    sample['cold_process_ready_ms'] for sample in idle)
+            for scenario in ('fast', 'limited'):
+                key = f'{product}/{scenario}'
+                if key in REPORT['medians']:
+                    for metric in ('rss', 'private'):
+                        REPORT['medians'][key][f'peak_{metric}_bytes'] = statistics.median(
+                            sample['peak'][metric] for sample in REPORT['samples']
+                            if sample['product'] == product and sample['scenario'] == scenario)
+        REPORT['passed'] = len(REPORT['samples']) == 30 and not REPORT['errors']
         save()
     finally:
         server.shutdown()

@@ -6,6 +6,7 @@ import functools
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,6 +19,9 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlsplit
 
 from smoke_v7_portable_app import Pipe
+
+
+PROCESS_OPTIONS = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -62,11 +66,11 @@ def run(args):
 
     def generate(*params, cwd=None):
         subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", *map(str, params)],
-                       cwd=cwd, check=True, timeout=60, capture_output=True)
+                       cwd=cwd, check=True, timeout=60, capture_output=True, **PROCESS_OPTIONS)
 
     def hashes(path):
         output = subprocess.check_output([str(ffmpeg), "-v", "error", "-i", str(path),
-                                          "-map", "0:v:0", "-f", "framemd5", "-"], timeout=60).decode()
+                                          "-map", "0:v:0", "-f", "framemd5", "-"], timeout=60, **PROCESS_OPTIONS).decode()
         return [line.rsplit(",", 1)[-1].strip() for line in output.splitlines() if line and not line.startswith("#")]
 
     with tempfile.TemporaryDirectory(prefix="core-media-", dir=test_tmp()) as temporary:
@@ -93,6 +97,15 @@ def run(args):
                         extra = ["-hls_key_info_file", info]
                     generate("-i", source, "-c", "copy", "-hls_time", "1", "-hls_playlist_type", "vod",
                              *extra, folder / "index.m3u8", cwd=folder)
+            # Exercise prefixed XML through the real downloader, including a
+            # prolog comment containing element-shaped text that is not media.
+            shutil.copytree(stage / 'dash', stage / 'dash-namespaced')
+            namespace = 'urn:mpeg:dash:schema:mpd:2011'
+            ET.register_namespace('d', namespace)
+            manifest = stage / 'dash-namespaced/index.mpd'
+            tree = ET.parse(manifest)
+            tree.write(manifest, encoding='utf-8', xml_declaration=True)
+            manifest.write_text(manifest.read_text().replace('?>', '?>\n<!-- <Period><Representation id="fake"/> -->', 1))
             server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(stage)))
             if args.live:
                 shutil.copytree(stage / 'hls', stage / 'live')
@@ -102,6 +115,8 @@ def run(args):
             cases = [("HLS fMP4 with audio", "hls", "hls/index.m3u8"),
                                          ("HLS AES-128 with audio", "hls", "encrypted/index.m3u8"),
                                          ("DASH separate video and audio", "dash", "dash/index.mpd")]
+            if not args.audio_failure:
+                cases.append(("DASH prefixed XML with comments", "dash", "dash-namespaced/index.mpd"))
             if args.live:
                 cases = [("HLS live finite window, pause/resume and full decode", "live", "live/index.m3u8")]
             for case, kind, manifest in cases:
@@ -164,13 +179,22 @@ def run(args):
                     raise AssertionError(f"{case}: {task['status']}")
                 output = Path(task["output_path"])
                 metadata = json.loads(subprocess.check_output([str(ffprobe), "-v", "error", "-show_streams",
-                                                               "-show_format", "-of", "json", str(output)], timeout=30))
+                                                               "-show_format", "-of", "json", str(output)], timeout=30, **PROCESS_OPTIONS))
+                subprocess.run([str(ffmpeg), '-nostdin', '-v', 'error', '-xerror', '-i', str(output),
+                                '-map', '0:v:0', '-map', '0:a:0', '-f', 'null', '-'],
+                               check=True, capture_output=True, timeout=60, **PROCESS_OPTIONS)
                 actual = hashes(output)
                 types = {s["codec_type"] for s in metadata["streams"]}
                 if actual != expected or not {"video", "audio"}.issubset(types):
                     raise AssertionError(f"{case}: frame integrity or audio stream mismatch")
+                tracks = {s['codec_type']: s for s in metadata['streams'] if s['codec_type'] in {'video', 'audio'}}
+                start_delta = abs(float(tracks['video'].get('start_time', 0)) - float(tracks['audio'].get('start_time', 0)))
+                duration_delta = abs(float(tracks['video']['duration']) - float(tracks['audio']['duration']))
+                if start_delta > .25 or duration_delta > .25:
+                    raise AssertionError(f'{case}: audio/video timeline differs: {start_delta=}, {duration_delta=}')
                 result["cases"].append({"name": case, "passed": True, "video_frames": len(actual),
-                                        "audio": True, "duration": metadata["format"].get("duration"),
+                                        "audio": True, "decoded_video_and_audio": True, "duration": metadata["format"].get("duration"),
+                                        "track_start_delta_seconds": start_delta, "track_duration_delta_seconds": duration_delta,
                                         "bytes": output.stat().st_size})
                 print(case + " passed", flush=True)
                 request({"type": "command", "request_id": 4, "command": {
@@ -191,6 +215,39 @@ def run(args):
     return 0 if result["passed"] else 1
 
 
+def run_isolated(args):
+    if os.environ.get('HLS_VM_ACCEPTANCE') != '1':
+        raise RuntimeError('--isolated must run in the independent acceptance environment (HLS_VM_ACCEPTANCE=1)')
+    from v7_core_ipc import connect, free_port
+    port = free_port()
+    previous_pipe = os.environ.get('HLS_V7_PIPE')
+    with tempfile.TemporaryDirectory(prefix='isolated-core-media-', dir=test_tmp()) as temporary:
+        root = Path(temporary)
+        pipe_name = rf'\\.\pipe\HLSMedia-{uuid.uuid4().hex}'
+        environment = dict(os.environ, HLS_V7_DATA_DIR=str(root / 'data'),
+                           HLS_V7_DOWNLOAD_DIR=str(root / 'downloads'), HLS_V7_PIPE=pipe_name,
+                           HLS_V7_CORE_TCP='1', HLS_V7_CORE_BIND=f'127.0.0.1:{port}')
+        engine = subprocess.Popen([str(args.runtime.resolve() / 'app/resources/HLSDownloaderEngine.exe')],
+                                  env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  **PROCESS_OPTIONS)
+        try:
+            connect(port).close()
+            os.environ['HLS_V7_PIPE'] = pipe_name
+            return run(args)
+        finally:
+            if previous_pipe is None:
+                os.environ.pop('HLS_V7_PIPE', None)
+            else:
+                os.environ['HLS_V7_PIPE'] = previous_pipe
+            if engine.poll() is None:
+                engine.terminate()
+                try:
+                    engine.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    engine.kill()
+                    engine.wait(timeout=5)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", type=Path, required=True)
@@ -198,4 +255,6 @@ if __name__ == "__main__":
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument('--audio-failure', nargs='?', const='all', choices=['all', 'segment'])
     parser.add_argument('--live', action='store_true')
-    raise SystemExit(run(parser.parse_args()))
+    parser.add_argument('--isolated', action='store_true', help='Start a private Core with disposable data and IPC in the acceptance environment')
+    args = parser.parse_args()
+    raise SystemExit(run_isolated(args) if args.isolated else run(args))
