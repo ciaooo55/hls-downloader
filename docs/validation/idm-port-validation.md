@@ -28,7 +28,9 @@
 
 完整 Rust 回归后仅删除旧包装函数并让测试直接调用生产实现，随后重新运行受影响的下载工作流子集并重建最终 Release。原始日志、输入快照和开发产物的本地记录目录为 `artifacts/idm-port-20261114/`，不上传到源码仓库。
 
-开发 Core 文件为 15,083,008 字节，SHA256 为 `ee5287a6e6432fdec8f9d75201c9798beed7565866f564a6c10ad37db94d79c6`。这只是 Core EXE，不能作为完整安装包或整个产品占用的度量。
+本地开发 Core 文件为 15,083,008 字节，SHA256 为 `ee5287a6e6432fdec8f9d75201c9798beed7565866f564a6c10ad37db94d79c6`。该文件构建于下述 CI 借用清理之前，仅是当时的 Core EXE，不能作为最新源码的完整安装包或整个产品占用的度量。
+
+首次同步提交 `de151ad7` 的 GitHub 检查中，Core 测试、客户端测试、构建及依赖边界检查通过；Clippy 拒绝了 DASH XML 改造后遗留的三处 `&&str` 多余借用。现已按诊断移除这三处借用，本地 `cargo fmt --all -- --check` 通过。同步后的自动测试、构建和 lint 结果以 [v7 CI](https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml) 对应源码提交为准。
 
 ## 尚未完成的验收与差异
 
@@ -43,3 +45,5 @@ FTP 多连接/主动 PORT、DASH 多 Period/SegmentList 字节范围尚未实现
 `main` 保存当前维护的产品代码、测试、配置和必要文档；Git 提交历史、版本标签与已有 Release 保留。正式安装包和配套浏览器扩展以 Release 附件为准，不把本轮开发包覆盖到已发布的 v7.0.6。
 
 `.tool-cache/`、`artifacts/` 和依赖输出是本地忽略目录；下载文件、任务恢复数据、用户自有备选 UI 和加密凭据备份不能作为编译垃圾删除。清理记录保留实际结果，不将被策略拒绝的删除记录为成功。
+
+2026-11-15 整理结果：GitHub 只保留 `main` 这一条维护源码分支；10 个已发布 Release、94 个附件及 1 个未发布草稿保持原样。根目录 `site-cache/` 纳入项目忽略规则。已删除可重建的 Rust target、Compose 构建目录、扩展 `.output` 和 `.wxt`，释放约 40 GiB；依赖缓存和原始验证证据保留。`.tool-cache/idm-port` 与 `.tool-cache/test-tmp/idm-port` 的删除再次在执行前被自动审批以 `blocked by policy` 拒绝，仍保留约 15 MB 的旧 Core 副本和两份共 28 字节的夹具，未绕过限制。详细本地记录为 `artifacts/workspace-cleanup-20261115/`。

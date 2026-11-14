@@ -308,3 +308,5 @@ DASH XML 改造后的首次全套回归曾发现时间轴边界错误，原因�
 最终 Core 构建、自检、产物哈希和未执行范围见 [源码验证记录](idm-port-validation.md)。原始日志和开发构建保留在本地忽略目录 `artifacts/idm-port-20261114/`；源码仓库不混入安装包、缓存或私有凭据。产物为未发布开发构建，没有将旧安装包验收改记为本轮通过。
 
 本轮临时资源未完全清除：旧 Core 提取副本约 15 MB，以及测试临时目录内两份共 28 字节的夹具仍保留。两次 PowerShell 清理均在执行前被自动审批以 `blocked by policy` 拒绝，没有更换工具或删除方式绕过；确切路径与预检记录见 `cleanup.json`、`cleanup-preflight.json`、`cleanup-temp-preflight.json`。没有本轮常驻 Core 或编译进程继续运行。
+
+随后按用户 2026-11-15 的源码整理要求，已删除 Rust target、Compose 与扩展可重建输出；上述小量残留再次被策略拒绝，仍明确保留。最新同步、Clippy 修正和整理范围见 [源码验证记录](idm-port-validation.md)，GitHub 已有 Release 不变。

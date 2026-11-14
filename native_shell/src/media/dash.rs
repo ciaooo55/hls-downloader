@@ -137,7 +137,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 segment_list
                     .and_then(|list| mpd_child(list, "Initialization")?.attribute("sourceURL"))
             })
-            .map(|value| resolve(&base_url, &apply_template(&value, &id, 0, 0, bandwidth)));
+            .map(|value| resolve(&base_url, &apply_template(value, &id, 0, 0, bandwidth)));
         // SegmentURL 的 media 是显式地址，不能当作 SegmentTemplate 重复展开。
         let media_template = if segment_list.is_some() {
             None
@@ -149,7 +149,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         if let Some(template) = media_template {
             media.extend(expand_timeline(
                 &templates,
-                &template,
+                template,
                 &base_url,
                 &id,
                 bandwidth,
@@ -163,7 +163,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             .filter(|child| mpd_element(*child, "SegmentURL", root))
         {
             if let Some(source) = child.attribute("media") {
-                media.push(resolve(&base_url, &source));
+                media.push(resolve(&base_url, source));
             }
         }
         if let Some(list) = segment_list {

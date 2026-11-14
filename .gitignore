@@ -42,6 +42,7 @@ desktop_ui/resources/common/
 
 # Runtime state
 downloads/
+/site-cache/
 data.db
 data.db-shm
 data.db-wal
