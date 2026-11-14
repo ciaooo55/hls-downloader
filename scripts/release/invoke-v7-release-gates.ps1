@@ -102,10 +102,10 @@ $lifecycleScript = if ($MsiEvidenceRoot) { '..\validation\verify-v7-received-msi
 $evidenceArgument = if ($MsiEvidenceRoot) { " -EvidenceRoot $(Quote-PS $MsiEvidenceRoot)" } else { '' }
 $location = if ($MsiEvidenceRoot) { 'authenticated GitHub-hosted isolated Windows execution; verified against exact candidate SHA-256' } else { 'local isolated Windows execution' }
 $upgradeCommand = "& $(Quote-PS (Join-Path $PSScriptRoot $lifecycleScript)) -Scenario Upgrade -CandidateManifestPath $(Quote-PS $manifestFullPath)$evidenceArgument"
-Invoke-Gate 'installer' $upgradeCommand "public v7.0.0 MSI -> candidate v$([string]$manifest.product_version) MSI; checkpoint/process recovery; $location"
+Invoke-Gate 'installer' $upgradeCommand "public v7.0.5 MSI -> candidate v$([string]$manifest.product_version) MSI; checkpoint/process recovery; $location"
 
 $rollbackCommand = "& $(Quote-PS (Join-Path $PSScriptRoot $lifecycleScript)) -Scenario FailureRollback -CandidateManifestPath $(Quote-PS $manifestFullPath)$evidenceArgument"
-Invoke-Gate 'rollback' $rollbackCommand "candidate MSI failure injection; v7.0.0 product/data/registration preserved; $location"
+Invoke-Gate 'rollback' $rollbackCommand "candidate MSI failure injection; v7.0.5 product/data/registration preserved; $location"
 
 $aggregate = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
 $evidence = Get-Content -LiteralPath $aggregate -Raw -Encoding UTF8 | ConvertFrom-Json

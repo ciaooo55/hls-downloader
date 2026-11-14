@@ -8,8 +8,8 @@ param(
     [string]$CandidateManifestPath,
 
     [string]$OldMsiPath = '',
-    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.3-r22/HLSDownloader-7.0.3-r22-Windows-x64-unsigned.msi',
-    [string]$OldMsiSha256 = '8945ab49b5a77dac24f689cd80565184956345f2c8d8cc52c1b58426c7b70bd8',
+    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.5/HLSDownloader-7.0.5-Windows-x64.msi',
+    [string]$OldMsiSha256 = 'd87bd30d874d23d88f69a13add28ff4a87a57ebc06dc5a3ac5af69079facf401',
     [string]$InstallDir = '',
     [ValidateSet('Direct', 'Wmi')]
     [string]$ApplicationLaunchMode = 'Direct',
@@ -237,13 +237,13 @@ try {
     $originPort = Get-FreeTcpPort
     $manifestPath = (Resolve-Path -LiteralPath $CandidateManifestPath).Path
     $manifest = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion '7.0.3'
+    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion '7.0.5'
     $candidate = Resolve-FullPath ([string]$manifest.artifacts.msi.path) (Split-Path $manifestPath -Parent)
     Add-Step 'candidate-msi-exists' (Test-Path -LiteralPath $candidate -PathType Leaf) $candidate
     $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'candidate-manifest-sha256' ($candidateHash -eq ([string]$manifest.artifacts.msi.sha256).ToLowerInvariant()) $candidateHash
 
-    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.3-r22-Windows-x64-unsigned.msi' }
+    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.5-Windows-x64.msi' }
     if (-not (Test-Path -LiteralPath $old -PathType Leaf)) { Invoke-WebRequest -Uri $OldMsiUrl -OutFile $old -UseBasicParsing }
     if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
     $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
