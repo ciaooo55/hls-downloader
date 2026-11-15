@@ -12,6 +12,7 @@
 - 2026-11-15 在 `ddcb2c6e` 基线上补入 FTP EPSV/IPv6 与受限 PASV 回退；修复 PASV 跳过坏字段、接受多余字段和端口饱和计算。协商失败不覆盖原文件，REST 仍紧邻 RETR。
 - 同日贯通 DASH SegmentList 显式字节范围的解析、初始化段、视频、音轨、字幕、直播去重、时长累计和断点身份。通过现有 HTTP 凭据和重定向路径，严格校验范围响应，以 64 KiB 缓冲落盘，校验并同步成功后才记检查点。
 - 分片身份变化时先持久失效旧检查点，再写新数据；修复失败传输恰好写满旧长度后，重启可能误用旧身份的问题，并移除不再调用的旧检查点查询方法。
+- 在 `5206bb81` 基线上接入 DASH SegmentBase.indexRange / SIDX v0、v1：继承和覆盖初始化范围，仅展开选定视频、音轨及启用的字幕。索引结果进入同一范围下载、断点、预览与封装路径；索引请求显式携带任务控制文件，逐块读取时检查暂停、取消和限速。坏字幕索引保留既有可选附件语义，不能使完整音视频任务失败。
 
 原版函数、调用方、行为约束与 HLS 生产路径见 [逐模块对应表](idm-source-audit.md#逐模块实施2026-11-14)。没有修改 UI、迁移持久数据、接入恢复 C 引擎或 IDM 私有 DLL。
 
@@ -52,13 +53,35 @@
 
 最终日志为 `artifacts/idm-protocol-20261115/rust-regression-final.log`、`clippy-final.log`、`core-build-final.log`、`core-self-test.log`，真实媒体日志为同目录 `real-media.log`。常规完整库回归仍将真实 FFmpeg 用例列为忽略，因此单独列出显式执行结果，不重复累加。没有操作个人桌面/浏览器，没有运行 IDM。浏览器插件源码本次未改动，未重复运行未受影响的 606 项扩展测试。
 
+## 2026-11-15 SegmentBase / SIDX 后续验证
+
+只读核对原 `0x0055a250 → 0x005d0250 → 0x005d0180 → 0x005cfef0 → 0x005cfd80` 的实际调用链，确认索引表、box 长度、偏移锚点和嵌套引用拒绝路径。没有运行 IDM 或接入恢复 C。具体原版行为与 Rust 适配差异见 [源码对应表](idm-source-audit.md#逐模块实施2026-11-14)。
+
+本次支持单 Period、带 indexRange 的 SegmentBase，SIDX v0/v1、32/64 位 box、父级继承、初始化范围、媒体范围与时长。限制为整个索引请求最多 3,000,000 字节；拒绝未知版本/flags、零 timescale、零长度或时长、截断/溢出、size=0、无 indexRange、外置 RepresentationIndex 和嵌套索引。前者是 HLS 请求限制，原版对应常量仅为缓冲预算，不能说两者完全相同。
+
+真实媒体通过 `download_dash_selected` 正式入口下载：FFmpeg 生成两秒 MPEG-4 视频和 AAC 音轨及真实 global SIDX，经本地 HTTP 范围服务、选轨、初始化段、分片、检查点与最终封装。逐字节核对已下载范围，重启后仅重新读取清单和索引，未重下初始化段与媒体。未选视频和禁用字幕不请求；启用的损坏字幕索引不阻断音视频任务。
+
+首次真实音频断言发现最后一帧相差 256 个样本。完整原文件独立重封装同样将 AAC 终端填充从 1024 样本裁至声明的 768 样本，和 HLS 成品逐帧一致；不是范围下载丢数据。最终回归同时验证下载字节，以及与独立整文件重封装相比的全部音频样本哈希、时间基和时间戳，没有忽略末帧或放宽数据断言。结果为 20 帧视频、95 帧音频完全匹配，仅代表该双轨夹具。
+
+实际执行的两个真实 FFmpeg 用例均通过（原 SegmentList 视频用例和新增 SegmentBase 双轨用例）。原始日志、首次失败、独立重封装对照及最终结果保留在 `artifacts/idm-sidx-20261115/`，包括 `real-media-initial.log`、`aac-padding-comparison.json` 和 `real-media-final.log`。这些用例在常规库回归中仍明确忽略，必须配置 `HLS_FFMPEG` 后显式运行，不能把忽略算作通过。
+
+| 实际执行 | 结果与边界 |
+| --- | --- |
+| Core、client、protocol 完整库回归（单线程） | 735 通过、16 忽略、0 失败；Core 676、client 48、protocol 11 项通过。日志 `rust-regression-final.log` |
+| 最终 DASH 全部用例（含两个真实 FFmpeg 用例） | 33 通过、0 忽略、0 失败；包含完整库回归后按 Clippy 建议进行的等价固定数组分组调整。日志 `dash-tests-final.log`，不重复累计至上一行 |
+| Clippy（Core 全 targets，与 CI 相同的结构性例外） | `-D warnings` 通过；日志 `clippy-final.log` |
+| 最新 Core 开发构建及 `--self-test` | 构建成功，退出码 0，输出 `HLSDownloaderEngine 7.0.6 self-test ok`；日志 `core-build-final.log`、`core-self-test.log`。内存自检，不启动桌面、托盘或浏览器，不代表整套安装包验收 |
+| `cargo fmt --all -- --check`、`git diff --check` | 通过 |
+
+本轮生成的测试音视频、HTTP 夹具及空临时目录已清理，原始失败日志与解码对照保留；没有测试常驻进程。开发 Core 留在项目配置的 Cargo target 内，身份见同证据目录的 `run-summary.json`，不覆盖已有 Release，也不将缓存或本地证据提交为产品源码。
+
 ## 尚未完成的验收与差异
 
-没有操作个人桌面或浏览器，没有运行原版 IDM。忽略的 14 项包含交互式 UAC、Sandbox 传输和真实 FFmpeg 等条件场景，不能算作通过。
+没有操作个人桌面或浏览器，没有运行原版 IDM。常规回归中的忽略项包含交互式 UAC、Sandbox 传输和真实 FFmpeg 等条件场景，不能算作通过；本次显式运行的两个 FFmpeg 用例结果单列于上节。
 
-本轮尚未执行当前源码在独立环境的真实浏览器/Host/Core 接管、安装启动与升级、所有媒体变体和音画同步、五轮修改前后性能及原版 IDM 同条件对照。已新增并实际运行真实 FFmpeg 回归：生成 2 秒 fMP4，按初始化段与两个媒体范围下载，通过生产封装路径输出，20 帧解码哈希与源文件一致；该用例为视频，不代表独立音轨同步已验收。性能脚本已有五轮采样和中位数输出，但不能据此宣称性能回退低于 5% 或达到 IDM。Firefox 永久安装仍需 Mozilla 签名。
+本轮尚未执行当前源码在独立环境的真实浏览器/Host/Core 接管、安装启动与升级、所有媒体变体和音画同步、五轮修改前后性能及原版 IDM 同条件对照。已实际验证上节的两秒视频及双轨夹具，但不能推广为所有媒体或所有音画同步场景已验收。性能脚本已有五轮采样和中位数输出，但不能据此宣称性能回退低于 5% 或达到 IDM。Firefox 永久安装仍需 Mozilla 签名。
 
-FTP 多连接/主动 PORT、DASH 多 Period 和 SegmentBase/sidx 索引展开尚未实现。SegmentList 显式字节范围现已实现。现有 FFmpeg 封装、DOM 浮窗、持久回执及额外协议功能按计划保留。
+FTP 多连接/主动 PORT、DASH 多 Period、无 indexRange 的 SegmentBase 及外置索引尚未实现。嵌套索引沿用已确认的原版拒绝行为；畸形数据校验不作为待实现功能。SegmentList 显式字节范围及带 indexRange 的非嵌套 SegmentBase/sidx 现已实现。现有 FFmpeg 封装、DOM 浮窗、持久回执及额外协议功能按计划保留。
 
 ## 源码与发布文件的边界
 

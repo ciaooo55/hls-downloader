@@ -918,7 +918,19 @@ pub fn fetch_hls_bytes_range(
     start: u64,
     length: u64,
 ) -> Result<Vec<u8>, EngineError> {
-    fetch_bytes_range_with_transport(url, headers, proxy, start, length, true)
+    fetch_bytes_range_with_transport(url, headers, proxy, start, length, true, None)
+}
+
+pub(crate) fn fetch_index_bytes_range(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    start: u64,
+    length: u64,
+    control: &Path,
+) -> Result<Vec<u8>, EngineError> {
+    check_control(control)?;
+    fetch_bytes_range_with_transport(url, headers, proxy, start, length, false, Some(control))
 }
 
 fn fetch_bytes_range_with_transport(
@@ -928,6 +940,7 @@ fn fetch_bytes_range_with_transport(
     start: u64,
     length: u64,
     browser_first: bool,
+    task_control: Option<&Path>,
 ) -> Result<Vec<u8>, EngineError> {
     if !http_fetch_url_allowed(url) {
         return Err(EngineError::Failed("url must be http(s)".into()));
@@ -948,9 +961,13 @@ fn fetch_bytes_range_with_transport(
     let result = (|| {
         let control = dir.join("control");
         fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
-        let control = crate::net_policy::current_throttle_context()
-            .map(|context| context.control)
-            .filter(|path| !path.as_os_str().is_empty())
+        let control = task_control
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                crate::net_policy::current_throttle_context()
+                    .map(|context| context.control)
+                    .filter(|path| !path.as_os_str().is_empty())
+            })
             .unwrap_or(control);
         let job = Job {
             url: url.to_string(),
@@ -977,11 +994,26 @@ fn fetch_bytes_range_with_transport(
         };
         let fetched = fetch_exact_range(&job, start, end, browser_first)?;
         let mut body = Vec::new();
-        // 多读一个字节用于判定超长；不能等错误响应结束后才验证大小。
+        // 多读一个字节用于判定超长；每块读取时继续遵守暂停与限速。
         let mut reader = fetched.body.take(length.saturating_add(1));
-        if let Err(error) = reader.read_to_end(&mut body) {
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
             check_job_control(&job)?;
-            return Err(EngineError::Failed(error.to_string()));
+            let count = reader.read(&mut buffer).map_err(|error| {
+                check_job_control(&job)
+                    .err()
+                    .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+            })?;
+            if count == 0 {
+                break;
+            }
+            if count as u64 > length - body.len() as u64 {
+                return Err(EngineError::Failed(
+                    "byte range response exceeds requested length".into(),
+                ));
+            }
+            crate::net_policy::consume(count, || check_job_control(&job))?;
+            body.extend_from_slice(&buffer[..count]);
         }
         if body.len() as u64 != length {
             return Err(EngineError::Failed(format!(
@@ -989,7 +1021,7 @@ fn fetch_bytes_range_with_transport(
                 body.len()
             )));
         }
-        crate::net_policy::consume(body.len(), || check_job_control(&job))?;
+        check_job_control(&job)?;
         Ok(body)
     })();
     let _ = fs::remove_dir_all(dir);

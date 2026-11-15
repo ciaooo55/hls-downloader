@@ -28,6 +28,7 @@ pub struct Representation {
     pub base_url: String,
     pub init: Option<String>,
     pub init_range: Option<ByteRange>,
+    pub index_range: Option<ByteRange>,
     pub media: Vec<String>,
     pub media_ranges: Vec<Option<ByteRange>>,
     pub media_durations: Vec<f64>,
@@ -37,6 +38,137 @@ pub struct Representation {
 pub struct ByteRange {
     pub start: u64,
     pub length: u64,
+}
+
+// Bound the fetched index, using the original CSidxParser's buffer budget.
+const MAX_SIDX_BYTES: u64 = 3_000_000;
+
+fn sidx_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let value = bytes
+        .get(offset..offset + 4)
+        .ok_or("truncated SIDX field")?;
+    Ok(u32::from_be_bytes(
+        value.try_into().map_err(|_| "truncated SIDX field")?,
+    ))
+}
+
+fn parse_sidx(bytes: &[u8], file_offset: u64) -> Result<Vec<(ByteRange, f64)>, String> {
+    if bytes.len() as u64 > MAX_SIDX_BYTES {
+        return Err("DASH SIDX exceeds index byte limit".into());
+    }
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let header = bytes
+            .get(cursor..cursor + 8)
+            .ok_or("truncated SIDX box header")?;
+        let short_size = sidx_u32(header, 0)?;
+        let (size, header_size) = match short_size {
+            0 => return Err("unbounded SIDX box size".into()),
+            1 => (
+                (u64::from(sidx_u32(bytes, cursor + 8)?) << 32)
+                    | u64::from(sidx_u32(bytes, cursor + 12)?),
+                16,
+            ),
+            size => (u64::from(size), 8),
+        };
+        if size < header_size as u64 || size > (bytes.len() - cursor) as u64 {
+            return Err("invalid or truncated SIDX box size".into());
+        }
+        let end = cursor + size as usize;
+        if &header[4..8] != b"sidx" {
+            cursor = end;
+            continue;
+        }
+        let payload = &bytes[cursor + header_size..end];
+        let flags = sidx_u32(payload, 0)?;
+        let version = flags >> 24;
+        if version > 1 || flags & 0x00ff_ffff != 0 {
+            return Err("unsupported SIDX version or flags".into());
+        }
+        let timescale = sidx_u32(payload, 8)?;
+        if timescale == 0 {
+            return Err("invalid SIDX timescale".into());
+        }
+        let (first_offset, count_offset) = if version == 0 {
+            (u64::from(sidx_u32(payload, 16)?), 22)
+        } else {
+            (
+                (u64::from(sidx_u32(payload, 20)?) << 32) | u64::from(sidx_u32(payload, 24)?),
+                30,
+            )
+        };
+        let count_bytes = payload
+            .get(count_offset..count_offset + 2)
+            .ok_or("truncated SIDX reference count")?;
+        let count = u16::from_be_bytes([count_bytes[0], count_bytes[1]]) as usize;
+        if count == 0 {
+            return Err("empty SIDX references".into());
+        }
+        let entries = &payload[count_offset + 2..];
+        if entries.len() != count * 12 {
+            return Err("invalid SIDX reference table length".into());
+        }
+        // first_offset is relative to the end of this box, not the requested
+        // index range. A range can contain preceding or trailing boxes.
+        let mut start = file_offset
+            .checked_add(end as u64)
+            .and_then(|offset| offset.checked_add(first_offset))
+            .ok_or("SIDX offset overflow")?;
+        let mut segments = Vec::with_capacity(count);
+        for entry in entries.as_chunks::<12>().0 {
+            let reference = sidx_u32(entry, 0)?;
+            if reference & 0x8000_0000 != 0 {
+                return Err("unsupported hierarchical SIDX reference".into());
+            }
+            let length = u64::from(reference & 0x7fff_ffff);
+            let duration = sidx_u32(entry, 4)?;
+            if length == 0 || duration == 0 {
+                return Err("empty SIDX media reference".into());
+            }
+            let next = start
+                .checked_add(length)
+                .ok_or("SIDX media offset overflow")?;
+            segments.push((
+                ByteRange { start, length },
+                f64::from(duration) / f64::from(timescale),
+            ));
+            start = next;
+        }
+        return Ok(segments);
+    }
+    Err("DASH index contains no SIDX box".into())
+}
+
+fn expand_segment_base(
+    track: &mut Representation,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    control: &Path,
+) -> Result<(), String> {
+    let Some(range) = track.index_range else {
+        return Ok(());
+    };
+    if range.length > MAX_SIDX_BYTES {
+        return Err("DASH SIDX exceeds index byte limit".into());
+    }
+    if read_control(control) != "run" {
+        return Err(control_stop_error(control));
+    }
+    let bytes = crate::http_engine::fetch_index_bytes_range(
+        &track.base_url,
+        headers,
+        proxy,
+        range.start,
+        range.length,
+        control,
+    )
+    .map_err(|error| error.to_string())?;
+    let segments = parse_sidx(&bytes, range.start)?;
+    track.media = vec![track.base_url.clone(); segments.len()];
+    track.media_ranges = segments.iter().map(|(range, _)| Some(*range)).collect();
+    track.media_durations = segments.into_iter().map(|(_, duration)| duration).collect();
+    track.index_range = None;
+    Ok(())
 }
 
 fn parse_byte_range(value: &str) -> Result<ByteRange, String> {
@@ -125,15 +257,25 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         }
         let mut segment_list = None;
         let mut templates = Vec::new();
+        let mut segment_bases = Vec::new();
         for scope in scopes.into_iter().rev().flatten() {
             if let Some(list) = mpd_child(scope, "SegmentList") {
-                if templates.is_empty() {
+                if templates.is_empty() && segment_bases.is_empty() {
                     segment_list = Some(list);
                 }
                 break;
             }
             if let Some(template) = mpd_child(scope, "SegmentTemplate") {
+                if !segment_bases.is_empty() {
+                    break;
+                }
                 templates.push(template);
+            }
+            if let Some(base) = mpd_child(scope, "SegmentBase") {
+                if !templates.is_empty() {
+                    break;
+                }
+                segment_bases.push(base);
             }
         }
         let template_attr = |key: &str| {
@@ -144,7 +286,27 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let has_timeline = templates
             .iter()
             .any(|template| mpd_child(*template, "SegmentTimeline").is_some());
-        let initialization = segment_list.and_then(|list| mpd_child(list, "Initialization"));
+        let index_range = segment_bases
+            .iter()
+            .find_map(|base| base.attribute("indexRange"))
+            .map(parse_byte_range)
+            .transpose()?;
+        if !segment_bases.is_empty() && index_range.is_none() {
+            return Err("unsupported DASH SegmentBase without indexRange".into());
+        }
+        if segment_bases
+            .iter()
+            .any(|base| mpd_child(*base, "RepresentationIndex").is_some())
+        {
+            return Err("unsupported external DASH RepresentationIndex".into());
+        }
+        let initialization = segment_list
+            .and_then(|list| mpd_child(list, "Initialization"))
+            .or_else(|| {
+                segment_bases
+                    .iter()
+                    .find_map(|base| mpd_child(*base, "Initialization"))
+            });
         let init_range = initialization
             .and_then(|node| node.attribute("range"))
             .map(parse_byte_range)
@@ -234,6 +396,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             base_url,
             init: init.filter(|url| !url.is_empty()),
             init_range,
+            index_range,
             media,
             media_ranges,
             media_durations,
@@ -357,13 +520,27 @@ pub fn download_dash_selected(
     let mut recorded_subs: Vec<Representation> = Vec::new();
     loop {
         let manifest = parse_mpd(&xml, url)?;
-        let video = select_video(
+        let mut video = select_video(
             &manifest.representations,
             preferred_bandwidth,
             preferred_height,
         )
         .cloned();
-        let audio = select_audio(&manifest.representations, preferred_audio).cloned();
+        let mut audio = select_audio(&manifest.representations, preferred_audio).cloned();
+        let mut subtitles = if download_subtitles {
+            select_subtitles(&manifest.representations)
+        } else {
+            Vec::new()
+        };
+        for track in video.iter_mut().chain(audio.iter_mut()) {
+            expand_segment_base(track, headers, proxy, control)?;
+        }
+        // Subtitles remain best effort, as in save_dash_subtitles; a bad sidecar
+        // index must not prevent downloading the selected audio/video.
+        subtitles.retain_mut(|track| expand_segment_base(track, headers, proxy, control).is_ok());
+        if read_control(control) != "run" {
+            return Err(control_stop_error(control));
+        }
         if video.is_none() && audio.is_none() {
             return Err("DASH has no audio or video representation".into());
         }
@@ -403,11 +580,7 @@ pub fn download_dash_selected(
                 total_segments,
                 None,
                 prepared_audio,
-                if download_subtitles {
-                    select_subtitles(&manifest.representations)
-                } else {
-                    Vec::new()
-                },
+                subtitles,
                 headers,
                 proxy,
                 control,
@@ -541,7 +714,7 @@ pub fn download_dash_selected(
             }
         }
         if download_subtitles {
-            for track in select_subtitles(&manifest.representations) {
+            for track in subtitles {
                 merge_sub_track(&mut recorded_subs, &track);
             }
         }
@@ -2013,16 +2186,13 @@ mod tests {
         }
     }
 
-    fn serve_byte_ranges(
-        body: Vec<u8>,
+    fn serve_dash_files(
+        files: HashMap<String, Vec<u8>>,
         requests: usize,
     ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!(
-            "http://{}/all.mp4?token=signed",
-            listener.local_addr().unwrap()
-        );
+        let url = format!("http://{}", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
             let mut seen = Vec::new();
             for _ in 0..requests {
@@ -2040,28 +2210,342 @@ mod tests {
                     }
                     request.push_str(&line);
                 }
-                let range = request
+                let path = request
                     .lines()
-                    .find_map(|line| {
-                        let (key, value) = line.split_once(':')?;
-                        key.eq_ignore_ascii_case("Range").then_some(value.trim())
-                    })
-                    .unwrap();
-                let (start, end) = range
-                    .strip_prefix("bytes=")
+                    .next()
                     .unwrap()
-                    .split_once('-')
+                    .split_whitespace()
+                    .nth(1)
                     .unwrap();
-                let start = start.parse::<usize>().unwrap();
-                let end = end.parse::<usize>().unwrap();
-                let bytes = &body[start..=end];
-                write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len(), bytes.len()).unwrap();
-                socket.write_all(bytes).unwrap();
+                let body = files
+                    .get(path)
+                    .unwrap_or_else(|| panic!("unexpected request: {request}"));
+                let range = request.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("Range").then_some(value.trim())
+                });
+                if let Some(range) = range {
+                    let (start, end) = range
+                        .strip_prefix("bytes=")
+                        .unwrap()
+                        .split_once('-')
+                        .unwrap();
+                    let start = start.parse::<usize>().unwrap();
+                    let end = end.parse::<usize>().unwrap();
+                    let bytes = &body[start..=end];
+                    write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len(), bytes.len()).unwrap();
+                    socket.write_all(bytes).unwrap();
+                } else {
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    socket.write_all(body).unwrap();
+                }
                 seen.push(request);
             }
             seen
         });
         (url, worker)
+    }
+
+    fn serve_byte_ranges(
+        body: Vec<u8>,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let (base, worker) = serve_dash_files(
+            HashMap::from([("/all.mp4?token=signed".into(), body)]),
+            requests,
+        );
+        (format!("{base}/all.mp4?token=signed"), worker)
+    }
+
+    fn sidx_fixture(
+        version: u8,
+        first_offset: u64,
+        wide_box: bool,
+        entries: &[(u32, u32)],
+    ) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(u32::from(version) << 24).to_be_bytes());
+        payload.extend_from_slice(&1u32.to_be_bytes());
+        payload.extend_from_slice(&1000u32.to_be_bytes());
+        if version == 0 {
+            payload.extend_from_slice(&0u32.to_be_bytes());
+            payload.extend_from_slice(&(first_offset as u32).to_be_bytes());
+        } else {
+            payload.extend_from_slice(&0x1_0000_0020u64.to_be_bytes());
+            payload.extend_from_slice(&first_offset.to_be_bytes());
+        }
+        payload.extend_from_slice(&0u16.to_be_bytes());
+        payload.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        for (size, duration) in entries {
+            payload.extend_from_slice(&size.to_be_bytes());
+            payload.extend_from_slice(&duration.to_be_bytes());
+            payload.extend_from_slice(&0x9000_0000u32.to_be_bytes());
+        }
+        let mut bytes = Vec::new();
+        if wide_box {
+            bytes.extend_from_slice(&1u32.to_be_bytes());
+            bytes.extend_from_slice(b"sidx");
+            bytes.extend_from_slice(&(payload.len() as u64 + 16).to_be_bytes());
+        } else {
+            bytes.extend_from_slice(&(payload.len() as u32 + 8).to_be_bytes());
+            bytes.extend_from_slice(b"sidx");
+        }
+        bytes.extend(payload);
+        bytes
+    }
+
+    #[test]
+    fn sidx_versions_and_box_sizes_use_the_box_end_as_the_offset_anchor() {
+        for version in [0, 1] {
+            for wide in [false, true] {
+                let offset = if version == 0 { 16 } else { 0x1_0000_0010 };
+                let sidx = sidx_fixture(version, offset, wide, &[(20, 1000), (30, 1500)]);
+                let free = [0, 0, 0, 8, b'f', b'r', b'e', b'e'];
+                let bytes = [free.as_slice(), &sidx, &free].concat();
+                let start = 100 + free.len() as u64 + sidx.len() as u64 + offset;
+                assert_eq!(
+                    parse_sidx(&bytes, 100).unwrap(),
+                    vec![
+                        (ByteRange { start, length: 20 }, 1.0),
+                        (
+                            ByteRange {
+                                start: start + 20,
+                                length: 30
+                            },
+                            1.5
+                        ),
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sidx_rejects_malformed_nested_and_overflowing_indices() {
+        let good = sidx_fixture(0, 0, false, &[(20, 1000)]);
+        for end in 0..good.len() {
+            assert!(parse_sidx(&good[..end], 0).is_err(), "prefix {end}");
+        }
+        for (offset, value) in [
+            (0, 0),
+            (0, 4),
+            (8, 2 << 24),
+            (8, 1),
+            (16, 0),
+            (28, 0),
+            (28, 2),
+            (32, 0),
+            (36, 0),
+            (32, 0x8000_0014),
+        ] {
+            let mut bad = good.clone();
+            bad[offset..offset + 4].copy_from_slice(&u32::to_be_bytes(value));
+            assert!(parse_sidx(&bad, 0).is_err(), "field {offset}={value}");
+        }
+        assert!(
+            parse_sidx(&sidx_fixture(1, u64::MAX, false, &[(20, 1000)]), 1)
+                .unwrap_err()
+                .contains("overflow")
+        );
+        assert!(parse_sidx(&good, u64::MAX - good.len() as u64 - 10)
+            .unwrap_err()
+            .contains("overflow"));
+        let mut oversized = vec![0; MAX_SIDX_BYTES as usize + 1];
+        oversized[..good.len()].copy_from_slice(&good);
+        assert!(parse_sidx(&oversized, 0).unwrap_err().contains("limit"));
+    }
+
+    #[test]
+    fn segment_base_inherits_overrides_and_respects_nearer_addressing_types() {
+        let xml = r#"<MPD><Period><SegmentBase indexRange="100-199"><Initialization range="0-99"/></SegmentBase><AdaptationSet mimeType="video/mp4"><BaseURL>https://cdn.test/</BaseURL>
+<Representation id="inherit"><BaseURL>in.mp4?sig=a&amp;b=c</BaseURL><SegmentBase/></Representation>
+<Representation id="override"><BaseURL>out.mp4</BaseURL><SegmentBase indexRange="200-299"><Initialization sourceURL="init.mp4" range="10-49"/></SegmentBase></Representation>
+<Representation id="list"><SegmentList><SegmentURL media="seg.m4s"/></SegmentList></Representation>
+<Representation id="template"><SegmentTemplate media="$Number$.m4s"><SegmentTimeline><S d="2"/></SegmentTimeline></SegmentTemplate></Representation>
+</AdaptationSet></Period></MPD>"#;
+        let tracks = parse_mpd(xml, "https://origin.test/mpd")
+            .unwrap()
+            .representations;
+        assert_eq!(
+            tracks[0].index_range,
+            Some(ByteRange {
+                start: 100,
+                length: 100
+            })
+        );
+        assert_eq!(
+            tracks[0].init.as_deref(),
+            Some("https://cdn.test/in.mp4?sig=a&b=c")
+        );
+        assert_eq!(
+            tracks[0].init_range,
+            Some(ByteRange {
+                start: 0,
+                length: 100
+            })
+        );
+        assert_eq!(
+            tracks[1].index_range,
+            Some(ByteRange {
+                start: 200,
+                length: 100
+            })
+        );
+        assert_eq!(tracks[1].init.as_deref(), Some("https://cdn.test/init.mp4"));
+        assert_eq!(
+            tracks[1].init_range,
+            Some(ByteRange {
+                start: 10,
+                length: 40
+            })
+        );
+        assert_eq!(tracks[2].index_range, None);
+        assert_eq!(tracks[2].media, vec!["https://cdn.test/seg.m4s"]);
+        assert_eq!(tracks[3].index_range, None);
+        assert_eq!(tracks[3].media, vec!["https://cdn.test/1.m4s"]);
+        for ancestor in [
+            "<SegmentList><Initialization sourceURL=\"wrong.mp4\"/></SegmentList>",
+            "<SegmentTemplate initialization=\"wrong.mp4\"/>",
+        ] {
+            let xml = format!(
+                r#"<MPD><Period>{ancestor}<Representation><SegmentBase indexRange="50-99"><Initialization range="0-49"/></SegmentBase></Representation></Period></MPD>"#
+            );
+            let track = parse_mpd(&xml, "https://cdn.test/all.mp4")
+                .unwrap()
+                .representations
+                .remove(0);
+            assert!(track.media.is_empty());
+            assert_eq!(track.init.as_deref(), Some("https://cdn.test/all.mp4"));
+            assert_eq!(
+                track.index_range,
+                Some(ByteRange {
+                    start: 50,
+                    length: 50
+                })
+            );
+        }
+        for base in ["<SegmentBase/>", "<SegmentBase indexRange=\"1-10\"><RepresentationIndex sourceURL=\"other.idx\"/></SegmentBase>"] {
+            let xml = format!("<MPD><Period><Representation>{base}</Representation></Period></MPD>");
+            assert!(parse_mpd(&xml, "https://cdn.test/all.mp4").unwrap_err().contains("unsupported"));
+        }
+    }
+
+    #[test]
+    fn segment_base_downloads_with_credentials_and_reuses_checked_media() {
+        let index = sidx_fixture(0, 0, false, &[(4, 1000), (4, 2000)]);
+        let start = 4 + index.len();
+        let (url, server) =
+            serve_byte_ranges([b"INIT".as_slice(), &index, b"AAAABBBB"].concat(), 4);
+        let xml = format!(
+            r#"<MPD><Period><Representation mimeType="video/mp4"><SegmentBase indexRange="4-{}"><Initialization range="0-3"/></SegmentBase></Representation></Period></MPD>"#,
+            start - 1
+        );
+        let mut track = parse_mpd(&xml, &url).unwrap().representations.remove(0);
+        let root = std::env::temp_dir().join(format!("dash-sidx-download-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let headers = HashMap::from([
+            ("Cookie".into(), "session=sidx".into()),
+            ("Authorization".into(), "Bearer sidx".into()),
+        ]);
+        expand_segment_base(&mut track, &headers, "", &control).unwrap();
+        assert_eq!(track.media_durations, vec![1.0, 2.0]);
+        assert_eq!(
+            track.media_ranges,
+            vec![
+                Some(ByteRange {
+                    start: start as u64,
+                    length: 4
+                }),
+                Some(ByteRange {
+                    start: start as u64 + 4,
+                    length: 4
+                })
+            ]
+        );
+        for _ in 0..2 {
+            expand_segment_base(&mut track, &headers, "", &control).unwrap();
+            let (files, _) = download_dash_primary(
+                &track,
+                true,
+                &root,
+                &headers,
+                "",
+                &control,
+                &mut DashCheckpoint::load(&root),
+                None,
+                3,
+            )
+            .unwrap();
+            assert_eq!(
+                files
+                    .iter()
+                    .flat_map(|path| fs::read(path).unwrap())
+                    .collect::<Vec<_>>(),
+                b"INITAAAABBBB"
+            );
+        }
+        for request in server.join().unwrap() {
+            assert!(request.starts_with("GET /all.mp4?token=signed HTTP/1.1"));
+            let request = request.to_ascii_lowercase();
+            assert!(request.contains("cookie: session=sidx\r\n"));
+            assert!(request.contains("authorization: bearer sidx\r\n"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn segment_base_obeys_explicit_control_without_a_throttle_context() {
+        use std::io::{Read, Write};
+        let root = std::env::temp_dir().join(format!("dash-sidx-control-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        for (command, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/all.mp4", listener.local_addr().unwrap());
+            let index = sidx_fixture(0, 0, false, &[(4, 1000)]);
+            let xml = format!(
+                r#"<MPD><Period><Representation><SegmentBase indexRange="0-{}"/></Representation></Period></MPD>"#,
+                index.len() - 1
+            );
+            let mut track = parse_mpd(&xml, &url).unwrap().representations.remove(0);
+            let original = track.clone();
+            fs::write(&control, command).unwrap();
+            assert_eq!(
+                expand_segment_base(&mut track, &HashMap::new(), "", &control).unwrap_err(),
+                expected
+            );
+            fs::write(&control, "run").unwrap();
+            let server_control = control.clone();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut header = [0u8; 1];
+                let mut received = Vec::new();
+                while !received.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut header).unwrap();
+                    received.push(header[0]);
+                }
+                fs::write(server_control, command).unwrap();
+                let _ = write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", index.len() - 1, index.len() + 4, index.len());
+                let _ = socket.write_all(&index);
+            });
+            assert_eq!(
+                expand_segment_base(&mut track, &HashMap::new(), "", &control).unwrap_err(),
+                expected
+            );
+            assert_eq!(track, original);
+            server.join().unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2305,6 +2789,195 @@ mod tests {
         merge_sub_track(&mut subs, &first);
         merge_sub_track(&mut subs, &next);
         assert_eq!(subs, vec![audio]);
+    }
+
+    #[test]
+    #[ignore = "requires real FFmpeg; configure HLS_FFMPEG and run explicitly"]
+    fn real_ffmpeg_segment_base_preserves_selected_av_and_timestamps() {
+        let ffmpeg = crate::media::merge::locate_ffmpeg().expect("configure HLS_FFMPEG");
+        let root = std::env::temp_dir().join(format!("dash-sidx-real-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut files = HashMap::new();
+        let mut representations = String::new();
+        let mut sources = Vec::new();
+        let mut expected_tracks = Vec::new();
+        // Two manifests, four AV indices, two init ranges and one optional subtitle index.
+        let mut request_count = 9;
+        for (kind, input, codec) in [
+            ("video", "testsrc2=size=128x72:rate=10", "mpeg4"),
+            ("audio", "sine=frequency=440:sample_rate=48000", "aac"),
+        ] {
+            let source = root.join(format!("{kind}.mp4"));
+            let mut command = Command::new(&ffmpeg);
+            command.args([
+                "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", input, "-t", "2",
+            ]);
+            if kind == "video" {
+                command.args(["-an", "-c:v", codec, "-g", "10"]);
+            } else {
+                command.args(["-vn", "-c:a", codec, "-ac", "1"]);
+            }
+            let generated = command
+                .args([
+                    "-movflags",
+                    "empty_moov+default_base_moof+frag_keyframe+global_sidx",
+                    "-frag_duration",
+                    "1000000",
+                ])
+                .arg(&source)
+                .output()
+                .unwrap();
+            assert!(
+                generated.status.success(),
+                "{}",
+                String::from_utf8_lossy(&generated.stderr)
+            );
+            let bytes = fs::read(&source).unwrap();
+            let mut cursor = 0;
+            let mut index = None;
+            while cursor < bytes.len() {
+                let size =
+                    u32::from_be_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
+                assert!(size >= 8 && size <= bytes.len() - cursor);
+                if &bytes[cursor + 4..cursor + 8] == b"sidx" {
+                    index = Some((cursor, size));
+                    break;
+                }
+                cursor += size;
+            }
+            let (start, size) = index.expect("FFmpeg must generate a global SIDX");
+            let references = parse_sidx(&bytes[start..start + size], start as u64).unwrap();
+            assert!(references.len() >= 2);
+            let mut expected = bytes[..start].to_vec();
+            for (range, _) in &references {
+                expected.extend_from_slice(
+                    &bytes[range.start as usize..(range.start + range.length) as usize],
+                );
+            }
+            expected_tracks.push((kind, references.len(), expected));
+            request_count += references.len();
+            representations.push_str(&format!(r#"<AdaptationSet mimeType="{kind}/mp4" contentType="{kind}"><Representation id="{kind}" bandwidth="1000"><BaseURL>{kind}.mp4?token=signed</BaseURL><SegmentBase indexRange="{start}-{}"><Initialization range="0-{}"/></SegmentBase></Representation></AdaptationSet>"#, start + size - 1, start - 1));
+            files.insert(format!("/{kind}.mp4?token=signed"), bytes);
+            sources.push(source);
+        }
+        // Unselected video is never fetched; disabled subtitles are not fetched either.
+        representations.push_str(r#"<AdaptationSet mimeType="video/mp4"><Representation id="unused" bandwidth="1"><BaseURL>unused.mp4</BaseURL><SegmentBase indexRange="0-43"/></Representation></AdaptationSet><AdaptationSet mimeType="text/vtt"><Representation id="sub"><BaseURL>optional-sub.mp4</BaseURL><SegmentBase indexRange="0-43"/></Representation></AdaptationSet>"#);
+        files.insert("/optional-sub.mp4".into(), vec![0; 44]);
+        files.insert(
+            "/manifest.mpd".into(),
+            format!("<MPD><Period>{representations}</Period></MPD>").into_bytes(),
+        );
+        let (base, server) = serve_dash_files(files, request_count);
+        let task = root.join("task");
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let headers = HashMap::from([
+            ("Cookie".into(), "session=real".into()),
+            ("Authorization".into(), "Bearer real".into()),
+        ]);
+        let url = format!("{base}/manifest.mpd");
+        let output =
+            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, false, "audio")
+                .unwrap();
+        // A restart rechecks indices but reuses persisted media. A malformed
+        // optional subtitle index must not fail an otherwise complete AV task.
+        assert_eq!(
+            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, true, "audio")
+                .unwrap(),
+            output
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), request_count);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.contains("/optional-sub.mp4 "))
+                .count(),
+            1
+        );
+        for request in requests {
+            assert!(!request.contains("unused"));
+            let request = request.to_ascii_lowercase();
+            assert!(request.contains("cookie: session=real\r\n"));
+            assert!(request.contains("authorization: bearer real\r\n"));
+        }
+        for (kind, count, expected) in expected_tracks {
+            let dir = if kind == "video" {
+                task.clone()
+            } else {
+                task.join("audio")
+            };
+            let mut downloaded = fs::read(dir.join("init.mp4")).unwrap();
+            for index in 0..count {
+                let slot = index + usize::from(kind == "video");
+                downloaded.extend(fs::read(dir.join(format!("seg-{slot:04}.m4s"))).unwrap());
+            }
+            assert!(
+                downloaded == expected,
+                "downloaded {kind} ranges must match source bytes"
+            );
+        }
+        // Compare AAC against an independent whole-file remux: MP4 muxing
+        // trims declared terminal padding that the fragmented source decoder
+        // can still emit. Compare all PCM samples and timestamps after the
+        // same container transition, rather than ignoring the final frame.
+        let reference = root.join("reference.mp4");
+        let remuxed = Command::new(&ffmpeg)
+            .args(["-v", "error", "-nostdin", "-y", "-i"])
+            .arg(&sources[0])
+            .arg("-i")
+            .arg(&sources[1])
+            .args([
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(
+            remuxed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&remuxed.stderr)
+        );
+        let decode = |path: &Path, stream: &str| {
+            let result = Command::new(&ffmpeg)
+                .args(["-v", "error", "-nostdin", "-copyts", "-i"])
+                .arg(path)
+                .args(["-map", stream, "-f", "framemd5", "-"])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let decoded = String::from_utf8(result.stdout).unwrap();
+            let timebase = decoded
+                .lines()
+                .find(|line| line.starts_with("#tb "))
+                .unwrap()
+                .to_string();
+            let frames = decoded
+                .lines()
+                .filter(|line| !line.starts_with('#') && !line.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (timebase, frames)
+        };
+        let video = decode(&sources[0], "0:v:0");
+        assert_eq!(video.1.len(), 20);
+        assert_eq!(decode(&output, "0:v:0"), video);
+        let audio = decode(&reference, "0:a:0");
+        assert!(audio.1.len() >= 90);
+        assert_eq!(decode(&output, "0:a:0"), audio);
+        eprintln!("SIDX AV: {} video frames, {} audio frames; exact downloaded ranges, decoded hashes and timestamps match whole-file reference", video.1.len(), audio.1.len());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2815,6 +3488,7 @@ mod tests {
                 base_url: String::new(),
                 init: Some("https://cdn.test/a-init.mp4".into()),
                 init_range: None,
+                index_range: None,
                 media: vec!["https://cdn.test/a0.m4s".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
@@ -2834,6 +3508,7 @@ mod tests {
                 base_url: String::new(),
                 init: Some("https://cdn.test/a-init.mp4".into()),
                 init_range: None,
+                index_range: None,
                 media: vec![
                     "https://cdn.test/a1.m4s".into(),
                     "https://cdn.test/a0.m4s".into(),
@@ -2866,6 +3541,7 @@ mod tests {
                 base_url: String::new(),
                 init: None,
                 init_range: None,
+                index_range: None,
                 media: vec!["https://cdn.test/en-0.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
@@ -2885,6 +3561,7 @@ mod tests {
                 base_url: String::new(),
                 init: None,
                 init_range: None,
+                index_range: None,
                 media: vec!["https://cdn.test/en-1.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
