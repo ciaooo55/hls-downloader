@@ -273,9 +273,9 @@ HLS 本轮采用的是具体的资源生命周期优化：首次领取范围后�
 | `0x00560610 → 0x00559d00`；HTTP worker `0x00590000 → 0x0055b060/0x00560610` | 普通模式选择扣除已接收、缓冲和预留后的剩余区间；开连接受剩余量门槛控制；ZIP 有单独 finder | `RangeScheduler::claim`、`ActiveProgress`、`AdaptiveConnectionController` | 已有最大安全尾部切分，响应身份校验后才允许切；保留播放 seek 优先和资源身份门槛。HLS 最小切分 256 KiB、初始最多 2 连接及拥堵退避，不照搬原对象 `+0xC0` 的 `2*x+3` 或旧机器常量 | 已适配；`active_split_*`、`adaptive_scheduler_*`、播放区间覆盖回归。当前默认按校验器开启，显式 0/false/off 关闭 |
 | `0x00590000 → 0x00584860` | 完成时同时调整连接状态、块记账及后续调度；存在相邻连接交接 | `range_worker` → `fetch_range` → `persist_range_progress` → `RangeScheduler::complete` | 调整终态顺序：先保存失败/整包转交流程的停止状态，再释放活动范围和通知。继续使用 Rust 所有权管理 worker，不移植原对象内存布局或停止其他线程的私有调用 | 已适配；范围忽略、唯一整包响应保全、共享停止、暂停、取消、并发检查点回归 |
 | `0x00584e80 → 0x00582990` | 读取 Content-Length、Content-Range 起点、终点和总长；调用方比较字段，存在站点及模式分支 | `fetch_range` 的真实 HTTP 206 路径 | 复现 HLS 可把 `bytes 0-3/10` 加 10 字节正文判成功；新增终点/Content-Length 一致性检查和按响应终点限制读取。合法短区间继续从下一字节请求，错误元数据不进入检查点。不能把原调用方特殊分支推广成 IDM 所有响应都作相同验证 | 已适配；新增本地 TCP 反例、短区间、空响应有界重试、身份变化及最终字节一致性回归 |
-| `0x00578290 → 0x00573e20`；`0x00577f50 → 0x00573fa0/0x00574f60` | 非零偏移发 REST；检查 REST 回复；PASV 解析数据端点；不以收到控制回复代表数据完成 | `ftp_engine::download_ftp` → SIZE/MDTM → REST → EPSV/PASV → RETR | 保留 SIZE+MDTM 资源版本续传、精确 350 回复、EPSV 优先、PASV 仅采端口而使用控制连接 peer；失败不续写旧资源。当前单流，不宣称具备 IDM 的 FTP 多连接/主动 PORT 模式 | 已适配（被动单流合同）；`resumes_only_the_saved_ftp_resource_version`、PASV、停止回归。FTP 多连接和主动模式列为尚未完成的对标差异，不假装已移植 |
+| `0x00578290 → 0x00573e20`；`0x00577f50 → 0x00573fa0/0x00574f60` | 非零偏移发 REST；检查 REST 回复；PASV 解析数据端点；不以收到控制回复代表数据完成。原版 REST 分支检查回复首字符为 `3`，不是精确 `350` | `ftp_engine::download_ftp` → SIZE/MDTM → EPSV/PASV → REST → RETR | 保留 SIZE+MDTM 资源版本续传、精确 350 回复、PASV 仅采端口而使用控制连接 peer；失败不续写旧资源。2026-11-15 才真正补入 EPSV 优先及 IPv6；旧版对应表提前写成已支持属记录错误。仅 IPv4 的 500/501/502/504 可回退 PASV，畸形成功、临时错误或权限错误直接失败；严格解析六个八位字段，REST 紧邻 RETR | 已适配（被动单流合同）；EPSV 成功/拒绝/畸形、PASV 回退/坏字段、IPv6、已有文件保全、身份续传和停止回归。EPSV 依据 RFC 2428，未从已读原函数确认原版有该分支；FTP 多连接/主动 PORT 尚未完成 |
 | `0x1003f5b0 → 0x1003ede0` | 逐行消费 HLS、按 tag 分派并携带段、密钥及初始化信息 | `hls::parse_playlist` → 分片下载 → 现有 FFmpeg 封装 | 首个实际行必须是完整 `#EXTM3U`，继续容忍 BOM/前导空白；隐式 BYTERANGE 只能延续相邻同资源，LL-HLS part 与完整段分别记偏移，避免跨资源或跨类型复用旧偏移。保留 LL-HLS、字幕、广告跳过和播放优先 | 已适配；伪清单、byte range、轮换密钥、init map、gap、直播等回归；首行和相邻偏移约束同时依据 RFC 8216，未声称是原版逐字相同策略 |
-| 原媒体解析链；`0x1002c598 → 0x1003fb70 → 0x1003fa40` | fMP4 box 长度有界读取，提取轨道与时长；该函数是 MP4 读取器，不能误当 XML MPD 解析器 | `dash::parse_mpd` → 时间轴/轨道下载 → `mux_av` | 以项目已有 roxmltree 替换字符串扫 XML，识别命名空间、忽略注释伪节点、按父节点继承轨道属性和模板；保留签名 URL 解码、时间轴与分片上限；删除被替代的字符串 XML 扫描助手。仍明确拒绝多 Period 与 SegmentList byte ranges，不能声称完整复刻 IDM 所有 DASH 变体 | 已适配（当前支持的 DASH）；命名空间/注释/签名 URL、独立音轨、继承、自闭合、固定时长和负重复回归；不以恢复文件名代替原函数证据 |
+| 原媒体解析链；`0x1002c598 → 0x1003fb70 → 0x1003fa40` | fMP4 box 长度有界读取，提取轨道与时长；该函数是 MP4 读取器，不能误当 XML MPD 解析器 | `dash::parse_mpd` → 时间轴/轨道下载 → `mux_av` | 使用项目已有 roxmltree，保留签名 URL、继承、时间轴与分片上限。2026-11-15 补入 SegmentList 的 Initialization.range/SegmentURL.mediaRange：同 URL 不同范围分别下载、去重和记账；请求使用现有凭据与传输，严格校验 206/Content-Range/长度后以 64 KiB 缓冲落盘。替换前先持久失效旧检查点，防止失败文件冒用旧身份；旧整段身份格式不变。仍拒绝多 Period，未实现 SegmentBase/sidx 索引展开 | 已适配（当前支持的 DASH）；范围解析、视频/音轨/字幕下载、范围变化后重新下载、直播范围和时长累计、错误响应及写满后失败重启回归。真实 2 秒 fMP4 经范围下载及封装，20 帧解码哈希一致；不据此宣称所有媒体或与 IDM 等效 |
 | 原 TS/MP4 转换与音频状态；恢复模块中部分 descriptor 仍标未实测 | 原版有完整解复用和封装调用链；恢复 C 单个 CRC/probe 不等于成品 MP4 | `media::merge`、FFmpeg `-c copy`、同目录暂存和原子替换 | 保留现有完整封装路径，不替换成模拟 I/O 或随机字节串接；失败、暂停不发布残缺成品 | 有意不同；真实合法媒体验证需解码、轨道、时长和帧哈希；CRC/probe 不能作为替代 |
 | 插件 `Wb/Ub/Zb/rb` 及媒体元素生命周期 | 元素/frame 关联、可见性及几何变化决定浮窗生命周期 | `mediaOverlay`、`content.ts` 的 Resize/Intersection/MutationObserver 与 shadow root 注册 | 现有 DOM 浮窗保留；只观察已注册根和媒体相关属性，隐藏或移除后清理。原生 IDMBRBTN 绘制 DLL 未接入，UI 不改为 IDM 外观 | 已适配（关联和生命周期）／有意不同（绘制）；现有几何、遮挡、shadow、销毁测试；未做本轮个人浏览器运行验证 |
 | 连接、缓冲及媒体子进程生命周期 | 按需分配、结束后释放；不能从恢复程序体积推断完整引擎占用 | 领取首个范围后才打开文件和分配 writer；已有流式网络与按需 FFmpeg | 保留已有惰性 writer 和复用缓冲；本轮 DASH 删除重复字符串扫描。没有为了“看似原生”重复引入恢复 C 或第二套 runtime | 已适配；现有资源生命周期回归通过。五轮中位数采集脚本已补齐，但本轮尚未运行；没有同条件原版 IDM 性能证据 |
@@ -284,11 +284,15 @@ HLS 本轮采用的是具体的资源生命周期优化：首次领取范围后�
 
 SFTP、BT、字幕、播放、投屏、TVBox、队列、计划任务和站点同步继续通过现有 Core；本轮没有重新建立平行服务，也没有改 UI 或迁移数据库。
 
-已知对标差异包括 FTP 多连接/主动模式、DASH 多 Period/SegmentList byte ranges、自制完整封装器和 IDM 原生浏览器浮窗。前两项尚未完成；后两项按本轮约定保留现有实现。未读取清楚的原版调用链不标“已等效”。原版同条件吞吐、CPU、内存与异常恢复比较仍未执行，不能写“达到 IDM”。本轮的本地回归和构建结果不替代独立桌面/浏览器、安装升级或 Mozilla 签名验收；新增媒体隔离验收脚本仅通过语法检查，未运行产品流程。
+已知对标差异包括 FTP 多连接/主动模式、DASH 多 Period/SegmentBase 索引展开、自制完整封装器和 IDM 原生浏览器浮窗。前两项尚未完成；后两项按本轮约定保留现有实现。SegmentList 显式字节范围已于 2026-11-15 接入实际下载路径。未读取清楚的原版调用链不标“已等效”。原版同条件吞吐、CPU、内存与异常恢复比较仍未执行，不能写“达到 IDM”。本地回归和构建不替代独立桌面/浏览器、安装升级或 Mozilla 签名验收。
 
 首行与相邻 byte range 的规范依据：[RFC 8216 §4.3.1.1、§4.3.2.2](https://www.rfc-editor.org/rfc/rfc8216.html)。
 
-### 本轮回归与交付证据（2026-11-15）
+EPSV 及控制连接 peer 的规范依据：[RFC 2428 §3–4](https://www.rfc-editor.org/rfc/rfc2428.html)。SegmentList 属性核对使用 [ISO MPEG-DASH MPD schema](https://standards.iso.org/ittf/PubliclyAvailableStandards/MPEG-DASH_schema_files/DASH-MPD.xsd) 中的 URLType.range 和 SegmentURLType.mediaRange；这些规范补齐不冒充已确认的 IDM 原函数逐字移植。
+
+### 上一批源码回归与交付证据（2026-11-15）
+
+以下为浏览器/HTTP/HLS/XML 改造的验证快照。随后补齐的 FTP EPSV 与 DASH SegmentList 字节范围，以 [后续验证记录](idm-port-validation.md#2026-11-15-ftp--dash-后续验证) 为准；不能把历史整包产物或旧测试数当作最新交付结果。
 
 完整回归额外发现成品路径与缓存清理之间的竞态：`published.path` 在两次查询之间被清理时，已完成任务可能显示临时 payload 路径。本轮改为一次读取 marker；读取失败时采用完成快照已持久化的合法成品路径，原成品丢失也不改指向其他任务的同名文件。确定性回归覆盖不可读 marker、删除 marker 以及原名称被其他文件占用。删除已无生产调用的包装函数，所有测试直接验证实际解析路径。
 

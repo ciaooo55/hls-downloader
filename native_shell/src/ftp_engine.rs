@@ -107,16 +107,35 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
     let user = percent_decode(user)?;
     let password = percent_decode(password)?;
-    let (host, port) = if let Some((host, port)) = hostport.rsplit_once(':') {
+    let default_port = if tls { 990 } else { 21 };
+    let parse_port = |port: &str| -> Result<u16, String> {
         let port = port
             .parse::<u16>()
             .map_err(|_| "FTP port invalid".to_string())?;
         if port == 0 {
             return Err("FTP port invalid".into());
         }
+        Ok(port)
+    };
+    let (host, port) = if let Some(bracketed) = hostport.strip_prefix('[') {
+        let (host, suffix) = bracketed
+            .split_once(']')
+            .ok_or("FTP IPv6 address invalid")?;
+        host.parse::<std::net::Ipv6Addr>()
+            .map_err(|_| "FTP IPv6 address invalid".to_string())?;
+        let port = if suffix.is_empty() {
+            default_port
+        } else {
+            parse_port(suffix.strip_prefix(':').ok_or("FTP port invalid")?)?
+        };
         (host, port)
+    } else if let Some((host, port)) = hostport.rsplit_once(':') {
+        if host.contains(':') {
+            return Err("FTP IPv6 address must be bracketed".into());
+        }
+        (host, parse_port(port)?)
     } else {
-        (hostport, if tls { 990 } else { 21 })
+        (hostport, default_port)
     };
     if host.is_empty() || !ftp_wire_ok(host) {
         return Err("FTP host missing".into());
@@ -253,10 +272,20 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     if resume_from >= size {
         resume_from = 0;
     }
-    let pasv = command(&mut ctrl, "PASV")?;
-    require_reply_code(&pasv, &[227], "PASV")?;
-    let data_port = parse_pasv_port(&pasv)?;
-    let data_addr = std::net::SocketAddr::new(ctrl.peer_addr()?.ip(), data_port);
+    let peer = ctrl.peer_addr()?;
+    let epsv = command(&mut ctrl, "EPSV")?;
+    // Only an unsupported command on IPv4 authorizes PASV. A malformed
+    // success or a transient/permission error must not start another path.
+    let data_port = if peer.is_ipv4() && matches!(reply_code(&epsv), Some(500 | 501 | 502 | 504)) {
+        let pasv = command(&mut ctrl, "PASV")?;
+        require_reply_code(&pasv, &[227], "PASV")?;
+        parse_pasv_port(&pasv)?
+    } else {
+        require_reply_code(&epsv, &[229], "EPSV")?;
+        parse_epsv_port(&epsv)?
+    };
+    // Both passive modes use the control peer, never a server-advertised host.
+    let data_addr = std::net::SocketAddr::new(peer.ip(), data_port);
     let data_raw = TcpStream::connect(data_addr).map_err(|error| error.to_string())?;
     data_raw
         .set_read_timeout(Some(Duration::from_secs(30)))
@@ -265,7 +294,7 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     // interrupt a blocked FTP or FTPS data read without relying on short TLS
     // read timeouts or transport-specific timeout semantics.
     let data_abort = data_raw.try_clone().map_err(|error| error.to_string())?;
-    // REST 必须紧挨 RETR；中间发送 PASV 会让部分服务器取消续传偏移。
+    // REST 必须紧挨 RETR；中间发送 EPSV/PASV 会让部分服务器取消续传偏移。
     if resume_from > 0 {
         let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
         match reply_code(&reply) {
@@ -506,23 +535,45 @@ fn read_reply(stream: &mut Conn) -> Result<String, String> {
 }
 
 fn parse_pasv_port(reply: &str) -> Result<u16, String> {
-    let start = reply
-        .find('(')
-        .ok_or_else(|| "PASV missing host".to_string())?
-        + 1;
-    let end = reply
-        .find(')')
-        .ok_or_else(|| "PASV missing host".to_string())?;
-    let nums: Vec<u16> = reply[start..end]
+    let (_, address) = reply.split_once('(').ok_or("PASV missing host")?;
+    let (address, _) = address.split_once(')').ok_or("PASV missing host")?;
+    let nums: Vec<u8> = address
         .split(',')
-        .filter_map(|item| item.trim().parse().ok())
-        .collect();
-    if nums.len() < 6 {
+        .map(|item| item.trim().parse::<u8>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| "PASV address invalid".to_string())?;
+    if nums.len() != 6 {
         return Err("PASV address invalid".into());
     }
-    let port = nums[4].saturating_mul(256).saturating_add(nums[5]);
+    let port = u16::from_be_bytes([nums[4], nums[5]]);
     if port == 0 {
         return Err("PASV port invalid".into());
+    }
+    Ok(port)
+}
+
+fn parse_epsv_port(reply: &str) -> Result<u16, String> {
+    let (_, address) = reply.split_once('(').ok_or("EPSV missing port")?;
+    let (address, _) = address.rsplit_once(')').ok_or("EPSV missing port")?;
+    let bytes = address.as_bytes();
+    let delimiter = *bytes.first().ok_or("EPSV address invalid")?;
+    if !(33..=126).contains(&delimiter)
+        || bytes.len() < 5
+        || bytes[1] != delimiter
+        || bytes[2] != delimiter
+        || bytes.last() != Some(&delimiter)
+    {
+        return Err("EPSV address invalid".into());
+    }
+    let port_text = &address[3..address.len() - 1];
+    if !port_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("EPSV port invalid".into());
+    }
+    let port = port_text
+        .parse::<u16>()
+        .map_err(|_| "EPSV port invalid".to_string())?;
+    if port == 0 {
+        return Err("EPSV port invalid".into());
     }
     Ok(port)
 }
@@ -542,6 +593,18 @@ mod tests {
         let explicit = parse_ftp_url("ftps://files.example:21/a.bin").unwrap();
         assert_eq!(explicit.port, 21);
         assert!(explicit.tls);
+        let ipv6 = parse_ftp_url("ftp://alice:secret@[::1]:2121/file.bin").unwrap();
+        assert_eq!(ipv6.host, "::1");
+        assert_eq!(ipv6.port, 2121);
+        assert_eq!(parse_ftp_url("ftps://[::1]/a").unwrap().port, 990);
+        for invalid in [
+            "ftp://[::1/a",
+            "ftp://[::1]x/a",
+            "ftp://[host]/a",
+            "ftp://::1/a",
+        ] {
+            assert!(parse_ftp_url(invalid).is_err(), "{invalid}");
+        }
         assert!(parse_ftp_url("ftp://files.example:notaport/a.bin").is_err());
         assert!(parse_ftp_url("ftp://files.example:0/a.bin").is_err());
         assert!(parse_ftp_url("ftp://files.example/a.bin\r\nSITE EXEC x").is_err());
@@ -584,6 +647,177 @@ mod tests {
         );
         assert!(parse_pasv_port("227 Entering Passive Mode (169,254,169,254,0,0)").is_err());
         assert!(parse_pasv_port("227 no-parens").is_err());
+        for tuple in [
+            "1,2,3,4,5,256",
+            "1,2,3,4,256,5",
+            "1,2,3,4,bad,5,6",
+            "1,2,3,4,5,6,7",
+            "1,2,3,4,5",
+            "1,2,3,4,-1,5",
+        ] {
+            assert!(
+                parse_pasv_port(&format!("227 Passive ({tuple})")).is_err(),
+                "{tuple}"
+            );
+        }
+        assert!(parse_pasv_port("227 ) before (").is_err());
+    }
+
+    #[test]
+    fn epsv_requires_empty_address_fields_and_valid_port() {
+        for delimiter in ['|', '!', '(', ')', '1'] {
+            let reply = format!("229 Passive ({delimiter}{delimiter}{delimiter}6446{delimiter})");
+            assert_eq!(parse_epsv_port(&reply).unwrap(), 6446, "{reply}");
+        }
+        for tuple in [
+            "",
+            "|||",
+            "|||0|",
+            "|||65536|",
+            "||127.0.0.1|6446|",
+            "|1||6446|",
+            "|||+6446|",
+            "||| 6446|",
+            "|||6446!",
+            "   6446 ",
+            "ééé6446é",
+        ] {
+            assert!(
+                parse_epsv_port(&format!("229 Passive ({tuple})")).is_err(),
+                "{tuple}"
+            );
+        }
+        assert!(parse_epsv_port("229 ) before (").is_err());
+    }
+
+    #[test]
+    fn passive_negotiation_prefers_epsv_and_only_falls_back_when_unsupported() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        for (case, epsv_reply, pasv_reply, success) in [
+            ("epsv", "229", "", true),
+            ("ipv6", "229", "", true),
+            ("ipv6-no-pasv", "502 Not implemented", "", false),
+            ("legacy-500", "500 Unknown command", "227", true),
+            ("legacy-501", "501 Unsupported syntax", "227", true),
+            ("legacy-502", "502 Not implemented", "227", true),
+            ("legacy-504", "504 Unsupported command", "227", true),
+            ("bad-epsv", "229 Passive (|||65536|)", "", false),
+            ("epsv-unavailable", "425 Cannot open data", "", false),
+            ("epsv-auth", "530 Not logged in", "", false),
+            (
+                "pasv-unavailable",
+                "502 Not implemented",
+                "425 Cannot open data",
+                false,
+            ),
+            (
+                "bad-pasv",
+                "502 Not implemented",
+                "227 Passive (127,0,0,1,256,1)",
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind(if case.starts_with("ipv6") {
+                "[::1]:0"
+            } else {
+                "127.0.0.1:0"
+            })
+            .unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut ctrl, _) = listener.accept().unwrap();
+                ctrl.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                ctrl.write_all(b"220 Ready\r\n").unwrap();
+                let mut reader = BufReader::new(ctrl.try_clone().unwrap());
+                let mut data_listener = None;
+                let mut commands = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    let command = line.trim_end();
+                    commands.push(command.to_string());
+                    match command {
+                        "USER anonymous" => ctrl.write_all(b"230 Logged in\r\n").unwrap(),
+                        "TYPE I" => ctrl.write_all(b"200 Binary\r\n").unwrap(),
+                        "SIZE /file.bin" => ctrl.write_all(b"213 8\r\n").unwrap(),
+                        "MDTM /file.bin" => ctrl.write_all(b"213 20261115000000\r\n").unwrap(),
+                        "EPSV" | "PASV" => {
+                            let reply = if command == "EPSV" {
+                                epsv_reply
+                            } else {
+                                pasv_reply
+                            };
+                            if reply == "229" || reply == "227" {
+                                let listener = TcpListener::bind((address.ip(), 0)).unwrap();
+                                let port = listener.local_addr().unwrap().port();
+                                data_listener = Some(listener);
+                                if reply == "229" {
+                                    write!(ctrl, "229 Passive (!!!{port}!)\r\n").unwrap();
+                                } else {
+                                    // A different advertised IP must not redirect the data socket.
+                                    write!(
+                                        ctrl,
+                                        "227 Passive (192,0,2,1,{},{})\r\n",
+                                        port / 256,
+                                        port % 256
+                                    )
+                                    .unwrap();
+                                }
+                            } else {
+                                write!(ctrl, "{reply}\r\n").unwrap();
+                            }
+                        }
+                        "RETR /file.bin" => {
+                            assert!(success, "{case}: failed negotiation must not retrieve");
+                            ctrl.write_all(b"150 Opening data\r\n").unwrap();
+                            let (mut data, _) = data_listener.take().unwrap().accept().unwrap();
+                            data.write_all(b"AAAABBBB").unwrap();
+                            drop(data);
+                            ctrl.write_all(b"226 Complete\r\n").unwrap();
+                            break;
+                        }
+                        _ => panic!("{case}: unexpected command {command}"),
+                    }
+                }
+                commands
+            });
+            let root =
+                std::env::temp_dir().join(format!("hls-ftp-passive-{}-{case}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = root.join("payload.downloading");
+            let control = root.join("control");
+            std::fs::write(&control, "run").unwrap();
+            std::fs::write(&output, b"original").unwrap();
+            let result = download_ftp(
+                &format!("ftp://{address}/file.bin"),
+                &output,
+                &control,
+                false,
+            );
+            let commands = server.join().unwrap();
+            let bytes = std::fs::read(&output).unwrap();
+            let has_state = output.with_extension("ftp-state.json").exists();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(result.is_ok(), success, "{case}: {result:?}");
+            assert_eq!(
+                commands.iter().any(|item| item == "PASV"),
+                !pasv_reply.is_empty(),
+                "{case}"
+            );
+            assert_eq!(
+                bytes,
+                if success { b"AAAABBBB" } else { b"original" },
+                "{case}"
+            );
+            assert!(
+                !has_state,
+                "{case}: failed negotiation must not change resource identity"
+            );
+        }
     }
 
     #[test]
@@ -730,6 +964,15 @@ mod tests {
                             } else {
                                 ctrl.write_all(b"502 MDTM unsupported\r\n").unwrap();
                             }
+                        } else if command == "EPSV" {
+                            if case == "unchanged" {
+                                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                                let port = listener.local_addr().unwrap().port();
+                                data_listener = Some(listener);
+                                write!(ctrl, "229 Passive (|||{port}|)\r\n").unwrap();
+                            } else {
+                                ctrl.write_all(b"502 EPSV unsupported\r\n").unwrap();
+                            }
                         } else if command == "PASV" {
                             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
                             let port = listener.local_addr().unwrap().port();
@@ -809,6 +1052,16 @@ mod tests {
                 expect_rest,
                 "{case}"
             );
+            if expect_rest {
+                let rest = requests[1]
+                    .iter()
+                    .position(|line| line == "REST 4")
+                    .unwrap();
+                assert!(
+                    requests[1][rest + 1].starts_with("RETR "),
+                    "{case}: REST must immediately precede RETR"
+                );
+            }
             assert!(
                 !state.contains("secret"),
                 "resume metadata must not persist FTP passwords"
@@ -848,6 +1101,8 @@ mod tests {
                     ctrl.write_all(b"213 4\r\n").unwrap();
                 } else if command.starts_with("MDTM ") {
                     ctrl.write_all(b"502 MDTM unsupported\r\n").unwrap();
+                } else if command == "EPSV" {
+                    ctrl.write_all(b"502 EPSV unsupported\r\n").unwrap();
                 } else if command == "PASV" {
                     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
                     let data_port = listener.local_addr().unwrap().port();

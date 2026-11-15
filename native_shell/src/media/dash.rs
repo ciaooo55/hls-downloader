@@ -27,8 +27,36 @@ pub struct Representation {
     pub label: String,
     pub base_url: String,
     pub init: Option<String>,
+    pub init_range: Option<ByteRange>,
     pub media: Vec<String>,
+    pub media_ranges: Vec<Option<ByteRange>>,
     pub media_durations: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ByteRange {
+    pub start: u64,
+    pub length: u64,
+}
+
+fn parse_byte_range(value: &str) -> Result<ByteRange, String> {
+    let (start, end) = value.split_once('-').ok_or("invalid DASH byte range")?;
+    if start.is_empty()
+        || end.is_empty()
+        || !start.bytes().chain(end.bytes()).all(|b| b.is_ascii_digit())
+    {
+        return Err("invalid DASH byte range".into());
+    }
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| "invalid DASH byte range")?;
+    let length = end
+        .parse::<u64>()
+        .ok()
+        .and_then(|end| end.checked_sub(start))
+        .and_then(|n| n.checked_add(1))
+        .ok_or("invalid DASH byte range")?;
+    Ok(ByteRange { start, length })
 }
 
 pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
@@ -45,21 +73,6 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         .count();
     if period_count > 1 {
         return Err("unsupported multi-period DASH: cannot preserve all periods".into());
-    }
-    for element in ["Initialization", "SegmentURL"] {
-        for node in root
-            .descendants()
-            .filter(|node| mpd_element(*node, element, root))
-        {
-            let field = if element == "Initialization" {
-                "range"
-            } else {
-                "mediaRange"
-            };
-            if node.attribute(field).is_some() {
-                return Err("unsupported DASH SegmentList byte ranges".into());
-            }
-        }
     }
     let mut representations = Vec::new();
     for node in root
@@ -131,13 +144,26 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let has_timeline = templates
             .iter()
             .any(|template| mpd_child(*template, "SegmentTimeline").is_some());
-        let init = template_attr("initialization")
-            .or_else(|| node.attribute("initialization"))
-            .or_else(|| {
-                segment_list
-                    .and_then(|list| mpd_child(list, "Initialization")?.attribute("sourceURL"))
+        let initialization = segment_list.and_then(|list| mpd_child(list, "Initialization"));
+        let init_range = initialization
+            .and_then(|node| node.attribute("range"))
+            .map(parse_byte_range)
+            .transpose()?;
+        let init = if let Some(initialization) = initialization {
+            let source = initialization.attribute("sourceURL").unwrap_or("");
+            Some(if source.is_empty() {
+                base_url.clone()
+            } else {
+                resolve(&base_url, source)
             })
-            .map(|value| resolve(&base_url, &apply_template(value, &id, 0, 0, bandwidth)));
+        } else {
+            template_attr("initialization")
+                .or_else(|| node.attribute("initialization"))
+                .map(|value| resolve(&base_url, &apply_template(value, &id, 0, 0, bandwidth)))
+        };
+        if init_range.is_some() && init.as_ref().is_none_or(|url| url.is_empty()) {
+            return Err("invalid DASH initialization URL".into());
+        }
         // SegmentURL 的 media 是显式地址，不能当作 SegmentTemplate 重复展开。
         let media_template = if segment_list.is_some() {
             None
@@ -145,6 +171,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             template_attr("media")
         };
         let mut media = Vec::new();
+        let mut media_ranges = Vec::new();
         let mut media_durations = Vec::new();
         if let Some(template) = media_template {
             media.extend(expand_timeline(
@@ -156,14 +183,28 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 period_duration.filter(|_| !dynamic || has_timeline),
                 &mut media_durations,
             )?);
+            media_ranges.resize(media.len(), None);
         }
         let list = segment_list.unwrap_or(node);
         for child in list
             .children()
             .filter(|child| mpd_element(*child, "SegmentURL", root))
         {
-            if let Some(source) = child.attribute("media") {
-                media.push(resolve(&base_url, source));
+            let range = child
+                .attribute("mediaRange")
+                .map(parse_byte_range)
+                .transpose()?;
+            if let Some(source) = child.attribute("media").or(range.map(|_| "")) {
+                let url = if source.is_empty() && range.is_some() {
+                    base_url.clone()
+                } else {
+                    resolve(&base_url, source)
+                };
+                if url.is_empty() {
+                    return Err("invalid DASH segment URL".into());
+                }
+                media.push(url);
+                media_ranges.push(range);
             }
         }
         if let Some(list) = segment_list {
@@ -192,7 +233,9 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             label: inherited("label"),
             base_url,
             init: init.filter(|url| !url.is_empty()),
-            media: media.into_iter().filter(|url| !url.is_empty()).collect(),
+            init_range,
+            media,
+            media_ranges,
             media_durations,
         });
     }
@@ -373,9 +416,10 @@ pub fn download_dash_selected(
         }
         if let Some(video) = video.as_ref() {
             if let Some(init) = &video.init {
-                if seen.insert(init.clone()) {
+                if seen.insert((init.clone(), video.init_range)) {
                     files.push(resume_or_fetch(
                         init,
+                        video.init_range,
                         headers,
                         proxy,
                         &task_dir.join("init.mp4"),
@@ -397,8 +441,9 @@ pub fn download_dash_selected(
                     );
                 }
             }
-            for media in &video.media {
-                if !seen.insert(media.clone()) {
+            for (media_index, media) in video.media.iter().enumerate() {
+                let range = video.media_ranges[media_index];
+                if !seen.insert((media.clone(), range)) {
                     continue;
                 }
                 if read_control(control) != "run" {
@@ -408,6 +453,7 @@ pub fn download_dash_selected(
                 let dest = task_dir.join(format!("seg-{index:04}.m4s"));
                 files.push(resume_or_fetch(
                     media,
+                    range,
                     headers,
                     proxy,
                     &dest,
@@ -430,9 +476,10 @@ pub fn download_dash_selected(
             }
         } else if let Some(audio) = audio.as_ref() {
             if let Some(init) = &audio.init {
-                if seen.insert(init.clone()) {
+                if seen.insert((init.clone(), audio.init_range)) {
                     files.push(resume_or_fetch(
                         init,
+                        audio.init_range,
                         headers,
                         proxy,
                         &task_dir.join("init.mp4"),
@@ -454,8 +501,9 @@ pub fn download_dash_selected(
                     );
                 }
             }
-            for media in &audio.media {
-                if !seen.insert(media.clone()) {
+            for (media_index, media) in audio.media.iter().enumerate() {
+                let range = audio.media_ranges[media_index];
+                if !seen.insert((media.clone(), range)) {
                     continue;
                 }
                 if read_control(control) != "run" {
@@ -465,6 +513,7 @@ pub fn download_dash_selected(
                 let dest = task_dir.join(format!("seg-{index:04}.m4s"));
                 files.push(resume_or_fetch(
                     media,
+                    range,
                     headers,
                     proxy,
                     &dest,
@@ -561,6 +610,7 @@ fn download_dash_primary(
     if let Some(init) = &track.init {
         files.push(resume_or_fetch(
             init,
+            track.init_range,
             headers,
             proxy,
             &task_dir.join("init.mp4"),
@@ -585,6 +635,7 @@ fn download_dash_primary(
         if let Some(init) = &audio.init {
             audio_files.push(resume_or_fetch(
                 init,
+                audio.init_range,
                 headers,
                 proxy,
                 &audio_dir.join("init.mp4"),
@@ -610,6 +661,7 @@ fn download_dash_primary(
             &(index + offset).to_string(),
             &track.id,
             &track.media[index],
+            track.media_ranges[index],
             &track.mime,
         );
         let size = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
@@ -626,6 +678,7 @@ fn download_dash_primary(
                 &index.to_string(),
                 &audio.id,
                 &audio.media[index],
+                audio.media_ranges[index],
                 &audio.mime,
             );
             let size = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
@@ -685,6 +738,7 @@ fn download_dash_primary(
             let audio = audio.unwrap();
             audio_files.push(resume_or_fetch(
                 &audio.media[index],
+                audio.media_ranges[index],
                 headers,
                 proxy,
                 &audio_planned[index],
@@ -700,6 +754,7 @@ fn download_dash_primary(
         } else {
             files.push(resume_or_fetch(
                 &track.media[index],
+                track.media_ranges[index],
                 headers,
                 proxy,
                 &planned[index],
@@ -783,10 +838,22 @@ fn merge_representation(dst: &mut Option<Representation>, src: &Representation) 
         Some(existing) => {
             if existing.init.is_none() {
                 existing.init = src.init.clone();
+                existing.init_range = src.init_range;
             }
-            for media in &src.media {
-                if !existing.media.iter().any(|item| item == media) {
+            for (index, media) in src.media.iter().enumerate() {
+                let range = src.media_ranges[index];
+                if !existing
+                    .media
+                    .iter()
+                    .zip(&existing.media_ranges)
+                    .any(|(url, saved)| url == media && *saved == range)
+                {
+                    existing.media_durations.resize(existing.media.len(), 1.0);
                     existing.media.push(media.clone());
+                    existing.media_ranges.push(range);
+                    existing
+                        .media_durations
+                        .push(src.media_durations.get(index).copied().unwrap_or(1.0));
                 }
             }
         }
@@ -799,10 +866,22 @@ fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) 
     }) {
         if existing.init.is_none() {
             existing.init = incoming.init.clone();
+            existing.init_range = incoming.init_range;
         }
-        for media in &incoming.media {
-            if !existing.media.iter().any(|item| item == media) {
+        for (index, media) in incoming.media.iter().enumerate() {
+            let range = incoming.media_ranges[index];
+            if !existing
+                .media
+                .iter()
+                .zip(&existing.media_ranges)
+                .any(|(url, saved)| url == media && *saved == range)
+            {
+                existing.media_durations.resize(existing.media.len(), 1.0);
                 existing.media.push(media.clone());
+                existing.media_ranges.push(range);
+                existing
+                    .media_durations
+                    .push(incoming.media_durations.get(index).copied().unwrap_or(1.0));
             }
         }
         return;
@@ -828,6 +907,7 @@ fn pull_dash_audio_segments(
     if let Some(init) = &audio.init {
         let path = resume_or_fetch(
             init,
+            audio.init_range,
             headers,
             proxy,
             &audio_dir.join("init.mp4"),
@@ -855,6 +935,7 @@ fn pull_dash_audio_segments(
         }
         let path = resume_or_fetch(
             media,
+            audio.media_ranges[index],
             headers,
             proxy,
             &audio_dir.join(format!("seg-{index:04}.m4s")),
@@ -916,6 +997,7 @@ fn fetch_dash_audio(
 
 fn download_one(
     url: &str,
+    range: Option<ByteRange>,
     headers: &HashMap<String, String>,
     proxy: &str,
     output: &Path,
@@ -940,11 +1022,16 @@ fn download_one(
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
         replay_json: crate::credentials::scoped_replay_json(),
-        curl_body_limit: None,
+        curl_body_limit: range.map(|range| range.length),
         range_stop: None,
         origin_boundary: String::new(),
     };
-    run_job(&job).map_err(|error| error.to_string())?;
+    if let Some(range) = range {
+        crate::http_engine::download_bytes_range(&job, range.start, range.length)
+            .map_err(|error| error.to_string())?;
+    } else {
+        run_job(&job).map_err(|error| error.to_string())?;
+    }
     Ok(output.to_path_buf())
 }
 
@@ -960,15 +1047,20 @@ pub(crate) fn dash_file_identity(
     slot: &str,
     representation: &str,
     url: &str,
+    range: Option<ByteRange>,
     mime: &str,
 ) -> String {
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "kind": kind,
         "mime": mime,
         "representation": representation,
         "slot": slot,
         "url": super::hls::stable_media_url(url),
     });
+    // Keep existing whole-segment checkpoint identities compatible.
+    if let Some(range) = range {
+        payload["range"] = serde_json::json!([range.start, range.length]);
+    }
     crate::crypto_lite::sha256_hex(payload.to_string().as_bytes())
 }
 
@@ -1013,10 +1105,6 @@ impl DashCheckpoint {
         Self { records }
     }
 
-    fn has(&self, slot: &str) -> bool {
-        self.records.contains_key(slot)
-    }
-
     fn can_reuse(&self, slot: &str, identity: &str, size: u64) -> bool {
         if size == 0 {
             return false;
@@ -1057,6 +1145,7 @@ impl DashCheckpoint {
 #[allow(clippy::too_many_arguments)]
 fn resume_or_fetch(
     url: &str,
+    range: Option<ByteRange>,
     headers: &HashMap<String, String>,
     proxy: &str,
     dest: &Path,
@@ -1070,7 +1159,7 @@ fn resume_or_fetch(
     vod: &mut DashCheckpoint,
 ) -> Result<PathBuf, String> {
     let rel = relative_posix(task_dir, dest);
-    let identity = dash_file_identity(kind, slot, representation, url, mime);
+    let identity = dash_file_identity(kind, slot, representation, url, range, mime);
     let size = dest.metadata().map(|meta| meta.len()).unwrap_or(0);
     if dest.is_file() && vod.can_reuse(&rel, &identity, size) {
         if checkpoint {
@@ -1080,11 +1169,14 @@ fn resume_or_fetch(
         super::preview::mark_ready(task_dir, dest)?;
         return Ok(dest.to_path_buf());
     }
-    if dest.is_file() && vod.has(&rel) {
-        let _ = fs::remove_file(dest);
+    // Invalidate the old identity on disk before replacing any bytes. A failed
+    // transfer can leave a full-length partial file; an older checkpoint must
+    // never authorize it after a restart or a manifest/range change.
+    if vod.records.remove(&rel).is_some() {
+        vod.save(task_dir)?;
     }
     super::preview::reset_ready(task_dir, dest)?;
-    download_one(url, headers, proxy, dest, control)?;
+    download_one(url, range, headers, proxy, dest, control)?;
     if checkpoint {
         vod.remember(
             &rel,
@@ -1448,6 +1540,7 @@ fn download_dash_subtitle_track(
     if let Some(init) = &track.init {
         files.push(resume_or_fetch(
             init,
+            track.init_range,
             headers,
             proxy,
             &work.join("init.bin"),
@@ -1467,6 +1560,7 @@ fn download_dash_subtitle_track(
         }
         files.push(resume_or_fetch(
             media,
+            track.media_ranges[index],
             headers,
             proxy,
             &work.join(format!("{index:06}.bin")),
@@ -1868,15 +1962,470 @@ mod tests {
 
     #[test]
     fn byte_range_segment_lists_are_not_treated_as_whole_files() {
-        for entry in [
-            r#"<Initialization sourceURL="all.mp4" range="0-99"/>"#,
-            r#"<SegmentURL media="all.mp4" mediaRange="100-199"/>"#,
+        let xml = r#"<MPD><Period><Representation id="v"><BaseURL>all.mp4?token=signed</BaseURL><SegmentList duration="2"><Initialization range="0-99"/><SegmentURL mediaRange="100-199"/><SegmentURL media="all.mp4?token=signed" mediaRange="200-299"/></SegmentList></Representation></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/list.mpd").unwrap();
+        let track = &parsed.representations[0];
+        assert_eq!(
+            track.init.as_deref(),
+            Some("https://cdn.test/all.mp4?token=signed")
+        );
+        assert_eq!(
+            track.init_range,
+            Some(ByteRange {
+                start: 0,
+                length: 100
+            })
+        );
+        assert_eq!(track.media, vec![track.init.clone().unwrap(); 2]);
+        assert_eq!(
+            track.media_ranges,
+            vec![
+                Some(ByteRange {
+                    start: 100,
+                    length: 100
+                }),
+                Some(ByteRange {
+                    start: 200,
+                    length: 100
+                })
+            ]
+        );
+        assert_eq!(track.media_durations, vec![2.0, 2.0]);
+        for value in [
+            "",
+            "99-0",
+            "0-18446744073709551615",
+            "18446744073709551616-18446744073709551617",
+            "0-",
+            "-1",
+            "+0-99",
+            "0-99-100",
         ] {
-            let xml = format!("<MPD><Period><Representation id=\"v\"><SegmentList>{entry}</SegmentList></Representation></Period></MPD>");
-            assert!(parse_mpd(&xml, "https://cdn.test/list.mpd")
-                .unwrap_err()
-                .contains("byte ranges"));
+            for (element, field) in [("Initialization", "range"), ("SegmentURL", "mediaRange")] {
+                let xml = format!("<MPD><Period><Representation><SegmentList><{element} {field}=\"{value}\"/></SegmentList></Representation></Period></MPD>");
+                assert!(
+                    parse_mpd(&xml, "https://cdn.test/list.mpd")
+                        .unwrap_err()
+                        .contains("byte range"),
+                    "{xml}"
+                );
+            }
         }
+    }
+
+    fn serve_byte_ranges(
+        body: Vec<u8>,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/all.mp4?token=signed",
+            listener.local_addr().unwrap()
+        );
+        let worker = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..requests {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                let range = request
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("Range").then_some(value.trim())
+                    })
+                    .unwrap();
+                let (start, end) = range
+                    .strip_prefix("bytes=")
+                    .unwrap()
+                    .split_once('-')
+                    .unwrap();
+                let start = start.parse::<usize>().unwrap();
+                let end = end.parse::<usize>().unwrap();
+                let bytes = &body[start..=end];
+                write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len(), bytes.len()).unwrap();
+                socket.write_all(bytes).unwrap();
+                seen.push(request);
+            }
+            seen
+        });
+        (url, worker)
+    }
+
+    #[test]
+    fn ranged_primary_downloads_exact_bytes_and_resumes_only_matching_ranges() {
+        let (url, server) = serve_byte_ranges(b"INITAAAABBBBCCCC".to_vec(), 4);
+        let root = std::env::temp_dir().join(format!("dash-ranges-primary-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let xml = r#"<MPD><Period><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><Initialization range="0-3"/><SegmentURL mediaRange="4-7"/><SegmentURL mediaRange="8-11"/></SegmentList></Representation></Period></MPD>"#;
+        let mut track = parse_mpd(xml, &url).unwrap().representations.remove(0);
+        let headers = HashMap::from([
+            ("Cookie".into(), "session=test".into()),
+            ("Authorization".into(), "Bearer test".into()),
+        ]);
+        let (files, audio) = download_dash_primary(
+            &track,
+            true,
+            &root,
+            &headers,
+            "",
+            &control,
+            &mut DashCheckpoint::load(&root),
+            None,
+            3,
+        )
+        .unwrap();
+        assert!(audio.is_none());
+        assert_eq!(
+            files
+                .iter()
+                .map(|p| fs::read(p).unwrap())
+                .collect::<Vec<_>>(),
+            vec![b"INIT", b"AAAA", b"BBBB"]
+        );
+        download_dash_primary(
+            &track,
+            true,
+            &root,
+            &headers,
+            "",
+            &control,
+            &mut DashCheckpoint::load(&root),
+            None,
+            3,
+        )
+        .unwrap();
+        track.media_ranges[1] = Some(ByteRange {
+            start: 12,
+            length: 4,
+        });
+        download_dash_primary(
+            &track,
+            true,
+            &root,
+            &headers,
+            "",
+            &control,
+            &mut DashCheckpoint::load(&root),
+            None,
+            3,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&files[2]).unwrap(), b"CCCC");
+        let seen = server.join().unwrap();
+        for (request, range) in seen.iter().zip(["0-3", "4-7", "8-11", "12-15"]) {
+            assert!(
+                request.starts_with("GET /all.mp4?token=signed HTTP/1.1"),
+                "{request}"
+            );
+            let request = request.to_ascii_lowercase();
+            assert!(
+                request.contains(&format!("range: bytes={range}\r\n")),
+                "{request}"
+            );
+            assert!(request.contains("cookie: session=test\r\n"), "{request}");
+            assert!(
+                request.contains("authorization: bearer test\r\n"),
+                "{request}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_range_replacement_cannot_reuse_an_old_checkpoint_after_restart() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/all.mp4", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (start, body, broken) in [(0, "AAAA", false), (4, "BBBB", true), (0, "AAAA", false)]
+            {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains(&format!("range: bytes={start}-{}\r\n", start + 3)));
+                if broken {
+                    // Exactly four file bytes arrive, then chunk framing fails.
+                    write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/8\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n{body}\r\nZ\r\n", start + 3).unwrap();
+                } else {
+                    write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/8\r\nContent-Length: 4\r\nConnection: close\r\n\r\n{body}", start + 3).unwrap();
+                }
+            }
+        });
+        let root = std::env::temp_dir().join(format!("dash-ranges-restart-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let dest = root.join("seg-0001.m4s");
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let fetch = |start| {
+            resume_or_fetch(
+                &url,
+                Some(ByteRange { start, length: 4 }),
+                &HashMap::new(),
+                "",
+                &dest,
+                &control,
+                &root,
+                "video",
+                "1",
+                "v",
+                "video/mp4",
+                true,
+                &mut DashCheckpoint::load(&root),
+            )
+        };
+        fetch(0).unwrap();
+        assert!(fetch(4).is_err());
+        assert_eq!(fs::read(&dest).unwrap(), b"BBBB");
+        let old_identity = dash_file_identity(
+            "video",
+            "1",
+            "v",
+            &url,
+            Some(ByteRange {
+                start: 0,
+                length: 4,
+            }),
+            "video/mp4",
+        );
+        assert!(!DashCheckpoint::load(&root).can_reuse("seg-0001.m4s", &old_identity, 4));
+        assert!(!super::super::preview::is_ready(&root, "seg-0001.m4s"));
+        fetch(0).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"AAAA");
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ranged_audio_and_subtitles_use_the_same_checked_download_path() {
+        let body = b"INITAAAABBBB";
+        let (url, audio_server) = serve_byte_ranges(body.to_vec(), 3);
+        let root = std::env::temp_dir().join(format!("dash-ranges-tracks-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let xml = r#"<MPD><Period><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><Initialization range="0-3"/><SegmentURL mediaRange="4-7"/><SegmentURL mediaRange="8-11"/></SegmentList></Representation></Period></MPD>"#;
+        let track = parse_mpd(xml, &url).unwrap().representations.remove(0);
+        let files = pull_dash_audio_segments(
+            &track,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut DashCheckpoint::load(&root),
+            &[],
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|p| fs::read(p).unwrap())
+                .collect::<Vec<_>>(),
+            vec![b"INIT", b"AAAA", b"BBBB"]
+        );
+        audio_server.join().unwrap();
+        let cue = b"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nrange subtitle\n";
+        let (url, sub_server) =
+            serve_byte_ranges([b"unused".as_slice(), cue, b"trailer"].concat(), 1);
+        let xml = format!(
+            r#"<MPD><Period><Representation id="s" mimeType="text/vtt"><SegmentList><SegmentURL mediaRange="6-{}"/></SegmentList></Representation></Period></MPD>"#,
+            6 + cue.len() - 1
+        );
+        let track = parse_mpd(&xml, &url).unwrap().representations.remove(0);
+        let output = download_dash_subtitle_track(
+            &track,
+            &root.join("subs"),
+            "en",
+            &HashMap::new(),
+            "",
+            &control,
+            &root,
+            &mut DashCheckpoint::load(&root),
+        )
+        .unwrap();
+        assert!(fs::read_to_string(output)
+            .unwrap()
+            .contains("range subtitle"));
+        sub_server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_same_url_ranges_accumulate_with_their_durations() {
+        let first = parse_mpd(r#"<MPD type="dynamic"><Period><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><SegmentURL mediaRange="0-3"/></SegmentList></Representation></Period></MPD>"#, "https://cdn.test/all.mp4").unwrap().representations.remove(0);
+        let next = parse_mpd(r#"<MPD type="dynamic"><Period><Representation id="a" mimeType="audio/mp4"><SegmentList duration="2"><SegmentURL mediaRange="0-3"/><SegmentURL mediaRange="4-7"/></SegmentList></Representation></Period></MPD>"#, "https://cdn.test/all.mp4").unwrap().representations.remove(0);
+        let mut audio = None;
+        merge_representation(&mut audio, &first);
+        merge_representation(&mut audio, &next);
+        let audio = audio.unwrap();
+        assert_eq!(audio.media.len(), 2);
+        assert_eq!(
+            audio.media_ranges,
+            vec![
+                Some(ByteRange {
+                    start: 0,
+                    length: 4
+                }),
+                Some(ByteRange {
+                    start: 4,
+                    length: 4
+                })
+            ]
+        );
+        assert_eq!(audio.media_durations, vec![1.0, 2.0]);
+        let mut subs = Vec::new();
+        merge_sub_track(&mut subs, &first);
+        merge_sub_track(&mut subs, &next);
+        assert_eq!(subs, vec![audio]);
+    }
+
+    #[test]
+    #[ignore = "requires real FFmpeg; configure HLS_FFMPEG and run explicitly"]
+    fn real_ffmpeg_ranged_fmp4_preserves_decoded_frames() {
+        let ffmpeg = crate::media::merge::locate_ffmpeg().expect("configure HLS_FFMPEG");
+        let root = std::env::temp_dir().join(format!("dash-ranges-real-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.mp4");
+        let generated = Command::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-nostdin",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=128x72:rate=10",
+                "-t",
+                "2",
+                "-an",
+                "-c:v",
+                "mpeg4",
+                "-g",
+                "10",
+                "-movflags",
+                "empty_moov+default_base_moof+frag_keyframe",
+            ])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let bytes = fs::read(&source).unwrap();
+        let mut moofs = Vec::new();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let size = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            assert!(size >= 8 && size <= bytes.len() - offset);
+            if &bytes[offset + 4..offset + 8] == b"moof" {
+                moofs.push(offset);
+            }
+            offset += size;
+        }
+        assert_eq!(moofs.len(), 2);
+        let (url, server) = serve_byte_ranges(bytes.clone(), 3);
+        let xml = format!(
+            r#"<MPD><Period><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><Initialization range="0-{}"/><SegmentURL mediaRange="{}-{}"/><SegmentURL mediaRange="{}-{}"/></SegmentList></Representation></Period></MPD>"#,
+            moofs[0] - 1,
+            moofs[0],
+            moofs[1] - 1,
+            moofs[1],
+            bytes.len() - 1
+        );
+        let track = parse_mpd(&xml, &url).unwrap().representations.remove(0);
+        let task = root.join("task");
+        fs::create_dir_all(&task).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut vod = DashCheckpoint::load(&task);
+        let (files, _) = download_dash_primary(
+            &track,
+            true,
+            &task,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut vod,
+            None,
+            3,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .flat_map(|path| fs::read(path).unwrap())
+                .collect::<Vec<_>>(),
+            bytes
+        );
+        write_dash_playlist(&task, &files).unwrap();
+        let output = finish_dash(
+            &task,
+            &files,
+            3,
+            None,
+            None,
+            Vec::new(),
+            &HashMap::new(),
+            "",
+            &control,
+            &mut vod,
+        )
+        .unwrap();
+        let decode = |path: &Path| {
+            let result = Command::new(&ffmpeg)
+                .args(["-v", "error", "-nostdin", "-i"])
+                .arg(path)
+                .args(["-map", "0:v:0", "-f", "framemd5", "-"])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            String::from_utf8(result.stdout)
+                .unwrap()
+                .lines()
+                .filter(|line| !line.starts_with('#') && !line.is_empty())
+                .map(|line| line.rsplit(',').next().unwrap().trim().to_string())
+                .collect::<Vec<_>>()
+        };
+        let expected = decode(&source);
+        assert_eq!(expected.len(), 20);
+        assert_eq!(decode(&output), expected);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2180,6 +2729,7 @@ mod tests {
             "1",
             "v",
             "https://cdn.test/1.m4s?token=old",
+            None,
             "video/mp4",
         );
         std::fs::write(
@@ -2193,7 +2743,14 @@ mod tests {
         .unwrap();
         let vod = DashCheckpoint::load(&dir);
         assert!(vod.can_reuse("seg-0001.m4s", &identity, 3));
-        let other = dash_file_identity("video", "1", "v", "https://cdn.test/2.m4s", "video/mp4");
+        let other = dash_file_identity(
+            "video",
+            "1",
+            "v",
+            "https://cdn.test/2.m4s",
+            None,
+            "video/mp4",
+        );
         assert!(!vod.can_reuse("seg-0001.m4s", &other, 3));
         assert_eq!(
             dash_file_identity(
@@ -2201,6 +2758,7 @@ mod tests {
                 "1",
                 "v",
                 "https://cdn.test/1.m4s?token=old",
+                None,
                 "video/mp4"
             ),
             dash_file_identity(
@@ -2208,6 +2766,7 @@ mod tests {
                 "1",
                 "v",
                 "https://cdn.test/1.m4s?token=new",
+                None,
                 "video/mp4"
             ),
         );
@@ -2255,7 +2814,9 @@ mod tests {
                 label: String::new(),
                 base_url: String::new(),
                 init: Some("https://cdn.test/a-init.mp4".into()),
+                init_range: None,
                 media: vec!["https://cdn.test/a0.m4s".into()],
+                media_ranges: vec![None],
                 media_durations: vec![4.0],
             },
         );
@@ -2272,10 +2833,12 @@ mod tests {
                 label: String::new(),
                 base_url: String::new(),
                 init: Some("https://cdn.test/a-init.mp4".into()),
+                init_range: None,
                 media: vec![
                     "https://cdn.test/a1.m4s".into(),
                     "https://cdn.test/a0.m4s".into(),
                 ],
+                media_ranges: vec![None, None],
                 media_durations: vec![4.0, 4.0],
             },
         );
@@ -2302,7 +2865,9 @@ mod tests {
                 label: "English".into(),
                 base_url: String::new(),
                 init: None,
+                init_range: None,
                 media: vec!["https://cdn.test/en-0.vtt".into()],
+                media_ranges: vec![None],
                 media_durations: vec![4.0],
             },
         );
@@ -2319,7 +2884,9 @@ mod tests {
                 label: "English".into(),
                 base_url: String::new(),
                 init: None,
+                init_range: None,
                 media: vec!["https://cdn.test/en-1.vtt".into()],
+                media_ranges: vec![None],
                 media_durations: vec![4.0],
             },
         );

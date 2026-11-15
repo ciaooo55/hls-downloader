@@ -975,38 +975,7 @@ fn fetch_bytes_range_with_transport(
             range_stop: None,
             origin_boundary: String::new(),
         };
-        let range = format!("bytes={start}-{end}");
-        let fetched = if browser_first {
-            fetch_browser_first(&job, Some(&range))?
-        } else {
-            fetch(&job, Some(&range))?
-        };
-        if fetched.status != 206 {
-            return Err(EngineError::Failed(format!(
-                "HTTP {}: byte range requires status 206",
-                fetched.status
-            )));
-        }
-        match parse_content_range(fetched.content_range.as_deref().unwrap_or("")) {
-            Some((actual_start, actual_end, _)) if actual_start == start && actual_end == end => {}
-            Some((actual_start, actual_end, _)) => {
-                return Err(EngineError::RangeUnsupported(format!(
-                    "Content-Range {actual_start}-{actual_end} != {start}-{end}"
-                )))
-            }
-            None => {
-                return Err(EngineError::RangeUnsupported(
-                    "byte range response missing valid Content-Range".into(),
-                ))
-            }
-        }
-        if let Some(size) = fetched.content_length {
-            if size != length {
-                return Err(EngineError::Failed(format!(
-                    "byte range Content-Length {size} != {length}"
-                )));
-            }
-        }
+        let fetched = fetch_exact_range(&job, start, end, browser_first)?;
         let mut body = Vec::new();
         // 多读一个字节用于判定超长；不能等错误响应结束后才验证大小。
         let mut reader = fetched.body.take(length.saturating_add(1));
@@ -1025,6 +994,97 @@ fn fetch_bytes_range_with_transport(
     })();
     let _ = fs::remove_dir_all(dir);
     result
+}
+
+fn fetch_exact_range(
+    job: &Job,
+    start: u64,
+    end: u64,
+    browser_first: bool,
+) -> Result<FetchResult, EngineError> {
+    let range = format!("bytes={start}-{end}");
+    let fetched = if browser_first {
+        fetch_browser_first(job, Some(&range))?
+    } else {
+        fetch(job, Some(&range))?
+    };
+    if fetched.status != 206 {
+        return Err(EngineError::Failed(format!(
+            "HTTP {}: byte range requires status 206",
+            fetched.status
+        )));
+    }
+    if fetched.content_encoding {
+        return Err(EngineError::RangeUnsupported(
+            "byte range response is not identity encoded".into(),
+        ));
+    }
+    match parse_content_range(fetched.content_range.as_deref().unwrap_or("")) {
+        Some((actual_start, actual_end, _)) if actual_start == start && actual_end == end => {}
+        Some((actual_start, actual_end, _)) => {
+            return Err(EngineError::RangeUnsupported(format!(
+                "Content-Range {actual_start}-{actual_end} != {start}-{end}"
+            )))
+        }
+        None => {
+            return Err(EngineError::RangeUnsupported(
+                "byte range response missing valid Content-Range".into(),
+            ))
+        }
+    }
+    let length = end - start + 1;
+    if let Some(size) = fetched.content_length {
+        if size != length {
+            return Err(EngineError::Failed(format!(
+                "byte range Content-Length {size} != {length}"
+            )));
+        }
+    }
+    Ok(fetched)
+}
+
+/// Download an exact media range without whole-resource fallback or buffering.
+/// The caller may publish/checkpoint the file only after this succeeds.
+pub(crate) fn download_bytes_range(job: &Job, start: u64, length: u64) -> Result<(), EngineError> {
+    let end = length
+        .checked_sub(1)
+        .and_then(|last| start.checked_add(last))
+        .ok_or_else(|| EngineError::RangeUnsupported("byte range is empty or overflows".into()))?;
+    check_job_control(job)?;
+    let fetched = fetch_exact_range(job, start, end, false)?;
+    let mut file =
+        fs::File::create(&job.output).map_err(|error| EngineError::Failed(error.to_string()))?;
+    let mut body = fetched.body.take(length.saturating_add(1));
+    let mut buffer = [0u8; 64 * 1024];
+    let mut received = 0;
+    loop {
+        check_job_control(job)?;
+        let count = body.read(&mut buffer).map_err(|error| {
+            check_job_control(job)
+                .err()
+                .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+        })?;
+        if count == 0 {
+            break;
+        }
+        if count as u64 > length - received {
+            return Err(EngineError::Failed(
+                "byte range response exceeds requested length".into(),
+            ));
+        }
+        crate::net_policy::consume(count, || check_job_control(job))?;
+        file.write_all(&buffer[..count])
+            .map_err(|error| EngineError::Failed(error.to_string()))?;
+        received += count as u64;
+    }
+    if received != length {
+        return Err(EngineError::Failed(format!(
+            "incomplete response body: byte range length {received} != {length}"
+        )));
+    }
+    file.sync_data()
+        .map_err(|error| EngineError::Failed(error.to_string()))?;
+    Ok(())
 }
 
 fn check_transfer_control(path: &Path, stop: Option<&AtomicBool>) -> Result<(), EngineError> {
@@ -4465,6 +4525,59 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .contains(&3));
+    }
+
+    #[test]
+    fn ranged_file_download_rejects_whole_files_wrong_bounds_and_incomplete_bodies() {
+        for (case, response, untouched) in [
+            ("ignored", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nABCD", true),
+            ("missing-range", "HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\n\r\nABCD", true),
+            ("wrong-range", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-4/10\r\nContent-Length: 4\r\n\r\nABCD", true),
+            ("wrong-length", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Length: 5\r\n\r\nABCDE", true),
+            ("encoded", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n\r\nABCD", true),
+            ("truncated", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Length: 4\r\n\r\nABC", false),
+            ("oversized", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nABCDE\r\n0\r\n\r\n", false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/media", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    if line == "\r\n" { break; }
+                }
+                socket.write_all(response.as_bytes()).unwrap();
+            });
+            let (job, dir) = temp_job(&url, false, 1, 4);
+            fs::write(&job.output, b"keep").unwrap();
+            let result = download_bytes_range(&job, 2, 4);
+            server.join().unwrap();
+            assert!(result.is_err(), "{case}: {result:?}");
+            let bytes = fs::read(&job.output).unwrap();
+            if untouched { assert_eq!(bytes, b"keep", "{case}"); }
+            else { assert!(bytes.len() <= 4, "{case}"); }
+            fs::remove_dir_all(dir).unwrap();
+        }
+        let (job, dir) = temp_job("http://127.0.0.1:1/", false, 1, 4);
+        fs::write(&job.output, b"keep").unwrap();
+        fs::write(&job.control, "pause").unwrap();
+        assert!(matches!(
+            download_bytes_range(&job, 0, 4),
+            Err(EngineError::Pause)
+        ));
+        assert!(matches!(
+            download_bytes_range(&job, 0, 0),
+            Err(EngineError::RangeUnsupported(_))
+        ));
+        assert!(matches!(
+            download_bytes_range(&job, u64::MAX, 2),
+            Err(EngineError::RangeUnsupported(_))
+        ));
+        assert_eq!(fs::read(&job.output).unwrap(), b"keep");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
