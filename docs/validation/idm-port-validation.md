@@ -1,6 +1,6 @@
 # 发布后源码验证记录
 
-日期：2026-11-15。正式发布版本仍为 [v7.0.6](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6)，受测发布源码为 `1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d`。本文记录在基线 `7636ad417afec41cce81cf078af0a40598db1fff` 上完成的后续源码修改，不能替代新成品的完整发布验收。
+日期：2026-11-16。正式发布版本仍为 [v7.0.6](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6)，受测发布源码为 `1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d`。本文记录在基线 `7636ad417afec41cce81cf078af0a40598db1fff` 上完成的后续源码修改，不能替代新成品的完整发布验收。
 
 ## 已落地修改
 
@@ -74,6 +74,29 @@
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 
 本轮生成的测试音视频、HTTP 夹具及空临时目录已清理，原始失败日志与解码对照保留；没有测试常驻进程。开发 Core 留在项目配置的 Cargo target 内，身份见同证据目录的 `run-summary.json`，不覆盖已有 Release，也不将缓存或本地证据提交为产品源码。
+
+## 2026-11-16 FTP/FTPS 停止与长度边界
+
+修改基线为 `8b77a98c`。只读复核 `FTPConnection` 析构及控制/数据 socket 清理链，依据和没有核实的原版调用关系见 [源码对应表](idm-source-audit.md#ftpftps-通道生命周期2026-11-16)。没有执行 IDM，也没有接入恢复 C。
+
+旧代码只在数据读取期间观察任务停止，隔离回归实际复现了等待欢迎消息时写入 pause、两秒内仍不返回。生产路径现将控制检查置于底层 TCP 读写：100 ms 超时只用于检查停止，在内部续等至原有 30 s 单次 I/O 上限；Schannel 接收到的是正常数据或真实终止错误。热路径不逐块读控制文件，最多每 100 ms 读取一次；数据继续在任务调用线程下载并沿用限速上下文，移除原读取线程、跨线程结果通道及超时后分离线程。
+
+SIZE 已知时在写入前拒绝超界响应，短响应不再等最终回执才失败，SIZE=0 也验证 EOF。未知长度保留流式下载；同步文件且收到 226/250 后才清除身份状态。保留 SIZE+MDTM 续传身份、REST 紧邻 RETR、被动 peer 限制及 FTPS 凭据句柄复用。
+
+| 实际执行 | 结果与边界 |
+| --- | --- |
+| FTP/SFTP 定向库回归 | 26 通过，0 失败；覆盖控制阶段、AUTH/TLS 握手、数据读取及最终回执的 pause/cancel，预停止不连网、不改原文件；保留现有身份续传、EPSV/PASV 与 SFTP 回归 |
+| FTP 数据边界夹具 | 11 个实际 TCP 传输场景随上述定向回归执行：准确长度、跨轮询间隔的慢控制回复和慢数据、226/250、超长/跨缓冲超长、短响应/短响应无完成回复、空文件/空文件超长、未知长度和 426；失败不写超界、不移除已知身份，不重复累计为额外测试数 |
+| Core、client、protocol 完整库回归（单线程） | 739 通过、16 忽略、0 失败；Core 680、client 48、protocol 11 项通过；日志 `rust-regression-final.log` |
+| Clippy（Core 全 targets，与 CI 相同的结构性例外） | `-D warnings` 通过；日志 `clippy-final.log` |
+| Core 开发构建及 `--self-test` | 构建成功，退出码 0，输出 `HLSDownloaderEngine 7.0.6 self-test ok`；日志 `core-build-final.log`、`core-self-test.log`。内存自检，不创建桌面、托盘或生产 IPC |
+| `cargo fmt --all -- --check`、`git diff --check` | 通过 |
+
+完整库回归后补入慢响应夹具，并重跑受影响的 FTP/SFTP 定向回归；生产代码保持不变。原始失败、诊断及最终日志位于 `artifacts/idm-ftp-lifecycle-20261116/`。本轮没有五轮修改前后或原版性能数据，不能由少一个线程推断具体 CPU/内存/吞吐提升；新增完成时单次 `sync_all` 保证成功返回前同步数据，其耗时尚未量化。
+
+本轮未更改浏览器插件、UI 或数据库，没有操作个人桌面/浏览器。DNS 解析和仍在进行的 TCP connect 尚不能由底层读写轮询中断；FTP 多连接/主动 PORT 仍未实现，不把这次修复描述成整个 FTP 已与 IDM 等效。
+
+编译与测试进程已结束。自动审批以 `blocked by policy` 拒绝删除本轮测试临时目录 `.tool-cache/test-tmp/idm-ftp-lifecycle-20261116/`，其中保留早期失败的 `data-pause` 夹具；该忽略目录未提交，不将其记录为已清理。原始验证日志继续保留在上述 artifacts 目录。
 
 ## 尚未完成的验收与差异
 

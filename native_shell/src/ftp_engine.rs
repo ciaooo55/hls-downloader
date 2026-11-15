@@ -1,20 +1,75 @@
 //! FTP / FTPS single-stream download with version-checked SIZE+MDTM+REST resume.
 
+use std::cell::Cell;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-enum Conn {
-    Plain(TcpStream),
+#[derive(Debug)]
+struct FtpSocket<'a> {
+    stream: TcpStream,
+    control: &'a FtpControl<'a>,
+}
+
+impl<'a> FtpSocket<'a> {
+    fn new(stream: TcpStream, control: &'a FtpControl<'a>) -> Result<Self, String> {
+        stream
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .map_err(|error| error.to_string())?;
+        stream
+            .set_write_timeout(Some(Duration::from_millis(100)))
+            .map_err(|error| error.to_string())?;
+        Ok(Self { stream, control })
+    }
+
+    fn io<T>(
+        &mut self,
+        mut operation: impl FnMut(&mut TcpStream) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        let started = Instant::now();
+        loop {
+            self.control.check().map_err(std::io::Error::other)?;
+            match operation(&mut self.stream) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) && started.elapsed() < Duration::from_secs(30) => {}
+                result => return result,
+            }
+        }
+    }
+}
+
+impl Read for FtpSocket<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // 轮询超时在 TCP 层内部续等，不能传给 Schannel 破坏握手/记录读取状态。
+        self.io(|stream| stream.read(buf))
+    }
+}
+
+impl Write for FtpSocket<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.io(|stream| stream.write(buf))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.control.check().map_err(std::io::Error::other)?;
+        self.stream.flush()
+    }
+}
+
+enum Conn<'a> {
+    Plain(FtpSocket<'a>),
     #[cfg(windows)]
     Tls(
-        Box<schannel::tls_stream::TlsStream<TcpStream>>,
+        Box<schannel::tls_stream::TlsStream<FtpSocket<'a>>>,
         schannel::schannel_cred::SchannelCred,
     ),
 }
 
-impl Read for Conn {
+impl Read for Conn<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Self::Plain(stream) => stream.read(buf),
@@ -24,26 +79,27 @@ impl Read for Conn {
     }
 }
 
-impl Conn {
+impl<'a> Conn<'a> {
     fn peer_addr(&self) -> Result<std::net::SocketAddr, String> {
         match self {
-            Self::Plain(stream) => stream.peer_addr().map_err(|error| error.to_string()),
+            Self::Plain(stream) => stream.stream.peer_addr().map_err(|error| error.to_string()),
             #[cfg(windows)]
             Self::Tls(stream, _) => stream
                 .get_ref()
+                .stream
                 .peer_addr()
                 .map_err(|error| error.to_string()),
         }
     }
 
-    fn secure_data(&self, stream: TcpStream, host: &str) -> Result<Self, String> {
+    fn secure_data(&self, stream: FtpSocket<'a>, host: &str) -> Result<Self, String> {
         #[cfg(windows)]
         if let Self::Tls(_, credentials) = self {
             // FTPS 服务器可能要求数据连接恢复控制连接的 TLS 会话；必须复用凭据句柄。
             let tls = schannel::tls_stream::Builder::new()
                 .domain(host)
                 .connect(credentials.clone(), stream)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| format!("FTPS data TLS handshake failed: {error:?}"))?;
             return Ok(Self::Tls(Box::new(tls), credentials.clone()));
         }
         let _ = (stream, host);
@@ -51,7 +107,7 @@ impl Conn {
     }
 }
 
-impl Write for Conn {
+impl Write for Conn<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Self::Plain(stream) => stream.write(buf),
@@ -187,14 +243,63 @@ fn ftp_wire_ok(value: &str) -> bool {
     !value.chars().any(|ch| matches!(ch, '\r' | '\n' | '\0'))
 }
 
+#[derive(Debug)]
+struct FtpControl<'a> {
+    path: &'a Path,
+    reason: Cell<crate::http_engine::Control>,
+    checked: Cell<Instant>,
+}
+
+impl FtpControl<'_> {
+    fn check(&self) -> Result<(), String> {
+        if self.checked.get().elapsed() >= Duration::from_millis(100) {
+            self.poll()?;
+        }
+        self.stopped()
+    }
+
+    fn poll(&self) -> Result<(), String> {
+        if self.reason.get() == crate::http_engine::Control::Run {
+            self.reason.set(crate::http_engine::read_control(self.path));
+            self.checked.set(Instant::now());
+        }
+        self.stopped()
+    }
+
+    fn stopped(&self) -> Result<(), String> {
+        match self.reason.get() {
+            crate::http_engine::Control::Run => Ok(()),
+            crate::http_engine::Control::Pause => Err("paused".into()),
+            crate::http_engine::Control::Cancel => Err("canceled".into()),
+        }
+    }
+}
+
 pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> Result<u64, String> {
     let target = parse_ftp_url(url)?;
+    let control = FtpControl {
+        path: control,
+        reason: Cell::new(crate::http_engine::Control::Run),
+        checked: Cell::new(Instant::now()),
+    };
+    control.poll()?;
+    let result = transfer_ftp(&target, output, &control, resume);
+    control.poll()?;
+    result
+}
+
+fn transfer_ftp(
+    target: &FtpTarget,
+    output: &Path,
+    control: &FtpControl<'_>,
+    resume: bool,
+) -> Result<u64, String> {
     let progress = output.with_extension("progress.json");
     let implicit = target.tls && target.port == 990;
+    control.check()?;
     let raw = TcpStream::connect((target.host.as_str(), target.port))
         .map_err(|error| error.to_string())?;
-    raw.set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|error| error.to_string())?;
+    let raw = FtpSocket::new(raw, control)?;
     let mut ctrl = if implicit {
         wrap_tls(raw, &target.host)?
     } else {
@@ -286,14 +391,9 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     };
     // Both passive modes use the control peer, never a server-advertised host.
     let data_addr = std::net::SocketAddr::new(peer.ip(), data_port);
+    control.check()?;
     let data_raw = TcpStream::connect(data_addr).map_err(|error| error.to_string())?;
-    data_raw
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|error| error.to_string())?;
-    // Keep a raw duplicate of the socket outside Schannel so pause/cancel can
-    // interrupt a blocked FTP or FTPS data read without relying on short TLS
-    // read timeouts or transport-specific timeout semantics.
-    let data_abort = data_raw.try_clone().map_err(|error| error.to_string())?;
+    let data_raw = FtpSocket::new(data_raw, control)?;
     // REST 必须紧挨 RETR；中间发送 EPSV/PASV 会让部分服务器取消续传偏移。
     if resume_from > 0 {
         let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
@@ -311,6 +411,7 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     } else {
         Conn::Plain(data_raw)
     };
+    control.poll()?;
     let mut file = if resume_from > 0 {
         std::fs::OpenOptions::new()
             .append(true)
@@ -324,111 +425,63 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
     };
     // Persist identity only after the output has been opened/truncated. Otherwise
     // a failed fresh transfer could incorrectly label old bytes as the new file.
+    control.check()?;
     if let Some(state) = state {
         let bytes = serde_json::to_vec(&state).map_err(|error| error.to_string())?;
         std::fs::write(&state_path, bytes).map_err(|error| error.to_string())?;
     } else if state_path.exists() {
         std::fs::remove_file(&state_path).map_err(|error| error.to_string())?;
     }
-    let stop_reader = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let stop_reader_worker = std::sync::Arc::clone(&stop_reader);
-    let progress_for_reader = progress.clone();
-    let throttle = crate::net_policy::current_throttle_context();
-    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
-    let data_reader = std::thread::spawn(move || {
-        // 限速上下文是线程局部状态，读取线程必须继承任务、队列和全局限额。
-        let result =
-            crate::net_policy::with_throttle_context(throttle, || -> Result<u64, String> {
-                let mut buf = [0u8; 64 * 1024];
-                let mut downloaded = resume_from;
-                crate::http_engine::write_progress(
-                    &progress_for_reader,
-                    downloaded,
-                    size,
-                    0.0,
-                    "downloading",
-                );
-                loop {
-                    let count = data.read(&mut buf).map_err(|error| error.to_string())?;
-                    if stop_reader_worker.load(std::sync::atomic::Ordering::Acquire) {
-                        return Err("stopped".into());
-                    }
-                    if count == 0 {
-                        break;
-                    }
-                    crate::net_policy::consume(count, || {
-                        if stop_reader_worker.load(std::sync::atomic::Ordering::Acquire) {
-                            Err("stopped".to_string())
-                        } else {
-                            Ok(())
-                        }
-                    })?;
-                    file.write_all(&buf[..count])
-                        .map_err(|error| error.to_string())?;
-                    downloaded += count as u64;
-                    crate::http_engine::write_progress(
-                        &progress_for_reader,
-                        downloaded,
-                        size,
-                        0.0,
-                        "downloading",
-                    );
-                }
-                file.flush().map_err(|error| error.to_string())?;
-                Ok(downloaded)
-            });
-        let _ = result_tx.send(result);
-    });
-
-    let downloaded = loop {
-        let flag = std::fs::read_to_string(control).unwrap_or_else(|_| "run".into());
-        let action = flag.trim();
-        if matches!(action, "pause" | "cancel") {
-            stop_reader.store(true, std::sync::atomic::Ordering::Release);
-            let _ = data_abort.shutdown(std::net::Shutdown::Both);
-            // A normal TCP shutdown wakes both plain recv and Schannel's
-            // underlying recv quickly. Bound the cleanup wait so task control
-            // never regresses to the old unbounded data-channel stall.
-            match result_rx.recv_timeout(Duration::from_millis(750)) {
-                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    let _ = data_reader.join();
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // Dropping JoinHandle detaches only as a last resort. The
-                    // stop flag prevents any later read from being written.
-                }
-            }
-            return Err(if action == "pause" {
-                "paused"
-            } else {
-                "canceled"
-            }
-            .into());
+    // 数据留在调用线程，直接沿用任务/队列/全局限速上下文。
+    let mut buf = [0u8; 64 * 1024];
+    let mut downloaded = resume_from;
+    crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
+    loop {
+        control.check()?;
+        // 多读至多一个字节来确认 SIZE 边界；超出的响应必须在落盘前拒绝。
+        let limit = remote_size.map_or(buf.len(), |size| {
+            size.saturating_sub(downloaded)
+                .saturating_add(1)
+                .min(buf.len() as u64) as usize
+        });
+        let count = data
+            .read(&mut buf[..limit])
+            .map_err(|error| error.to_string())?;
+        control.check()?;
+        if count == 0 {
+            break;
         }
-        match result_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(result) => {
-                let _ = data_reader.join();
-                break result?;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = data_reader.join();
-                return Err("FTP data reader stopped unexpectedly".into());
-            }
+        let received = downloaded
+            .checked_add(count as u64)
+            .ok_or("FTP transfer length overflow")?;
+        if remote_size.is_some_and(|size| received > size) {
+            return Err(format!(
+                "FTP transfer exceeds declared size: expected {size}, received at least {received}"
+            ));
         }
-    };
-    let reply = read_reply(&mut ctrl)?;
-    require_reply_code(&reply, &[226, 250], "transfer completion")?;
+        crate::net_policy::consume(count, || control.check())?;
+        control.check()?;
+        file.write_all(&buf[..count])
+            .map_err(|error| error.to_string())?;
+        downloaded = received;
+        crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
+    }
     if remote_size.is_some_and(|size| downloaded != size) {
         return Err(format!(
             "FTP transfer size mismatch: expected {size}, received {downloaded}"
         ));
     }
+    drop(data);
+    file.sync_all().map_err(|error| error.to_string())?;
+    control.check()?;
+    let reply = read_reply(&mut ctrl)?;
+    require_reply_code(&reply, &[226, 250], "transfer completion")?;
+    control.poll()?;
     let _ = std::fs::remove_file(state_path);
     Ok(downloaded)
 }
 
-fn wrap_tls(stream: TcpStream, host: &str) -> Result<Conn, String> {
+fn wrap_tls<'a>(stream: FtpSocket<'a>, host: &str) -> Result<Conn<'a>, String> {
     #[cfg(windows)]
     {
         let cred = schannel::schannel_cred::SchannelCred::builder()
@@ -439,7 +492,7 @@ fn wrap_tls(stream: TcpStream, host: &str) -> Result<Conn, String> {
         let tls = schannel::tls_stream::Builder::new()
             .domain(host)
             .connect(cred.clone(), stream)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("FTPS control TLS handshake failed: {error:?}"))?;
         Ok(Conn::Tls(Box::new(tls), cred))
     }
     #[cfg(not(windows))]
@@ -449,7 +502,7 @@ fn wrap_tls(stream: TcpStream, host: &str) -> Result<Conn, String> {
     }
 }
 
-fn take_plain(conn: Conn) -> Result<TcpStream, String> {
+fn take_plain<'a>(conn: Conn<'a>) -> Result<FtpSocket<'a>, String> {
     match conn {
         Conn::Plain(stream) => Ok(stream),
         #[cfg(windows)]
@@ -457,7 +510,7 @@ fn take_plain(conn: Conn) -> Result<TcpStream, String> {
     }
 }
 
-fn command(stream: &mut Conn, line: &str) -> Result<String, String> {
+fn command(stream: &mut Conn<'_>, line: &str) -> Result<String, String> {
     stream
         .write_all(format!("{line}\r\n").as_bytes())
         .map_err(|error| error.to_string())?;
@@ -519,7 +572,7 @@ fn reply_is_complete(reply: &[u8]) -> Result<bool, String> {
     }
 }
 
-fn read_reply(stream: &mut Conn) -> Result<String, String> {
+fn read_reply(stream: &mut Conn<'_>) -> Result<String, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     while buf.len() < 8192 {
@@ -581,6 +634,7 @@ fn parse_epsv_port(reply: &str) -> Result<u16, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     #[test]
     fn parses_userinfo_and_ftps_port() {
@@ -1073,17 +1127,29 @@ mod tests {
         }
     }
 
-    fn spawn_stalled_ftp_server() -> (
+    fn spawn_stalled_ftp_server(
+        phase: &'static str,
+    ) -> (
         u16,
         std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
         std::thread::JoinHandle<()>,
     ) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stalled_tx, stalled_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut ctrl, _) = listener.accept().unwrap();
             ctrl.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let stall = || {
+                stalled_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            };
+            if phase == "greeting" {
+                stall();
+                return;
+            }
             ctrl.write_all(b"220 Ready\r\n").unwrap();
             let mut reader = std::io::BufReader::new(ctrl.try_clone().unwrap());
             let mut data_listener = None;
@@ -1093,14 +1159,27 @@ mod tests {
                     break;
                 }
                 let command = line.trim_end().to_ascii_uppercase();
+                if command.split_whitespace().next() == Some(phase) {
+                    stall();
+                    break;
+                }
                 if command.starts_with("USER ") {
+                    ctrl.write_all(b"331 Password required\r\n").unwrap();
+                } else if command == "PASS" || command.starts_with("PASS ") {
                     ctrl.write_all(b"230 Logged in\r\n").unwrap();
+                } else if command == "AUTH TLS" {
+                    ctrl.write_all(b"234 Begin TLS\r\n").unwrap();
+                    let mut tls_header = [0u8; 5];
+                    reader.read_exact(&mut tls_header).unwrap();
+                    assert_eq!(tls_header[0], 22, "client must start a TLS handshake");
+                    stall();
+                    break;
                 } else if command == "TYPE I" {
                     ctrl.write_all(b"200 Type set\r\n").unwrap();
                 } else if command.starts_with("SIZE ") {
-                    ctrl.write_all(b"213 4\r\n").unwrap();
+                    ctrl.write_all(b"213 8\r\n").unwrap();
                 } else if command.starts_with("MDTM ") {
-                    ctrl.write_all(b"502 MDTM unsupported\r\n").unwrap();
+                    ctrl.write_all(b"213 20261116000000\r\n").unwrap();
                 } else if command == "EPSV" {
                     ctrl.write_all(b"502 EPSV unsupported\r\n").unwrap();
                 } else if command == "PASV" {
@@ -1116,26 +1195,37 @@ mod tests {
                         .as_bytes(),
                     )
                     .unwrap();
+                } else if command.starts_with("REST ") {
+                    ctrl.write_all(b"350 Restarting\r\n").unwrap();
                 } else if command.starts_with("RETR ") {
                     ctrl.write_all(b"150 Opening data\r\n").unwrap();
                     let (mut data, _) = data_listener.take().unwrap().accept().unwrap();
-                    data.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                    stalled_tx.send(()).unwrap();
-                    let mut byte = [0u8; 1];
-                    let _ = std::io::Read::read(&mut data, &mut byte);
+                    if phase == "data" {
+                        stall();
+                    } else {
+                        data.write_all(b"AAAABBBB").unwrap();
+                        // Signal EOF, then wait for the client to close its data socket.
+                        // This confirms the output is written before testing the final reply stall.
+                        data.shutdown(std::net::Shutdown::Write).unwrap();
+                        data.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                        assert_eq!(data.read(&mut [0u8; 1]).unwrap(), 0);
+                        drop(data);
+                        assert_eq!(phase, "completion");
+                        stall();
+                    }
                     break;
                 } else {
                     panic!("unexpected FTP command: {command}");
                 }
             }
         });
-        (port, stalled_rx, server)
+        (port, stalled_rx, release_tx, server)
     }
 
-    fn assert_stalled_transfer_interrupts(action: &str) {
-        let (port, stalled_rx, server) = spawn_stalled_ftp_server();
+    fn assert_stalled_transfer_interrupts(phase: &'static str, action: &str) {
+        let (port, stalled_rx, release_tx, server) = spawn_stalled_ftp_server(phase);
         let root = std::env::temp_dir().join(format!(
-            "hls-v7-ftp-stall-{}-{}-{action}",
+            "hls-v7-ftp-stall-{}-{}-{phase}-{action}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1146,17 +1236,54 @@ mod tests {
         let output = root.join("payload.downloading");
         let control = root.join("control");
         std::fs::write(&control, "run").unwrap();
+        std::fs::write(&output, b"keep").unwrap();
         let worker_output = output.clone();
         let worker_control = control.clone();
-        let url = format!("ftp://127.0.0.1:{port}/file.bin");
-        let worker =
-            std::thread::spawn(move || download_ftp(&url, &worker_output, &worker_control, false));
+        let scheme = if phase == "tls" || phase == "AUTH" {
+            "ftps"
+        } else {
+            "ftp"
+        };
+        let url = format!("{scheme}://127.0.0.1:{port}/file.bin");
+        if phase == "REST" {
+            let target = parse_ftp_url(&url).unwrap();
+            let state = ResumeState {
+                version: 1,
+                host: target.host,
+                port: target.port,
+                user: target.user,
+                path: target.path,
+                tls: target.tls,
+                total: 8,
+                modified: "20261116000000".into(),
+            };
+            std::fs::write(
+                output.with_extension("ftp-state.json"),
+                serde_json::to_vec(&state).unwrap(),
+            )
+            .unwrap();
+        }
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = download_ftp(&url, &worker_output, &worker_control, true);
+            result_tx.send(result).unwrap();
+        });
         stalled_rx
             .recv_timeout(Duration::from_secs(5))
-            .expect("FTP data connection did not enter stalled read");
+            .expect("FTP did not enter the requested stalled phase");
         let started = std::time::Instant::now();
         std::fs::write(&control, action).unwrap();
-        let error = worker.join().unwrap().unwrap_err();
+        let observed = result_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        server.join().unwrap();
+        let bytes = std::fs::read(&output).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        let error = observed
+            .unwrap_or_else(|error| {
+                panic!("{phase}/{action}: FTP stop waited for the server: {error}")
+            })
+            .unwrap_err();
         assert_eq!(
             error,
             if action == "pause" {
@@ -1167,16 +1294,254 @@ mod tests {
         );
         assert!(
             started.elapsed() < Duration::from_secs(2),
-            "{action} took too long to interrupt a stalled FTP data read: {:?}",
+            "{phase}: {action} took too long to interrupt FTP: {:?}",
             started.elapsed()
         );
-        server.join().unwrap();
-        let _ = std::fs::remove_dir_all(root);
+        if phase == "data" {
+            assert!(bytes.is_empty() || bytes == b"keep");
+        } else {
+            assert_eq!(
+                bytes,
+                if phase == "completion" {
+                    b"AAAABBBB".as_slice()
+                } else {
+                    b"keep".as_slice()
+                },
+                "{phase}: do not modify output before transfer acceptance"
+            );
+        }
     }
 
     #[test]
     fn stalled_data_channel_observes_pause_and_cancel_promptly() {
-        assert_stalled_transfer_interrupts("pause");
-        assert_stalled_transfer_interrupts("cancel");
+        assert_stalled_transfer_interrupts("data", "pause");
+        assert_stalled_transfer_interrupts("data", "cancel");
+    }
+
+    #[test]
+    fn stalled_control_phases_observe_pause_and_cancel_promptly() {
+        for phase in [
+            "greeting",
+            "USER",
+            "PASS",
+            "TYPE",
+            "SIZE",
+            "MDTM",
+            "EPSV",
+            "PASV",
+            "REST",
+            "RETR",
+            "completion",
+        ] {
+            for action in ["pause", "cancel"] {
+                assert_stalled_transfer_interrupts(phase, action);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn stalled_control_tls_handshake_observes_pause_and_cancel_promptly() {
+        for phase in ["AUTH", "tls"] {
+            for action in ["pause", "cancel"] {
+                assert_stalled_transfer_interrupts(phase, action);
+            }
+        }
+    }
+
+    #[test]
+    fn stopped_transfer_preserves_output_without_opening_a_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let root = std::env::temp_dir().join(format!("hls-ftp-prestop-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = root.join("payload.downloading");
+        let control = root.join("control");
+        std::fs::write(&output, b"original").unwrap();
+        for (action, error) in [("pause", "paused"), ("cancel", "canceled")] {
+            std::fs::write(&control, action).unwrap();
+            assert_eq!(
+                download_ftp(
+                    &format!("ftp://{}/file.bin", listener.local_addr().unwrap()),
+                    &output,
+                    &control,
+                    true,
+                ),
+                Err(error.into())
+            );
+            assert_eq!(std::fs::read(&output).unwrap(), b"original");
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn validates_data_length_before_writing_and_requires_final_success() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        for (case, size, body, completion, success) in [
+            ("exact", Some(8), b"AAAABBBB".to_vec(), Some(226), true),
+            (
+                "delayed-success",
+                Some(8),
+                b"AAAABBBB".to_vec(),
+                Some(226),
+                true,
+            ),
+            (
+                "alternate-success",
+                Some(8),
+                b"AAAABBBB".to_vec(),
+                Some(250),
+                true,
+            ),
+            (
+                "overrun",
+                Some(8),
+                b"AAAABBBBCCCC".to_vec(),
+                Some(226),
+                false,
+            ),
+            (
+                "late-overrun",
+                Some(65536),
+                vec![42; 65537],
+                Some(226),
+                false,
+            ),
+            ("short", Some(8), b"AAAA".to_vec(), Some(226), false),
+            (
+                "short-no-completion",
+                Some(8),
+                b"AAAA".to_vec(),
+                None,
+                false,
+            ),
+            ("empty", Some(0), Vec::new(), Some(226), true),
+            ("empty-overrun", Some(0), b"A".to_vec(), Some(226), false),
+            ("unknown-size", None, b"AAAABBBB".to_vec(), Some(226), true),
+            (
+                "completion-failure",
+                Some(8),
+                b"AAAABBBB".to_vec(),
+                Some(426),
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server_body = body.clone();
+            let (release_tx, release_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut ctrl, _) = listener.accept().unwrap();
+                ctrl.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                ctrl.write_all(b"220 Ready\r\n").unwrap();
+                let mut reader = BufReader::new(ctrl.try_clone().unwrap());
+                let mut data_listener = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    match line.trim_end() {
+                        "USER anonymous" => ctrl.write_all(b"230 Logged in\r\n").unwrap(),
+                        "TYPE I" => ctrl.write_all(b"200 Binary\r\n").unwrap(),
+                        "SIZE /file.bin" => {
+                            if let Some(size) = size {
+                                write!(ctrl, "213 {size}\r\n").unwrap();
+                            } else {
+                                ctrl.write_all(b"502 SIZE unsupported\r\n").unwrap();
+                            }
+                        }
+                        "MDTM /file.bin" => ctrl.write_all(b"213 20261116000000\r\n").unwrap(),
+                        "EPSV" => {
+                            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                            let port = listener.local_addr().unwrap().port();
+                            data_listener = Some(listener);
+                            write!(ctrl, "229 Passive (|||{port}|)\r\n").unwrap();
+                        }
+                        "RETR /file.bin" => {
+                            if case == "delayed-success" {
+                                // Both waits cross the TCP poll interval without stopping the task.
+                                std::thread::sleep(Duration::from_millis(250));
+                            }
+                            ctrl.write_all(b"150 Opening data\r\n").unwrap();
+                            let (mut data, _) = data_listener.take().unwrap().accept().unwrap();
+                            if case == "delayed-success" {
+                                std::thread::sleep(Duration::from_millis(250));
+                            }
+                            data.write_all(&server_body).unwrap();
+                            drop(data);
+                            if let Some(code) = completion {
+                                // Oversized responses may already have closed the control socket.
+                                let _ = write!(ctrl, "{code} Transfer finished\r\n");
+                            } else {
+                                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                            }
+                            break;
+                        }
+                        command => panic!("{case}: unexpected command {command}"),
+                    }
+                }
+            });
+            let root =
+                std::env::temp_dir().join(format!("hls-ftp-length-{}-{case}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = root.join("payload.downloading");
+            let control = root.join("control");
+            std::fs::write(&control, "run").unwrap();
+            let worker_output = output.clone();
+            let (result_tx, result_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = download_ftp(
+                    &format!("ftp://{address}/file.bin"),
+                    &worker_output,
+                    &control,
+                    true,
+                );
+                result_tx.send(result).unwrap();
+            });
+            let result = result_rx.recv_timeout(Duration::from_secs(2));
+            let _ = release_tx.send(());
+            worker.join().unwrap();
+            server.join().unwrap();
+            let bytes = std::fs::read(&output).unwrap();
+            let has_state = output.with_extension("ftp-state.json").exists();
+            std::fs::remove_dir_all(root).unwrap();
+            let result = result.expect("length errors must not wait for the final reply");
+            assert_eq!(result.is_ok(), success, "{case}: {result:?}");
+            assert!(
+                body.starts_with(&bytes),
+                "{case}: output must be a valid prefix"
+            );
+            if let Some(size) = size {
+                assert!(
+                    bytes.len() as u64 <= size,
+                    "{case}: no excess bytes may be written"
+                );
+            }
+            if success {
+                assert_eq!(result.unwrap(), body.len() as u64, "{case}");
+                assert_eq!(bytes, body, "{case}");
+                assert!(!has_state, "{case}: success removes resume identity");
+            } else {
+                let error = result.unwrap_err();
+                assert!(
+                    error.contains(if case == "completion-failure" {
+                        "transfer completion rejected"
+                    } else if case.starts_with("short") {
+                        "size mismatch"
+                    } else {
+                        "exceeds declared size"
+                    }),
+                    "{case}: {error}"
+                );
+                assert_eq!(has_state, size.is_some_and(|size| size > 0), "{case}");
+            }
+        }
     }
 }
