@@ -1,13 +1,14 @@
 //! HLS / LL-HLS downloader. Segments use the HTTP engine; mux is local.
 
 use crate::http_engine::{
-    extract_http_status, fetch_hls_bytes, fetch_hls_bytes_limited, fetch_hls_bytes_range,
-    retryable_http_status, EngineError,
+    copy_hls_body, extract_http_status, fetch_hls_bytes_limited, retryable_http_status,
+    EngineError, Job, MediaTransferError,
 };
 use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -1725,17 +1726,23 @@ fn ensure_init_map(
     let path = seg_dir.join(format!("init-{suffix}.{}", extension(&init_map.uri)));
     // 磁盘上的旧文件没有完成凭据，可能是上次写盘/解密失败留下的残片。
     // 仅 map_cache 中本次运行成功落盘的条目可以复用。
-    let mut body = fetch_segment_bytes(&init_map.uri, headers, proxy, control, init_map.byterange)
-        .map_err(|error| error.to_string())?;
-    if let Some(key) = &init_map.key {
+    let encryption = if let Some(key) = &init_map.key {
         let key_bytes = load_key(key, headers, proxy, key_cache)?;
         let iv = key.iv.unwrap_or_else(|| sequence_iv(sequence));
-        body = decrypt_aes128(&key_bytes, &iv, &body)?;
-    }
-    if body.is_empty() {
-        return Err("HLS 初始化段为空".into());
-    }
-    fs::write(&path, body).map_err(|error| error.to_string())?;
+        Some((key_bytes, iv))
+    } else {
+        None
+    };
+    save_segment(
+        &init_map.uri,
+        headers,
+        proxy,
+        &path,
+        control,
+        init_map.byterange,
+        encryption.as_ref().map(|(key, iv)| (key.as_slice(), *iv)),
+    )
+    .map_err(|error| error.to_string())?;
     map_cache.insert(identity, path.clone());
     Ok(path)
 }
@@ -2135,11 +2142,29 @@ fn download_segment(
     media_key: Option<&MediaKey>,
     sequence: u64,
 ) -> Result<PathBuf, String> {
+    let encryption = key_bytes
+        .zip(media_key)
+        .filter(|(_, key)| key.method.eq_ignore_ascii_case("AES-128"))
+        .map(|(key, media_key)| {
+            (
+                key.as_slice(),
+                media_key.iv.unwrap_or_else(|| sequence_iv(sequence)),
+            )
+        });
     let mut attempt = 1;
-    let mut body = loop {
-        match fetch_segment_bytes(&segment.uri, headers, proxy, control, segment.byterange) {
-            Ok(body) => break body,
-            Err(error) => {
+    loop {
+        match save_segment(
+            &segment.uri,
+            headers,
+            proxy,
+            path,
+            control,
+            segment.byterange,
+            encryption,
+        ) {
+            Ok(path) => return Ok(path),
+            Err(MediaTransferError::Output(error)) => return Err(error.to_string()),
+            Err(MediaTransferError::Transfer(error)) => {
                 let message = error.to_string();
                 if matches!(
                     error,
@@ -2159,18 +2184,7 @@ fn download_segment(
                 attempt += 1;
             }
         }
-    };
-    if let (Some(key), Some(media_key)) = (key_bytes, media_key) {
-        if media_key.method.eq_ignore_ascii_case("AES-128") {
-            let iv = media_key.iv.unwrap_or_else(|| sequence_iv(sequence));
-            body = decrypt_aes128(key, &iv, &body)?;
-        }
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::write(path, body).map_err(|error| error.to_string())?;
-    Ok(path.to_path_buf())
 }
 
 fn file_len(path: &Path) -> u64 {
@@ -2389,35 +2403,87 @@ fn download_one_with_range(
     control: &Path,
     byterange: Option<(u64, u64)>,
 ) -> Result<PathBuf, String> {
-    let body = fetch_segment_bytes(url, headers, proxy, control, byterange)
-        .map_err(|error| error.to_string())?;
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::write(output, body).map_err(|error| error.to_string())?;
-    Ok(output.to_path_buf())
+    save_segment(url, headers, proxy, output, control, byterange, None)
+        .map_err(|error| error.to_string())
 }
 
-fn fetch_segment_bytes(
+fn save_segment(
     url: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
+    output: &Path,
     control: &Path,
     byterange: Option<(u64, u64)>,
-) -> Result<Vec<u8>, EngineError> {
+    encryption: Option<(&[u8], [u8; 16])>,
+) -> Result<PathBuf, MediaTransferError> {
     match read_control(control).as_str() {
-        "cancel" => return Err(EngineError::Cancel),
-        "pause" => return Err(EngineError::Pause),
+        "cancel" => return Err(EngineError::Cancel.into()),
+        "pause" => return Err(EngineError::Pause.into()),
         _ => {}
     }
-    if let Some((offset, length)) = byterange {
-        return fetch_hls_bytes_range(url, headers, proxy, offset, length);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
     }
-    let (status, body) = fetch_hls_bytes(url, headers, proxy)?;
-    if status != 200 && status != 206 {
-        return Err(EngineError::Failed(format!("HLS media HTTP {status}")));
+    let name = output
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "HLS 分片路径无效"))?;
+    let mut temporary_name = std::ffi::OsString::from(".");
+    temporary_name.push(name);
+    temporary_name.push(".part");
+    let temporary = output.with_file_name(temporary_name);
+    let result = (|| {
+        let job = Job {
+            url: url.to_string(),
+            headers: headers.clone(),
+            // HLS owns completion and filenames; no per-response HTTP sidecar.
+            output: PathBuf::new(),
+            connections: 1,
+            chunk_bytes: 64 * 1024,
+            total: 0,
+            sequential: true,
+            resume_from: 0,
+            proxy: proxy.to_string(),
+            resource_key: url.to_string(),
+            etag: String::new(),
+            last_modified: String::new(),
+            control: control.to_path_buf(),
+            progress: PathBuf::new(),
+            method: "GET".into(),
+            body_path: PathBuf::new(),
+            mirrors: Vec::new(),
+            replay_json: crate::credentials::scoped_replay_json(),
+            curl_body_limit: byterange.map(|(_, length)| length),
+            range_stop: None,
+            origin_boundary: String::new(),
+        };
+        let mut writer = BufWriter::with_capacity(1024 * 1024, fs::File::create(&temporary)?);
+        if let Some((key, iv)) = encryption {
+            let mut cipher = crate::crypto_lite::Aes128CbcWriter::new(&mut writer, key, &iv)?;
+            copy_hls_body(&job, byterange, &mut cipher)?;
+            cipher.finish()?;
+        } else {
+            copy_hls_body(&job, byterange, &mut writer)?;
+        }
+        writer.flush()?;
+        if writer.get_ref().metadata()?.len() == 0 {
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "HLS 媒体段为空").into(),
+            );
+        }
+        writer.get_ref().sync_data()?;
+        drop(writer);
+        match read_control(control).as_str() {
+            "pause" => return Err(EngineError::Pause.into()),
+            "cancel" => return Err(EngineError::Cancel.into()),
+            _ => {}
+        }
+        replace_file_atomic(&temporary, output)?;
+        Ok(output.to_path_buf())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
     }
-    Ok(body)
+    result
 }
 
 fn playlist_leaf(path: &Path) -> String {
@@ -2434,10 +2500,6 @@ fn playlist_leaf(path: &Path) -> String {
     } else {
         "seg.bin".into()
     }
-}
-
-fn decrypt_aes128(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
-    crate::crypto_lite::decrypt_aes128_cbc_pkcs7(key, iv, data)
 }
 
 fn sequence_iv(sequence: u64) -> [u8; 16] {
@@ -2640,6 +2702,7 @@ fn read_control(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http_engine::fetch_hls_bytes;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
@@ -2782,6 +2845,187 @@ mod tests {
     }
 
     #[test]
+    fn segment_streams_before_eof_and_preserves_old_file_when_stopped() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        for ranged in [false, true] {
+            for action in ["pause", "cancel"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let root = std::env::temp_dir().join(format!("hls-stream-stop-{}", address.port()));
+                fs::create_dir_all(&root).unwrap();
+                let output = root.join("segment.ts");
+                let staged = root.join(".segment.ts.part");
+                let control = root.join("control");
+                fs::write(&control, "run").unwrap();
+                fs::write(&output, b"previous completed segment").unwrap();
+                let (ready_tx, ready_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let server = std::thread::spawn(move || {
+                    let (stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                            break;
+                        }
+                    }
+                    let headers = if ranged {
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4194303/4194304\r\nContent-Length: 4194304\r\n\r\n"
+                    } else {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 4194304\r\n\r\n"
+                    };
+                    reader.get_mut().write_all(headers.as_bytes()).unwrap();
+                    reader
+                        .get_mut()
+                        .write_all(&vec![7; 2 * 1024 * 1024])
+                        .unwrap();
+                    ready_tx.send(()).unwrap();
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                });
+                let mut segment = parse_playlist(
+                    "#EXTM3U\n#EXTINF:1,\nsegment.ts\n",
+                    &format!("http://{address}/index.m3u8"),
+                )
+                .unwrap()
+                .segments
+                .remove(0);
+                segment.byterange = ranged.then_some((0, 4 * 1024 * 1024));
+                let worker_output = output.clone();
+                let worker_control = control.clone();
+                let (result_tx, result_rx) = mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    result_tx
+                        .send(download_segment(
+                            &segment,
+                            &HashMap::new(),
+                            "",
+                            &worker_output,
+                            &worker_control,
+                            None,
+                            None,
+                            0,
+                        ))
+                        .unwrap();
+                });
+                let ready = ready_rx.recv_timeout(Duration::from_secs(5));
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while file_len(&staged) == 0 && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let streamed = file_len(&staged) > 0;
+                fs::write(&control, action).unwrap();
+                let stopped = result_rx.recv_timeout(Duration::from_secs(2));
+                let _ = release_tx.send(());
+                server.join().unwrap();
+                worker.join().unwrap();
+                let saved = fs::read(&output).unwrap();
+                let leftover = staged.exists();
+                let sidecar = fs::read_dir(&root).unwrap().flatten().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("response.json")
+                });
+                fs::remove_dir_all(root).unwrap();
+                ready.unwrap();
+                assert!(streamed, "data must reach provisional output before EOF");
+                assert_eq!(
+                    stopped.unwrap().unwrap_err(),
+                    if action == "pause" {
+                        "paused"
+                    } else {
+                        "canceled"
+                    }
+                );
+                assert_eq!(saved, b"previous completed segment");
+                assert!(!leftover);
+                assert!(!sidecar);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Explicit five-run local transport benchmark; not a media decode test"]
+    fn hls_segment_transfer_benchmark() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let root = std::env::temp_dir().join(format!("hls-segment-bench-{}", address.port()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let block: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
+        let sent = block.clone();
+        let total = 32 * 1024 * 1024;
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let stream = reader.get_mut();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            for _ in 0..total / sent.len() {
+                stream.write_all(&sent).unwrap();
+            }
+        });
+        let segment = parse_playlist(
+            "#EXTM3U\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST\n",
+            &format!("http://{address}/index.m3u8"),
+        )
+        .unwrap()
+        .segments
+        .remove(0);
+        let output = root.join("segment.ts");
+        let start = std::time::Instant::now();
+        let result = download_segment(
+            &segment,
+            &HashMap::new(),
+            "",
+            &output,
+            &control,
+            None,
+            None,
+            0,
+        );
+        let elapsed = start.elapsed().as_secs_f64();
+        server.join().unwrap();
+        let checked = (|| -> Result<(), String> {
+            result?;
+            let mut file = fs::File::open(&output).map_err(|e| e.to_string())?;
+            assert_eq!(file.metadata().unwrap().len(), total as u64);
+            let mut received = vec![0; block.len()];
+            for _ in 0..total / block.len() {
+                file.read_exact(&mut received).map_err(|e| e.to_string())?;
+                assert_eq!(received, block);
+            }
+            Ok(())
+        })();
+        fs::remove_dir_all(root).unwrap();
+        checked.unwrap();
+        eprintln!(
+            "HLS_SEGMENT_BENCH bytes={total} seconds={elapsed:.6} mib_per_sec={:.3}",
+            32.0 / elapsed
+        );
+    }
+
+    #[test]
     fn segment_retries_only_recoverable_requests() {
         use std::io::{BufRead, BufReader, Write};
         use std::net::{TcpListener, TcpStream};
@@ -2921,6 +3165,7 @@ mod tests {
             let expected = match route {
                 "transient" | "exhausted" => 3,
                 "truncated" => 2,
+                "write" => 0,
                 _ => 1,
             };
             eprintln!("{target}: requests={count}, result={result:?}");
@@ -3423,13 +3668,13 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
-        let first_segment_seen = Arc::new(AtomicBool::new(false));
-        let release_first_segment = Arc::new((Mutex::new(false), Condvar::new()));
+        let blocked_segment_seen = Arc::new(AtomicBool::new(false));
+        let release_blocked_segment = Arc::new((Mutex::new(false), Condvar::new()));
         let requests = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let server_stop = Arc::clone(&stop);
-        let server_seen = Arc::clone(&first_segment_seen);
-        let server_release = Arc::clone(&release_first_segment);
+        let server_seen = Arc::clone(&blocked_segment_seen);
+        let server_release = Arc::clone(&release_blocked_segment);
         let server_requests = Arc::clone(&requests);
         let server = thread::spawn(move || {
             while !server_stop.load(Ordering::SeqCst) {
@@ -3484,6 +3729,8 @@ mod tests {
                         b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nvod/a.ts\n#EXTINF:1,\nvod/b.ts\n#EXT-X-ENDLIST\n",
                     )
                 } else if path == "/vod/a.ts" {
+                    (200, b"AAA")
+                } else if path == "/vod/b.ts" {
                     if !server_seen.swap(true, Ordering::SeqCst) {
                         let (lock, wake) = &*server_release;
                         let mut released = lock.lock().unwrap();
@@ -3491,8 +3738,6 @@ mod tests {
                             released = wake.wait(released).unwrap();
                         }
                     }
-                    (200, b"AAA")
-                } else if path == "/vod/b.ts" {
                     (200, b"BBB")
                 } else {
                     (404, b"not found")
@@ -3539,15 +3784,15 @@ mod tests {
             )
         });
         let deadline = Instant::now() + Duration::from_secs(15);
-        while !first_segment_seen.load(Ordering::SeqCst) {
+        while !blocked_segment_seen.load(Ordering::SeqCst) {
             assert!(
                 Instant::now() < deadline,
-                "server did not receive the first segment"
+                "server did not receive the second segment"
             );
             thread::sleep(Duration::from_millis(5));
         }
         std::fs::write(&control, "pause").unwrap();
-        let (lock, wake) = &*release_first_segment;
+        let (lock, wake) = &*release_blocked_segment;
         *lock.lock().unwrap() = true;
         wake.notify_all();
         assert_eq!(first.join().unwrap().unwrap_err(), "paused");
@@ -3578,7 +3823,7 @@ mod tests {
             log.iter()
                 .filter(|entry| entry.as_str() == "/vod/b.ts|true")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             log.iter().filter(|entry| entry.ends_with("|false")).count(),
@@ -3602,14 +3847,14 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
         let playlist_requests = Arc::new(AtomicUsize::new(0));
-        let first_segment_seen = Arc::new(AtomicBool::new(false));
-        let release_first_segment = Arc::new((Mutex::new(false), Condvar::new()));
+        let blocked_segment_seen = Arc::new(AtomicBool::new(false));
+        let release_blocked_segment = Arc::new((Mutex::new(false), Condvar::new()));
         let requests = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let server_stop = Arc::clone(&stop);
         let server_playlists = Arc::clone(&playlist_requests);
-        let server_seen = Arc::clone(&first_segment_seen);
-        let server_release = Arc::clone(&release_first_segment);
+        let server_seen = Arc::clone(&blocked_segment_seen);
+        let server_release = Arc::clone(&release_blocked_segment);
         let server_requests = Arc::clone(&requests);
         let server = thread::spawn(move || {
             while !server_stop.load(Ordering::SeqCst) {
@@ -3667,7 +3912,7 @@ mod tests {
                     if number == 0 {
                         (
                             200,
-                            b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\nlive/0.ts\n",
+                        b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\nlive/0.ts\n#EXTINF:1,\nlive/1.ts\n",
                         )
                     } else {
                         (
@@ -3676,6 +3921,8 @@ mod tests {
                         )
                     }
                 } else if path == "/live/0.ts" {
+                    (200, b"LIVE0")
+                } else if path == "/live/1.ts" {
                     if !server_seen.swap(true, Ordering::SeqCst) {
                         let (lock, wake) = &*server_release;
                         let mut released = lock.lock().unwrap();
@@ -3683,8 +3930,6 @@ mod tests {
                             released = wake.wait(released).unwrap();
                         }
                     }
-                    (200, b"LIVE0")
-                } else if path == "/live/1.ts" {
                     (200, b"LIVE1")
                 } else {
                     (404, b"not found")
@@ -3739,22 +3984,22 @@ mod tests {
             .recv_timeout(Duration::from_secs(15))
             .expect("live download worker did not start");
         let deadline = Instant::now() + Duration::from_secs(15);
-        while !first_segment_seen.load(Ordering::SeqCst) {
+        while !blocked_segment_seen.load(Ordering::SeqCst) {
             match done_rx.try_recv() {
-                Ok(result) => panic!("live download exited before the first segment: {result:?}"),
+                Ok(result) => panic!("live download exited before the second segment: {result:?}"),
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    panic!("live download result channel disconnected before the first segment")
+                    panic!("live download result channel disconnected before the second segment")
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
             assert!(
                 Instant::now() < deadline,
-                "server did not receive the first live segment after worker startup"
+                "server did not receive the second live segment after the first completed"
             );
             thread::sleep(Duration::from_millis(5));
         }
         std::fs::write(&control, "pause").unwrap();
-        let (lock, wake) = &*release_first_segment;
+        let (lock, wake) = &*release_blocked_segment;
         *lock.lock().unwrap() = true;
         wake.notify_all();
         let first_result = done_rx
@@ -3796,7 +4041,7 @@ mod tests {
             log.iter()
                 .filter(|entry| entry.as_str() == "/live/1.ts|true")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             log.iter().filter(|entry| entry.ends_with("|false")).count(),

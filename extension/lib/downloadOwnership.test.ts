@@ -201,6 +201,34 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
   })
 
+  it('hands an exact multi-part raw POST to Core through the registered resource download path', async () => {
+    const url = 'https://cdn.test/export?sig=a%2Fb+z'
+    const body = new TextEncoder().encode('{"asset":"中文","token":"once"}')
+    const request = { requestId: 'split-post', url, method: 'POST', tabId: 7, frameId: 3,
+      type: 'xmlhttprequest', documentUrl: 'https://player.test/embed', timeStamp: Date.now() }
+    listener(mocks.browser.webRequest.onBeforeRequest)({ ...request,
+      requestBody: { raw: [{ bytes: body.subarray(0, 12) }, { bytes: body.subarray(12) }] } })
+    listener(mocks.browser.webRequest.onSendHeaders)({ ...request,
+      requestHeaders: [{ name: 'Content-Type', value: 'application/json' },
+        { name: 'Authorization', value: 'Bearer exact-post' }] })
+    listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'ETag', value: '"post-video"' }] })
+    await resourceMessage({ url, kind: 'media', method: 'POST', responseIdentity: { etag: '"post-video"' } })
+    await flush()
+    const stored = (session[pageResourceKey(7, 'https://site.test/')] as any[]).find(resource => resource.url === url)
+    const sending = new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource: stored }, { url: 'https://player.test/embed', tab: { id: 7 }, frameId: 3 }, resolve,
+    ))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect((await sending).ok).toBe(true)
+    const payload = mocks.native.mock.calls.find(([message]) => message.op === 'offer')![0].resource
+    expect(payload.url).toBe(url)
+    expect(payload.request_method).toBe('POST')
+    expect(Uint8Array.from(atob(payload.request_body), char => char.charCodeAt(0))).toEqual(body)
+    expect(payload.request_headers.authorization).toBe('Bearer exact-post')
+    expect(payload.request_contexts['https://cdn.test'].url_contexts[url].request_headers.authorization).toBe('Bearer exact-post')
+  })
+
   it('binds resource observations to the browser sender, not payload tab/frame identity', async () => {
     await resourceMessage({ url: 'https://cdn.test/video.mp4', kind: 'media',
       tabId: 99, frameId: 8, pageUrl: 'https://wrong.test/', evidence: ['current_src'] })

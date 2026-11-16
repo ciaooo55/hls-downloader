@@ -98,11 +98,56 @@ SIZE 已知时在写入前拒绝超界响应，短响应不再等最终回执才
 
 编译与测试进程已结束。自动审批以 `blocked by policy` 拒绝删除本轮测试临时目录 `.tool-cache/test-tmp/idm-ftp-lifecycle-20261116/`，其中保留早期失败的 `data-pause` 夹具；该忽略目录未提交，不将其记录为已清理。原始验证日志继续保留在上述 artifacts 目录。
 
+## 2026-11-16 分块 POST 与 HLS 流式传输
+
+修改基线 `205ea099`。先更新既有架构计划第六节，再只读核查原插件 `fc` 的调用方、`0x005f37c0 → 0x00567020 → recv` 和容量记录函数；没有执行 IDM、操作个人桌面/浏览器或引入恢复 C。具体源码约束与未核清链路见 [源码对应表](idm-source-audit.md#分块-post-与-hls-有界读取2026-11-16)。
+
+插件补齐多 raw 块的精确 POST 正文；任一块缺失或总长超过 128 KiB 全部拒绝，保留原 MIME 类型限制、requestId/frame、签名地址和凭据。旧版新增两项反例实际失败；现从注册的浏览器事件到后台 offer 消息验证原始正文与 Authorization，而非只测辅助函数。
+
+普通 HLS 分片、初始化段、字节范围段和辅助分片改为有界读取及暂存输出；AES-128 复用已有 AES 算法，跨块 CBC 状态和末块 padding 校验在流中完成。网络错误可重试，本地写盘/解密错误不再请求；正文、长度、解密、flush/sync 和原子替换成功后才返回完成，失败保留原文件。原有整段包装不再编译进生产。清单/密钥仍受原大小限制，读取时逐块执行限速；控制轮询沿用 50 ms 热路径预算。
+
+初次回归两项续传夹具在首段正文尚未送出时就暂停，却假定该段已经完成；新路径显式携带控制文件，按暂停中断该请求。现将暂停屏障移到第二段请求，先确保首段已持久发布，再验证第二段中断、首段不重下、VOD/live 恢复字节完全一致。另新增正文未结束前确有暂存输出、传输中暂停/取消保留旧文件的四个普通/Range 场景；没有通过关闭取消检查来迁就旧测试。
+
+| 实际执行 | 结果与边界 |
+| --- | --- |
+| 插件完整类型生成、类型检查与 Vitest | 54 文件、609 通过；`plugin-full-final.log` |
+| Chromium / Firefox 生产构建 | 成功；展开后分别约 794.09 / 795.45 kB；不是已签名商店包；`plugin-build.log` |
+| HLS 定向回归 | 最后去除无用响应 sidecar 后，31 通过、1 基准用例忽略；`hls-final-sidecar.log` |
+| AES / 哈希定向回归 | 13 通过；包含独立 .NET AES/CBC/PKCS7 向量、1～33 字节输入分块、截断/坏 padding；`crypto-targeted.log` |
+| Core、client、protocol 完整库回归（单线程） | 741 通过、17 忽略、0 失败；分别 682、48、11 通过。最后只改 HLS Job 的空 output/progress 字段以移除无用响应 sidecar，随后重跑上列 HLS 定向、Clippy 及 Core 构建。新增忽略项是需显式运行的五轮传输基准；`rust-regression-final.log` |
+| 最终 Clippy（Core 全 targets，与 CI 相同的结构性例外） | `-D warnings` 通过；`clippy-sidecar-final.log` |
+| 最终 Core 开发构建及自检 | 构建成功，`--self-test` 退出 0，输出 `HLSDownloaderEngine 7.0.6 self-test ok`；`core-build-sidecar-final.log`、`core-self-test.log` |
+| 隔离 Core 真实 HLS 媒体 | 明文 TS、AES-128 TS、fMP4、single-file fMP4 Range 四项通过；每项 30 帧视频、142 帧音频的完整 framemd5 行（时间戳、大小和哈希）与 FFmpeg 独立读取原清单的结果相同，双轨严格解码通过；`real-media-range.json` |
+
+真实媒体验收由 `scripts/validation/verify_hls_streaming.py` 生成合法三秒 H.264/AAC，经独立数据目录、loopback TCP 和禁弹窗 Core 下载。TS/m4s 使用 chunked 正文且每块 1003 字节，覆盖 AES 非块对齐读取；single-file 场景严格要求 206、四个预期 Range 及精确 Content-Range/长度。全部 GET 要求原始签名 query、Authorization 和 Cookie；无拒绝请求、额外重下、`.part` 或无用 `.response.json` 残留。真实夹具成功后已清除，报告保留。该范围不含浏览器、桌面、原版 IDM 或安装包。
+
+最终本地开发 Core 为 `.tool-cache/build-cache/cargo-target/debug/hls-downloader-engine.exe`，29,220,864 字节，SHA256 为 `02b02897bc0c1fe7d615fa9a39e0e05c8da26f6c7888edeed83f3514dba69dc7`。这是开发构建，不代表新发布安装包或发布体积。原始日志、初次失败、基准和输入身份位于 `artifacts/idm-streaming-20261116/`；忽略项不算通过。
+
+### HLS 资源与持久化成本
+
+用同一机器、同一 Cargo 开发测试配置和 32 MiB 普通 TCP HLS 实体各运行五次，采样时无本批构建或其他测试。每轮新进程，逐字节验证成品；CPU/峰值内存包含服务器夹具和成品校验，传输时间包含成功返回所需的写盘。测试不启动浏览器、UI 或 IDM。原始结果在 `before/benchmark.json` 和最终去除 sidecar 后的 `after-final/benchmark.json`，各含受测 EXE 哈希。前后顺序采样，未交错 A/B，且新旧持久化合同不同，不能当作隔离网络吞吐比较。
+
+| 五轮中位数 | 修改前 | 修改后 |
+| --- | ---: | ---: |
+| 峰值工作集 | 78,647,296 B（约 75.00 MiB） | 12,582,912 B（12.00 MiB） |
+| 峰值提交内存（Windows PeakPagefileUsage） | 103,649,280 B | 3,375,104 B |
+| 32 MiB 完成时间 | 0.493900 s | 1.621705 s |
+| 完成吞吐 | 64.790 MiB/s | 19.732 MiB/s |
+| 全进程 CPU 时间 | 0.062500 s | 0.015625 s |
+
+工作集约降 84%，但完成吞吐回退约 69.5%，且低于计划的 20 MiB/s 本地下载门槛，**本场景性能未通过**。存储阶段另做五轮诊断：32 MiB 本地写入、`fsync`、原子替换的中位数分别约 0.0121、0.6492、0.0013 s，记录在 `io-phases.json`。新路径增加成功返回前的数据同步；旧路径只将缓存写交给操作系统，不保证检查点对应数据已同步。同步是已经测出的成本，但此诊断不是最终下载的逐阶段跟踪，不能将全部回退精确归因于它。先前同为 1 MiB 写缓冲的 `after/` 吞吐中位数为 37.002 MiB/s，存在明显批间波动，不能选择较快一批代表最终结果；初始 64 KiB 结果保存在 `after-initial/`。不移除可靠写入保证来换数值，也不据此宣称网络提速。
+
+CPU 受 Windows 时钟粒度影响，不据此宣传降低百分比。上述单分片数据不能推广为多连接、真实 HTTPS、整机占用、启动或完整安装包表现，也没有达到 IDM 的运行对照证据。浏览器身份 curl 分支仍先整段落临时文件，本批只避免其后整段内存复制，该分支的网络过程限速/背压仍未完成。
+
+### 本批临时资源
+
+没有本批常驻 Core、FFmpeg、编译或测试进程。成功的真实媒体及基准夹具已清除，验证日志保留。两份早期失败夹具的递归清理在执行前被自动审批以 `blocked by policy` 拒绝，仍在 `.tool-cache/test-tmp/idm-streaming-20261116/hls-auth-live-resume-10904-4440` 和 `hls-auth-vod-resume-10904-4445`，未改用其他工具绕过。只读快照见 `failed-fixture-state.json`，实际清理状态见 `cleanup.json`；不称临时目录已全部清空。
+
 ## 尚未完成的验收与差异
 
-没有操作个人桌面或浏览器，没有运行原版 IDM。常规回归中的忽略项包含交互式 UAC、Sandbox 传输和真实 FFmpeg 等条件场景，不能算作通过；本次显式运行的两个 FFmpeg 用例结果单列于上节。
+没有操作个人桌面或浏览器，没有运行原版 IDM。常规回归中的忽略项包含交互式 UAC、Sandbox 传输和真实 FFmpeg 等条件场景，不能算作通过；此前显式运行的两个 DASH FFmpeg 用例和本批四种 HLS 真实媒体结果分别列在对应小节。
 
-本轮尚未执行当前源码在独立环境的真实浏览器/Host/Core 接管、安装启动与升级、所有媒体变体和音画同步、五轮修改前后性能及原版 IDM 同条件对照。已实际验证上节的两秒视频及双轨夹具，但不能推广为所有媒体或所有音画同步场景已验收。性能脚本已有五轮采样和中位数输出，但不能据此宣称性能回退低于 5% 或达到 IDM。Firefox 永久安装仍需 Mozilla 签名。
+当前源码在独立环境的真实浏览器/Host/Core 接管、安装启动与升级、所有媒体变体和音画同步、其他完整性能场景及原版 IDM 同条件对照仍未执行。已实际验证此前两秒 DASH 视频/双轨及本批三秒 HLS 四种双轨夹具，不能推广为所有媒体或所有音画同步场景已验收。本批 HLS 单分片已有五轮前后采样且发现回退，不能宣称性能回退低于 5% 或达到 IDM。Firefox 永久安装仍需 Mozilla 签名。
 
 FTP 多连接/主动 PORT、DASH 多 Period、无 indexRange 的 SegmentBase 及外置索引尚未实现。嵌套索引沿用已确认的原版拒绝行为；畸形数据校验不作为待实现功能。SegmentList 显式字节范围及带 indexRange 的非嵌套 SegmentBase/sidx 现已实现。现有 FFmpeg 封装、DOM 浮窗、持久回执及额外协议功能按计划保留。
 

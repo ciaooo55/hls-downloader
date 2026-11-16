@@ -803,6 +803,7 @@ pub(crate) fn fetch_bytes_limited(
     fetch_bytes_with_transport(url, headers, proxy, false, Some(limit))
 }
 
+#[cfg(test)]
 pub fn fetch_hls_bytes(
     url: &str,
     headers: &HashMap<String, String>,
@@ -886,14 +887,28 @@ fn fetch_bytes_with_transport(
         let mut reader = fetched
             .body
             .take(limit.map_or(u64::MAX, |limit| limit.saturating_add(1)));
-        if let Err(error) = reader.read_to_end(&mut body) {
-            check_job_control(&job)?;
-            return Err(EngineError::Failed(error.to_string()));
-        }
-        if limit.is_some_and(|limit| body.len() as u64 > limit) {
-            return Err(EngineError::Failed(
-                "metadata response exceeds byte limit".into(),
-            ));
+        let mut buffer = [0; 64 * 1024];
+        let mut last_control = Instant::now();
+        loop {
+            if last_control.elapsed() >= Duration::from_millis(50) {
+                check_job_control(&job)?;
+                last_control = Instant::now();
+            }
+            let count = reader.read(&mut buffer).map_err(|error| {
+                check_job_control(&job)
+                    .err()
+                    .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+            })?;
+            if count == 0 {
+                break;
+            }
+            if limit.is_some_and(|limit| body.len() as u64 + count as u64 > limit) {
+                return Err(EngineError::Failed(
+                    "metadata response exceeds byte limit".into(),
+                ));
+            }
+            crate::net_policy::consume(count, || check_job_control(&job))?;
+            body.extend_from_slice(&buffer[..count]);
         }
         if matches!(status, 200 | 206)
             && expected_length.is_some_and(|expected| expected != body.len() as u64)
@@ -904,13 +919,105 @@ fn fetch_bytes_with_transport(
                 expected_length.unwrap()
             )));
         }
-        crate::net_policy::consume(body.len(), || check_job_control(&job))?;
+        check_job_control(&job)?;
         Ok((status, body))
     })();
     let _ = fs::remove_dir_all(dir);
     result
 }
 
+/// Distinguish retryable transport failures from terminal disk/decryption errors.
+#[derive(Debug)]
+pub(crate) enum MediaTransferError {
+    Transfer(EngineError),
+    Output(std::io::Error),
+}
+
+impl From<EngineError> for MediaTransferError {
+    fn from(error: EngineError) -> Self {
+        Self::Transfer(error)
+    }
+}
+
+impl From<std::io::Error> for MediaTransferError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Output(error)
+    }
+}
+
+impl std::fmt::Display for MediaTransferError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transfer(error) => error.fmt(formatter),
+            Self::Output(error) => error.fmt(formatter),
+        }
+    }
+}
+
+/// Copies one HLS entity through the existing credential/transport path.
+/// Output is provisional until length, decryption and durability checks succeed.
+pub(crate) fn copy_hls_body(
+    job: &Job,
+    range: Option<(u64, u64)>,
+    writer: &mut impl Write,
+) -> Result<(), MediaTransferError> {
+    check_job_control(job)?;
+    let fetched = if let Some((start, length)) = range {
+        let end = length
+            .checked_sub(1)
+            .and_then(|last| start.checked_add(last))
+            .ok_or_else(|| {
+                EngineError::RangeUnsupported("byte range is empty or overflows".into())
+            })?;
+        fetch_exact_range(job, start, end, true)?
+    } else {
+        let fetched = fetch_browser_first(job, None)?;
+        if !matches!(fetched.status, 200 | 206) {
+            return Err(EngineError::Failed(format!("HLS media HTTP {}", fetched.status)).into());
+        }
+        fetched
+    };
+    let expected = range.map(|(_, length)| length).or(fetched.content_length);
+    let mut body = fetched
+        .body
+        .take(expected.map_or(u64::MAX, |length| length.saturating_add(1)));
+    let mut received = 0u64;
+    let mut buffer = [0; 64 * 1024];
+    let mut last_control = Instant::now();
+    loop {
+        if last_control.elapsed() >= Duration::from_millis(50) {
+            check_job_control(job)?;
+            last_control = Instant::now();
+        }
+        let count = body.read(&mut buffer).map_err(|error| {
+            check_job_control(job)
+                .err()
+                .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+        })?;
+        if count == 0 {
+            break;
+        }
+        if expected.is_some_and(|length| count as u64 > length - received) {
+            return Err(
+                EngineError::Failed("media response exceeds expected length".into()).into(),
+            );
+        }
+        crate::net_policy::consume(count, || check_job_control(job))?;
+        writer.write_all(&buffer[..count])?;
+        received += count as u64;
+    }
+    if expected.is_some_and(|length| received != length) {
+        return Err(EngineError::Failed(format!(
+            "incomplete response body: received {received} bytes, expected {}",
+            expected.unwrap()
+        ))
+        .into());
+    }
+    check_job_control(job)?;
+    Ok(())
+}
+
+#[cfg(test)]
 pub fn fetch_hls_bytes_range(
     url: &str,
     headers: &HashMap<String, String>,

@@ -417,9 +417,6 @@ describe('browser request chains', () => {
   })
 
   it('never reconstructs multipart uploads or hands them to the desktop app', () => {
-    const body = captureReplayableRequestBody({ raw: [{ bytes: new Uint8Array([1, 2]).buffer }, { bytes: new Uint8Array([3]).buffer }] })
-    expect(body).toBe('')
-
     const store = new RequestChainStore()
     store.observeRequest({
       requestId: 'upload', url: 'https://api.test/export', tabId: 3, method: 'POST', timeStamp: 1000,
@@ -430,6 +427,43 @@ describe('browser request chains', () => {
       requestHeaders: [{ name: 'Content-Type', value: 'multipart/form-data; boundary=browser' }],
     })
     expect(replayablePostRequest(chain)).toEqual({})
+  })
+
+  it('preserves an exact JSON POST split across raw chunks, including a UTF-8 boundary', () => {
+    const store = new RequestChainStore()
+    const json = '{"asset":"中文片段","token":"once+%2F"}'
+    const bytes = new TextEncoder().encode(json)
+    const split = bytes.indexOf(0xe4) + 1
+    store.observeRequest({
+      requestId: 'split-post', url: 'https://api.test/export?sig=a%2Bb', tabId: 3,
+      method: 'POST', timeStamp: 1000,
+      requestBody: { raw: [
+        { bytes: bytes.subarray(0, split) },
+        { bytes: new Uint8Array(0) },
+        { bytes: bytes.buffer.slice(split) },
+      ] },
+    })
+    const chain = store.observeRequest({
+      requestId: 'split-post', url: 'https://api.test/export?sig=a%2Bb', tabId: 3,
+      method: 'POST', timeStamp: 1001,
+      requestHeaders: [
+        { name: 'Content-Type', value: 'application/json; charset=utf-8' },
+        { name: 'Authorization', value: 'Bearer request-token' },
+      ],
+    })
+    const replay = replayablePostRequest(chain)
+    expect(replay.request_method).toBe('POST')
+    expect(new TextDecoder().decode(Uint8Array.from(atob(replay.request_body!), char => char.charCodeAt(0)))).toBe(json)
+    expect(requestHeader(chain, 'authorization')).toBe('Bearer request-token')
+    expect(chain.finalUrl).toBe('https://api.test/export?sig=a%2Bb')
+  })
+
+  it('rejects missing raw bytes and aggregate overflow without keeping a partial POST', () => {
+    const chunk = new Uint8Array(64 * 1024)
+    expect(captureReplayableRequestBody({ raw: [{ bytes: chunk }, { bytes: chunk }] })).not.toBe('')
+    expect(captureReplayableRequestBody({ raw: [{ bytes: chunk }, { bytes: chunk }, { bytes: new Uint8Array([1]) }] })).toBe('')
+    expect(captureReplayableRequestBody({ raw: [{ bytes: chunk }, {}] })).toBe('')
+    expect(captureReplayableRequestBody({ raw: [{ bytes: new Uint8Array(0) }] })).toBe('')
   })
 
   it('bounds captured headers and strips header injection bytes', () => {

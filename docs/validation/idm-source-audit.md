@@ -289,6 +289,21 @@ HLS 本轮采用的是具体的资源生命周期优化：首次领取范围后�
 
 FTP SIZE 写前边界另依据 [RFC 3659 §4](https://www.rfc-editor.org/rfc/rfc3659.html#section-4)：已知长度时多读至多一字节验证边界，超长块在写入前拒绝；短响应在等待最终回执前失败，零长度也验证 EOF。SIZE 不支持时保留未知长度流式下载。成功同步文件且收到 226/250 后才移除断点身份，失败保留可用前缀及已有身份校验。该长度约束不是从上述析构函数推断的原版数据算法。参考输入身份见 `artifacts/idm-ftp-lifecycle-20261116/reference.json`。
 
+### 分块 POST 与 HLS 有界读取（2026-11-16）
+
+本批先在 [实施计划第六节](../architecture/native-migration-plan.md#六2026-11-16-源码逐项对照执行安排) 固定模块、顺序、保留功能和验收，再在 `205ea099` 基线上修改。原始输入身份为 `artifacts/idm-streaming-20261116/reference.json`。
+
+| IDM 原函数及调用方 | 已确认行为 | HLS 实际路径 | 差异与修改 | 状态及验收依据 |
+| --- | --- | --- | --- | --- |
+| 插件 `Ka` 保存 requestBody；`Y` 对请求字段 14 / 19 调用 `fc`；另一裁决分支将 `fc` 结果传入 Blob | `fc` 顺序收集所有 raw.bytes，任一缺失就拒绝；URL encoded 与 multipart 另有重建分支 | `onBeforeRequest → RequestChainStore → captureReplayableRequestBody → replayablePostRequest → resourcePayload → NativeBridge.offer` | 旧代码拒绝多个完整 raw 块，实际反例丢失 JSON POST。现先检查所有块及总量，再精确拼接；保留视图偏移、UTF-8 原始字节、128 KiB 上限、requestId/frame/URL 和请求凭据。继续只允许 JSON/urlencoded，不重建 multipart 或文件引用，不仿照原插件的失败退 GET 分支 | 已适配（完整 raw 字节）；旧版新增两项反例实际失败，修复后通过；注册事件到 offer 消息的回归验证精确正文、签名 URL 与 Authorization。插件完整回归 609 通过，不能代替真实浏览器/Host 运行 |
+| 原 `0x005f37c0 → 0x00567020 → recv`；`0x005f1ad0` 的容量记录 | 原收包将 `capacity - used` 传给 recv，TLS 缓冲按需分配/复用。只确认所列子路径，尚未核清 worker 经虚表进入它的完整链路；不能由恢复 C 推断原媒体全流程或原限速位置 | `download_prepared_segments → download_segment → save_segment → copy_hls_body`；初始化段和辅助分片共用；清单/密钥仍用有界 fetch | 旧媒体实体整段 Vec，AES 再生成整段 Vec；普通 fetch 完整接收后才限速。现复用 HTTP 身份/重定向/Range 路径，以 64 KiB 读取、最多 1 MiB 写缓冲，AES 只保留末块并在 finish 验证 padding；逐块 consume，显式任务控制，先同步暂存再原子发布。区分网络与本地错误，磁盘/解密失败不重发请求。移出生产的旧整段包装仅供既有测试使用 | 已适配（所列上层/直连 HTTP 路径）；普通/范围传输中途停止保留旧完成文件并清除暂存，VOD/live 可靠完成段续用，标准向量和任意 AES 分块通过。实测与性能代价见验证记录，不称整体等效 |
+
+**剩余差异：**`fetch_browser_first → fetch_via_curl_impersonate` 仍先由子进程完整下载到临时文件，再返回 `Body::File`。本批消除了后续整段内存复制，但不能因此宣称该 HTTPS 浏览器身份路径已实现网络接收背压或过程限速；磁盘暂存和按分片启动子进程的成本仍在。下一批 B3 必须先核查头部、重定向、压缩、退出码和子进程生命周期，再将正文接入可限速的流式通道，不能直接改用不携带既有身份的客户端。
+
+最终开发 Core 已构建、自检并完成四种真实 HLS 双轨下载：明文 TS、AES-128 TS、fMP4、single-file fMP4 Range。精确签名 query 和凭据、初始化及媒体 Range、完整音视频帧哈希/时间戳均通过；这仍不是浏览器接管或 IDM 同条件运行对照。五轮单分片测试工作集约 75→12 MiB，含持久同步的完成吞吐 64.79→19.73 MiB/s，性能门槛未通过，具体合同差异、同步诊断与波动见验证记录。
+
+本批没有缩减额外功能或修改 UI。FTP 多连接、DASH 多 Period、独立安装/浏览器验收仍按下节保留，不因本批回归通过标记整个项目完成。
+
 ### 保留的功能与未闭环项目
 
 SFTP、BT、字幕、播放、投屏、TVBox、队列、计划任务和站点同步继续通过现有 Core；本轮没有重新建立平行服务，也没有改 UI 或迁移数据库。

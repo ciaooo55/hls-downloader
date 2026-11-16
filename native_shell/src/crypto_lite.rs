@@ -1,38 +1,91 @@
 //! AES-128 CBC (PKCS7) and SHA-256 without extra crates.
 
-pub fn decrypt_aes128_cbc_pkcs7(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
-    if key.len() != 16 || iv.len() != 16 {
-        return Err("AES-128 key/IV must be 16 bytes".into());
-    }
-    if data.is_empty() || !data.len().is_multiple_of(16) {
-        return Err("AES-128 ciphertext must be a multiple of 16 bytes".into());
-    }
-    let round_keys = expand_key(key);
-    let mut prev = [0u8; 16];
-    prev.copy_from_slice(iv);
-    let mut plain = Vec::with_capacity(data.len());
-    for chunk in data.as_chunks::<16>().0 {
-        let mut block = [0u8; 16];
-        block.copy_from_slice(chunk);
-        decrypt_block(&round_keys, &mut block);
-        for (byte, prev_byte) in block.iter_mut().zip(prev.iter()) {
-            *byte ^= prev_byte;
+use std::io::{self, Write};
+
+/// Holds the last ciphertext block until finish validates its PKCS7 padding.
+/// Callers must not publish the output before finish succeeds.
+pub(crate) struct Aes128CbcWriter<W> {
+    writer: W,
+    round_keys: [u32; 44],
+    previous: [u8; 16],
+    pending: [u8; 16],
+    filled: usize,
+}
+
+impl<W: Write> Aes128CbcWriter<W> {
+    pub(crate) fn new(writer: W, key: &[u8], iv: &[u8]) -> io::Result<Self> {
+        if key.len() != 16 || iv.len() != 16 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "AES-128 key/IV must be 16 bytes",
+            ));
         }
-        prev.copy_from_slice(chunk);
-        plain.extend_from_slice(&block);
+        Ok(Self {
+            writer,
+            round_keys: expand_key(key),
+            previous: iv.try_into().unwrap(),
+            pending: [0; 16],
+            filled: 0,
+        })
     }
-    let pad = *plain.last().unwrap_or(&0) as usize;
-    if pad == 0 || pad > 16 || plain.len() < pad {
-        return Err("invalid PKCS7 padding".into());
+
+    fn decrypt_pending(&self) -> [u8; 16] {
+        let mut block = self.pending;
+        decrypt_block(&self.round_keys, &mut block);
+        for (byte, previous) in block.iter_mut().zip(self.previous) {
+            *byte ^= previous;
+        }
+        block
     }
-    if plain[plain.len() - pad..]
-        .iter()
-        .any(|byte| *byte as usize != pad)
-    {
-        return Err("invalid PKCS7 padding".into());
+
+    pub(crate) fn finish(mut self) -> io::Result<W> {
+        if self.filled != 16 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "AES-128 ciphertext must be a multiple of 16 bytes",
+            ));
+        }
+        let block = self.decrypt_pending();
+        let pad = block[15] as usize;
+        if pad == 0 || pad > 16 || block[16 - pad..].iter().any(|byte| *byte as usize != pad) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid PKCS7 padding",
+            ));
+        }
+        self.writer.write_all(&block[..16 - pad])?;
+        Ok(self.writer)
     }
-    plain.truncate(plain.len() - pad);
-    Ok(plain)
+}
+
+impl<W: Write> Write for Aes128CbcWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        if self.filled == 16 {
+            let block = self.decrypt_pending();
+            self.writer.write_all(&block)?;
+            self.previous = self.pending;
+            self.filled = 0;
+        }
+        let count = bytes.len().min(16 - self.filled);
+        self.pending[self.filled..self.filled + count].copy_from_slice(&bytes[..count]);
+        self.filled += count;
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+#[cfg(test)]
+pub fn decrypt_aes128_cbc_pkcs7(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut writer =
+        Aes128CbcWriter::new(Vec::new(), key, iv).map_err(|error| error.to_string())?;
+    writer.write_all(data).map_err(|error| error.to_string())?;
+    writer.finish().map_err(|error| error.to_string())
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -500,6 +553,36 @@ mod tests {
         assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 16], &[0u8; 15], &[0u8; 16]).is_err());
         assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 16], &[0u8; 16], &[]).is_err());
         assert!(decrypt_aes128_cbc_pkcs7(&[0u8; 16], &[0u8; 16], &[0u8; 17]).is_err());
+    }
+
+    #[test]
+    fn streaming_cbc_preserves_bytes_across_every_block_boundary() {
+        // Independently produced with .NET AES/CBC/PKCS7, key 00..0f, IV 10..1f.
+        let ciphertext = unhex(concat!(
+            "954f64f2e4e86e9eee82d20216684899a93b9ddb22e8ab104c61e728831d6d5a",
+            "1f51afc19343249ef3b4495be12dc4f3e0b296f5c91be273a66c1216a66da5fd",
+            "24dbfbf2953d5862f57436198ada0a43e14e1630c58f3e0af2b02aff4bbfc25c"
+        ));
+        let key: Vec<u8> = (0..16).collect();
+        let iv: Vec<u8> = (16..32).collect();
+        let expected: Vec<u8> = (0..80).collect();
+        for chunk_size in 1..=33 {
+            let mut writer = Aes128CbcWriter::new(Vec::new(), &key, &iv).unwrap();
+            for chunk in ciphertext.chunks(chunk_size) {
+                writer.write_all(chunk).unwrap();
+                writer.write_all(&[]).unwrap();
+            }
+            assert_eq!(
+                writer.finish().unwrap(),
+                expected,
+                "chunk size {chunk_size}"
+            );
+        }
+        for invalid in [&ciphertext[..95], &ciphertext[..80]] {
+            let mut writer = Aes128CbcWriter::new(Vec::new(), &key, &iv).unwrap();
+            writer.write_all(invalid).unwrap();
+            assert!(writer.finish().is_err());
+        }
     }
 
     #[test]

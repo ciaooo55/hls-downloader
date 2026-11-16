@@ -120,22 +120,30 @@ function base64(bytes: Uint8Array): string {
 }
 
 /**
- * Keep a small exact request payload in the worker only. Multipart/file bodies
- * and multi-part raw data are deliberately not reconstructed or replayed.
+ * Keep a small exact request payload in the worker only. Every raw part must
+ * expose its bytes; file references and multipart reconstruction are excluded.
  */
 export function captureReplayableRequestBody(body?: RequestBodyLike): string {
   if (!body) return ''
   const raw = body.raw || []
-  if (raw.length === 1 && raw[0]?.bytes) {
-    const rawBytes = raw[0].bytes
-    const byteLength = rawBytes instanceof Uint8Array ? rawBytes.byteLength : Number(rawBytes.byteLength || 0)
-    if (!Number.isFinite(byteLength) || byteLength <= 0 || byteLength > MAX_REPLAY_BODY_BYTES) return ''
-    const bytes = rawBytes instanceof Uint8Array
-      ? rawBytes
-      : new Uint8Array(rawBytes)
-    return bytes.length && bytes.length <= MAX_REPLAY_BODY_BYTES ? base64(bytes) : ''
+  if (raw.length) {
+    let totalBytes = 0
+    for (const part of raw) {
+      if (!part.bytes) return ''
+      const length = part.bytes.byteLength
+      if (!Number.isSafeInteger(length) || length < 0 || length > MAX_REPLAY_BODY_BYTES - totalBytes) return ''
+      totalBytes += length
+    }
+    if (!totalBytes) return ''
+    const bytes = new Uint8Array(totalBytes)
+    let offset = 0
+    for (const part of raw) {
+      const chunk = part.bytes instanceof Uint8Array ? part.bytes : new Uint8Array(part.bytes!)
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return base64(bytes)
   }
-  if (raw.length) return ''
   if (!body.formData) return ''
   const entries = Object.entries(body.formData)
   if (entries.length > MAX_FORM_FIELDS) return ''
