@@ -5618,6 +5618,58 @@ fn schedule_stop_dispatches_pause_control_without_touching_queued_tasks() {
 }
 
 #[test]
+fn startup_reconciles_durable_ranges_when_database_progress_lags() {
+    for (case, ranges, output_len, expected) in [
+        ("merged", vec![(0, 39), (20, 59), (80, 89)], 100, 70),
+        ("truncated", vec![(0, 79)], 50, 7),
+        ("outside-total", vec![(0, 100)], 101, 7),
+        ("other-resource", vec![(0, 79)], 100, 7),
+        ("old-format", vec![(0, 79)], 100, 7),
+        ("empty", vec![], 100, 0),
+    ] {
+        let root = lifecycle_test_root(case);
+        fs::create_dir_all(&root).unwrap();
+        let db = root.join("core.sqlite3");
+        let coordinator = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        let task_id = lifecycle_task(&coordinator, &root, "downloading");
+        let spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec(&task_id)
+            .unwrap()
+            .clone();
+        let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+        paths.prepare().unwrap();
+        fs::write(&paths.output, vec![1; output_len]).unwrap();
+        fs::write(
+            paths.progress.with_file_name(crate::range_cache::FILE_NAME),
+            serde_json::json!({"version":if case == "old-format" {1} else {2}, "total":100,
+                "resource_key":if case == "other-resource" {"https://other.test/file"} else {&spec.url},
+                "etag":"\"fixture\"", "last_modified":"", "ranges":ranges})
+            .to_string(),
+        )
+        .unwrap();
+        drop(coordinator);
+        let restarted = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        restarted.recover_startup().unwrap();
+        {
+            let core = restarted.lock().unwrap();
+            let task = core.snapshot(&task_id).unwrap();
+            assert_eq!(task.status, "paused", "{case}");
+            assert_eq!(task.downloaded_bytes, expected, "{case}");
+            assert_eq!(task.total_bytes, Some(100), "{case}");
+            assert_eq!(
+                core.store().load_tasks().unwrap()[0].downloaded_bytes,
+                expected,
+                "{case}"
+            );
+        }
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn shutdown_waits_for_checkpoints_and_recovers_only_interrupted_tasks() {
     for resume in [false, true] {
         let root = lifecycle_test_root("shutdown");

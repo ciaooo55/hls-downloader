@@ -653,6 +653,8 @@ def _exercise_chrome(
                         "return Boolean(window.__hlsRescanSmoke);"
                         "})()",
                     )
+                    # CSS draws separators between facts; verify the accessible
+                    # label and visible fact nodes instead of concatenated textContent.
                     popup_details = _evaluate(
                         popup_websocket_url,
                         "({ready:document.documentElement.dataset.popupReady||'bootstrap',"
@@ -663,7 +665,9 @@ def _exercise_chrome(
                         "rescanTriggered:Boolean(window.__hlsRescanSmoke),"
                         "rescanBusy:Boolean(document.querySelector('.scan-button')?.disabled),"
                         "resourceCount:document.querySelectorAll('article').length,"
-                        "resourceMeta:document.querySelector('.resource-body>span')?.textContent||'',"
+                        "resourceMeta:document.querySelector('.resource-facts')?.getAttribute('aria-label')||'',"
+                        "resourceFacts:[...document.querySelectorAll('article:first-of-type .resource-fact')]"
+                        ".filter(node=>node.getBoundingClientRect().height>0).map(node=>node.textContent?.trim()),"
                         "fits:document.body.scrollWidth<=document.body.clientWidth,"
                         "secondaryHidden:[...document.querySelectorAll('.resource-extra')].every(node=>!node.getBoundingClientRect().height),"
                         "actions:[...document.querySelectorAll('.article-actions > button')].map(button=>button.textContent?.trim())})",
@@ -680,6 +684,7 @@ def _exercise_chrome(
                         and popup_details.get("rescanBusy") is False
                         and int(popup_details.get("resourceCount", 0)) >= 1
                         and str(popup_details.get("resourceMeta", "")).startswith("音频 · .wav")
+                        and popup_details.get("resourceFacts", [])[:2] == ["音频", ".wav"]
                         and popup_details.get("actions") == ["下载"]
                         and popup_details.get("fits") is True
                         and popup_details.get("secondaryHidden") is True

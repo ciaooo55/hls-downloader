@@ -1510,11 +1510,32 @@ impl CoreCoordinator {
                 "downloading" | "recording" | "merging" | "checking" | "parsing"
             ) {
                 let status = if resume { "queued" } else { "paused" };
+                // SQLite progress may lag behind the synced range checkpoint when
+                // the process was killed. Reconcile before publishing recovery.
+                let spec = self.lock()?.task_spec(&task.task_id).cloned();
+                let saved = spec.as_ref().and_then(|spec| {
+                    if spec.resource_kind != crate::ResourceKind::File
+                        || spec.local_source_path.is_some()
+                        || !crate::http_engine::http_fetch_url_allowed(&spec.url)
+                    {
+                        return None;
+                    }
+                    let paths = TaskPaths::for_task(&task.task_id, spec).ok()?;
+                    if !paths
+                        .progress
+                        .with_file_name(crate::range_cache::FILE_NAME)
+                        .is_file()
+                    {
+                        return None;
+                    }
+                    let (job, _) = build_job(&task.task_id, spec).ok()?;
+                    crate::http_engine::checkpoint_progress(&job)
+                });
                 mark_progress(
                     &self.core,
                     &task.task_id,
-                    task.downloaded_bytes,
-                    task.total_bytes,
+                    saved.map_or(task.downloaded_bytes, |(bytes, _)| bytes),
+                    saved.map(|(_, total)| total).or(task.total_bytes),
                     "waiting",
                     status,
                 )?;

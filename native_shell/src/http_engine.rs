@@ -437,7 +437,39 @@ fn subtract_ranges(base_start: u64, base_end: u64, completed: &[(u64, u64)]) -> 
 fn load_completed_ranges(job: &Job) -> Option<Vec<(u64, u64)>> {
     let text = fs::read_to_string(completed_ranges_path(job)).ok()?;
     let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
-    if !checkpoint_matches(job, &value) {
+    completed_ranges_from_checkpoint(job, &value)
+}
+
+/// Restore local progress after a crash. This does not authorize HTTP reuse:
+/// run_job still probes the server and checks its current resource identity.
+pub(crate) fn checkpoint_progress(job: &Job) -> Option<(u64, u64)> {
+    let text = fs::read_to_string(completed_ranges_path(job)).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let mut saved = job.clone();
+    if saved.total == 0 {
+        saved.total = value.get("total")?.as_u64()?;
+    }
+    if saved.etag.trim().is_empty() && saved.last_modified.trim().is_empty() {
+        saved.etag = value
+            .get("etag")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .into();
+        saved.last_modified = value
+            .get("last_modified")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .into();
+    }
+    let ranges = completed_ranges_from_checkpoint(&saved, &value)?;
+    Some((covered_bytes(&ranges), saved.total))
+}
+
+fn completed_ranges_from_checkpoint(
+    job: &Job,
+    value: &serde_json::Value,
+) -> Option<Vec<(u64, u64)>> {
+    if !checkpoint_matches(job, value) {
         return None;
     }
     // 必须在 set_len 预分配之前校验；补长后的零字节不能充当已下载数据。
