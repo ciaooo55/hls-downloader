@@ -1591,6 +1591,20 @@ unsafe extern "system" fn frameless_window_proc(
     }
 }
 
+/// 与 `Tokens.card-radius` 保持一致的无边框窗口圆角（逻辑像素）。
+#[cfg_attr(not(windows), allow(dead_code))]
+const CARD_RADIUS: f32 = 8.0;
+
+#[cfg(windows)]
+fn ready_size(native: &slint::winit_030::winit::window::Window, window: &slint::Window) -> bool {
+    let actual = native.inner_size();
+    let rendered = window.size();
+    actual.width > 0
+        && actual.height > 0
+        && actual.width == rendered.width
+        && actual.height == rendered.height
+}
+
 fn round_native_window(window: &slint::Window) {
     #[cfg(windows)]
     {
@@ -1600,6 +1614,7 @@ fn round_native_window(window: &slint::Window) {
         };
         use windows_sys::Win32::{
             Foundation::RECT,
+            Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND},
             Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
             UI::WindowsAndMessaging::{
                 GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
@@ -1634,11 +1649,25 @@ fn round_native_window(window: &slint::Window) {
                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                     );
                 }
+                // Windows 11：交给 DWM 画抗锯齿圆角、系统描边和阴影，半径 8 与
+                // Tokens.card-radius 一致；此时不能再设窗口区域，否则 DWM 圆角失效。
+                let preference = DWMWCP_ROUND;
+                let dwm_rounded = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                    std::ptr::from_ref(&preference).cast(),
+                    std::mem::size_of_val(&preference) as u32,
+                ) >= 0;
+                if dwm_rounded {
+                    SetWindowRgn(hwnd, std::ptr::null_mut(), 1);
+                    return ready_size(native, window);
+                }
+                // Windows 10 没有 DWM 圆角：用窗口区域裁出同样 8 逻辑像素的圆角。
                 let mut bounds: RECT = std::mem::zeroed();
                 if GetWindowRect(hwnd, &mut bounds) == 0 {
                     return false;
                 }
-                let diameter = (28.0 * window.scale_factor()).round() as i32;
+                let diameter = (2.0 * CARD_RADIUS * window.scale_factor()).round() as i32;
                 let region = CreateRoundRectRgn(
                     0,
                     0,
@@ -1651,12 +1680,7 @@ fn round_native_window(window: &slint::Window) {
                     DeleteObject(region);
                 }
             }
-            let actual = native.inner_size();
-            let rendered = window.size();
-            actual.width > 0
-                && actual.height > 0
-                && actual.width == rendered.width
-                && actual.height == rendered.height
+            ready_size(native, window)
         });
         if ready_to_repaint == Some(true) {
             // 隐藏后 Win32 画布会被清空，但 softbuffer 仍可能报告缓冲可复用。

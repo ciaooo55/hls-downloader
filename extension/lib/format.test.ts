@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { formatBytes, formatDuration } from './format'
+import { formatBitrate, formatBytes, formatDuration } from './format'
 
 describe('shared byte and duration formatting', () => {
   it('climbs the unit ladder the way the overlay already did', () => {
@@ -44,16 +44,30 @@ describe('formatter convergence', () => {
 
   it('has every consumer import the shared implementation instead of defining one', () => {
     const content = sources.find(source => source.path.endsWith('content.ts'))!.text
-    expect(content).toContain("import { formatBytes, formatDuration } from '../lib/format'")
+    expect(content).toContain("import { formatBitrate, formatBytes, formatDuration } from '../lib/format'")
     const popup = sources.find(source => source.path.endsWith('main.ts'))!.text
-    expect(popup).toContain("import { formatBytes, formatDuration } from '../../lib/format'")
+    expect(popup).toContain("import { formatBitrate, formatBytes, formatDuration } from '../../lib/format'")
     const overlay = sources.find(source => source.path.endsWith('mediaOverlay.ts'))!.text
-    expect(overlay).toContain("import { formatBytes, formatDuration } from './format'")
+    expect(overlay).toContain("import { formatBitrate, formatBytes, formatDuration } from './format'")
   })
 
   it('no longer keeps the old per-file formatter names', () => {
     for (const source of sources.filter(entry => !entry.path.endsWith('format.ts'))) {
       expect(source.text).not.toContain('formatSize')
+      // 码率同样只走 formatBitrate，不再各自内联 "/ 1_000_000).toFixed(1) Mbps"。
+      expect(source.text).not.toContain('/ 1_000_000).toFixed(1)')
     }
+  })
+})
+
+describe('formatBitrate', () => {
+  it('shows sub-megabit streams in kbps instead of "0.0 Mbps"', () => {
+    expect(formatBitrate(40_570)).toBe('41 kbps')
+    expect(formatBitrate(400_000)).toBe('400 kbps')
+    expect(formatBitrate(999_600)).toBe('1.0 Mbps')
+    expect(formatBitrate(900_000)).toBe('900 kbps')
+    expect(formatBitrate(2_500_000)).toBe('2.5 Mbps')
+    expect(formatBitrate(0)).toBe('')
+    expect(formatBitrate(Number.NaN)).toBe('')
   })
 })

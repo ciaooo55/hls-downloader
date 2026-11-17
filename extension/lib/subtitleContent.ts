@@ -103,11 +103,11 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     // 播放器顶行留给下载和更多操作；窄播放器也不能让字幕工具栏遮住它们。
     style.textContent = `:host{position:fixed;z-index:2147483646;pointer-events:none;display:block;box-sizing:border-box}
       *{box-sizing:border-box} [hidden]{display:none!important} .tools{position:absolute;right:8px;top:50px;display:flex;justify-content:flex-end;gap:4px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 16px);pointer-events:auto;font:12px system-ui;color:white}
-      button{border:1px solid #596675;border-radius:5px;padding:5px 8px;background:#17202ee8;color:#fff;cursor:pointer;font:12px system-ui}button:hover{background:#285379}button:disabled{opacity:.65;cursor:default}
+      button{border:1px solid #596675;border-radius:4px;padding:5px 8px;background:#17202ee8;color:#fff;cursor:pointer;font:12px system-ui}button:hover{background:#285379}button:disabled{opacity:.65;cursor:default}
       button:focus-visible,summary:focus-visible{outline:2px solid #9ac5ff;outline-offset:2px}
-      details{position:relative}summary{padding:5px 7px;border:1px solid #596675;border-radius:5px;background:#17202ee8;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}
-      .options{position:absolute;right:0;top:32px;width:220px;max-width:calc(100vw - 24px);display:flex;flex-wrap:wrap;gap:5px;padding:8px;border:1px solid #596675;border-radius:7px;background:#17202ef5;box-shadow:0 4px 16px #0006}
-      .status{padding:4px 6px;background:#111b;border-radius:4px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      details{position:relative}summary{padding:5px 8px;border:1px solid #596675;border-radius:4px;background:#17202ee8;cursor:pointer;list-style:none;font:12px system-ui}summary:hover{background:#285379}summary::-webkit-details-marker{display:none}
+      .options{position:absolute;right:0;top:32px;width:220px;max-width:calc(100vw - 24px);display:flex;flex-wrap:wrap;gap:5px;padding:8px;border:1px solid #596675;border-radius:8px;background:#17202ef5;box-shadow:0 4px 16px #0006}
+      .status{padding:5px 8px;border:1px solid transparent;background:#111b;border-radius:4px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .captions{position:absolute;bottom:48px;left:5%;width:90%;text-align:center;font:600 clamp(15px,2vw,24px)/1.4 system-ui;color:#fff;text-shadow:0 1px 3px #000;white-space:pre-wrap;overflow-wrap:anywhere}
       .line{display:table;margin:2px auto;padding:2px 8px;background:#000b;border-radius:4px}.line:empty{display:none}.source{font-size:.76em;font-weight:400;color:#eee}`
     const tools = document.createElement('div'); tools.className = 'tools'

@@ -83,6 +83,34 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Resu
     )
 }
 
+/// Rewraps a concatenated MPEG-TS stream as MP4 without re-encoding (stream
+/// copy; data and bitmap-subtitle streams, which MP4 cannot carry, are dropped).
+pub fn remux_ts_to_mp4(input: &Path, output: &Path, control: &Path) -> Result<(), String> {
+    let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
+    let mut command = Command::new(ffmpeg);
+    command
+        .args(["-y", "-nostdin", "-loglevel", "error", "-f", "mpegts", "-i"])
+        .arg(input)
+        .args([
+            "-map",
+            "0:v?",
+            "-map",
+            "0:a?",
+            "-dn",
+            "-sn",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+        ]);
+    run_ffmpeg_to_output(
+        &mut command,
+        output,
+        &output.with_extension("remux.log"),
+        control,
+    )
+}
+
 pub fn mux_av(
     video: &Path,
     audio: Option<&Path>,
@@ -316,6 +344,104 @@ fn which(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ts_remux_produces_mp4_with_the_same_streams_when_ffmpeg_is_available() {
+        let Some(ffmpeg) = locate_ffmpeg() else {
+            eprintln!("skipped: no FFmpeg on PATH/HLS_FFMPEG");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "hls-ts-remux-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("merged.ts");
+        let generated = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=64x48:rate=10:duration=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=880:duration=1",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-map",
+                "2:a",
+                "-c:v",
+                "mpeg2video",
+                "-c:a",
+                "mp2",
+                "-f",
+                "mpegts",
+            ])
+            .arg(&input)
+            .status()
+            .unwrap();
+        if !generated.success() {
+            eprintln!("skipped: FFmpeg cannot synthesize the fixture");
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let output = root.join("merged.mp4");
+        remux_ts_to_mp4(&input, &output, &control).unwrap();
+        let bytes = fs::read(&output).unwrap();
+        assert_eq!(&bytes[4..8], b"ftyp", "remuxed output is an MP4 container");
+        // Decode all streams: default FFmpeg stream selection would lose the
+        // second audio track despite producing a valid MP4.
+        // MP4 identifies MPEG audio generically and FFmpeg chooses its float
+        // MP3 decoder, while TS chooses the integer MP2 decoder. Use the same
+        // decoder for this MP2 fixture so rounding is not mistaken for data loss.
+        let checksums = |path: &Path| {
+            let result = Command::new(&ffmpeg)
+                .args(["-v", "error", "-nostdin", "-c:a", "mp2", "-i"])
+                .arg(path)
+                .args(["-map", "0:v", "-map", "0:a", "-f", "streamhash", "-"])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            String::from_utf8(result.stdout).unwrap()
+        };
+        let expected = checksums(&input);
+        assert_eq!(expected.lines().count(), 3);
+        assert_eq!(checksums(&output), expected);
+        assert!(root.join("merged.remux.log").is_file());
+        // No staging file is left next to the output.
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".hls-mux-"))
+            .count();
+        assert_eq!(leftovers, 0);
+        // A non-TS input fails without touching an existing output.
+        fs::write(&input, b"not a transport stream").unwrap();
+        assert!(remux_ts_to_mp4(&input, &output, &control).is_err());
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(windows)]
     #[test]

@@ -454,7 +454,7 @@ pub fn register_packaged_native_host_for_sid(
     }
     #[cfg(not(windows))]
     {
-        let _ = entries;
+        let _ = (entries, user_sid);
         Ok(0)
     }
 }
@@ -481,6 +481,7 @@ pub fn unregister_packaged_native_host_for_sid(
     let fallback_directory = fallback_manifest_directory()?;
     let fallback = manifest_paths(&fallback_directory);
     let entries = registration_entries(&preferred);
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut candidates = vec![
         (preferred.chromium, "allowed_origins"),
         (preferred.firefox, "allowed_extensions"),
@@ -503,7 +504,7 @@ pub fn unregister_packaged_native_host_for_sid(
     };
     #[cfg(not(windows))]
     let removed_keys = {
-        let _ = entries;
+        let _ = (entries, user_sid);
         0
     };
 
@@ -540,6 +541,9 @@ mod tests {
     #[test]
     fn generated_manifests_use_an_absolute_host_and_cover_all_browsers() {
         let (engine, root) = fixture();
+        // 打包注册的回退目录取自 %LOCALAPPDATA%（仅 Windows 提供）；其余断言使用显式回退目录，
+        // 在所有平台运行。
+        #[cfg(windows)]
         assert_eq!(prepare_packaged_native_host_manifests(&engine).unwrap(), 2);
         let (host, manifests) =
             prepare_manifests_with_fallback(&engine, &root.join("fallback")).unwrap();

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NativeBridge, type NativePortLike } from './nativeBridge'
+import { NativeBridge, nativeDisconnectDetail, type NativePortLike } from './nativeBridge'
 
 class FakeEvent<T extends (...args: any[]) => void> {
   listener: T | null = null
@@ -555,5 +555,35 @@ describe('native resource string safety', () => {
     port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
     await request
     bridge.close()
+  })
+})
+
+describe('native host missing', () => {
+  it('distinguishes forbidden access from an absent desktop app', async () => {
+    const port = new FakePort() as FakePort & { error?: { message: string } }
+    const bridge = new NativeBridge(() => port)
+    const request = bridge.request({ op: 'activate' })
+    port.error = { message: 'Access to the specified native messaging host is forbidden.' }
+    port.onDisconnect.emit()
+    await expect(request).rejects.toThrow('浏览器禁止访问下载器')
+    bridge.close()
+  })
+
+  it('tells the user the desktop app is not installed when the host cannot be found', async () => {
+    const port = new FakePort() as FakePort & { error?: { message: string } }
+    const bridge = new NativeBridge(() => port)
+    const request = bridge.request({ op: 'activate' })
+    port.error = { message: 'Specified native messaging host not found.' }
+    port.onDisconnect.emit()
+    await expect(request).rejects.toThrow('未检测到 HLS Downloader 桌面端')
+    bridge.close()
+  })
+
+  it('reads the disconnect reason from the port or chrome.runtime.lastError', () => {
+    expect(nativeDisconnectDetail({ error: { message: 'No such native application x' } })).toBe('No such native application x')
+    const g = globalThis as { chrome?: unknown }
+    const previous = g.chrome
+    g.chrome = { runtime: { lastError: { message: 'Native host has exited.' } } }
+    try { expect(nativeDisconnectDetail({})).toBe('Native host has exited.') } finally { g.chrome = previous }
   })
 })

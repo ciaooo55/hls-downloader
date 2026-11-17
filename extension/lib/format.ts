@@ -37,3 +37,10 @@ export function formatDuration(seconds: number): string {
     ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
     : `${minutes}:${String(remainder).padStart(2, '0')}`
 }
+
+/** 码率：>= 1 Mbps 显示一位小数 Mbps，更低的显示整数 kbps（避免 40 kbps 显示成「0.0 Mbps」）。非正数返回空串。 */
+export function formatBitrate(bitsPerSecond: number): string {
+  if (!Number.isFinite(bitsPerSecond) || bitsPerSecond <= 0) return ''
+  const kbps = Math.max(1, Math.round(bitsPerSecond / 1_000))
+  return kbps >= 1_000 ? `${(bitsPerSecond / 1_000_000).toFixed(1)} Mbps` : `${kbps} kbps`
+}

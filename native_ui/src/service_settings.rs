@@ -39,6 +39,7 @@ impl ServiceSettings {
         this.window.on_action(move |action| {
             if let Some(this) = weak.upgrade() {
                 if let Err(error) = this.action(&action) {
+                    this.window.set_status_tone("warning".into());
                     this.window.set_status(error.into());
                 }
             }
@@ -196,6 +197,7 @@ impl ServiceSettings {
         match response {
             CorePipeResponse::Subtitle { result, .. } => {
                 if let Err(message) = subtitle_result(result) {
+                    self.window.set_status_tone("error".into());
                     self.window.set_status(message.into());
                     return;
                 }
@@ -231,25 +233,30 @@ impl ServiceSettings {
                     .set_show_source(p["showSource"].as_bool().unwrap_or(true));
                 self.window
                     .set_prefetch(p["prefetch"].as_bool().unwrap_or(false));
+                self.window.set_status_tone("success".into());
                 self.window.set_status("配置已读取，密钥不会回显".into());
             }
             CorePipeResponse::Error { message, .. } => {
+                self.window.set_status_tone("error".into());
                 self.window.set_status(message.clone().into())
             }
-            CorePipeResponse::Events { events, .. } => self.window.set_status(
-                events
-                    .iter()
-                    .find_map(|e| {
-                        if let hls_client::CoreEvent::Error { message, .. } = &e.event {
-                            Some(message.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| "凭据已保存".into())
-                    .into(),
-            ),
-            _ => self.window.set_status("凭据已保存".into()),
+            CorePipeResponse::Events { events, .. } => {
+                let error = events.iter().find_map(|e| {
+                    if let hls_client::CoreEvent::Error { message, .. } = &e.event {
+                        Some(message.clone())
+                    } else {
+                        None
+                    }
+                });
+                self.window
+                    .set_status_tone(if error.is_some() { "error" } else { "success" }.into());
+                self.window
+                    .set_status(error.unwrap_or_else(|| "凭据已保存".into()).into());
+            }
+            _ => {
+                self.window.set_status_tone("success".into());
+                self.window.set_status("凭据已保存".into())
+            }
         }
     }
 }

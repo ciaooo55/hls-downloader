@@ -77,10 +77,10 @@ describe('token sheets', () => {
     const light = THEME_TOKENS_CSS.match(/\[data-hlsd-theme="light"\]\{[^}]+\}/)![0]
     expect(names(dark)).toEqual(names(light))
     expect(names(dark)).toContain('--primary')
-    expect(dark).toContain('--bg:#151719')
-    expect(dark).toContain('--surface:#1c1f23')
-    expect(dark).toContain('--primary:#5ea2f3')
-    expect(light).toContain('--border:#d8e0ea')
+    expect(dark).toContain('--bg:#0f1115')
+    expect(dark).toContain('--surface:#171a20')
+    expect(dark).toContain('--primary:#7aa2ff')
+    expect(light).toContain('--border:#e2e5eb')
   })
 
   it('keeps base primitives free of hard-coded palette colors', () => {
@@ -211,7 +211,7 @@ describe('contrast guards', () => {
   }
 
   it('dark and light deliberately use different on-primary inks', () => {
-    // Not a cosmetic difference: #2563eb needs white, #5ea2f3 needs dark ink.
+    // Not a cosmetic difference: #2e5bea needs white, #7aa2ff needs dark ink.
     expect(themeTokens('dark')['on-primary']).not.toBe(themeTokens('light')['on-primary'])
     expect(themeTokens('light')['on-primary']).toBe('#ffffff')
   })

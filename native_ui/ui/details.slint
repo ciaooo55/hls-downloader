@@ -1,5 +1,5 @@
-import { ScrollView, LineEdit, SpinBox, TextEdit } from "std-widgets.slint";
-import { Tokens, HotButton, FieldLabel, SegmentBlock, SegmentMapBar } from "theme.slint";
+import { LineEdit, SpinBox, TextEdit } from "std-widgets.slint";
+import { Tokens, HotButton, FieldLabel, SegmentBlock, SegmentMapBar, WorkbenchIcon, HotScrollView } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component DetailsWindow inherits Window {
@@ -24,23 +24,29 @@ export component DetailsWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.filename; description: root.status + " · " + root.transfer; icon: "details"; }
-        ScrollView {
+        HotScrollView {
         horizontal-scrollbar-policy: always-off;
         viewport-width: self.width;
         VerticalLayout {
-        padding: 20px; spacing: 14px;
+        padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 14px;
         Rectangle {
-            height: 96px; background: Tokens.surface; border-radius: 10px; border-width: 1px; border-color: Tokens.line; clip: true;
-            Text { x: 12px; y: 8px; text: "传输速度"; color: Tokens.faint; font-size: 11px; }
-            for sample[index] in root.speed-history: Rectangle {
-                width: parent.width / max(root.speed-history.length, 1);
-                x: index * self.width; height: max(1px, (parent.height - 30px) * sample); y: parent.height - self.height;
-                background: Tokens.accent; opacity: 0.6;
-                animate height { duration: Tokens.motion-fast; easing: ease-out; }
+            height: 96px; background: Tokens.surface; border-radius: Tokens.card-radius; border-width: 1px; border-color: Tokens.line; clip: true;
+            Text { x: 12px; y: 8px; text: "传输速度"; color: Tokens.ink; font-size: 12px; font-weight: 600; }
+            // 速度柱放在内缩的绘图区里，不碰卡片圆角。
+            Rectangle {
+                x: 12px; y: 28px; width: parent.width - 24px; height: parent.height - 38px;
+                Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.hairline; }
+                for sample[index] in root.speed-history: Rectangle {
+                    width: parent.width / max(root.speed-history.length, 1) - 1px;
+                    x: index * (parent.width / max(root.speed-history.length, 1)); height: max(1px, parent.height * sample); y: parent.height - self.height;
+                    border-top-left-radius: 1.5px; border-top-right-radius: 1.5px;
+                    background: Tokens.accent; opacity: 0.6;
+                    animate height { duration: Tokens.motion-fast; easing: ease-out; }
+                }
             }
         }
         Rectangle {
-            background: Tokens.surface; border-radius: 10px; border-width: 1px; border-color: Tokens.line;
+            background: Tokens.surface; border-radius: Tokens.card-radius; border-width: 1px; border-color: Tokens.line;
             VerticalLayout {
                 padding: 12px; spacing: 8px;
                 HorizontalLayout {
@@ -64,12 +70,20 @@ export component DetailsWindow inherits Window {
                 Text { text: root.connections; color: Tokens.muted; font-size: 12px; wrap: word-wrap; }
             }
         }
-        if root.diagnostic != "": Text { text: root.diagnostic; color: Tokens.warn; wrap: word-wrap; }
-        FieldLabel { label: "下载地址"; }
-        LineEdit { text <=> root.url; height: Tokens.control-height; accessible-label: "下载地址"; }
-        FieldLabel { label: "更新请求身份"; }
-        HorizontalLayout { spacing: 8px; LineEdit { text <=> root.cookie; height: Tokens.control-height; input-type: password; placeholder-text: "新 Cookie（可选）"; accessible-label: "新 Cookie"; } HotButton { label: "更新并继续"; icon: "retry"; clicked => { root.action("refresh_url"); } } }
-        HorizontalLayout { spacing: 8px; FieldLabel { label: "限速 KiB/s"; } SpinBox { value <=> root.speed-limit; minimum: 0; maximum: 1000000; height: Tokens.control-height; } HotButton { label: "应用"; icon: "check"; clicked => { root.action("speed"); } } }
+        // 诊断信息与确认窗的重名提示一致：琥珀底色横幅 + 图标，而不是一段裸露的彩色文字。
+        if root.diagnostic != "": Rectangle {
+            background: Tokens.warn-surface; border-radius: Tokens.card-radius;
+            border-width: 1px; border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.30 : 0.22);
+            HorizontalLayout {
+                padding: 12px; spacing: 10px;
+                WorkbenchIcon { name: "failed"; ink: Tokens.warn; width: 16px; height: 16px; y: 13px; }
+                Text { text: root.diagnostic; color: Tokens.ink; font-size: 12px; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+            }
+        }
+        // 三个可编辑字段统一“80px 标签列 + 控件”，输入框左缘对齐。
+        HorizontalLayout { spacing: 8px; FieldLabel { label: "下载地址"; width: 80px; } LineEdit { text <=> root.url; height: Tokens.control-height; accessible-label: "下载地址"; } }
+        HorizontalLayout { spacing: 8px; FieldLabel { label: "请求身份"; width: 80px; } LineEdit { text <=> root.cookie; height: Tokens.control-height; input-type: password; placeholder-text: "新 Cookie（可选）"; accessible-label: "新 Cookie"; } HotButton { label: "更新并继续"; icon: "retry"; width: 116px; clicked => { root.action("refresh_url"); } } }
+        HorizontalLayout { spacing: 8px; FieldLabel { label: "限速 KiB/s"; width: 80px; } SpinBox { value <=> root.speed-limit; minimum: 0; maximum: 1000000; height: Tokens.control-height; } HotButton { label: "应用"; icon: "check"; width: 116px; clicked => { root.action("speed"); } } }
         HorizontalLayout { Text { text: "任务日志"; color: Tokens.ink; font-size: 15px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; } HotButton { label: "刷新日志"; icon: "refresh"; clicked => { root.action("logs"); } } }
         TextEdit { text: root.logs; read-only: true; min-height: 160px; preferred-height: 200px; accessible-label: "任务日志"; }
         }

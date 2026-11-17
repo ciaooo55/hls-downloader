@@ -1738,6 +1738,12 @@ fn send_message(stream: &mut std::net::TcpStream, id: u8, payload: &[u8]) -> Res
 }
 
 fn check_torrent_control(control: &Path) -> Result<(), String> {
+    match crate::task_control::current(control) {
+        Some(crate::task_control::PAUSE) => return Err("paused".into()),
+        Some(crate::task_control::CANCEL) => return Err("canceled".into()),
+        Some(_) => return Ok(()),
+        None => {}
+    }
     let command =
         fs::read_to_string(control).map_err(|error| format!("read BT task control: {error}"))?;
     match command.trim() {

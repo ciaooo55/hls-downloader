@@ -252,6 +252,8 @@ fn installer_matches(
 }
 
 fn mark_downloaded_from_internet(path: &Path) {
+    #[cfg(not(windows))]
+    let _ = path;
     #[cfg(windows)]
     {
         let zone = format!("{}:Zone.Identifier", path.display());

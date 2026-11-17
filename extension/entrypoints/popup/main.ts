@@ -8,7 +8,7 @@ import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel }
 import { withDeadline } from '../../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../../lib/downloadConfirmation'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
-import { formatBytes, formatDuration } from '../../lib/format'
+import { formatBitrate, formatBytes, formatDuration } from '../../lib/format'
 import { mountSubtitlePopup } from '../../lib/subtitlePopup'
 import {
   THEME_BASE_CSS,
@@ -406,10 +406,11 @@ async function main() {
       const size = selected.size && selected.size > 0 ? formatBytes(selected.size) : likelySize > 0 ? `约 ${formatBytes(likelySize)}` : '大小未知'
       const quality = selected.quality || resourceQuality(selected.url, selected.height)
       const resolution = selected.width && selected.height ? (selected.width + '\u00d7' + selected.height) : ''
-      const bandwidth = selected.bandwidth ? ((selected.bandwidth / 1_000_000).toFixed(1) + ' Mbps') : ''
+      const bandwidth = selected.bandwidth ? formatBitrate(selected.bandwidth) : ''
       const duration = selected.duration ? formatDuration(selected.duration) : ''
       const streamMode = selected.isLive === true ? '直播' : ''
-      const meta = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean).join(' \u00b7 ')
+      const metaParts = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean)
+      const meta = metaParts.join(' \u00b7 ')
       const article = el('article')
       article.dataset.resourceId = item.id
       article.tabIndex = -1
@@ -417,8 +418,14 @@ async function main() {
       const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
       const cardUrl = item.url
       name.title = item.filename || item.title || cardUrl
-      const line = el('span', '', meta)
+      // 每项不可断开，分隔点由样式画在后一项前面；换行处行首的分隔点落在裁剪区外，行尾永远不会留下孤立的“·”。
+      const line = el('span', 'resource-facts')
       line.title = meta
+      line.setAttribute('aria-label', meta)
+      const facts = el('span', 'resource-facts-row')
+      facts.setAttribute('aria-hidden', 'true')
+      for (const part of metaParts) facts.append(el('span', 'resource-fact', String(part)))
+      line.append(facts)
       const mime = el('small', '', itemHost)
       mime.title = [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 ')
       const copyBtn = el('button', 'copy-link') as HTMLButtonElement
@@ -432,7 +439,7 @@ async function main() {
       if (item.variants?.length) {
         const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
           variant
-            ? [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? `${(variant.bandwidth / 1_000_000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' \u00b7 ')
+            ? [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? formatBitrate(variant.bandwidth) : ''].filter(Boolean).join(' \u00b7 ')
             : '\u81ea\u52a8\uff08\u6700\u9ad8\uff09'
         // 原生选择框提供方向键、Escape 和越过滚动容器的菜单，不再维护自绘遮罩。
         const trigger = el('select', 'quality-trigger')

@@ -71,6 +71,24 @@ interface PendingRequest {
   fallbackResponse?: unknown
 }
 
+// Chrome: "Specified native messaging host not found." / "Native host has exited."
+// Firefox: "No such native application …". Only the "not installed" family is
+// mapped to the explicit desktop-missing message.
+const NATIVE_HOST_MISSING = /native messaging host not found|no such native application/i
+const NATIVE_HOST_FORBIDDEN = /access to the specified native messaging host is forbidden/i
+
+/** Reason the browser gives for a native port disconnect (Firefox port.error, Chrome runtime.lastError). */
+export function nativeDisconnectDetail(port: unknown): string {
+  const portError = (port as { error?: { message?: unknown } } | null)?.error?.message
+  if (portError) return String(portError)
+  try {
+    const runtime = (globalThis as { chrome?: { runtime?: { lastError?: { message?: unknown } } } }).chrome?.runtime
+    return String(runtime?.lastError?.message || '')
+  } catch {
+    return ''
+  }
+}
+
 export class NativeBridge {
   private port: NativePortLike | null = null
   private portLastResponseAt = 0
@@ -172,7 +190,7 @@ export class NativeBridge {
     if (this.port) return this.port
     const port = this.connect()
     port.onMessage.addListener(message => this.handleMessage(port, message))
-    port.onDisconnect.addListener(() => this.handleDisconnect(port))
+    port.onDisconnect.addListener(() => this.handleDisconnect(port, nativeDisconnectDetail(port)))
     this.port = port
     this.portLastResponseAt = Date.now()
     return port
@@ -300,10 +318,16 @@ export class NativeBridge {
     return true
   }
 
-  private handleDisconnect(port: NativePortLike): void {
+  private handleDisconnect(port: NativePortLike, detail = ''): void {
     if (this.port !== port) return
     this.port = null
-    this.retryOrRejectActive(port, new Error('下载器连接已断开'))
+    this.retryOrRejectActive(port, new Error(
+      NATIVE_HOST_MISSING.test(detail)
+        ? '下载器连接已断开：未检测到 HLS Downloader 桌面端，请确认主程序已安装并运行'
+        : NATIVE_HOST_FORBIDDEN.test(detail)
+          ? '下载器连接已断开：浏览器禁止访问下载器，请检查扩展授权与浏览器集成注册'
+          : '下载器连接已断开',
+    ))
   }
 
   private retryOrRejectActive(port: NativePortLike, error: Error): void {

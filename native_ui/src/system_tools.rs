@@ -127,6 +127,7 @@ impl SystemTools {
 
     fn send_request(&self, id: u64, request: CorePipeRequest) -> bool {
         if !(self.request)(request) {
+            self.window.set_notice_tone("error".into());
             self.window.set_notice("命令队列已满，请稍后重试".into());
             return false;
         }
@@ -189,6 +190,8 @@ impl SystemTools {
                 Ok(path) => {
                     let result = file_dialogs::open(&path.to_string_lossy());
                     let browser = open_extensions_page();
+                    self.window
+                        .set_notice_tone(if result.is_ok() { "success" } else { "error" }.into());
                     self.window.set_notice(match result {
                         Ok(()) => format!(
                             "已打开插件目录：{}。{}",
@@ -203,12 +206,16 @@ impl SystemTools {
                         Err(error) => error.into(),
                     });
                 }
-                Err(error) => self.window.set_notice(error.into()),
+                Err(error) => {
+                    self.window.set_notice_tone("error".into());
+                    self.window.set_notice(error.into())
+                }
             },
             "firefox" => {
                 if let Err(error) = file_dialogs::open(
                     "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/",
                 ) {
+                    self.window.set_notice_tone("error".into());
                     self.window.set_notice(error.into());
                 }
             }
@@ -218,6 +225,7 @@ impl SystemTools {
                     .unwrap_or(std::path::Path::new("."))
                     .join("logs");
                 if let Err(error) = file_dialogs::open(&path.to_string_lossy()) {
+                    self.window.set_notice_tone("error".into());
                     self.window.set_notice(error.into());
                 }
             }
@@ -274,13 +282,15 @@ impl SystemTools {
             ),
             CoreEvent::Error { code, message } => {
                 self.notify(message.clone());
+                self.window.set_notice_tone("error".into());
                 self.window.set_notice(message.clone().into());
                 if code.starts_with("update") {
                     self.window.set_busy(false);
                 }
             }
-            CoreEvent::Toast { message, .. } => {
+            CoreEvent::Toast { level, message } => {
                 self.notify(message.clone());
+                self.window.set_notice_tone(toast_tone(level).into());
                 self.window.set_notice(message.clone().into());
             }
             CoreEvent::UpdateAvailable {
@@ -526,6 +536,7 @@ impl SystemTools {
                 message,
                 ..
             } if self.pending.borrow_mut().remove(id) => {
+                self.window.set_notice_tone("error".into());
                 self.window.set_notice(message.clone().into());
                 self.window.set_busy(false);
             }
@@ -540,6 +551,7 @@ impl SystemTools {
                     }
                 }) {
                     self.window.set_busy(false);
+                    self.window.set_notice_tone("error".into());
                     self.window.set_notice(message.clone().into());
                 }
             }
@@ -583,6 +595,16 @@ impl SystemTools {
         self.pending.borrow_mut().clear();
         self.decision_request.set(None);
         self.decision.set_busy(false);
+    }
+}
+
+/// Core 提示级别 → 页脚状态语气；未知级别按说明处理。
+fn toast_tone(level: &str) -> &'static str {
+    match level {
+        "success" => "success",
+        "warn" | "warning" => "warning",
+        "error" => "error",
+        _ => "info",
     }
 }
 

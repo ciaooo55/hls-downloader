@@ -1082,6 +1082,32 @@ fn advanced_defaults_are_applied_and_host_scope_is_enforced() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(not(windows))]
+#[test]
+fn default_cookie_fails_closed_without_dpapi() {
+    // 非 Windows 平台没有 DPAPI：默认 Cookie 必须拒绝保存，而不是以明文落库。
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let error = coordinator
+        .set_default_cookie("session=private")
+        .unwrap_err();
+    assert!(error.contains("DPAPI"), "{error}");
+    assert!(!coordinator.default_cookie_configured().unwrap());
+    assert!(coordinator
+        .load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)
+        .unwrap()
+        .is_none());
+    let spec = coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://example.test/file.bin".into(),
+            filename: "file.bin".into(),
+            ..TaskSpec::default()
+        })
+        .unwrap();
+    assert!(spec.credential_ref.is_none());
+    assert!(!spec.headers.values().any(|value| value.contains("private")));
+}
+
+#[cfg(windows)]
 #[test]
 fn default_cookie_is_protected_and_attached_by_reference_only() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
@@ -1186,6 +1212,197 @@ fn serve_http_fixture(body: &'static [u8]) -> std::net::SocketAddr {
     address
 }
 
+/// The default `system` proxy is resolved by WinHTTP; other platforms only
+/// have the plain direct transport. Windows keeps the default so these tests
+/// still exercise the system-proxy route there.
+fn direct_transport_off_windows(coordinator: &CoreCoordinator) {
+    #[cfg(not(windows))]
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+    #[cfg(windows)]
+    let _ = coordinator;
+}
+
+fn direct_http_coordinator(download_dir: &Path) -> CoreCoordinator {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    for (key, value) in [
+        ("legal_terms_accepted", serde_json::json!(true)),
+        (
+            "download_dir",
+            serde_json::json!(download_dir.to_string_lossy()),
+        ),
+        // The default system proxy needs WinHTTP; direct runs the Linux transport.
+        ("proxy_mode", serde_json::json!("direct")),
+    ] {
+        coordinator.set_setting(key, value).unwrap();
+    }
+    coordinator
+}
+
+fn wait_for_task_status(coordinator: &CoreCoordinator, status: &str) -> crate::TaskSnapshot {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let task = coordinator
+            .tasks()
+            .unwrap()
+            .into_iter()
+            .find(|task| task.task_id == "task-1")
+            .unwrap();
+        if task.status == status {
+            return task;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "task did not reach {status}: {task:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn direct_multi_connection_task_completes_through_in_memory_control_and_progress() {
+    let body: &'static [u8] = Box::leak(
+        (0..3 * 1024 * 1024u32)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let address = serve_http_fixture(body);
+    let download_dir = std::env::temp_dir().join(format!(
+        "hls-p0-direct-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&download_dir).unwrap();
+    let coordinator = direct_http_coordinator(&download_dir);
+    let spec = TaskSpec {
+        url: format!("http://{address}/fixture.bin"),
+        resource_kind: crate::ResourceKind::File,
+        title: "Fixture".into(),
+        filename: "fixture.bin".into(),
+        download_dir: download_dir.to_string_lossy().into_owned(),
+        request_method: "GET".into(),
+        concurrency: 4,
+        expected_size: Some(body.len() as u64),
+        ..Default::default()
+    };
+    coordinator
+        .dispatch(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "start".into(),
+        })
+        .unwrap();
+    let task = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(task.downloaded_bytes, body.len() as u64);
+    assert_eq!(fs::read(&task.output_path).unwrap(), body);
+    // The token lives only while the task runs.
+    let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while crate::task_control::current(&paths.control).is_some() {
+        assert!(std::time::Instant::now() < deadline, "control token leaked");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = fs::remove_dir_all(download_dir);
+}
+
+#[test]
+fn direct_task_pause_reaches_a_stalled_worker_through_the_control_token() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        listener.set_nonblocking(true).unwrap();
+        loop {
+            if release_rx.try_recv().is_ok() {
+                return;
+            }
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let mut stream = reader.into_inner();
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\nabc",
+                    );
+                    held.push(stream);
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    });
+    let download_dir = std::env::temp_dir().join(format!(
+        "hls-p0-pause-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&download_dir).unwrap();
+    let coordinator = direct_http_coordinator(&download_dir);
+    let spec = TaskSpec {
+        url: format!("http://{address}/stall.bin"),
+        resource_kind: crate::ResourceKind::File,
+        title: "Stall".into(),
+        filename: "stall.bin".into(),
+        download_dir: download_dir.to_string_lossy().into_owned(),
+        request_method: "GET".into(),
+        concurrency: 1,
+        ..Default::default()
+    };
+    coordinator
+        .dispatch(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "start".into(),
+        })
+        .unwrap();
+    let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while crate::task_control::current(&paths.control).is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "task never registered"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let paused_at = std::time::Instant::now();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "pause".into(),
+        })
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while crate::task_control::current(&paths.control).is_some() {
+        assert!(std::time::Instant::now() < deadline, "worker ignored pause");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(paused_at.elapsed() < Duration::from_secs(2));
+    assert_eq!(fs::read_to_string(&paths.control).unwrap(), "pause");
+    wait_for_task_status(&coordinator, "paused");
+    let _ = release_tx.send(());
+    server.join().unwrap();
+    let _ = fs::remove_dir_all(download_dir);
+}
+
 #[test]
 fn coordinator_runs_http_task_and_atomically_publishes_output() {
     let body: &'static [u8] = b"v6-core-http-fixture";
@@ -1202,6 +1419,7 @@ fn coordinator_runs_http_task_and_atomically_publishes_output() {
     fs::create_dir_all(&download_dir).unwrap();
     fs::write(download_dir.join("fixture.bin"), b"existing").unwrap();
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    direct_transport_off_windows(&coordinator);
     coordinator
         .set_setting("legal_terms_accepted", serde_json::json!(true))
         .unwrap();
@@ -1286,6 +1504,7 @@ fn a_scan_that_cannot_run_never_publishes_the_download() {
     fs::create_dir_all(&download_dir).unwrap();
     fs::write(download_dir.join("fixture.bin"), b"existing").unwrap();
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    direct_transport_off_windows(&coordinator);
     coordinator
         .set_setting("legal_terms_accepted", serde_json::json!(true))
         .unwrap();
@@ -1908,6 +2127,7 @@ fn live_torrent_selection_update_cancels_requested_file_and_publishes_remaining_
     });
 
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    direct_transport_off_windows(&coordinator);
     coordinator
         .set_setting("legal_terms_accepted", serde_json::json!(true))
         .unwrap();
@@ -2691,7 +2911,11 @@ fn site_rule_credentials_are_vaulted_applied_and_deleted() {
         .load_credential(&rule.credential_ref)
         .unwrap()
         .unwrap();
+    // DPAPI 只在 Windows 上可用；其他平台的站点规则凭据以明文存入本地库（无系统级加密可用）。
+    #[cfg(windows)]
     assert!(!protected.contains("sid=private"));
+    #[cfg(not(windows))]
+    assert!(protected.contains("sid=private"));
 
     let ruled = apply_site_rules_to_spec(
         &coordinator.core(),
@@ -3994,12 +4218,17 @@ fn create_task_rejects_client_dir_outside_download_root() {
     coordinator
         .set_setting("download_dir", serde_json::json!("downloads"))
         .unwrap();
+    // 当前平台上的绝对目录（盘符路径在非 Windows 平台只是一个相对目录名，会被合法地放进根目录）。
+    #[cfg(windows)]
+    let outside = r"C:\Windows";
+    #[cfg(not(windows))]
+    let outside = "/etc";
     let escaped = coordinator
         .dispatch(CoreCommand::CreateTask {
             spec: TaskSpec {
                 url: "https://cdn.test/a.bin".into(),
                 filename: "a.bin".into(),
-                download_dir: r"C:\Windows".into(),
+                download_dir: outside.into(),
                 ..Default::default()
             },
         })

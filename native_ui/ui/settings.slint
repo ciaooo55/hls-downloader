@@ -1,5 +1,5 @@
-import { ScrollView, LineEdit, CheckBox, ComboBox } from "std-widgets.slint";
-import { Tokens, HotButton } from "theme.slint";
+import { LineEdit } from "std-widgets.slint";
+import { Tokens, HotButton, HotCheckBox, HotScrollView, HotComboBox } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 import { NavigationItem } from "workbench_components.slint";
 import { SiteRulesEditor, SiteRuleRow } from "site_rules.slint";
@@ -17,6 +17,8 @@ export component SettingsWindow inherits Window {
     in-out property <string> selected-group: "通用";
     changed selected-group => { content.viewport-y = 0px; }
     in property <string> status;
+    // 页脚状态语气：info / success / warning / error，由 Rust 随状态文字一起设置。
+    in property <string> status-tone: "warning";
     in property <bool> busy: false;
     in property <[SiteRuleRow]> site-rules;
     callback group-selected(string);
@@ -31,13 +33,14 @@ export component SettingsWindow inherits Window {
             spacing: 0px;
             Rectangle {
             width: 156px; background: Tokens.rail;
-            ScrollView {
+            nav-scroll := HotScrollView {
                 width: parent.width; height: parent.height; horizontal-scrollbar-policy: always-off;
                 VerticalLayout {
-                    padding: 12px; spacing: 4px;
+                    // 分组多到需要滚动时，右侧让出覆盖式滚动条的宽度（与队列侧栏一致）。
+                    padding: 12px; padding-right: root.groups.length * 40px + 20px > nav-scroll.visible-height ? 18px : 12px; spacing: 4px;
                     for group in root.groups: NavigationItem {
                         label: group; active: root.selected-group == group; show-count: false; enabled: !root.busy;
-                        icon: group == "通用" ? "settings" : group == "下载" ? "running" : group == "计划" ? "queued" : group == "网络" ? "network" : group == "媒体" ? "media" : group == "字幕翻译" ? "subtitle" : group == "BT" ? "torrent" : group == "投屏与推送" ? "tvbox" : group == "浏览器" ? "extension" : group == "外观" ? "theme" : "security";
+                        icon: group == "通用" ? "settings" : group == "下载" ? "running" : group == "计划" ? "queued" : group == "网络" ? "network" : group == "媒体" ? "media" : group == "字幕翻译" ? "subtitle" : group == "BT" ? "torrent" : group == "投屏与推送" ? "cast" : group == "浏览器" ? "extension" : group == "外观" ? "theme" : "security";
                         clicked => { root.selected-group = group; root.group-selected(group); }
                     }
                 }
@@ -45,13 +48,13 @@ export component SettingsWindow inherits Window {
             }
             Rectangle { width: 1px; background: Tokens.line; }
             VerticalLayout {
-            padding: 20px; spacing: 16px;
+            padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 16px;
             Text { text: root.selected-group; color: Tokens.ink; font-size: 17px; font-weight: 600; }
             Rectangle {
                 background: Tokens.surface;
                 border-radius: Tokens.panel-radius;
                 border-width: 1px; border-color: Tokens.line;
-            content := ScrollView {
+            content := HotScrollView {
                 x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
                 horizontal-scrollbar-policy: always-off;
                 viewport-width: self.width;
@@ -61,8 +64,8 @@ export component SettingsWindow inherits Window {
                     for field in root.fields: VerticalLayout {
                         spacing: 8px;
                         if field.kind != "bool": Text { text: field.label; color: Tokens.muted; font-size: 12px; wrap: word-wrap; }
-                        if field.kind == "bool": CheckBox { text: field.label; checked <=> field.checked; toggled => { root.edited(field.key, self.checked ? "true" : "false"); } }
-                        if field.kind == "choice": ComboBox { model: field.choices; current-value <=> field.value; height: Tokens.control-height; selected(value) => { root.edited(field.key, value); } }
+                        if field.kind == "bool": HotCheckBox { text: field.label; checked <=> field.checked; toggled => { root.edited(field.key, self.checked ? "true" : "false"); } }
+                        if field.kind == "choice": HotComboBox { model: field.choices; current-value <=> field.value; height: Tokens.control-height; selected(value) => { root.edited(field.key, value); } }
                         if field.kind == "text" || field.kind == "number" || field.kind == "directory": HorizontalLayout {
                             spacing: Tokens.control-gap;
                             LineEdit { text <=> field.value; height: Tokens.control-height; accessible-label: field.label; edited(value) => { root.edited(field.key, value); } }
@@ -74,17 +77,22 @@ export component SettingsWindow inherits Window {
                         edited(index, key, value) => { root.site-rule-edited(index, key, value); }
                         action(index, action) => { root.site-rule-action(index, action); }
                     }
-                    if root.selected-group == "网络": HotButton { label: "管理默认 Cookie"; icon: "security"; clicked => { root.action("default_cookie"); } }
-                    if root.selected-group == "字幕翻译": HotButton { label: "读取字幕服务配置"; icon: "subtitle"; clicked => { root.action("subtitle"); } }
-                    if root.selected-group == "安全": HotButton { label: "检查更新"; icon: "refresh"; clicked => { root.action("update"); } }
-                    if root.selected-group == "浏览器": HotButton { label: "浏览器扩展管理"; icon: "extension"; clicked => { root.action("extension"); } }
+                    // 页面级操作按钮保持自身宽度靠左，不拉伸成整行宽的长条。
+                    if root.selected-group == "字幕翻译": Text { text: "翻译服务、API Key、语言与字幕显示在单独的窗口中配置，保存后立即对播放器生效。"; color: Tokens.muted; font-size: 12px; wrap: word-wrap; }
+                    if root.selected-group == "网络" || root.selected-group == "字幕翻译" || root.selected-group == "安全" || root.selected-group == "浏览器": HorizontalLayout {
+                        alignment: start;
+                        if root.selected-group == "网络": HotButton { label: "管理默认 Cookie"; icon: "security"; clicked => { root.action("default_cookie"); } }
+                        if root.selected-group == "字幕翻译": HotButton { label: "读取字幕服务配置"; icon: "subtitle"; clicked => { root.action("subtitle"); } }
+                        if root.selected-group == "安全": HotButton { label: "检查更新"; icon: "refresh"; clicked => { root.action("update"); } }
+                        if root.selected-group == "浏览器": HotButton { label: "浏览器扩展管理"; icon: "extension"; clicked => { root.action("extension"); } }
+                    }
                 }
             }
             }
             }
         }
         DialogFooter {
-            status: root.status;
+            status: root.status; tone: root.status-tone;
             HotButton { label: "取消"; clicked => { root.action("close"); } }
             HotButton { label: root.busy ? "保存中…" : "保存设置"; icon: "save"; primary: true; enabled: !root.busy; clicked => { root.action("save"); } }
         }

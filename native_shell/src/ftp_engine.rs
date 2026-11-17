@@ -1,4 +1,10 @@
 //! FTP / FTPS single-stream download with version-checked SIZE+MDTM+REST resume.
+//!
+//! Data connections are passive (EPSV, PASV for IPv4) by default. When the
+//! server refuses passive mode or its passive port cannot be reached, the
+//! transfer falls back to active mode (EPRT, PORT for IPv4) and remembers
+//! that for the rest of the transfer, so segmented helpers go active directly.
+//! FTPS active mode uses the same client-side data TLS as passive mode.
 
 use std::cell::Cell;
 use std::io::{Read, Write};
@@ -80,16 +86,22 @@ impl Read for Conn<'_> {
 }
 
 impl<'a> Conn<'a> {
-    fn peer_addr(&self) -> Result<std::net::SocketAddr, String> {
+    fn socket(&self) -> &TcpStream {
         match self {
-            Self::Plain(stream) => stream.stream.peer_addr().map_err(|error| error.to_string()),
+            Self::Plain(stream) => &stream.stream,
             #[cfg(windows)]
-            Self::Tls(stream, _) => stream
-                .get_ref()
-                .stream
-                .peer_addr()
-                .map_err(|error| error.to_string()),
+            Self::Tls(stream, _) => &stream.get_ref().stream,
         }
+    }
+
+    fn peer_addr(&self) -> Result<std::net::SocketAddr, String> {
+        self.socket().peer_addr().map_err(|error| error.to_string())
+    }
+
+    fn local_addr(&self) -> Result<std::net::SocketAddr, String> {
+        self.socket()
+            .local_addr()
+            .map_err(|error| error.to_string())
     }
 
     fn secure_data(&self, stream: FtpSocket<'a>, host: &str) -> Result<Self, String> {
@@ -135,7 +147,7 @@ pub struct FtpTarget {
     pub tls: bool,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Clone, Debug)]
 struct ResumeState {
     version: u32,
     host: String,
@@ -275,7 +287,21 @@ impl FtpControl<'_> {
     }
 }
 
+/// Single-connection FTP download (the engine calls [`download_ftp_with`]).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> Result<u64, String> {
+    download_ftp_with(url, output, control, resume, 1)
+}
+
+/// FTP download with up to `connections` parallel REST segments (see
+/// [`transfer_segmented`]); `1` keeps the single-connection transfer.
+pub fn download_ftp_with(
+    url: &str,
+    output: &Path,
+    control: &Path,
+    resume: bool,
+    connections: usize,
+) -> Result<u64, String> {
     let target = parse_ftp_url(url)?;
     let control = FtpControl {
         path: control,
@@ -283,18 +309,28 @@ pub fn download_ftp(url: &str, output: &Path, control: &Path, resume: bool) -> R
         checked: Cell::new(Instant::now()),
     };
     control.poll()?;
-    let result = transfer_ftp(&target, output, &control, resume);
+    // 被动模式被拒/不可达时切到主动模式；同一任务的后续连接（含分段辅助连接）直接沿用。
+    let active = std::sync::atomic::AtomicBool::new(false);
+    let result = match transfer_ftp(
+        &target,
+        output,
+        &control,
+        resume,
+        connections.max(1),
+        &active,
+    ) {
+        // 服务器声明了 REST STREAM 却拒绝首个分段的 REST：回落单连接（从头下载）。
+        Err(error) if error == SEGMENTED_FALLBACK => {
+            transfer_ftp(&target, output, &control, false, 1, &active)
+        }
+        other => other,
+    };
     control.poll()?;
     result
 }
 
-fn transfer_ftp(
-    target: &FtpTarget,
-    output: &Path,
-    control: &FtpControl<'_>,
-    resume: bool,
-) -> Result<u64, String> {
-    let progress = output.with_extension("progress.json");
+/// Connects, upgrades to TLS when requested, logs in and selects binary mode.
+fn open_session<'a>(target: &FtpTarget, control: &'a FtpControl<'a>) -> Result<Conn<'a>, String> {
     let implicit = target.tls && target.port == 990;
     control.check()?;
     let raw = TcpStream::connect((target.host.as_str(), target.port))
@@ -329,6 +365,193 @@ fn transfer_ftp(
     }
     let reply = command(&mut ctrl, "TYPE I")?;
     require_reply_code(&reply, &[200], "TYPE I")?;
+    Ok(ctrl)
+}
+
+/// How long to wait for a passive connect or an active-mode accept.
+const DATA_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A data connection that is ready (passive) or will be opened by the
+/// server after `RETR` (active). Call [`DataChannel::establish`] after the
+/// `RETR` preliminary reply.
+enum DataChannel<'a> {
+    Passive(FtpSocket<'a>),
+    Active {
+        listener: std::net::TcpListener,
+        server_ip: std::net::IpAddr,
+        control: &'a FtpControl<'a>,
+    },
+}
+
+impl<'a> DataChannel<'a> {
+    fn establish(self) -> Result<FtpSocket<'a>, String> {
+        match self {
+            Self::Passive(socket) => Ok(socket),
+            Self::Active {
+                listener,
+                server_ip,
+                control,
+            } => {
+                let started = Instant::now();
+                loop {
+                    control.check()?;
+                    match listener.accept() {
+                        // 只接受控制连接对端发起的数据连接，防止端口被第三方抢占。
+                        Ok((stream, from)) if from.ip() == server_ip => {
+                            stream
+                                .set_nonblocking(false)
+                                .map_err(|error| error.to_string())?;
+                            return FtpSocket::new(stream, control);
+                        }
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if started.elapsed() >= DATA_CONNECT_TIMEOUT {
+                                return Err("FTP active mode: server did not connect".into());
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Why passive setup failed: `Refused` permits the active-mode fallback,
+/// `Fatal` (malformed replies, login/closing errors, pause/cancel) does not.
+enum PassiveError {
+    Refused(String),
+    Fatal(String),
+}
+
+impl From<String> for PassiveError {
+    fn from(value: String) -> Self {
+        Self::Fatal(value)
+    }
+}
+
+/// Negative replies that mean "passive mode is not available here".
+fn passive_refused(reply: &str) -> bool {
+    matches!(
+        reply_code(reply),
+        Some(425 | 450 | 500 | 501 | 502 | 504 | 520..=529 | 550)
+    )
+}
+
+/// Opens a data channel: passive first, active once passive was refused or
+/// unreachable. `active` is shared by every connection of one transfer.
+fn open_data<'a>(
+    ctrl: &mut Conn<'a>,
+    control: &'a FtpControl<'a>,
+    active: &std::sync::atomic::AtomicBool,
+) -> Result<DataChannel<'a>, String> {
+    use std::sync::atomic::Ordering;
+    if !active.load(Ordering::SeqCst) {
+        match open_passive_data(ctrl, control) {
+            Ok(socket) => return Ok(DataChannel::Passive(socket)),
+            Err(PassiveError::Fatal(error)) => return Err(error),
+            Err(PassiveError::Refused(reason)) => {
+                active.store(true, Ordering::SeqCst);
+                return open_active_data(ctrl, control)
+                    .map_err(|error| format!("{reason}; active mode failed: {error}"));
+            }
+        }
+    }
+    open_active_data(ctrl, control)
+}
+
+/// Negotiates a passive data connection (EPSV, PASV only as the IPv4
+/// fallback for an unsupported EPSV) and connects to the control peer.
+fn open_passive_data<'a>(
+    ctrl: &mut Conn<'a>,
+    control: &'a FtpControl<'a>,
+) -> Result<FtpSocket<'a>, PassiveError> {
+    let peer = ctrl.peer_addr()?;
+    let epsv = command(ctrl, "EPSV")?;
+    // Only an unsupported command on IPv4 authorizes PASV. A malformed
+    // success or a transient/permission error must not start another path.
+    let data_port = if peer.is_ipv4() && matches!(reply_code(&epsv), Some(500 | 501 | 502 | 504)) {
+        let pasv = command(ctrl, "PASV")?;
+        if passive_refused(&pasv) {
+            return Err(PassiveError::Refused(format!(
+                "PASV refused: {}",
+                pasv.trim()
+            )));
+        }
+        require_reply_code(&pasv, &[227], "PASV")?;
+        parse_pasv_port(&pasv)?
+    } else {
+        if passive_refused(&epsv) {
+            return Err(PassiveError::Refused(format!(
+                "EPSV refused: {}",
+                epsv.trim()
+            )));
+        }
+        require_reply_code(&epsv, &[229], "EPSV")?;
+        parse_epsv_port(&epsv)?
+    };
+    // Both passive modes use the control peer, never a server-advertised host.
+    let data_addr = std::net::SocketAddr::new(peer.ip(), data_port);
+    control.check()?;
+    let data_raw = TcpStream::connect_timeout(&data_addr, DATA_CONNECT_TIMEOUT)
+        .map_err(|error| PassiveError::Refused(format!("passive connect failed: {error}")))?;
+    control.check()?;
+    Ok(FtpSocket::new(data_raw, control)?)
+}
+
+/// Listens on the control connection's local address and announces it with
+/// EPRT (PORT for IPv4 servers that do not implement EPRT).
+fn open_active_data<'a>(
+    ctrl: &mut Conn<'a>,
+    control: &'a FtpControl<'a>,
+) -> Result<DataChannel<'a>, String> {
+    control.check()?;
+    let local = ctrl.local_addr()?;
+    let server_ip = ctrl.peer_addr()?.ip();
+    let listener = std::net::TcpListener::bind((local.ip(), 0))
+        .map_err(|error| format!("FTP active mode listen failed: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    let (family, ip) = match local.ip() {
+        std::net::IpAddr::V4(ip) => (1, ip.to_string()),
+        std::net::IpAddr::V6(ip) => (2, ip.to_string()),
+    };
+    let eprt = command(ctrl, &format!("EPRT |{family}|{ip}|{port}|"))?;
+    match (reply_code(&eprt), local.ip()) {
+        (Some(200), _) => {}
+        (Some(500 | 502), std::net::IpAddr::V4(ip)) => {
+            let [a, b, c, d] = ip.octets();
+            let reply = command(
+                ctrl,
+                &format!("PORT {a},{b},{c},{d},{},{}", port >> 8, port & 0xff),
+            )?;
+            require_reply_code(&reply, &[200], "PORT")?;
+        }
+        _ => require_reply_code(&eprt, &[200], "EPRT")?,
+    }
+    Ok(DataChannel::Active {
+        listener,
+        server_ip,
+        control,
+    })
+}
+
+fn transfer_ftp(
+    target: &FtpTarget,
+    output: &Path,
+    control: &FtpControl<'_>,
+    resume: bool,
+    connections: usize,
+    active: &std::sync::atomic::AtomicBool,
+) -> Result<u64, String> {
+    let progress = output.with_extension("progress.json");
+    let mut ctrl = open_session(target, control)?;
     let size_reply = command(&mut ctrl, &format!("SIZE {}", target.path))?;
     let remote_size = if reply_code(&size_reply) == Some(213) {
         size_reply
@@ -362,6 +585,25 @@ fn transfer_ftp(
         total: size,
         modified: modified.to_string(),
     });
+    // 多连接：FTP/FTPS、已知 SIZE+MDTM（资源身份可校验）、文件足够大且服务器在 FEAT 中声明
+    // REST STREAM 时，按 REST 偏移分段并行；否则保持原单连接路径。FTPS 的每个辅助连接各自完成
+    // 控制通道 TLS（独立凭据），数据通道复用本连接的会话。
+    if segmented_eligible(connections, remote_size, state.is_some()) {
+        if let Some(state) = state.clone() {
+            if server_supports_rest_stream(&mut ctrl)? {
+                return transfer_segmented(
+                    target,
+                    output,
+                    control,
+                    ctrl,
+                    state,
+                    connections,
+                    active,
+                    resume,
+                );
+            }
+        }
+    }
     let saved_state = std::fs::read(&state_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ResumeState>(&bytes).ok());
@@ -377,23 +619,7 @@ fn transfer_ftp(
     if resume_from >= size {
         resume_from = 0;
     }
-    let peer = ctrl.peer_addr()?;
-    let epsv = command(&mut ctrl, "EPSV")?;
-    // Only an unsupported command on IPv4 authorizes PASV. A malformed
-    // success or a transient/permission error must not start another path.
-    let data_port = if peer.is_ipv4() && matches!(reply_code(&epsv), Some(500 | 501 | 502 | 504)) {
-        let pasv = command(&mut ctrl, "PASV")?;
-        require_reply_code(&pasv, &[227], "PASV")?;
-        parse_pasv_port(&pasv)?
-    } else {
-        require_reply_code(&epsv, &[229], "EPSV")?;
-        parse_epsv_port(&epsv)?
-    };
-    // Both passive modes use the control peer, never a server-advertised host.
-    let data_addr = std::net::SocketAddr::new(peer.ip(), data_port);
-    control.check()?;
-    let data_raw = TcpStream::connect(data_addr).map_err(|error| error.to_string())?;
-    let data_raw = FtpSocket::new(data_raw, control)?;
+    let data_channel = open_data(&mut ctrl, control, active)?;
     // REST 必须紧挨 RETR；中间发送 EPSV/PASV 会让部分服务器取消续传偏移。
     if resume_from > 0 {
         let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
@@ -406,6 +632,8 @@ fn transfer_ftp(
     // 服务器在收到 RETR 后才启动数据通道 TLS；先握手会让客户端与服务器互相等待。
     let reply = command(&mut ctrl, &format!("RETR {}", target.path))?;
     require_reply_code(&reply, &[125, 150], "RETR")?;
+    // 主动模式下服务器在 RETR 之后才连入；FTPS 数据 TLS 两种模式都由客户端发起。
+    let data_raw = data_channel.establish()?;
     let mut data = if target.tls {
         ctrl.secure_data(data_raw, &target.host)?
     } else {
@@ -432,6 +660,8 @@ fn transfer_ftp(
     } else if state_path.exists() {
         std::fs::remove_file(&state_path).map_err(|error| error.to_string())?;
     }
+    // 单连接写入后，旧的分段完成表不再描述该文件。
+    let _ = std::fs::remove_file(output.with_extension(SEGMENT_STATE_EXTENSION));
     // 数据留在调用线程，直接沿用任务/队列/全局限速上下文。
     let mut buf = [0u8; 64 * 1024];
     let mut downloaded = resume_from;
@@ -479,6 +709,540 @@ fn transfer_ftp(
     control.poll()?;
     let _ = std::fs::remove_file(state_path);
     Ok(downloaded)
+}
+
+// ---------------------------------------------------------------------------
+// Multi-connection (segmented) transfer
+// ---------------------------------------------------------------------------
+
+/// Files smaller than this always use one connection.
+const SEGMENTED_MIN_BYTES: u64 = 4 * 1024 * 1024;
+const SEGMENT_MIN_BYTES: u64 = 1024 * 1024;
+const SEGMENT_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Upper bound of parallel FTP connections per task.
+pub(crate) const MAX_FTP_CONNECTIONS: usize = 8;
+const SEGMENT_STATE_EXTENSION: &str = "ftp-ranges.json";
+/// Internal marker: the server rejected REST on the first segment.
+const SEGMENTED_FALLBACK: &str = "ftp segmented transfer unavailable: REST rejected";
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Completed byte ranges of a segmented transfer, bound to the remote
+/// resource identity (host/port/user/path/size/MDTM).
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+struct SegmentState {
+    version: u32,
+    resource: ResumeState,
+    /// Inclusive `[start, end]` ranges that were synced to disk before they
+    /// were recorded here.
+    done: Vec<(u64, u64)>,
+}
+
+/// Whether a transfer may try the segmented path (REST STREAM is checked
+/// afterwards on the live connection). Applies to FTP and FTPS alike.
+fn segmented_eligible(connections: usize, remote_size: Option<u64>, has_identity: bool) -> bool {
+    connections > 1 && has_identity && remote_size.is_some_and(|size| size >= SEGMENTED_MIN_BYTES)
+}
+
+fn server_supports_rest_stream(ctrl: &mut Conn<'_>) -> Result<bool, String> {
+    let reply = command(ctrl, "FEAT")?;
+    Ok(reply_code(&reply) == Some(211)
+        && reply
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case("REST STREAM")))
+}
+
+fn normalize_segments(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    ranges.retain(|(start, end)| end >= start);
+    ranges.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1.saturating_add(1) {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+    merged
+}
+
+/// Splits `[0, size)` minus `done` into segments of at most `segment` bytes.
+fn pending_segments(size: u64, done: &[(u64, u64)], segment: u64) -> Vec<(u64, u64)> {
+    let mut gaps = Vec::new();
+    let mut cursor = 0u64;
+    for &(start, end) in done {
+        if start > cursor {
+            gaps.push((cursor, start - 1));
+        }
+        cursor = cursor.max(end.saturating_add(1));
+    }
+    if cursor < size {
+        gaps.push((cursor, size - 1));
+    }
+    let segment = segment.max(1);
+    let mut out = Vec::new();
+    for (start, end) in gaps {
+        let mut at = start;
+        while at <= end {
+            let last = at.saturating_add(segment - 1).min(end);
+            out.push((at, last));
+            if last == u64::MAX {
+                break;
+            }
+            at = last + 1;
+        }
+    }
+    out
+}
+
+fn segment_length(size: u64, connections: usize) -> u64 {
+    (size / (connections.max(1) as u64 * 4)).clamp(SEGMENT_MIN_BYTES, SEGMENT_MAX_BYTES)
+}
+
+struct SegmentShared<'p> {
+    queue: std::sync::Mutex<std::collections::VecDeque<(u64, u64)>>,
+    in_flight: std::sync::atomic::AtomicUsize,
+    done: std::sync::Mutex<Vec<(u64, u64)>>,
+    downloaded: std::sync::atomic::AtomicU64,
+    stop: std::sync::atomic::AtomicBool,
+    progress_at: std::sync::Mutex<Instant>,
+    size: u64,
+    output: &'p Path,
+    progress: std::path::PathBuf,
+    state_path: std::path::PathBuf,
+    resource: ResumeState,
+    /// Data connection mode shared with the primary (see [`open_data`]).
+    active: &'p std::sync::atomic::AtomicBool,
+}
+
+impl SegmentShared<'_> {
+    fn claim(&self) -> Option<Option<(u64, u64)>> {
+        use std::sync::atomic::Ordering;
+        let mut queue = self.queue.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(range) = queue.pop_front() {
+            self.in_flight.fetch_add(1, Ordering::SeqCst);
+            return Some(Some(range));
+        }
+        if self.in_flight.load(Ordering::SeqCst) == 0 {
+            return None;
+        }
+        // Another connection still owns a segment that may come back.
+        Some(None)
+    }
+
+    fn release(&self, remaining: Option<(u64, u64)>) {
+        use std::sync::atomic::Ordering;
+        if let Some(range) = remaining {
+            self.queue
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push_front(range);
+        }
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Records a synced range and rewrites the completion map atomically.
+    fn record(&self, start: u64, end: u64) -> Result<(), String> {
+        let mut done = self.done.lock().unwrap_or_else(|error| error.into_inner());
+        let mut next = done.clone();
+        next.push((start, end));
+        let next = normalize_segments(next);
+        write_segment_state(
+            &self.state_path,
+            &SegmentState {
+                version: 1,
+                resource: self.resource.clone(),
+                done: next.clone(),
+            },
+        )?;
+        *done = next;
+        Ok(())
+    }
+
+    fn add_progress(&self, count: u64) {
+        use std::sync::atomic::Ordering;
+        let total = self.downloaded.fetch_add(count, Ordering::SeqCst) + count;
+        let mut at = self
+            .progress_at
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if at.elapsed() >= PROGRESS_INTERVAL {
+            *at = Instant::now();
+            drop(at);
+            crate::http_engine::write_progress(
+                &self.progress,
+                total,
+                self.size,
+                0.0,
+                "downloading",
+            );
+        }
+    }
+}
+
+fn write_segment_state(path: &Path, state: &SegmentState) -> Result<(), String> {
+    let bytes = serde_json::to_vec(state).map_err(|error| error.to_string())?;
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    let tmp = path.with_file_name(name);
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|error| error.to_string())?;
+        file.write_all(&bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
+    crate::atomic_replace::replace_file(&tmp, path).map_err(|error| error.to_string())
+}
+
+/// After closing a data connection before the server finished sending,
+/// drain its transfer reply (226, 426 or 451, sometimes two) by sending NOOP
+/// and reading until the NOOP's 200 arrives.
+fn resync_after_abort(ctrl: &mut Conn<'_>) -> Result<(), String> {
+    ctrl.write_all(b"NOOP\r\n")
+        .map_err(|error| error.to_string())?;
+    for _ in 0..4 {
+        let reply = read_reply(ctrl)?;
+        match reply_code(&reply) {
+            Some(200) => return Ok(()),
+            Some(226 | 250 | 425 | 426 | 450 | 451) => continue,
+            _ => return Err(format!("FTP control resync failed: {}", reply.trim())),
+        }
+    }
+    Err("FTP control resync failed".into())
+}
+
+#[derive(Debug, PartialEq)]
+enum SegmentError {
+    RestRejected,
+    /// The FTPS data channel of a segment could not be secured (for example a
+    /// server that demands TLS session reuse the client cannot provide).
+    DataTls(String),
+    Failed(String),
+}
+
+/// What the primary connection's outcome means for the whole transfer.
+/// `Err(SEGMENTED_FALLBACK)` asks the caller to retry with one connection.
+fn segmented_outcome(
+    primary: Result<(), SegmentError>,
+    done: &[(u64, u64)],
+    started_this_run: bool,
+) -> Result<(), String> {
+    let nothing_recorded = done.is_empty() || done.iter().all(|(start, end)| start > end);
+    match primary {
+        Ok(()) => Ok(()),
+        Err(SegmentError::RestRejected) if nothing_recorded => Err(SEGMENTED_FALLBACK.into()),
+        Err(SegmentError::RestRejected) => {
+            Err("FTP server rejected REST for a segmented resume".into())
+        }
+        // 本次运行的首个分段就无法建立数据通道 TLS（如服务器要求的会话复用握手被拒）：辅助连接
+        // 尚未启动，回落单连接从头下载（已登记的分段表不再适用，否则续传会反复卡在同一处）。
+        Err(SegmentError::DataTls(_)) if !started_this_run => Err(SEGMENTED_FALLBACK.into()),
+        // 已有分段成功后才失败：按普通传输错误处理，重试时从已登记范围续传。
+        Err(SegmentError::DataTls(error)) => Err(format!("FTPS data TLS failed: {error}")),
+        Err(SegmentError::Failed(error)) => Err(error),
+    }
+}
+
+impl From<String> for SegmentError {
+    fn from(value: String) -> Self {
+        Self::Failed(value)
+    }
+}
+
+/// Downloads `[start, end]` over one data connection of `ctrl`. Returns the
+/// first byte not yet written (so a partial segment can still be recorded).
+#[allow(clippy::too_many_arguments)]
+fn fetch_segment<'a>(
+    ctrl: &mut Conn<'a>,
+    target: &FtpTarget,
+    control: &'a FtpControl<'a>,
+    file: &mut std::fs::File,
+    shared: &SegmentShared<'_>,
+    start: u64,
+    end: u64,
+    on_started: &mut dyn FnMut(),
+) -> (u64, Result<(), SegmentError>) {
+    use std::io::{Seek, SeekFrom};
+    use std::sync::atomic::Ordering;
+    let mut cursor = start;
+    let result = (|| -> Result<(), SegmentError> {
+        let data_channel = open_data(ctrl, control, shared.active)?;
+        // REST 必须紧挨 RETR；被拒绝即视为服务器不支持分段。
+        let reply = command(ctrl, &format!("REST {start}"))?;
+        if reply_code(&reply) != Some(350) {
+            drop(data_channel);
+            return Err(SegmentError::RestRejected);
+        }
+        let reply = command(ctrl, &format!("RETR {}", target.path))?;
+        require_reply_code(&reply, &[125, 150], "RETR")?;
+        let data_raw = data_channel.establish()?;
+        // FTPS：服务器在 RETR 之后才启动数据通道 TLS；数据连接复用本控制连接的凭据/会话。
+        // 握手成功后才算分段已启动，主连接据此决定是否开辅助连接。
+        let mut data = if target.tls {
+            ctrl.secure_data(data_raw, &target.host)
+                .map_err(SegmentError::DataTls)?
+        } else {
+            Conn::Plain(data_raw)
+        };
+        on_started();
+        file.seek(SeekFrom::Start(start))
+            .map_err(|error| error.to_string())?;
+        let to_eof = end + 1 == shared.size;
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            control.check()?;
+            if shared.stop.load(Ordering::SeqCst) {
+                return Err(SegmentError::Failed("ftp segment stopped".into()));
+            }
+            let remaining = (end + 1).saturating_sub(cursor);
+            if remaining == 0 && !to_eof {
+                break;
+            }
+            // 末段多读一个字节确认 SIZE 边界；超出的数据在落盘前拒绝。
+            let limit = (remaining + u64::from(to_eof)).min(buf.len() as u64) as usize;
+            let count = data
+                .read(&mut buf[..limit])
+                .map_err(|error| error.to_string())?;
+            control.check()?;
+            if count == 0 {
+                if to_eof && cursor == shared.size {
+                    break;
+                }
+                return Err(SegmentError::Failed(format!(
+                    "FTP segment truncated: expected bytes {start}-{end}, received up to {cursor}"
+                )));
+            }
+            if cursor + count as u64 > end + 1 {
+                return Err(SegmentError::Failed(format!(
+                    "FTP transfer exceeds declared size: expected {}, received at least {}",
+                    shared.size,
+                    cursor + count as u64
+                )));
+            }
+            crate::net_policy::consume(count, || control.check())?;
+            control.check()?;
+            file.write_all(&buf[..count])
+                .map_err(|error| error.to_string())?;
+            cursor += count as u64;
+            shared.add_progress(count as u64);
+        }
+        drop(data);
+        if to_eof {
+            let reply = read_reply(ctrl)?;
+            require_reply_code(&reply, &[226, 250], "transfer completion")?;
+        } else {
+            resync_after_abort(ctrl)?;
+        }
+        Ok(())
+    })();
+    (cursor, result)
+}
+
+/// One connection's loop: claim a segment, transfer it, sync and record what
+/// was written (also on pause/error), put any unfinished tail back.
+fn run_segment_worker<'a>(
+    ctrl: &mut Conn<'a>,
+    target: &FtpTarget,
+    control: &'a FtpControl<'a>,
+    shared: &SegmentShared<'_>,
+    on_started: &mut dyn FnMut(),
+) -> Result<(), SegmentError> {
+    use std::sync::atomic::Ordering;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(shared.output)
+        .map_err(|error| error.to_string())?;
+    loop {
+        control.check()?;
+        if shared.stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let (start, end) = match shared.claim() {
+            None => return Ok(()),
+            Some(None) => {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            Some(Some(range)) => range,
+        };
+        let (cursor, result) = fetch_segment(
+            ctrl, target, control, &mut file, shared, start, end, on_started,
+        );
+        // 先同步数据再登记完成表，与 HTTP 检查点同一语义；暂停/失败时登记已写部分。
+        let recorded = if cursor > start {
+            file.sync_data()
+                .map_err(|error| error.to_string())
+                .and_then(|_| shared.record(start, cursor - 1))
+        } else {
+            Ok(())
+        };
+        let remaining = (cursor <= end).then_some((cursor, end));
+        if let Err(error) = recorded {
+            // 未登记的字节也要重下：整段放回。
+            shared.release(Some((start, end)));
+            return Err(SegmentError::Failed(error));
+        }
+        match result {
+            Ok(()) => shared.release(remaining),
+            Err(error) => {
+                shared.release(remaining);
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Parallel REST-segmented download. The primary connection (already logged
+/// in) runs on the calling thread; helper connections are opened only after
+/// the primary's first `REST`+`RETR` was accepted, so a server that rejects
+/// REST falls back to the single-connection transfer before anything else
+/// connects. Helpers that cannot connect or fail leave their segment to the
+/// remaining connections; the primary's error (pause/cancel/failure) ends the
+/// transfer with every written range synced and recorded for resume.
+fn transfer_segmented<'a>(
+    target: &FtpTarget,
+    output: &Path,
+    control: &'a FtpControl<'a>,
+    mut ctrl: Conn<'a>,
+    resource: ResumeState,
+    connections: usize,
+    active: &std::sync::atomic::AtomicBool,
+    resume: bool,
+) -> Result<u64, String> {
+    use std::sync::atomic::Ordering;
+    let size = resource.total;
+    let connections = connections.clamp(1, MAX_FTP_CONNECTIONS);
+    let state_path = output.with_extension(SEGMENT_STATE_EXTENSION);
+    let single_state = output.with_extension("ftp-state.json");
+    let saved = std::fs::read(&state_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SegmentState>(&bytes).ok())
+        .filter(|_| resume)
+        .filter(|saved| saved.version == 1 && saved.resource == resource)
+        .filter(|_| std::fs::metadata(output).is_ok_and(|meta| meta.len() == size));
+    let done = match saved {
+        Some(saved) => normalize_segments(saved.done)
+            .into_iter()
+            .filter(|(_, end)| *end < size)
+            .collect::<Vec<_>>(),
+        None => {
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            control.check()?;
+            let file = std::fs::File::create(output).map_err(|error| error.to_string())?;
+            file.set_len(size).map_err(|error| error.to_string())?;
+            drop(file);
+            // 单连接续传状态描述的是“追加到文件末尾”；预分配后的文件不能再按它续传。
+            let _ = std::fs::remove_file(&single_state);
+            write_segment_state(
+                &state_path,
+                &SegmentState {
+                    version: 1,
+                    resource: resource.clone(),
+                    done: Vec::new(),
+                },
+            )?;
+            Vec::new()
+        }
+    };
+    let already: u64 = done.iter().map(|(start, end)| end - start + 1).sum();
+    let pending = pending_segments(size, &done, segment_length(size, connections));
+    let shared = SegmentShared {
+        queue: std::sync::Mutex::new(pending.into()),
+        in_flight: std::sync::atomic::AtomicUsize::new(0),
+        done: std::sync::Mutex::new(done),
+        downloaded: std::sync::atomic::AtomicU64::new(already),
+        stop: std::sync::atomic::AtomicBool::new(false),
+        progress_at: std::sync::Mutex::new(Instant::now()),
+        size,
+        output,
+        progress: output.with_extension("progress.json"),
+        state_path: state_path.clone(),
+        resource,
+        active,
+    };
+    crate::http_engine::write_progress(&shared.progress, already, size, 0.0, "downloading");
+    let throttle = crate::net_policy::current_throttle_context();
+    let control_path = control.path;
+    let started_this_run = std::cell::Cell::new(false);
+    let primary = std::thread::scope(|scope| {
+        let mut spawned = false;
+        let shared = &shared;
+        let started_this_run = &started_this_run;
+        let mut spawn_helpers = || {
+            if spawned {
+                return;
+            }
+            spawned = true;
+            started_this_run.set(true);
+            for _ in 1..connections {
+                let throttle = throttle.clone();
+                scope.spawn(move || {
+                    crate::net_policy::with_throttle_context(throttle, || {
+                        let helper_control = FtpControl {
+                            path: control_path,
+                            reason: Cell::new(crate::http_engine::Control::Run),
+                            checked: Cell::new(Instant::now()),
+                        };
+                        if helper_control.poll().is_err() {
+                            return;
+                        }
+                        // 连接数受限（421 等）或中途失败的辅助连接直接退出，分段由其余连接接手。
+                        let Ok(mut helper) = open_session(target, &helper_control) else {
+                            return;
+                        };
+                        let _ = run_segment_worker(
+                            &mut helper,
+                            target,
+                            &helper_control,
+                            shared,
+                            &mut || {},
+                        );
+                    });
+                });
+            }
+        };
+        let result = run_segment_worker(&mut ctrl, target, control, shared, &mut spawn_helpers);
+        if result.is_err() {
+            shared.stop.store(true, Ordering::SeqCst);
+        }
+        result
+    });
+    let done = shared
+        .done
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Err(error) = segmented_outcome(primary, &done, started_this_run.get()) {
+        if error == SEGMENTED_FALLBACK {
+            let _ = std::fs::remove_file(&state_path);
+        }
+        return Err(error);
+    }
+    control.check()?;
+    if done != [(0, size - 1)] {
+        return Err(format!(
+            "FTP segmented transfer incomplete: {} of {size} bytes recorded",
+            done.iter().map(|(start, end)| end - start + 1).sum::<u64>()
+        ));
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(output)
+        .map_err(|error| error.to_string())?;
+    let actual = file.metadata().map_err(|error| error.to_string())?.len();
+    if actual != size {
+        return Err(format!(
+            "FTP transfer size mismatch: expected {size}, received {actual}"
+        ));
+    }
+    file.sync_all().map_err(|error| error.to_string())?;
+    drop(file);
+    crate::http_engine::write_progress(&shared.progress, size, size, 0.0, "downloading");
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(&single_state);
+    Ok(size)
 }
 
 fn wrap_tls<'a>(stream: FtpSocket<'a>, host: &str) -> Result<Conn<'a>, String> {
@@ -825,6 +1589,10 @@ mod tests {
                                 write!(ctrl, "{reply}\r\n").unwrap();
                             }
                         }
+                        // Active fallback is attempted but this server implements neither.
+                        _ if command.starts_with("EPRT ") || command.starts_with("PORT ") => {
+                            ctrl.write_all(b"500 Unknown command\r\n").unwrap()
+                        }
                         "RETR /file.bin" => {
                             assert!(success, "{case}: failed negotiation must not retrieve");
                             ctrl.write_all(b"150 Opening data\r\n").unwrap();
@@ -861,6 +1629,20 @@ mod tests {
                 commands.iter().any(|item| item == "PASV"),
                 !pasv_reply.is_empty(),
                 "{case}"
+            );
+            // Only a refused passive mode (not malformed or auth replies) goes active.
+            assert_eq!(
+                commands.iter().any(|item| item.starts_with("EPRT ")),
+                matches!(
+                    case,
+                    "ipv6-no-pasv" | "epsv-unavailable" | "pasv-unavailable"
+                ),
+                "{case}: {commands:?}"
+            );
+            assert_eq!(
+                commands.iter().any(|item| item.starts_with("PORT ")),
+                matches!(case, "epsv-unavailable" | "pasv-unavailable"),
+                "{case}: {commands:?}"
             );
             assert_eq!(
                 bytes,
@@ -1543,5 +2325,834 @@ mod tests {
                 assert_eq!(has_state, size.is_some_and(|size| size > 0), "{case}");
             }
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Segmented (multi-connection) transfer
+    // ---------------------------------------------------------------------
+
+    #[derive(Clone, Copy)]
+    struct SegmentServerOptions {
+        advertise_rest: bool,
+        rest_ok: bool,
+        /// Connections beyond this receive `421` at greeting.
+        max_connections: usize,
+        chunk_delay_ms: u64,
+        /// Refuse EPSV/PASV so the client must use active mode (EPRT).
+        passive_refused: bool,
+    }
+
+    struct SegmentServer {
+        address: std::net::SocketAddr,
+        log: std::sync::Arc<std::sync::Mutex<Vec<(usize, String)>>>,
+        connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl SegmentServer {
+        fn commands(&self, prefix: &str) -> Vec<(usize, String)> {
+            self.log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, line)| line.starts_with(prefix))
+                .cloned()
+                .collect()
+        }
+
+        fn clear(&self) {
+            self.log.lock().unwrap().clear();
+        }
+    }
+
+    impl Drop for SegmentServer {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = std::net::TcpStream::connect(self.address);
+        }
+    }
+
+    fn segment_body(len: usize) -> std::sync::Arc<Vec<u8>> {
+        std::sync::Arc::new(
+            (0..len)
+                .map(|index| (index.wrapping_mul(31) ^ (index >> 11)) as u8)
+                .collect(),
+        )
+    }
+
+    fn spawn_segment_server(
+        body: std::sync::Arc<Vec<u8>>,
+        options: SegmentServerOptions,
+    ) -> SegmentServer {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+        use std::sync::atomic::Ordering;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let log = std::sync::Arc::clone(&log);
+            let connections = std::sync::Arc::clone(&connections);
+            let stop = std::sync::Arc::clone(&stop);
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(mut ctrl) = stream else { continue };
+                    let index = connections.fetch_add(1, Ordering::SeqCst);
+                    let log = std::sync::Arc::clone(&log);
+                    let body = std::sync::Arc::clone(&body);
+                    std::thread::spawn(move || {
+                        ctrl.set_read_timeout(Some(Duration::from_secs(10)))
+                            .unwrap();
+                        if index >= options.max_connections {
+                            let _ = ctrl.write_all(b"421 Too many connections\r\n");
+                            return;
+                        }
+                        ctrl.write_all(b"220 Ready\r\n").unwrap();
+                        let mut reader = BufReader::new(ctrl.try_clone().unwrap());
+                        let mut data_listener: Option<TcpListener> = None;
+                        let mut active_target: Option<std::net::SocketAddr> = None;
+                        let mut offset = 0usize;
+                        loop {
+                            let mut line = String::new();
+                            match reader.read_line(&mut line) {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                            let command = line.trim_end().to_string();
+                            log.lock().unwrap().push((index, command.clone()));
+                            let reply: String = if command == "USER anonymous" {
+                                "230 Logged in\r\n".into()
+                            } else if command == "TYPE I" {
+                                "200 Binary\r\n".into()
+                            } else if command == "SIZE /big.bin" {
+                                format!("213 {}\r\n", body.len())
+                            } else if command == "MDTM /big.bin" {
+                                "213 20261115000000\r\n".into()
+                            } else if command == "FEAT" {
+                                if options.advertise_rest {
+                                    "211-Features:\r\n SIZE\r\n MDTM\r\n REST STREAM\r\n211 End\r\n"
+                                        .into()
+                                } else {
+                                    "211-Features:\r\n SIZE\r\n MDTM\r\n211 End\r\n".into()
+                                }
+                            } else if command == "EPSV" || command == "PASV" {
+                                if options.passive_refused {
+                                    "502 Passive mode disabled\r\n".into()
+                                } else {
+                                    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                                    let port = listener.local_addr().unwrap().port();
+                                    data_listener = Some(listener);
+                                    format!("229 Passive (|||{port}|)\r\n")
+                                }
+                            } else if let Some(spec) = command.strip_prefix("EPRT ") {
+                                active_target = Some(parse_test_eprt(spec));
+                                "200 EPRT ok\r\n".into()
+                            } else if let Some(value) = command.strip_prefix("REST ") {
+                                if options.rest_ok {
+                                    offset = value.parse().unwrap();
+                                    "350 Restarting\r\n".into()
+                                } else {
+                                    "502 Not implemented\r\n".into()
+                                }
+                            } else if command == "RETR /big.bin" {
+                                ctrl.write_all(b"150 Opening data\r\n").unwrap();
+                                let mut data = match active_target.take() {
+                                    Some(target) => std::net::TcpStream::connect(target).unwrap(),
+                                    None => data_listener.take().unwrap().accept().unwrap().0,
+                                };
+                                let mut failed = false;
+                                for chunk in body[offset.min(body.len())..].chunks(64 * 1024) {
+                                    if options.chunk_delay_ms > 0 {
+                                        std::thread::sleep(Duration::from_millis(
+                                            options.chunk_delay_ms,
+                                        ));
+                                    }
+                                    if data.write_all(chunk).is_err() {
+                                        failed = true;
+                                        break;
+                                    }
+                                }
+                                drop(data);
+                                offset = 0;
+                                if failed {
+                                    "426 Connection closed; transfer aborted\r\n".into()
+                                } else {
+                                    "226 Complete\r\n".into()
+                                }
+                            } else if command == "NOOP" {
+                                "200 OK\r\n".into()
+                            } else {
+                                "500 Unknown\r\n".into()
+                            };
+                            if ctrl.write_all(reply.as_bytes()).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        SegmentServer {
+            address,
+            log,
+            connections,
+            stop,
+        }
+    }
+
+    fn segment_root(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "hls-ftp-segmented-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = root.join("payload.downloading");
+        let control = root.join("control");
+        std::fs::write(&control, "run").unwrap();
+        (root, output, control)
+    }
+
+    const SEGMENT_TEST_BYTES: usize = 5 * 1024 * 1024 + 4321;
+
+    /// Parses `|1|127.0.0.1|4242|` (EPRT argument) in tests.
+    fn parse_test_eprt(spec: &str) -> std::net::SocketAddr {
+        let parts: Vec<&str> = spec.split('|').collect();
+        assert_eq!(parts.len(), 5, "EPRT {spec}");
+        assert!(parts[1] == "1" || parts[1] == "2", "EPRT {spec}");
+        std::net::SocketAddr::new(parts[2].parse().unwrap(), parts[3].parse().unwrap())
+    }
+
+    /// Parses `127,0,0,1,16,146` (PORT argument) in tests.
+    fn parse_test_port(spec: &str) -> std::net::SocketAddr {
+        let parts: Vec<u16> = spec.split(',').map(|part| part.parse().unwrap()).collect();
+        assert_eq!(parts.len(), 6, "PORT {spec}");
+        let ip = std::net::Ipv4Addr::new(
+            parts[0] as u8,
+            parts[1] as u8,
+            parts[2] as u8,
+            parts[3] as u8,
+        );
+        std::net::SocketAddr::new(ip.into(), parts[4] * 256 + parts[5])
+    }
+
+    #[test]
+    fn refused_or_unreachable_passive_falls_back_to_active_mode() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        // (case, EPSV reply, PASV reply, EPRT accepted, resume offset)
+        for (case, epsv_reply, pasv_reply, eprt_ok, resume) in [
+            (
+                "eprt",
+                "502 Not implemented",
+                "502 Not implemented",
+                true,
+                false,
+            ),
+            (
+                "port",
+                "502 Not implemented",
+                "425 Passive refused",
+                false,
+                false,
+            ),
+            (
+                "unreachable-pasv",
+                "502 Not implemented",
+                "227",
+                true,
+                false,
+            ),
+            ("eprt-resume", "425 Cannot open data", "", true, true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut ctrl, _) = listener.accept().unwrap();
+                ctrl.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                ctrl.write_all(b"220 Ready\r\n").unwrap();
+                let mut reader = BufReader::new(ctrl.try_clone().unwrap());
+                let mut target = None;
+                let mut offset = 0usize;
+                let mut commands = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    let command = line.trim_end().to_string();
+                    commands.push(command.clone());
+                    match command.as_str() {
+                        "USER anonymous" => ctrl.write_all(b"230 Logged in\r\n").unwrap(),
+                        "TYPE I" => ctrl.write_all(b"200 Binary\r\n").unwrap(),
+                        "SIZE /file.bin" => ctrl.write_all(b"213 8\r\n").unwrap(),
+                        "MDTM /file.bin" => ctrl.write_all(b"213 20261115000000\r\n").unwrap(),
+                        "EPSV" => write!(ctrl, "{epsv_reply}\r\n").unwrap(),
+                        "PASV" if pasv_reply == "227" => {
+                            // Advertise a port nothing listens on.
+                            let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+                            let port = closed.local_addr().unwrap().port();
+                            drop(closed);
+                            write!(
+                                ctrl,
+                                "227 Passive (127,0,0,1,{},{})\r\n",
+                                port / 256,
+                                port % 256
+                            )
+                            .unwrap();
+                        }
+                        "PASV" => write!(ctrl, "{pasv_reply}\r\n").unwrap(),
+                        "RETR /file.bin" => {
+                            ctrl.write_all(b"150 Opening data\r\n").unwrap();
+                            let mut data = std::net::TcpStream::connect(
+                                target.take().expect("active address announced"),
+                            )
+                            .unwrap();
+                            data.write_all(&b"AAAABBBB"[offset..]).unwrap();
+                            drop(data);
+                            ctrl.write_all(b"226 Complete\r\n").unwrap();
+                            break;
+                        }
+                        other => {
+                            if let Some(spec) = other.strip_prefix("EPRT ") {
+                                if eprt_ok {
+                                    let addr = parse_test_eprt(spec);
+                                    assert_eq!(addr.ip(), address.ip(), "{case}: control IP");
+                                    target = Some(addr);
+                                    ctrl.write_all(b"200 EPRT ok\r\n").unwrap();
+                                } else {
+                                    ctrl.write_all(b"502 EPRT not implemented\r\n").unwrap();
+                                }
+                            } else if let Some(spec) = other.strip_prefix("PORT ") {
+                                target = Some(parse_test_port(spec));
+                                ctrl.write_all(b"200 PORT ok\r\n").unwrap();
+                            } else if let Some(value) = other.strip_prefix("REST ") {
+                                offset = value.parse().unwrap();
+                                ctrl.write_all(b"350 Restarting\r\n").unwrap();
+                            } else {
+                                panic!("{case}: unexpected command {other}");
+                            }
+                        }
+                    }
+                }
+                commands
+            });
+            let root =
+                std::env::temp_dir().join(format!("hls-ftp-active-{}-{case}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let output = root.join("payload.downloading");
+            let control = root.join("control");
+            std::fs::write(&control, "run").unwrap();
+            if resume {
+                std::fs::write(&output, b"AAAA").unwrap();
+                let state = ResumeState {
+                    version: 1,
+                    host: "127.0.0.1".into(),
+                    port: address.port(),
+                    user: "anonymous".into(),
+                    path: "/file.bin".into(),
+                    tls: false,
+                    total: 8,
+                    modified: "20261115000000".into(),
+                };
+                std::fs::write(
+                    output.with_extension("ftp-state.json"),
+                    serde_json::to_vec(&state).unwrap(),
+                )
+                .unwrap();
+            }
+            let result = download_ftp(
+                &format!("ftp://{address}/file.bin"),
+                &output,
+                &control,
+                resume,
+            );
+            let commands = server.join().unwrap();
+            let bytes = std::fs::read(&output).unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(result, Ok(8), "{case}: {commands:?}");
+            assert_eq!(bytes, b"AAAABBBB", "{case}");
+            assert!(
+                commands
+                    .iter()
+                    .any(|item| item.starts_with("EPRT |1|127.0.0.1|")),
+                "{case}"
+            );
+            assert_eq!(
+                commands
+                    .iter()
+                    .any(|item| item.starts_with("PORT 127,0,0,1,")),
+                !eprt_ok,
+                "{case}: {commands:?}"
+            );
+            if resume {
+                // REST still sits directly before RETR in active mode.
+                let rest = commands.iter().position(|item| item == "REST 4").unwrap();
+                assert_eq!(commands[rest + 1], "RETR /file.bin", "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn segmented_transfer_remembers_active_mode_for_helpers() {
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: true,
+                max_connections: 16,
+                chunk_delay_ms: 2,
+                passive_refused: true,
+            },
+        );
+        let (root, output, control) = segment_root("active");
+        let url = format!("ftp://{}/big.bin", server.address);
+        let result = download_ftp_with(&url, &output, &control, true, 4);
+        let bytes = std::fs::read(&output).unwrap();
+        let has_ranges = output.with_extension(SEGMENT_STATE_EXTENSION).exists();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(result.unwrap(), body.len() as u64);
+        assert!(
+            bytes == *body,
+            "segmented active output must equal the remote file"
+        );
+        assert!(!has_ranges);
+        // Passive is probed once by the primary; every later data connection
+        // (primary and helpers) goes straight to EPRT.
+        let epsv = server.commands("EPSV");
+        assert_eq!(epsv, vec![(0, "EPSV".to_string())], "{epsv:?}");
+        assert_eq!(
+            server.commands("EPRT ").len(),
+            server.commands("RETR").len()
+        );
+        let used: std::collections::BTreeSet<usize> = server
+            .commands("RETR")
+            .iter()
+            .map(|(conn, _)| *conn)
+            .collect();
+        assert!(
+            used.len() >= 2,
+            "helpers transferred data in active mode: {used:?}"
+        );
+    }
+
+    #[test]
+    fn segment_planning_skips_done_ranges_and_bounds_segment_size() {
+        assert_eq!(
+            normalize_segments(vec![(10, 19), (0, 9), (30, 39), (25, 31), (50, 40)]),
+            vec![(0, 19), (25, 39)]
+        );
+        assert_eq!(
+            pending_segments(50, &[(0, 19), (25, 39)], 4),
+            vec![(20, 23), (24, 24), (40, 43), (44, 47), (48, 49)]
+        );
+        assert_eq!(pending_segments(10, &[(0, 9)], 4), Vec::<(u64, u64)>::new());
+        assert_eq!(segment_length(5 * 1024 * 1024, 4), SEGMENT_MIN_BYTES);
+        assert_eq!(segment_length(4 << 30, 2), SEGMENT_MAX_BYTES);
+    }
+
+    #[test]
+    fn segmented_gating_is_the_same_for_ftp_and_ftps() {
+        let size = Some(SEGMENTED_MIN_BYTES);
+        assert!(segmented_eligible(4, size, true));
+        assert!(segmented_eligible(MAX_FTP_CONNECTIONS + 4, size, true));
+        assert!(
+            !segmented_eligible(1, size, true),
+            "one connection stays single"
+        );
+        assert!(
+            !segmented_eligible(4, Some(SEGMENTED_MIN_BYTES - 1), true),
+            "small file"
+        );
+        assert!(!segmented_eligible(4, None, true), "no SIZE");
+        assert!(!segmented_eligible(4, size, false), "no SIZE+MDTM identity");
+        // TLS is no longer a gate: an FTPS target with the same facts is eligible.
+        let target = parse_ftp_url("ftps://files.example/pub/a.bin").unwrap();
+        assert!(target.tls);
+        assert!(segmented_eligible(4, size, true));
+        // The segmented completion map binds the TLS flag into the identity,
+        // so FTP and FTPS checkpoints of the same path never mix.
+        let identity = |tls| ResumeState {
+            version: 1,
+            host: "files.example".into(),
+            port: 21,
+            user: "anonymous".into(),
+            path: "/pub/a.bin".into(),
+            tls,
+            total: SEGMENTED_MIN_BYTES,
+            modified: "20260101000000".into(),
+        };
+        assert_ne!(identity(true), identity(false));
+    }
+
+    #[test]
+    fn ftps_data_tls_failure_falls_back_only_before_any_segment_started() {
+        let tls = || Err(SegmentError::DataTls("session reuse required".into()));
+        // First segment of this run could not secure its data channel: retry
+        // with one connection (also when an older run left ranges behind).
+        assert_eq!(
+            segmented_outcome(tls(), &[], false),
+            Err(SEGMENTED_FALLBACK.into())
+        );
+        assert_eq!(
+            segmented_outcome(tls(), &[(0, 1023)], false),
+            Err(SEGMENTED_FALLBACK.into())
+        );
+        // After segments succeeded it is an ordinary, resumable failure.
+        let failed = segmented_outcome(tls(), &[(0, 1023)], true).unwrap_err();
+        assert_ne!(failed, SEGMENTED_FALLBACK);
+        assert!(failed.contains("FTPS data TLS failed"));
+        // REST handling is unchanged.
+        assert_eq!(
+            segmented_outcome(Err(SegmentError::RestRejected), &[], false),
+            Err(SEGMENTED_FALLBACK.into())
+        );
+        assert!(
+            segmented_outcome(Err(SegmentError::RestRejected), &[(0, 9)], false)
+                .unwrap_err()
+                .contains("rejected REST")
+        );
+        assert_eq!(
+            segmented_outcome(Err(SegmentError::Failed("paused".into())), &[], true),
+            Err("paused".into())
+        );
+        assert_eq!(segmented_outcome(Ok(()), &[], true), Ok(()));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ftps_without_schannel_reports_the_platform_instead_of_segmenting() {
+        // FTPS uses Windows Schannel; elsewhere the control upgrade fails
+        // before SIZE/MDTM, so the segmented path is never entered.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(b"220 ready\r\n").unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+            assert_eq!(line.trim(), "AUTH TLS");
+            stream.write_all(b"234 go\r\n").unwrap();
+        });
+        let dir = std::env::temp_dir().join(format!(
+            "hls-ftps-platform-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let control = dir.join("control");
+        std::fs::write(&control, "run").unwrap();
+        let error = download_ftp_with(
+            &format!("ftps://127.0.0.1:{port}/a.bin"),
+            &dir.join("a.bin"),
+            &control,
+            false,
+            4,
+        )
+        .unwrap_err();
+        assert!(error.contains("Schannel"), "{error}");
+        assert!(!dir.join("a.ftp-ranges.json").exists());
+        server.join().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fresh_segmented_transfer_ignores_a_matching_checkpoint() {
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: true,
+                max_connections: 16,
+                chunk_delay_ms: 0,
+                passive_refused: false,
+            },
+        );
+        let (root, output, control) = segment_root("fresh");
+        std::fs::write(&output, vec![0u8; body.len()]).unwrap();
+        write_segment_state(
+            &output.with_extension(SEGMENT_STATE_EXTENSION),
+            &SegmentState {
+                version: 1,
+                resource: ResumeState {
+                    version: 1,
+                    host: "127.0.0.1".into(),
+                    port: server.address.port(),
+                    user: "anonymous".into(),
+                    path: "/big.bin".into(),
+                    tls: false,
+                    total: body.len() as u64,
+                    modified: "20261115000000".into(),
+                },
+                done: vec![(0, body.len() as u64 - 1)],
+            },
+        )
+        .unwrap();
+        let result = download_ftp_with(
+            &format!("ftp://{}/big.bin", server.address),
+            &output,
+            &control,
+            false,
+            4,
+        );
+        let actual = std::fs::read(&output).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(result.unwrap(), body.len() as u64);
+        assert_eq!(actual.as_slice(), body.as_slice());
+        assert!(!server.commands("RETR").is_empty());
+    }
+
+    #[test]
+    fn segmented_transfer_uses_parallel_rest_connections_and_cleans_up() {
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: true,
+                max_connections: 16,
+                chunk_delay_ms: 2,
+                passive_refused: false,
+            },
+        );
+        let (root, output, control) = segment_root("parallel");
+        let url = format!("ftp://{}/big.bin", server.address);
+        let result = download_ftp_with(&url, &output, &control, true, 4);
+        let bytes = std::fs::read(&output).unwrap();
+        let has_ranges = output.with_extension(SEGMENT_STATE_EXTENSION).exists();
+        let has_state = output.with_extension("ftp-state.json").exists();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(result.unwrap(), body.len() as u64);
+        assert!(
+            bytes == *body,
+            "segmented output must equal the remote file"
+        );
+        assert!(!has_ranges && !has_state, "success removes resume state");
+        let rests = server.commands("REST ");
+        let segments =
+            pending_segments(body.len() as u64, &[], segment_length(body.len() as u64, 4));
+        assert_eq!(
+            rests.len(),
+            segments.len(),
+            "one REST per segment: {rests:?}"
+        );
+        let used: std::collections::BTreeSet<usize> = server
+            .commands("RETR")
+            .iter()
+            .map(|(conn, _)| *conn)
+            .collect();
+        assert!(
+            used.len() >= 2,
+            "more than one connection transferred data: {used:?}"
+        );
+        assert!(server.connections.load(std::sync::atomic::Ordering::SeqCst) <= 4);
+    }
+
+    #[test]
+    fn single_connection_is_kept_without_rest_stream_or_for_small_files() {
+        for (case, advertise_rest, len, connections) in [
+            ("no-feat-rest", false, SEGMENT_TEST_BYTES, 4),
+            ("small-file", true, 64 * 1024, 4),
+            ("one-connection", true, SEGMENT_TEST_BYTES, 1),
+        ] {
+            let body = segment_body(len);
+            let server = spawn_segment_server(
+                std::sync::Arc::clone(&body),
+                SegmentServerOptions {
+                    advertise_rest,
+                    rest_ok: true,
+                    max_connections: 16,
+                    chunk_delay_ms: 0,
+                    passive_refused: false,
+                },
+            );
+            let (root, output, control) = segment_root(case);
+            let url = format!("ftp://{}/big.bin", server.address);
+            let result = download_ftp_with(&url, &output, &control, true, connections);
+            let bytes = std::fs::read(&output).unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            assert_eq!(result.unwrap(), len as u64, "{case}");
+            assert!(bytes == *body, "{case}");
+            assert_eq!(
+                server.connections.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "{case}"
+            );
+            assert!(server.commands("REST ").is_empty(), "{case}");
+            assert_eq!(
+                server.commands("FEAT").is_empty(),
+                case != "no-feat-rest",
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_rest_falls_back_to_one_fresh_connection() {
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: false,
+                max_connections: 16,
+                chunk_delay_ms: 0,
+                passive_refused: false,
+            },
+        );
+        let (root, output, control) = segment_root("rest-rejected");
+        let url = format!("ftp://{}/big.bin", server.address);
+        let result = download_ftp_with(&url, &output, &control, true, 4);
+        let bytes = std::fs::read(&output).unwrap();
+        let has_ranges = output.with_extension(SEGMENT_STATE_EXTENSION).exists();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(result.unwrap(), body.len() as u64);
+        assert!(bytes == *body);
+        assert!(!has_ranges);
+        // Helpers are only opened after the primary's REST succeeded.
+        assert_eq!(
+            server.connections.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        assert_eq!(server.commands("RETR").len(), 1);
+    }
+
+    #[test]
+    fn refused_helper_connections_leave_the_work_to_the_primary() {
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: true,
+                max_connections: 1,
+                chunk_delay_ms: 0,
+                passive_refused: false,
+            },
+        );
+        let (root, output, control) = segment_root("helpers-refused");
+        let url = format!("ftp://{}/big.bin", server.address);
+        let result = download_ftp_with(&url, &output, &control, true, 4);
+        let bytes = std::fs::read(&output).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(result.unwrap(), body.len() as u64);
+        assert!(bytes == *body);
+        assert!(server.commands("RETR").iter().all(|(conn, _)| *conn == 0));
+    }
+
+    #[test]
+    fn paused_segmented_transfer_resumes_only_unrecorded_ranges() {
+        use std::sync::atomic::Ordering;
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: true,
+                max_connections: 16,
+                chunk_delay_ms: 15,
+                passive_refused: false,
+            },
+        );
+        let (root, output, control) = segment_root("pause-resume");
+        let url = format!("ftp://{}/big.bin", server.address);
+        let worker = {
+            let (url, output, control) = (url.clone(), output.clone(), control.clone());
+            std::thread::spawn(move || download_ftp_with(&url, &output, &control, true, 3))
+        };
+        // Let every connection write part of a segment, then pause.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while server.commands("RETR").len() < 3 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        std::fs::write(&control, "pause").unwrap();
+        let paused_at = Instant::now();
+        let first = worker.join().unwrap();
+        assert_eq!(first.unwrap_err(), "paused");
+        assert!(paused_at.elapsed() < Duration::from_secs(3));
+        let state: SegmentState = serde_json::from_slice(
+            &std::fs::read(output.with_extension(SEGMENT_STATE_EXTENSION)).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !state.done.is_empty(),
+            "written bytes are recorded on pause"
+        );
+        assert_eq!(std::fs::metadata(&output).unwrap().len(), body.len() as u64);
+        for &(start, end) in &state.done {
+            let file = std::fs::read(&output).unwrap();
+            assert!(
+                file[start as usize..=end as usize] == body[start as usize..=end as usize],
+                "recorded range {start}-{end} holds remote bytes"
+            );
+        }
+        server.clear();
+        std::fs::write(&control, "run").unwrap();
+        let second = download_ftp_with(&url, &output, &control, true, 3);
+        let bytes = std::fs::read(&output).unwrap();
+        let has_ranges = output.with_extension(SEGMENT_STATE_EXTENSION).exists();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(second.unwrap(), body.len() as u64);
+        assert!(bytes == *body);
+        assert!(!has_ranges);
+        for (_, rest) in server.commands("REST ") {
+            let offset: u64 = rest.trim_start_matches("REST ").parse().unwrap();
+            assert!(
+                !state
+                    .done
+                    .iter()
+                    .any(|(start, end)| *start <= offset && offset <= *end),
+                "resume re-requested recorded byte {offset}"
+            );
+        }
+        assert!(server.connections.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[test]
+    fn changed_remote_identity_discards_the_segment_map() {
+        let (root, output, _control) = segment_root("identity");
+        let resource = ResumeState {
+            version: 1,
+            host: "127.0.0.1".into(),
+            port: 21,
+            user: "anonymous".into(),
+            path: "/big.bin".into(),
+            tls: false,
+            total: 10,
+            modified: "20261115000000".into(),
+        };
+        let path = output.with_extension(SEGMENT_STATE_EXTENSION);
+        write_segment_state(
+            &path,
+            &SegmentState {
+                version: 1,
+                resource: resource.clone(),
+                done: vec![(0, 4)],
+            },
+        )
+        .unwrap();
+        let saved: SegmentState = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.done, vec![(0, 4)]);
+        let mut changed = resource.clone();
+        changed.modified = "20261116000000".into();
+        assert_ne!(saved.resource, changed);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

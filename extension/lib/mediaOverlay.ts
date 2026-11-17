@@ -1,5 +1,5 @@
 import type { MediaResource } from './resources'
-import { formatBytes, formatDuration } from './format'
+import { formatBitrate, formatBytes, formatDuration } from './format'
 
 export interface OverlayPosition {
   x: number
@@ -138,7 +138,7 @@ export function overlayResourceDetails(resource: MediaResource): OverlayResource
     resource.lowLatencyLive ? '低延迟直播' : resource.isLive === true ? '直播' : '',
     resource.quality || '',
     resource.width && resource.height ? `${resource.width}×${resource.height}` : '',
-    resource.bandwidth ? `${(resource.bandwidth / 1_000_000).toFixed(1)} Mbps` : '',
+    resource.bandwidth ? formatBitrate(resource.bandwidth) : '',
     resource.isLive === true ? '' : formatDuration(Number(resource.duration || 0)),
     likelyBytes ? `${resource.size ? '' : '约 '}${formatBytes(likelyBytes)}` : '',
   ].filter(Boolean)

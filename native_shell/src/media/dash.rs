@@ -1,4 +1,5 @@
-//! Native DASH downloader. Unsupported multi-period manifests fail closed.
+//! Native DASH downloader. Static multi-period manifests are stitched per
+//! track in Period order; multi-period live manifests fail closed.
 
 use crate::http_engine::{fetch_bytes_limited, run_job, Job};
 use crate::media::merge::merge_with_ffmpeg;
@@ -15,7 +16,7 @@ pub struct DashManifest {
     pub representations: Vec<Representation>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Representation {
     pub id: String,
     pub bandwidth: u64,
@@ -32,6 +33,15 @@ pub struct Representation {
     pub media: Vec<String>,
     pub media_ranges: Vec<Option<ByteRange>>,
     pub media_durations: Vec<f64>,
+    /// Zero-based index of the Period this representation belongs to.
+    pub period: usize,
+    /// Indices in `media` that are a later Period's initialization segment
+    /// (stitched multi-period tracks only).
+    pub init_markers: Vec<usize>,
+    /// Later Period boundaries that reuse the current initialization (or have none).
+    pub period_markers: Vec<usize>,
+    /// SegmentBase without indexRange: the whole BaseURL is one segment.
+    pub whole_file: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -203,9 +213,14 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         .children()
         .filter(|node| mpd_element(*node, "Period", root))
         .count();
-    if period_count > 1 {
-        return Err("unsupported multi-period DASH: cannot preserve all periods".into());
+    if period_count > 1 && dynamic {
+        return Err("暂不支持多 Period 的直播 DASH（multi-period live）".into());
     }
+    let periods: Vec<_> = root
+        .children()
+        .filter(|node| mpd_element(*node, "Period", root))
+        .collect();
+    let period_durations = period_durations(&periods, root);
     let mut representations = Vec::new();
     for node in root
         .descendants()
@@ -217,7 +232,10 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let set = node
             .ancestors()
             .find(|node| mpd_element(*node, "AdaptationSet", root));
-        let period_duration = period.and_then(|period| period_duration_seconds(period, root));
+        let period_index = period
+            .and_then(|period| periods.iter().position(|item| *item == period))
+            .unwrap_or(0);
+        let period_duration = period_durations.get(period_index).copied().flatten();
         let id = node.attribute("id").unwrap_or("0").to_string();
         let bandwidth = node
             .attribute("bandwidth")
@@ -291,15 +309,13 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             .find_map(|base| base.attribute("indexRange"))
             .map(parse_byte_range)
             .transpose()?;
-        if !segment_bases.is_empty() && index_range.is_none() {
-            return Err("unsupported DASH SegmentBase without indexRange".into());
-        }
         if segment_bases
             .iter()
             .any(|base| mpd_child(*base, "RepresentationIndex").is_some())
         {
             return Err("unsupported external DASH RepresentationIndex".into());
         }
+        let whole_file = !segment_bases.is_empty() && index_range.is_none();
         let initialization = segment_list
             .and_then(|list| mpd_child(list, "Initialization"))
             .or_else(|| {
@@ -369,6 +385,24 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 media_ranges.push(range);
             }
         }
+        let whole_file = whole_file && media.is_empty();
+        let (init, init_range) = if whole_file {
+            // SegmentBase 没有 indexRange 时整份 BaseURL 就是一个分片；同址的
+            // Initialization 已包含在整文件里，不能重复拼接。
+            media.push(base_url.clone());
+            media_ranges.push(None);
+            if let Some(seconds) = period_duration.filter(|value| value.is_finite() && *value > 0.0)
+            {
+                media_durations = vec![seconds];
+            }
+            if init.as_deref() == Some(base_url.as_str()) {
+                (None, None)
+            } else {
+                (init, init_range)
+            }
+        } else {
+            (init, init_range)
+        };
         if let Some(list) = segment_list {
             let duration = list
                 .attribute("duration")
@@ -400,6 +434,10 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             media,
             media_ranges,
             media_durations,
+            period: period_index,
+            init_markers: Vec::new(),
+            period_markers: Vec::new(),
+            whole_file,
         });
     }
     if representations.is_empty() {
@@ -416,7 +454,7 @@ pub fn representation_choices(manifest: &DashManifest) -> Vec<crate::StreamVaria
     let mut choices: Vec<_> = manifest
         .representations
         .iter()
-        .filter(|item| is_video(item))
+        .filter(|item| item.period == 0 && is_video(item))
         .map(|item| crate::StreamVariant {
             label: if item.height > 0 {
                 format!("{}p · {} kbps", item.height, item.bandwidth / 1000)
@@ -437,7 +475,7 @@ pub fn audio_choices(manifest: &DashManifest) -> Vec<crate::StreamVariant> {
     let mut choices: Vec<_> = manifest
         .representations
         .iter()
-        .filter(|item| is_audio(item))
+        .filter(|item| item.period == 0 && is_audio(item))
         .map(|item| crate::StreamVariant {
             label: {
                 let title = if item.label.is_empty() {
@@ -520,24 +558,33 @@ pub fn download_dash_selected(
     let mut recorded_subs: Vec<Representation> = Vec::new();
     loop {
         let manifest = parse_mpd(&xml, url)?;
-        let mut video = select_video(
-            &manifest.representations,
-            preferred_bandwidth,
-            preferred_height,
-        )
-        .cloned();
-        let mut audio = select_audio(&manifest.representations, preferred_audio).cloned();
-        let mut subtitles = if download_subtitles {
-            select_subtitles(&manifest.representations)
+        // 选择以第一个 Period 为准，后续 Period 按同类特征匹配后顺序拼接。
+        let first_period: Vec<_> = manifest
+            .representations
+            .iter()
+            .filter(|item| item.period == 0)
+            .cloned()
+            .collect();
+        let video = select_video(&first_period, preferred_bandwidth, preferred_height).cloned();
+        let audio = select_audio(&first_period, preferred_audio).cloned();
+        let subtitles = if download_subtitles {
+            select_subtitles(&first_period)
         } else {
             Vec::new()
         };
-        for track in video.iter_mut().chain(audio.iter_mut()) {
-            expand_segment_base(track, headers, proxy, control)?;
-        }
+        let video = video
+            .map(|track| expand_periods(&manifest, track, headers, proxy, control))
+            .transpose()?;
+        let audio = audio
+            .map(|track| expand_periods(&manifest, track, headers, proxy, control))
+            .transpose()?;
         // Subtitles remain best effort, as in save_dash_subtitles; a bad sidecar
         // index must not prevent downloading the selected audio/video.
-        subtitles.retain_mut(|track| expand_segment_base(track, headers, proxy, control).is_ok());
+        let subtitles: Vec<_> = subtitles
+            .into_iter()
+            .filter_map(|track| expand_periods(&manifest, track, headers, proxy, control).ok())
+            .filter(|track| track.init_markers.is_empty())
+            .collect();
         if read_control(control) != "run" {
             return Err(control_stop_error(control));
         }
@@ -767,6 +814,160 @@ pub fn download_dash_selected(
     )
 }
 
+fn track_kind(item: &Representation) -> u8 {
+    if is_subtitle(item) {
+        2
+    } else if is_audio(item) {
+        1
+    } else if is_video(item) {
+        0
+    } else {
+        3
+    }
+}
+
+/// Picks the representation in `period` that continues `chosen`: same kind,
+/// then same contentType / mimeType / lang, then the closest bandwidth/height.
+fn match_period_track<'a>(
+    representations: &'a [Representation],
+    period: usize,
+    chosen: &Representation,
+) -> Option<&'a Representation> {
+    let kind = track_kind(chosen);
+    representations
+        .iter()
+        .filter(|item| item.period == period && track_kind(item) == kind)
+        .filter(|item| {
+            kind != 2 || chosen.lang.is_empty() || item.lang.eq_ignore_ascii_case(&chosen.lang)
+        })
+        .min_by_key(|item| {
+            (
+                !item.content_type.eq_ignore_ascii_case(&chosen.content_type),
+                !item.lang.eq_ignore_ascii_case(&chosen.lang),
+                !item.mime.eq_ignore_ascii_case(&chosen.mime),
+                item.bandwidth.abs_diff(chosen.bandwidth),
+                item.height.abs_diff(chosen.height),
+                item.id != chosen.id,
+            )
+        })
+}
+
+/// Resolves `chosen` (from Period 0) in every Period of a static manifest and
+/// returns the per-Period parts in document order.
+fn period_parts(
+    manifest: &DashManifest,
+    chosen: &Representation,
+) -> Result<Vec<Representation>, String> {
+    let mut parts = vec![chosen.clone()];
+    for period in 1..manifest.period_count {
+        let part =
+            match_period_track(&manifest.representations, period, chosen).ok_or_else(|| {
+                format!(
+                    "多 Period DASH 第 {} 个 Period 缺少与所选轨道（{}）匹配的轨道",
+                    period + 1,
+                    chosen.id
+                )
+            })?;
+        parts.push(part.clone());
+    }
+    Ok(parts)
+}
+
+fn codec_family(codecs: &str) -> String {
+    codecs
+        .split(['.', ','])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// Appends later Periods' segments to the first Period's track. A Period whose
+/// initialization differs keeps its init as an in-line segment (listed in
+/// `init_markers`), which the local playlist turns into a discontinuity with a
+/// new EXT-X-MAP so FFmpeg merges it without re-encoding.
+fn concat_period_parts(parts: Vec<Representation>) -> Result<Representation, String> {
+    let mut parts = parts.into_iter();
+    let mut out = parts.next().ok_or("DASH Period 为空")?;
+    let first_codec = codec_family(&out.codecs);
+    let mut aligned = out.media_durations.len() == out.media.len();
+    let mut current_init = (out.init.clone(), out.init_range);
+    for (offset, part) in parts.enumerate() {
+        let number = offset + 2;
+        if out.whole_file || part.whole_file {
+            return Err(
+                "多 Period DASH 中无 indexRange 的 SegmentBase 整文件轨道暂不支持拼接".into(),
+            );
+        }
+        let codec = codec_family(&part.codecs);
+        if !first_codec.is_empty() && !codec.is_empty() && codec != first_codec {
+            return Err(format!(
+                "多 Period DASH 第 {number} 个 Period 的编码（{}）与第 1 个 Period（{}）不同，无法无损拼接",
+                part.codecs, out.codecs
+            ));
+        }
+        if part.media.is_empty() {
+            return Err(format!(
+                "多 Period DASH 第 {number} 个 Period 没有可下载的分片"
+            ));
+        }
+        let init = (part.init.clone(), part.init_range);
+        if init != current_init {
+            let Some(url) = part.init.clone() else {
+                return Err(format!(
+                    "多 Period DASH 第 {number} 个 Period 缺少初始化段，无法与前一个 Period 拼接"
+                ));
+            };
+            out.init_markers.push(out.media.len());
+            out.media.push(url);
+            out.media_ranges.push(part.init_range);
+            out.media_durations.push(0.0);
+            current_init = init;
+        } else {
+            // tfdt may restart even when the initialization URL is unchanged.
+            out.period_markers.push(out.media.len());
+        }
+        aligned &= part.media_durations.len() == part.media.len();
+        out.media.extend(part.media);
+        out.media_ranges.extend(part.media_ranges);
+        out.media_durations.extend(part.media_durations);
+    }
+    if !aligned {
+        // 缺少准确时间轴时不伪造预览时长，与单 Period 行为一致。
+        out.media_durations.clear();
+    }
+    Ok(out)
+}
+
+fn expand_periods(
+    manifest: &DashManifest,
+    chosen: Representation,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    control: &Path,
+) -> Result<Representation, String> {
+    if manifest.period_count <= 1 || manifest.dynamic {
+        let mut track = chosen;
+        expand_segment_base(&mut track, headers, proxy, control)?;
+        return Ok(track);
+    }
+    let mut parts = period_parts(manifest, &chosen)?;
+    for part in &mut parts {
+        expand_segment_base(part, headers, proxy, control)?;
+    }
+    concat_period_parts(parts)
+}
+
+fn segment_file_name(index: usize, track: &Representation, marker_index: usize) -> String {
+    if track.init_markers.contains(&marker_index) {
+        format!("seg-{index:04}-init.mp4")
+    } else if track.period_markers.contains(&marker_index) {
+        format!("seg-{index:04}-period.m4s")
+    } else {
+        format!("seg-{index:04}.m4s")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn download_dash_primary(
     track: &Representation,
@@ -799,7 +1000,7 @@ fn download_dash_primary(
     }
     let offset = files.len();
     let planned: Vec<_> = (0..track.media.len())
-        .map(|index| task_dir.join(format!("seg-{:04}.m4s", index + offset)))
+        .map(|index| task_dir.join(segment_file_name(index + offset, track, index)))
         .collect();
     let audio_dir = task_dir.join("audio");
     let mut audio_files = Vec::new();
@@ -823,9 +1024,13 @@ fn download_dash_primary(
             )?);
         }
     }
-    let audio_planned: Vec<_> = (0..audio.map_or(0, |track| track.media.len()))
-        .map(|index| audio_dir.join(format!("seg-{index:04}.m4s")))
-        .collect();
+    let audio_planned: Vec<_> = audio
+        .map(|track| {
+            (0..track.media.len())
+                .map(|index| audio_dir.join(segment_file_name(index, track, index)))
+                .collect()
+        })
+        .unwrap_or_default();
     let kind = if video { "video" } else { "audio" };
     for (index, path) in planned.iter().enumerate() {
         let rel = relative_posix(task_dir, path);
@@ -1422,10 +1627,8 @@ fn parse_duration_seconds(value: &str) -> Option<f64> {
 }
 
 fn read_control(path: &Path) -> String {
-    fs::read_to_string(path)
-        .unwrap_or_else(|_| "run".into())
-        .trim()
-        .to_ascii_lowercase()
+    // 运行任务读进程内令牌，未注册路径仍读控制文件（行为不变）。
+    crate::task_control::read_word(path)
 }
 
 /// A stopped control value is not a valid completion.
@@ -1475,11 +1678,16 @@ fn write_dash_preview_track(
         .is_some_and(|name| name.to_string_lossy().contains("init"));
     let count = files.len().saturating_sub(usize::from(skip_init));
     // 清单未提供准确时间轴时等待成品，不能用固定 4 秒伪造可播放范围。
+    // 多 Period 拼接时内嵌的初始化段不占播放时长。
     if count == 0
         || durations.len() < count
-        || durations[..count]
+        || files
             .iter()
-            .any(|duration| !duration.is_finite() || *duration <= 0.0)
+            .skip(usize::from(skip_init))
+            .zip(durations)
+            .any(|(file, duration)| {
+                !is_init_file(file) && (!duration.is_finite() || *duration <= 0.0)
+            })
     {
         return Ok(false);
     }
@@ -1497,6 +1705,13 @@ fn write_dash_preview_track(
         ));
     }
     for (file, duration) in files.iter().skip(usize::from(skip_init)).zip(durations) {
+        if is_init_file(file) {
+            push_period_map(&mut text, file);
+            continue;
+        }
+        if is_period_start(file) {
+            text.push_str("#EXT-X-DISCONTINUITY\n");
+        }
         text.push_str(&format!(
             "#EXTINF:{duration:.6},\n{}\n",
             playlist_leaf(file)
@@ -1536,10 +1751,35 @@ fn write_dash_playlist(task_dir: &Path, files: &[PathBuf]) -> Result<(), String>
         ));
     }
     for file in files.iter().skip(usize::from(skip_init)) {
+        if is_init_file(file) {
+            push_period_map(&mut text, file);
+            continue;
+        }
+        if is_period_start(file) {
+            text.push_str("#EXT-X-DISCONTINUITY\n");
+        }
         text.push_str(&format!("#EXTINF:4.000,\n{}\n", playlist_leaf(file)));
     }
     text.push_str("#EXT-X-ENDLIST\n");
     fs::write(task_dir.join("local.m3u8"), text).map_err(|error| error.to_string())
+}
+
+fn is_init_file(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().contains("init"))
+}
+
+fn is_period_start(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().ends_with("-period.m4s"))
+}
+
+// 后续 Period 的初始化段与前一个不同：标记不连续并切换 EXT-X-MAP。
+fn push_period_map(text: &mut String, file: &Path) {
+    text.push_str(&format!(
+        "#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"{}\"\n",
+        playlist_leaf(file)
+    ));
 }
 
 fn playlist_leaf(path: &Path) -> String {
@@ -1801,29 +2041,39 @@ fn download_dash_subtitle_track(
     Ok(vtt_path)
 }
 
-fn period_duration_seconds(
-    period: roxmltree::Node<'_, '_>,
+/// Period@start / @duration per ISO 23009-1 5.3.2: a missing start follows the
+/// previous Period's end; a missing duration runs to the next Period's start or
+/// to mediaPresentationDuration for the last Period.
+fn period_durations(
+    periods: &[roxmltree::Node<'_, '_>],
     root: roxmltree::Node<'_, '_>,
-) -> Option<f64> {
-    if let Some(duration) = period.attribute("duration") {
-        return parse_duration_seconds(duration);
-    }
-    let period_start = period
-        .attribute("start")
-        .and_then(parse_duration_seconds)
-        .unwrap_or(0.0);
-    let end = if let Some(next) = period
-        .next_siblings()
-        .skip(1)
-        .find(|node| mpd_element(*node, "Period", root))
-    {
-        next.attribute("start").and_then(parse_duration_seconds)?
-    } else {
-        root.attribute("mediaPresentationDuration")
-            .and_then(parse_duration_seconds)?
+) -> Vec<Option<f64>> {
+    let explicit_start = |period: roxmltree::Node<'_, '_>| {
+        period.attribute("start").and_then(parse_duration_seconds)
     };
-    let duration = end - period_start;
-    (duration.is_finite() && duration > 0.0).then_some(duration)
+    let mut out = Vec::with_capacity(periods.len());
+    let mut previous_end = Some(0.0);
+    for (index, period) in periods.iter().enumerate() {
+        let start = explicit_start(*period).or(if index == 0 { Some(0.0) } else { previous_end });
+        let duration = period
+            .attribute("duration")
+            .and_then(parse_duration_seconds)
+            .or_else(|| {
+                let end = match periods.get(index + 1) {
+                    Some(next) => explicit_start(*next)?,
+                    None => root
+                        .attribute("mediaPresentationDuration")
+                        .and_then(parse_duration_seconds)?,
+                };
+                Some(end - start?)
+            })
+            .filter(|duration| duration.is_finite() && *duration > 0.0);
+        previous_end = start
+            .zip(duration)
+            .map(|(start, duration)| start + duration);
+        out.push(duration);
+    }
+    out
 }
 
 // 十进制时长转 f64 后可能略高于整数刻度，不能因此多请求一个分片。
@@ -2429,9 +2679,291 @@ mod tests {
                 })
             );
         }
-        for base in ["<SegmentBase/>", "<SegmentBase indexRange=\"1-10\"><RepresentationIndex sourceURL=\"other.idx\"/></SegmentBase>"] {
+        for base in ["<SegmentBase><RepresentationIndex sourceURL=\"other.idx\"/></SegmentBase>", "<SegmentBase indexRange=\"1-10\"><RepresentationIndex sourceURL=\"other.idx\"/></SegmentBase>"] {
             let xml = format!("<MPD><Period><Representation>{base}</Representation></Period></MPD>");
             assert!(parse_mpd(&xml, "https://cdn.test/all.mp4").unwrap_err().contains("unsupported"));
+        }
+    }
+
+    #[test]
+    fn segment_base_without_index_range_is_one_whole_file_segment() {
+        let xml = r#"<MPD type="static" mediaPresentationDuration="PT6.5S"><Period><BaseURL>https://cdn.test/v/</BaseURL>
+<Representation id="bare" mimeType="video/mp4"><BaseURL>bare.mp4?sig=1</BaseURL><SegmentBase/></Representation>
+<Representation id="same" mimeType="video/mp4"><BaseURL>same.mp4</BaseURL><SegmentBase><Initialization range="0-99"/></SegmentBase></Representation>
+<Representation id="split" mimeType="video/mp4"><BaseURL>body.mp4</BaseURL><SegmentBase timescale="1000"><Initialization sourceURL="head.mp4" range="0-49"/></SegmentBase></Representation>
+</Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        let [bare, same, split] = &parsed.representations[..] else {
+            panic!("three representations")
+        };
+        assert!(bare.whole_file && same.whole_file && split.whole_file);
+        assert_eq!(bare.media, ["https://cdn.test/v/bare.mp4?sig=1"]);
+        assert_eq!(bare.media_ranges, [None]);
+        assert_eq!(bare.media_durations, [6.5]);
+        assert_eq!(bare.init, None);
+        // The ranged init lives inside the whole file, so it is not fetched twice.
+        assert_eq!(
+            (same.media.len(), same.init.clone(), same.init_range),
+            (1, None, None)
+        );
+        assert_eq!(split.init.as_deref(), Some("https://cdn.test/v/head.mp4"));
+        assert_eq!(
+            split.init_range,
+            Some(ByteRange {
+                start: 0,
+                length: 50
+            })
+        );
+        assert_eq!(split.media, ["https://cdn.test/v/body.mp4"]);
+        // expand_segment_base leaves a whole-file track untouched (no index fetch).
+        let mut track = bare.clone();
+        expand_segment_base(
+            &mut track,
+            &HashMap::new(),
+            "",
+            Path::new("/nonexistent-control"),
+        )
+        .unwrap();
+        assert_eq!(&track, bare);
+        // Whole-file tracks embed their own moov; stitching periods of them is refused.
+        let two = r#"<MPD type="static"><Period duration="PT1S"><Representation id="v" mimeType="video/mp4"><BaseURL>a.mp4</BaseURL><SegmentBase/></Representation></Period><Period duration="PT1S"><Representation id="v" mimeType="video/mp4"><BaseURL>b.mp4</BaseURL><SegmentBase/></Representation></Period></MPD>"#;
+        let parsed = parse_mpd(two, "https://cdn.test/m.mpd").unwrap();
+        assert!(
+            concat_period_parts(period_parts(&parsed, &parsed.representations[0]).unwrap())
+                .unwrap_err()
+                .contains("SegmentBase")
+        );
+    }
+
+    #[test]
+    fn whole_file_segment_base_downloads_whole_resource() {
+        let body = b"ftypmoovmdat-whole-file".to_vec();
+        let (base, server) =
+            serve_dash_files(HashMap::from([("/all.mp4".into(), body.clone())]), 1);
+        let xml = r#"<MPD><Period duration="PT2S"><Representation id="v" mimeType="video/mp4"><SegmentBase/></Representation></Period></MPD>"#;
+        let track = parse_mpd(xml, &format!("{base}/all.mp4"))
+            .unwrap()
+            .representations
+            .remove(0);
+        let root = std::env::temp_dir().join(format!("hls-dash-whole-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let (files, _) = download_dash_primary(
+            &track,
+            true,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut DashCheckpoint::load(&root),
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(fs::read(&files[0]).unwrap(), body);
+        let request = server.join().unwrap().remove(0).to_ascii_lowercase();
+        assert!(
+            !request.contains("range:"),
+            "whole resource must not be ranged"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn multi_period_primary_writes_period_maps_into_local_playlists() {
+        let files = HashMap::from([
+            ("/p1/init.mp4".to_string(), b"I1".to_vec()),
+            ("/p1/1.m4s".to_string(), b"A1".to_vec()),
+            ("/p2/init.mp4".to_string(), b"I2".to_vec()),
+            ("/p2/1.m4s".to_string(), b"B1".to_vec()),
+            ("/p2/2.m4s".to_string(), b"B2".to_vec()),
+        ]);
+        let (base, server) = serve_dash_files(files, 5);
+        let xml = r#"<MPD type="static"><Period duration="PT2S"><BaseURL>p1/</BaseURL><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="2" initialization="init.mp4" media="$Number$.m4s"/></Representation></Period><Period duration="PT2S"><BaseURL>p2/</BaseURL><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><Initialization sourceURL="init.mp4"/><SegmentURL media="1.m4s"/><SegmentURL media="2.m4s"/></SegmentList></Representation></Period></MPD>"#;
+        let parsed = parse_mpd(xml, &format!("{base}/manifest.mpd")).unwrap();
+        let track = concat_period_parts(period_parts(&parsed, &parsed.representations[0]).unwrap())
+            .unwrap();
+        let root = std::env::temp_dir().join(format!("hls-dash-periods-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let (files, _) = download_dash_primary(
+            &track,
+            true,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut DashCheckpoint::load(&root),
+            None,
+            5,
+        )
+        .unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .flat_map(|path| fs::read(path).unwrap())
+                .collect::<Vec<_>>(),
+            b"I1A1I2B1B2"
+        );
+        write_dash_playlist(&root, &files).unwrap();
+        let local = fs::read_to_string(root.join("local.m3u8")).unwrap();
+        assert!(local.contains("#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4.000,\nseg-0001.m4s\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"seg-0002-init.mp4\"\n#EXTINF:4.000,\nseg-0003.m4s\n#EXTINF:4.000,\nseg-0004.m4s\n"), "{local}");
+        let preview = fs::read_to_string(root.join("preview-video.m3u8")).unwrap();
+        assert!(preview.contains("#EXTINF:2.000000,\nseg-0001.m4s\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\"seg-0002-init.mp4\"\n#EXTINF:1.000000,\nseg-0003.m4s"), "{preview}");
+        assert_eq!(server.join().unwrap().len(), 5);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn real_multi_period_av_download_merges_through_ffmpeg() {
+        let Some(ffmpeg) = crate::media::merge::locate_ffmpeg() else {
+            eprintln!("skipped: no FFmpeg on PATH/HLS_FFMPEG");
+            return;
+        };
+        for shared_init in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("hls-dash-real-periods-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&root);
+            let mut files = HashMap::new();
+            let mut periods = String::new();
+            let mut requests = 1;
+            for (period, tone) in [("p1", 440), ("p2", 880)] {
+                let dir = root.join("src").join(period);
+                fs::create_dir_all(&dir).unwrap();
+                let status = Command::new(&ffmpeg)
+                    .current_dir(&dir)
+                    .args([
+                        "-v",
+                        "error",
+                        "-nostdin",
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "testsrc=size=160x120:rate=25:duration=2",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                    ])
+                    .arg(format!(
+                        "sine=frequency={tone}:sample_rate=48000:duration=2"
+                    ))
+                    .args([
+                        "-map",
+                        "0:v",
+                        "-map",
+                        "1:a",
+                        "-c:v",
+                        "libx264",
+                        "-g",
+                        "25",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-f",
+                        "dash",
+                        "-seg_duration",
+                        "1",
+                        "-use_template",
+                        "1",
+                        "-use_timeline",
+                        "1",
+                        "-init_seg_name",
+                        "init-$RepresentationID$.m4s",
+                        "-media_seg_name",
+                        "chunk-$RepresentationID$-$Number%05d$.m4s",
+                        "out.mpd",
+                    ])
+                    .status()
+                    .unwrap();
+                if !status.success() {
+                    eprintln!("skipped: FFmpeg cannot build the fixture (libx264/aac missing?)");
+                    let _ = fs::remove_dir_all(&root);
+                    return;
+                }
+                let mut sets = String::new();
+                for (id, kind) in [("0", "video"), ("1", "audio")] {
+                    let mut segments: Vec<_> = fs::read_dir(&dir)
+                        .unwrap()
+                        .filter_map(|entry| {
+                            let name = entry.unwrap().file_name().into_string().unwrap();
+                            name.starts_with(&format!("chunk-{id}-")).then_some(name)
+                        })
+                        .collect();
+                    segments.sort();
+                    for name in segments.iter().chain([&format!("init-{id}.m4s")]) {
+                        let bytes = fs::read(dir.join(name)).unwrap();
+                        if shared_init && name.starts_with("init-") {
+                            let key = format!("/{name}");
+                            if let Some(first) = files.get(&key) {
+                                assert_eq!(
+                                    first, &bytes,
+                                    "shared initialization must be identical"
+                                );
+                            } else {
+                                files.insert(key, bytes);
+                                requests += 1;
+                            }
+                        } else {
+                            files.insert(format!("/{period}/{name}"), bytes);
+                            requests += 1;
+                        }
+                    }
+                    let list: String = segments
+                        .iter()
+                        .map(|name| format!(r#"<SegmentURL media="{name}"/>"#))
+                        .collect();
+                    let init_prefix = if shared_init { "/" } else { "" };
+                    sets.push_str(&format!(r#"<AdaptationSet contentType="{kind}" mimeType="{kind}/mp4"><Representation id="{period}-{kind}" bandwidth="1000"><SegmentList><Initialization sourceURL="{init_prefix}init-{id}.m4s"/>{list}</SegmentList></Representation></AdaptationSet>"#));
+                }
+                periods.push_str(&format!(
+                    r#"<Period duration="PT2S"><BaseURL>{period}/</BaseURL>{sets}</Period>"#
+                ));
+            }
+            files.insert(
+                "/manifest.mpd".into(),
+                format!(r#"<MPD type="static" mediaPresentationDuration="PT4S">{periods}</MPD>"#)
+                    .into_bytes(),
+            );
+            let (base, server) = serve_dash_files(files, requests);
+            let task = root.join("task");
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let output = download_dash_selected(
+                &format!("{base}/manifest.mpd"),
+                &HashMap::new(),
+                "",
+                &task,
+                &control,
+                0,
+                0,
+                false,
+                "",
+            )
+            .unwrap();
+            assert_eq!(server.join().unwrap().len(), requests);
+            let frames = Command::new(&ffmpeg)
+                .args(["-v", "error", "-nostdin", "-i"])
+                .arg(&output)
+                .args(["-f", "framecrc", "-"])
+                .output()
+                .unwrap();
+            assert!(frames.status.success());
+            let text = String::from_utf8_lossy(&frames.stdout);
+            let video = text.lines().filter(|line| line.starts_with("0,")).count();
+            let audio = text.lines().filter(|line| line.starts_with("1,")).count();
+            assert_eq!(video, 100, "both Periods' video frames survive the merge");
+            assert!(
+                audio >= 180,
+                "both Periods' audio survive the merge: {audio}"
+            );
+            fs::remove_dir_all(root).unwrap();
         }
     }
 
@@ -3263,7 +3795,16 @@ mod tests {
             );
         }
         let xml = r#"<MPD type="static" mediaPresentationDuration="PT20S"><Period start="PT2S"><AdaptationSet><Representation id="v"><SegmentTemplate duration="1" media="$Number$.m4s"/></Representation></AdaptationSet></Period><Period start="PT4.5S"/></MPD>"#;
-        assert!(parse_mpd(xml, "https://cdn.test/manifest.mpd").is_err());
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        assert_eq!(parsed.period_count, 2);
+        assert_eq!(
+            parsed.representations[0].media_durations,
+            vec![1.0, 1.0, 0.5]
+        );
+        // The empty second Period cannot continue the track: fail with a clear error.
+        assert!(period_parts(&parsed, &parsed.representations[0])
+            .unwrap_err()
+            .contains("第 2 个 Period"));
     }
 
     #[test]
@@ -3360,15 +3901,127 @@ mod tests {
     }
 
     #[test]
-    fn fails_closed_on_all_multi_period_manifests() {
-        for codec in ["avc1", "hvc1"] {
+    fn multi_period_stitches_same_codec_and_rejects_codec_changes() {
+        for codec in ["avc1.64001f", "hvc1"] {
             let xml = format!(
-                r#"<MPD type="static"><Period><AdaptationSet><Representation id="v" bandwidth="1" codecs="avc1" mimeType="video/mp4"><SegmentURL media="a.m4s"/></Representation></AdaptationSet></Period><Period><AdaptationSet><Representation id="v2" bandwidth="1" codecs="{codec}" mimeType="video/mp4"><SegmentURL media="b.m4s"/></Representation></AdaptationSet></Period></MPD>"#
+                r#"<MPD type="static"><Period><AdaptationSet><Representation id="v" bandwidth="1" codecs="avc1.4d401e" mimeType="video/mp4"><SegmentURL media="a.m4s"/></Representation></AdaptationSet></Period><Period><AdaptationSet><Representation id="v2" bandwidth="1" codecs="{codec}" mimeType="video/mp4"><SegmentURL media="b.m4s"/></Representation></AdaptationSet></Period></MPD>"#
             );
-            assert!(parse_mpd(&xml, "https://cdn.test/manifest.mpd")
-                .unwrap_err()
-                .contains("multi-period"));
+            let parsed = parse_mpd(&xml, "https://cdn.test/manifest.mpd").unwrap();
+            let stitched =
+                period_parts(&parsed, &parsed.representations[0]).and_then(concat_period_parts);
+            if codec == "hvc1" {
+                assert!(stitched.unwrap_err().contains("编码"));
+            } else {
+                assert_eq!(
+                    stitched.unwrap().media,
+                    ["https://cdn.test/a.m4s", "https://cdn.test/b.m4s"]
+                );
+            }
         }
+        let live = r#"<MPD type="dynamic"><Period><Representation id="v"/></Period><Period><Representation id="v"/></Period></MPD>"#;
+        assert!(parse_mpd(live, "https://cdn.test/manifest.mpd")
+            .unwrap_err()
+            .contains("multi-period"));
+    }
+
+    #[test]
+    fn multi_period_template_and_list_match_tracks_and_inline_period_inits() {
+        // Period 1: SegmentTemplate (number, fixed duration) under its own BaseURL.
+        // Period 2: no @start (follows Period 1), SegmentList with a different init.
+        // Period 3: SegmentTemplate + SegmentTimeline reusing Period 1's init URL.
+        let xml = r#"<MPD type="static" mediaPresentationDuration="PT9S"><BaseURL>https://cdn.test/root/</BaseURL>
+<Period id="p1" start="PT0S" duration="PT4S"><BaseURL>main/</BaseURL>
+ <AdaptationSet contentType="video" mimeType="video/mp4" codecs="avc1.64001f">
+  <SegmentTemplate timescale="1" duration="2" initialization="$RepresentationID$/init.mp4" media="$RepresentationID$/$Number$.m4s"/>
+  <Representation id="hi" bandwidth="3000000" height="720"/><Representation id="lo" bandwidth="800000" height="360"/>
+ </AdaptationSet>
+ <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="en" codecs="mp4a.40.2"><Representation id="en" bandwidth="128000"><SegmentTemplate duration="2" initialization="a-en/init.mp4" media="a-en/$Number$.m4s"/></Representation></AdaptationSet>
+ <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="ja" codecs="mp4a.40.2"><Representation id="ja" bandwidth="128000"><SegmentTemplate duration="2" initialization="a-ja/init.mp4" media="a-ja/$Number$.m4s"/></Representation></AdaptationSet>
+</Period>
+<Period id="ad"><BaseURL>https://ads.test/break/</BaseURL>
+ <AdaptationSet mimeType="video/mp4" codecs="avc1.4d401e"><Representation id="ad-hi" bandwidth="2500000" height="720"><SegmentList duration="1"><Initialization sourceURL="ad-init.mp4"/><SegmentURL media="ad1.m4s"/><SegmentURL media="ad2.m4s"/></SegmentList></Representation><Representation id="ad-lo" bandwidth="700000" height="360"><SegmentList duration="1"><Initialization sourceURL="ad-lo-init.mp4"/><SegmentURL media="lo1.m4s"/><SegmentURL media="lo2.m4s"/></SegmentList></Representation></AdaptationSet>
+ <AdaptationSet mimeType="audio/mp4" lang="ja"><Representation id="ad-ja" bandwidth="96000"><SegmentList duration="2"><Initialization sourceURL="ja-init.mp4"/><SegmentURL media="ja1.m4s"/></SegmentList></Representation></AdaptationSet>
+ <AdaptationSet mimeType="audio/mp4" lang="en"><Representation id="ad-en" bandwidth="96000"><SegmentList duration="2"><Initialization sourceURL="en-init.mp4"/><SegmentURL media="en1.m4s"/></SegmentList></Representation></AdaptationSet>
+</Period>
+<Period id="p2" start="PT6S"><BaseURL>main/</BaseURL>
+ <AdaptationSet contentType="video" mimeType="video/mp4"><Representation id="lo" bandwidth="800000" height="360"><SegmentTemplate timescale="10" initialization="$RepresentationID$/init.mp4" media="$RepresentationID$/t$Time$.m4s" presentationTimeOffset="60"><SegmentTimeline><S t="60" d="20" r="-1"/></SegmentTimeline></SegmentTemplate></Representation><Representation id="hi" bandwidth="3000000" height="720"><SegmentTemplate timescale="10" initialization="$RepresentationID$/init.mp4" media="$RepresentationID$/t$Time$.m4s" presentationTimeOffset="60"><SegmentTimeline><S t="60" d="20" r="-1"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet>
+ <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="en"><Representation id="en" bandwidth="128000"><SegmentTemplate duration="3" initialization="a-en/init.mp4" media="a-en/$Number$.m4s"/></Representation></AdaptationSet>
+</Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
+        assert_eq!(parsed.period_count, 3);
+        // Track pickers only offer the first Period's choices.
+        assert_eq!(representation_choices(&parsed).len(), 2);
+        assert_eq!(audio_choices(&parsed).len(), 2);
+        let first: Vec<_> = parsed
+            .representations
+            .iter()
+            .filter(|item| item.period == 0)
+            .cloned()
+            .collect();
+        let video = select_video(&first, 3_000_000, 720).unwrap();
+        let video = concat_period_parts(period_parts(&parsed, video).unwrap()).unwrap();
+        assert_eq!(
+            video.media,
+            [
+                "https://cdn.test/root/main/hi/1.m4s",
+                "https://cdn.test/root/main/hi/2.m4s",
+                "https://ads.test/break/ad-init.mp4",
+                "https://ads.test/break/ad1.m4s",
+                "https://ads.test/break/ad2.m4s",
+                "https://cdn.test/root/main/hi/init.mp4",
+                "https://cdn.test/root/main/hi/t60.m4s",
+                "https://cdn.test/root/main/hi/t80.m4s",
+            ]
+        );
+        assert_eq!(
+            video.init.as_deref(),
+            Some("https://cdn.test/root/main/hi/init.mp4")
+        );
+        assert_eq!(video.init_markers, vec![2, 5]);
+        assert_eq!(
+            video.media_durations,
+            vec![2.0, 2.0, 0.0, 1.0, 1.0, 0.0, 2.0, 2.0]
+        );
+        assert_eq!(video.media_ranges.len(), video.media.len());
+        // Audio follows the chosen language rather than document order.
+        let audio = select_audio(&first, "ja").unwrap();
+        let ja_parts = period_parts(&parsed, audio).unwrap();
+        assert_eq!(ja_parts[1].id, "ad-ja");
+        assert_eq!(
+            ja_parts[2].id, "en",
+            "only remaining audio continues the track"
+        );
+        let audio = select_audio(&first, "en").unwrap();
+        let audio = concat_period_parts(period_parts(&parsed, audio).unwrap()).unwrap();
+        assert_eq!(
+            audio.media,
+            [
+                "https://cdn.test/root/main/a-en/1.m4s",
+                "https://cdn.test/root/main/a-en/2.m4s",
+                "https://ads.test/break/en-init.mp4",
+                "https://ads.test/break/en1.m4s",
+                "https://cdn.test/root/main/a-en/init.mp4",
+                "https://cdn.test/root/main/a-en/1.m4s",
+            ]
+        );
+    }
+
+    #[test]
+    fn period_timing_inherits_start_and_presentation_duration() {
+        let xml = r#"<MPD type="static" mediaPresentationDuration="PT7S"><Period duration="PT2S"><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="1" media="a$Number$.m4s"/></Representation></Period><Period><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="1" media="b$Number$.m4s"/></Representation></Period><Period start="PT4S"><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="2" media="c$Number$.m4s"/></Representation></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/m.mpd").unwrap();
+        let counts: Vec<_> = parsed
+            .representations
+            .iter()
+            .map(|item| (item.period, item.media.len()))
+            .collect();
+        assert_eq!(counts, [(0, 2), (1, 2), (2, 2)]);
+        let stitched =
+            concat_period_parts(period_parts(&parsed, &parsed.representations[0]).unwrap())
+                .unwrap();
+        assert!(stitched.init_markers.is_empty());
+        assert_eq!(stitched.period_markers, vec![2, 4]);
+        assert_eq!(stitched.media_durations, vec![1.0, 1.0, 1.0, 1.0, 2.0, 1.0]);
     }
 
     #[test]
@@ -3492,6 +4145,10 @@ mod tests {
                 media: vec!["https://cdn.test/a0.m4s".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                period: 0,
+                init_markers: Vec::new(),
+                period_markers: Vec::new(),
+                whole_file: false,
             },
         );
         merge_representation(
@@ -3515,6 +4172,10 @@ mod tests {
                 ],
                 media_ranges: vec![None, None],
                 media_durations: vec![4.0, 4.0],
+                period: 0,
+                init_markers: Vec::new(),
+                period_markers: Vec::new(),
+                whole_file: false,
             },
         );
         let audio = audio.unwrap();
@@ -3545,6 +4206,10 @@ mod tests {
                 media: vec!["https://cdn.test/en-0.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                period: 0,
+                init_markers: Vec::new(),
+                period_markers: Vec::new(),
+                whole_file: false,
             },
         );
         merge_sub_track(
@@ -3565,6 +4230,10 @@ mod tests {
                 media: vec!["https://cdn.test/en-1.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                period: 0,
+                init_markers: Vec::new(),
+                period_markers: Vec::new(),
+                whole_file: false,
             },
         );
         assert_eq!(subs.len(), 1);

@@ -31,6 +31,8 @@ mod crypto_lite;
 #[cfg(feature = "full-core")]
 mod curl_import;
 #[cfg(feature = "full-core")]
+mod curl_slots;
+#[cfg(feature = "full-core")]
 mod download_worker;
 #[cfg(feature = "full-core")]
 mod duplicate;
@@ -77,6 +79,14 @@ mod player_thumbnail;
 mod power_action;
 use hls_client::profile_paths;
 #[cfg(feature = "full-core")]
+mod progress_facts;
+#[cfg(feature = "full-core")]
+mod progress_relay;
+#[cfg(feature = "full-core")]
+mod progress_writer;
+#[cfg(feature = "full-core")]
+mod range_cache;
+#[cfg(feature = "full-core")]
 mod recognize;
 use hls_client::runtime_log;
 #[cfg(feature = "full-core")]
@@ -95,6 +105,8 @@ mod store;
 mod subtitle_audio_source;
 #[cfg(feature = "full-core")]
 mod subtitle_translate;
+#[cfg(feature = "full-core")]
+mod task_control;
 #[cfg(feature = "full-core")]
 mod task_export;
 #[cfg(feature = "full-core")]

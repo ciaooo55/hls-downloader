@@ -1,11 +1,20 @@
 {
-  "source_baseline": "eb2364eb0a3cf7b49b101419bf7f4015a8840a88",
-  "status": "formal_release_published",
+  "source_baseline": "e0a2007a8f144cbc213243576732637fbe2803b6",
+  "status": "source_validated_pending_candidate_acceptance",
+  "current_source_iteration": {
+    "version": "7.0.7",
+    "date": "2026-11-17",
+    "record": "docs/architecture/source-integration-20261117.md",
+    "release_plan": "docs/validation/release-readiness-20261117.md",
+    "checks": "Windows Core 742, client/protocol 59, native UI 37; extension full suite 613 plus final bridge 30; explicit curl/FFmpeg 9; actual HLS 8 scenarios; strict Clippy and final development builds passed.",
+    "remaining": "Frozen-source candidate packaging, installer/upgrade/rollback, hosted Edge/Firefox, native business/media/software-scale and sustained download acceptance. Existing signing and physical-device/cloud-quality exclusions remain explicit.",
+    "published": false
+  },
   "historical_evidence": {
     "commit": "27fd2d06b8426356ded1372c31d11265ca4c436f",
     "command": "git show 27fd2d06:docs/validation/full-audit-20261027/current-evidence.json"
   },
-  "scope": "Public Native 7.0.6, tested source 1c1dc06b; formal_release records all seven successful same-source workflows, candidate-to-formal component identities, 7.0.5 upgrade/rollback acceptance and verified public assets. Earlier iterations and candidates retain their historical scope.",
+  "scope": "Current working source is 7.0.7 and has local source validation only. The formal_release section records the historical public 7.0.6 source 1c1dc06b and its seven workflows; those results do not validate the new 7.0.7 candidate. Each earlier iteration retains its own source and scope.",
   "source_iteration_20261114_sftp_identity": {
     "base_commit": "2cc36c9501acf0ebfaf086810794159d75925dde",
     "source_commit": "c2889635aeb26ad3be95d39e0373424a9b568c34",

@@ -4,14 +4,39 @@ use crate::{
     AvScanStatus, CoreCommand, CoreRuntime, CoreStore, EventEnvelope, MirrorStatus, TaskFailure,
     TaskSnapshot, TaskSpec,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+/// Active-progress snapshots of one task reach SQLite at most this often; a
+/// status or stage change is always written at once.
+pub(crate) const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_secs(5);
+/// Event sequences handed out without a SQLite write are covered by a
+/// reserved checkpoint, so a restart after a crash never reuses a sequence a
+/// subscriber may already have seen.
+const VOLATILE_SEQUENCE_RESERVE: u64 = 1024;
+
+#[derive(Debug, Clone)]
+struct PersistedProgress {
+    status: String,
+    stage: String,
+    at: Instant,
+}
 
 pub struct PersistentCore {
     runtime: CoreRuntime,
     store: CoreStore,
     event_notify: Arc<(Mutex<u64>, Condvar)>,
+    /// Last snapshot state written to SQLite per task.
+    persisted_progress: HashMap<String, PersistedProgress>,
+    /// Tasks whose in-memory snapshot is newer than their SQLite row.
+    volatile_tasks: BTreeSet<String>,
+    /// Highest sequence covered by the persisted event checkpoint.
+    reserved_sequence: u64,
+    /// Off-lock writer for periodic same-state progress rows (file-backed
+    /// stores only; see `progress_writer`).
+    progress_writer: Option<crate::progress_writer::ProgressWriter>,
 }
 
 impl PersistentCore {
@@ -62,7 +87,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(encoded)
     }
 
@@ -106,10 +131,48 @@ impl PersistentCore {
                 sequence: self.runtime.latest_sequence() + 1,
                 event,
             }];
+            let volatile = self.progress_is_volatile(&events[0].event);
+            // 同一活动状态下到期的周期写库交给写线程（文件库）；状态/阶段变化仍在锁内同步提交。
+            let deferred = !volatile
+                && self.progress_writer.is_some()
+                && self.progress_is_periodic(&events[0].event);
+            if volatile || deferred {
+                // 活动进度只进内存快照与事件环（同名事件、同一序号规则），SQLite 每任务
+                // 至多每 5 s 写一次；序号由预留检查点覆盖，崩溃重启后不会重用。
+                let sequence = events[0].sequence;
+                if sequence > self.reserved_sequence {
+                    let reserved = sequence.saturating_add(VOLATILE_SEQUENCE_RESERVE);
+                    self.store.reserve_event_sequence(reserved)?;
+                    self.reserved_sequence = reserved;
+                }
+                self.runtime.commit_progress(events[0].event.clone());
+                self.volatile_tasks.insert(task_id.clone());
+                if deferred {
+                    if let (Some(writer), crate::CoreEvent::TaskProgress { snapshot }) =
+                        (self.progress_writer.as_ref(), &events[0].event)
+                    {
+                        // 写线程只做带序号保护的 UPDATE：更新的同步写或删除总是优先。
+                        writer.submit(crate::store::ProgressRow {
+                            snapshot: snapshot.clone(),
+                            sequence,
+                        });
+                        self.persisted_progress.insert(
+                            snapshot.task_id.clone(),
+                            PersistedProgress {
+                                status: snapshot.status.clone(),
+                                stage: snapshot.stage.clone(),
+                                at: Instant::now(),
+                            },
+                        );
+                    }
+                }
+                self.notify_committed(&events);
+                return Ok(events);
+            }
             // 失败时运行态和事件环尚未改变；成功后才发布同一序号并唤醒订阅者。
             self.store.apply_events(&events)?;
             self.runtime.commit_progress(events[0].event.clone());
-            self.notify_committed(&events);
+            self.committed(&events);
             if state_changed {
                 crate::record_runtime_log(
                     "task_state_changed",
@@ -179,7 +242,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -200,7 +263,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -212,7 +275,7 @@ impl PersistentCore {
         // 单事件发布只改变事件环和序号；先提交数据库，无需复制整个运行态来回滚。
         self.store.apply_events(std::slice::from_ref(&envelope))?;
         let events = self.runtime.emit(envelope.event);
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -255,7 +318,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -275,7 +338,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -295,7 +358,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -368,7 +431,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(())
     }
 
@@ -404,6 +467,124 @@ impl PersistentCore {
         Arc::clone(&self.event_notify)
     }
 
+    /// Whether an UpdateProgress event may skip SQLite: the task is still in
+    /// the same active status/stage that was last written, and that write is
+    /// younger than [`PROGRESS_PERSIST_INTERVAL`].
+    fn progress_is_volatile(&self, event: &crate::CoreEvent) -> bool {
+        let crate::CoreEvent::TaskProgress { snapshot } = event else {
+            return false;
+        };
+        if !matches!(
+            snapshot.status.as_str(),
+            "downloading" | "processing" | "merging" | "recording" | "checking"
+        ) {
+            return false;
+        }
+        self.persisted_progress
+            .get(&snapshot.task_id)
+            .is_some_and(|persisted| {
+                persisted.status == snapshot.status
+                    && persisted.stage == snapshot.stage
+                    && persisted.at.elapsed() < PROGRESS_PERSIST_INTERVAL
+            })
+    }
+
+    /// Whether a non-volatile UpdateProgress is only the periodic refresh of
+    /// an unchanged active state (status and stage equal to the last write,
+    /// interval elapsed) rather than a state change.
+    fn progress_is_periodic(&self, event: &crate::CoreEvent) -> bool {
+        let crate::CoreEvent::TaskProgress { snapshot } = event else {
+            return false;
+        };
+        matches!(
+            snapshot.status.as_str(),
+            "downloading" | "processing" | "merging" | "recording" | "checking"
+        ) && self
+            .persisted_progress
+            .get(&snapshot.task_id)
+            .is_some_and(|persisted| {
+                persisted.status == snapshot.status && persisted.stage == snapshot.stage
+            })
+    }
+
+    /// Waits until the progress writer committed every queued row. Used by an
+    /// orderly shutdown and by tests; the hot path never waits.
+    pub fn wait_progress_writer_idle(&self) {
+        if let Some(writer) = self.progress_writer.as_ref() {
+            writer.wait_idle();
+        }
+    }
+
+    /// Bookkeeping after events reached SQLite, then subscriber notification.
+    fn committed(&mut self, events: &[EventEnvelope]) {
+        let now = Instant::now();
+        for envelope in events {
+            match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot }
+                | crate::CoreEvent::TaskUpdated { snapshot }
+                | crate::CoreEvent::TaskProgress { snapshot } => {
+                    self.persisted_progress.insert(
+                        snapshot.task_id.clone(),
+                        PersistedProgress {
+                            status: snapshot.status.clone(),
+                            stage: snapshot.stage.clone(),
+                            at: now,
+                        },
+                    );
+                    self.volatile_tasks.remove(&snapshot.task_id);
+                    // 同步写入的状态更新；写线程中排队的旧行已无意义。
+                    if let Some(writer) = self.progress_writer.as_ref() {
+                        writer.discard(&snapshot.task_id);
+                    }
+                }
+                crate::CoreEvent::TaskDeleted { task_id } => {
+                    self.persisted_progress.remove(task_id);
+                    self.volatile_tasks.remove(task_id);
+                    if let Some(writer) = self.progress_writer.as_ref() {
+                        writer.discard(task_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(last) = events.last() {
+            // The store wrote this sequence as the checkpoint.
+            self.reserved_sequence = last.sequence;
+        }
+        self.notify_committed(events);
+    }
+
+    /// Writes every in-memory progress snapshot that is newer than its SQLite
+    /// row. Called on drop and available for an orderly shutdown.
+    pub fn flush_volatile_progress(&mut self) -> Result<(), String> {
+        if self.volatile_tasks.is_empty() {
+            return Ok(());
+        }
+        let snapshots: Vec<TaskSnapshot> = self
+            .volatile_tasks
+            .iter()
+            .filter_map(|task_id| self.runtime.snapshot(task_id).cloned())
+            .collect();
+        // Reserved sequences protect restart, but are not revisions of task rows.
+        // A future row revision would reject subsequent periodic writer updates.
+        let sequence = self.runtime.latest_sequence();
+        self.store.persist_task_snapshots(&snapshots, sequence)?;
+        let now = Instant::now();
+        for snapshot in &snapshots {
+            self.persisted_progress.insert(
+                snapshot.task_id.clone(),
+                PersistedProgress {
+                    status: snapshot.status.clone(),
+                    stage: snapshot.stage.clone(),
+                    at: now,
+                },
+            );
+        }
+        self.volatile_tasks.clear();
+        self.reserved_sequence = self.reserved_sequence.max(sequence);
+        Ok(())
+    }
+
     fn notify_committed(&self, events: &[EventEnvelope]) {
         let Some(last) = events.last() else {
             return;
@@ -427,7 +608,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
-        self.notify_committed(&events);
+        self.committed(&events);
         Ok(events)
     }
 
@@ -462,11 +643,30 @@ impl PersistentCore {
                 }
             }
         }
+        let progress_writer = store
+            .open_progress_writer_connection()
+            .and_then(crate::progress_writer::ProgressWriter::start);
         Ok(Self {
             event_notify: Arc::new((Mutex::new(runtime.latest_sequence()), Condvar::new())),
+            reserved_sequence: runtime.latest_sequence(),
+            progress_writer,
             runtime,
             store,
+            persisted_progress: HashMap::new(),
+            volatile_tasks: BTreeSet::new(),
         })
+    }
+}
+
+impl Drop for PersistentCore {
+    fn drop(&mut self) {
+        // 先让写线程写完排队行并退出（避免与下面的同步冲刷争用写锁），再冲刷内存中的最新快照。
+        if let Some(mut writer) = self.progress_writer.take() {
+            writer.shutdown();
+        }
+        if let Err(error) = self.flush_volatile_progress() {
+            crate::record_runtime_log("progress_flush_failed", serde_json::json!({"error": error}));
+        }
     }
 }
 
@@ -779,7 +979,22 @@ mod tests {
             let actual = core.handle(command).unwrap();
             assert_eq!(actual, expected);
             assert_eq!(core.tasks(), runtime.list_tasks());
-            assert_eq!(core.store().load_tasks().unwrap(), core.tasks());
+            // P0-1: steady active progress may stay in memory for up to
+            // PROGRESS_PERSIST_INTERVAL; the stored row then still has the same
+            // status and stage, and a flush makes the two identical.
+            let stored = core.store().load_tasks().unwrap();
+            if core.volatile_tasks.is_empty() {
+                assert_eq!(stored, core.tasks());
+            } else {
+                for (row, live) in stored.iter().zip(core.tasks()) {
+                    assert_eq!(
+                        (&row.task_id, &row.status, &row.stage),
+                        (&live.task_id, &live.status, &live.stage)
+                    );
+                }
+                core.flush_volatile_progress().unwrap();
+                assert_eq!(core.store().load_tasks().unwrap(), core.tasks());
+            }
             assert_eq!(core.latest_sequence(), runtime.latest_sequence());
             assert_eq!(*core.event_notify.0.lock().unwrap(), core.latest_sequence());
         }
@@ -1388,6 +1603,343 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    fn temp_db(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "hls-core-{name}-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn remove_db(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    fn active_progress(bytes: u64) -> CoreCommand {
+        CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: bytes,
+            total_bytes: Some(1 << 20),
+            speed_bytes_per_sec: 1024,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        }
+    }
+
+    fn stored_bytes(core: &PersistentCore) -> u64 {
+        core.store().load_tasks().unwrap()[0].downloaded_bytes
+    }
+
+    #[test]
+    fn steady_progress_is_published_in_memory_and_persisted_on_state_change() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        // The first active update changes status (queued -> downloading) and is written.
+        core.handle(active_progress(100)).unwrap();
+        assert_eq!(stored_bytes(&core), 100);
+        let before = core.latest_sequence();
+        let events = core.handle(active_progress(200)).unwrap();
+        // Same event name and sequence contract for subscribers ...
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence, before + 1);
+        assert!(matches!(
+            &events[0].event,
+            crate::CoreEvent::TaskProgress { snapshot } if snapshot.downloaded_bytes == 200
+        ));
+        assert_eq!(core.events_after(before, 16), events);
+        assert_eq!(*core.event_notify.0.lock().unwrap(), before + 1);
+        assert_eq!(core.snapshot("task-1").unwrap().downloaded_bytes, 200);
+        // ... but SQLite keeps the last written row, with the checkpoint reserved ahead.
+        assert_eq!(stored_bytes(&core), 100);
+        assert!(core.store().latest_sequence().unwrap() > before);
+        for bytes in 300..320 {
+            core.handle(active_progress(bytes)).unwrap();
+        }
+        assert_eq!(stored_bytes(&core), 100);
+        // A state change writes the newest in-memory bytes at once.
+        core.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "pause".into(),
+        })
+        .unwrap();
+        assert_eq!(stored_bytes(&core), 319);
+        assert_eq!(core.store().load_tasks().unwrap(), core.tasks());
+        assert!(core.volatile_tasks.is_empty());
+    }
+
+    #[test]
+    fn steady_progress_reaches_sqlite_after_the_persist_interval() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        core.handle(active_progress(100)).unwrap();
+        core.handle(active_progress(200)).unwrap();
+        assert_eq!(stored_bytes(&core), 100);
+        let aged = Instant::now()
+            .checked_sub(PROGRESS_PERSIST_INTERVAL + Duration::from_millis(10))
+            .unwrap();
+        core.persisted_progress.get_mut("task-1").unwrap().at = aged;
+        core.handle(active_progress(300)).unwrap();
+        assert_eq!(stored_bytes(&core), 300);
+        assert_eq!(
+            core.store().latest_sequence().unwrap(),
+            core.latest_sequence()
+        );
+        // A stage change inside the interval is written too.
+        let merging = CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 400,
+            total_bytes: Some(1 << 20),
+            speed_bytes_per_sec: 0,
+            stage: "merging".into(),
+            status: "merging".into(),
+        };
+        core.handle(merging).unwrap();
+        assert_eq!(stored_bytes(&core), 400);
+    }
+
+    #[test]
+    fn crash_after_volatile_progress_never_reuses_a_published_sequence() {
+        let path = temp_db("volatile-crash");
+        let published = {
+            let mut core = PersistentCore::open(&path).unwrap();
+            core.handle(CoreCommand::CreateTask { spec: test_spec() })
+                .unwrap();
+            core.handle(active_progress(100)).unwrap();
+            let mut last = 0;
+            for bytes in 200..210 {
+                last = core.handle(active_progress(bytes)).unwrap()[0].sequence;
+            }
+            // Suppress only the orderly snapshot flush. Close the writer and DB
+            // normally so this crash-state fixture leaks neither handles nor threads.
+            core.volatile_tasks.clear();
+            drop(core);
+            last
+        };
+        let mut reopened = PersistentCore::open(&path).unwrap();
+        assert!(reopened.latest_sequence() >= published);
+        assert_eq!(stored_bytes(&reopened), 100);
+        let next = reopened.handle(CoreCommand::Ping).unwrap();
+        assert!(next[0].sequence > published);
+        drop(reopened);
+        remove_db(&path);
+    }
+
+    #[test]
+    fn orderly_drop_flushes_volatile_progress() {
+        let path = temp_db("volatile-flush");
+        let published = {
+            let mut core = PersistentCore::open(&path).unwrap();
+            core.handle(CoreCommand::CreateTask { spec: test_spec() })
+                .unwrap();
+            core.handle(active_progress(100)).unwrap();
+            core.handle(active_progress(250)).unwrap()[0].sequence
+        };
+        let mut reopened = PersistentCore::open(&path).unwrap();
+        assert_eq!(stored_bytes(&reopened), 250);
+        assert_eq!(reopened.tasks()[0].downloaded_bytes, 250);
+        let next = reopened.handle(CoreCommand::Ping).unwrap();
+        assert!(next[0].sequence > published);
+        drop(reopened);
+        remove_db(&path);
+    }
+
+    fn age_persisted(core: &mut PersistentCore) {
+        let aged = Instant::now()
+            .checked_sub(PROGRESS_PERSIST_INTERVAL + Duration::from_millis(10))
+            .unwrap();
+        core.persisted_progress.get_mut("task-1").unwrap().at = aged;
+    }
+
+    fn row_sequence(path: &std::path::Path) -> (u64, u64) {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let (json, sequence): (String, i64) = connection
+            .query_row(
+                "SELECT snapshot_json, event_sequence FROM tasks WHERE task_id = 'task-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let snapshot: TaskSnapshot = serde_json::from_str(&json).unwrap();
+        (snapshot.downloaded_bytes, sequence as u64)
+    }
+
+    #[test]
+    fn flush_does_not_block_later_periodic_progress() {
+        let path = temp_db("flush-then-progress");
+        let mut core = PersistentCore::open(&path).unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        core.handle(active_progress(100)).unwrap();
+        core.handle(active_progress(200)).unwrap();
+        core.flush_volatile_progress().unwrap();
+        age_persisted(&mut core);
+        let sequence = core.handle(active_progress(300)).unwrap()[0].sequence;
+        core.wait_progress_writer_idle();
+        let row = row_sequence(&path);
+        drop(core);
+        remove_db(&path);
+        assert_eq!(row, (300, sequence));
+    }
+
+    #[test]
+    fn periodic_progress_write_runs_off_the_core_lock_on_the_writer_thread() {
+        let path = temp_db("progress-writer");
+        let mut core = PersistentCore::open(&path).unwrap();
+        assert!(
+            core.progress_writer.is_some(),
+            "file-backed Core starts the writer"
+        );
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        core.handle(active_progress(100)).unwrap();
+        core.handle(active_progress(200)).unwrap(); // volatile, reserves sequences
+        age_persisted(&mut core);
+        // Another connection holds the SQLite write lock: a synchronous write
+        // would now wait for the busy timeout. The periodic write must not.
+        let blocker = rusqlite::Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = Instant::now();
+        let events = core.handle(active_progress(300)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "periodic progress waited on SQLite under the Core lock"
+        );
+        let sequence = events[0].sequence;
+        assert_eq!(core.snapshot("task-1").unwrap().downloaded_bytes, 300);
+        assert!(
+            core.store().latest_sequence().unwrap() >= sequence,
+            "sequence reserved before publish"
+        );
+        blocker.execute_batch("COMMIT").unwrap();
+        drop(blocker);
+        core.wait_progress_writer_idle();
+        assert_eq!(row_sequence(&path), (300, sequence));
+        assert_eq!(core.progress_writer.as_ref().unwrap().written(), 1);
+        // The persist interval restarted with the queued write.
+        let events = core.handle(active_progress(400)).unwrap();
+        core.wait_progress_writer_idle();
+        assert_eq!(row_sequence(&path).0, 300);
+        assert!(events[0].sequence > sequence);
+        drop(core);
+        // Orderly drop still flushes the newest in-memory bytes.
+        let reopened = PersistentCore::open(&path).unwrap();
+        assert_eq!(stored_bytes(&reopened), 400);
+        drop(reopened);
+        remove_db(&path);
+    }
+
+    #[test]
+    fn queued_periodic_row_never_overwrites_newer_state_or_resurrects_a_task() {
+        let path = temp_db("progress-writer-order");
+        let mut core = PersistentCore::open(&path).unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        core.handle(active_progress(100)).unwrap();
+        let stale = core.snapshot("task-1").unwrap().clone();
+        let stale_sequence = core.latest_sequence();
+        core.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "pause".into(),
+        })
+        .unwrap();
+        let paused = row_sequence(&path);
+        let logs_before = core.store().load_task_log("task-1", 500).unwrap();
+        // A row queued before the pause but written after it is ignored.
+        let mut writer = core.store().open_progress_writer_connection().unwrap();
+        let mut downloading = stale.clone();
+        downloading.downloaded_bytes = 150;
+        downloading
+            .log_tail
+            .push("downloading transfer 150/1048576".into());
+        let applied = crate::store::write_progress_rows(
+            &mut writer,
+            &[crate::store::ProgressRow {
+                snapshot: downloading.clone(),
+                sequence: stale_sequence,
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied, 0);
+        assert_eq!(row_sequence(&path), paused);
+        assert_eq!(core.store().load_tasks().unwrap()[0].status, "paused");
+        assert_eq!(
+            core.store().load_task_log("task-1", 500).unwrap(),
+            logs_before
+        );
+        // ... and a deleted task is not re-created by a late row.
+        core.handle(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "delete".into(),
+        })
+        .unwrap();
+        assert!(core.store().load_tasks().unwrap().is_empty());
+        let applied = crate::store::write_progress_rows(
+            &mut writer,
+            &[crate::store::ProgressRow {
+                snapshot: downloading,
+                sequence: u64::from(u32::MAX),
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied, 0);
+        assert!(core.store().load_tasks().unwrap().is_empty());
+        drop(writer);
+        drop(core);
+        remove_db(&path);
+    }
+
+    #[test]
+    fn writer_connection_and_core_connection_write_concurrently_without_busy_errors() {
+        let path = temp_db("progress-writer-busy");
+        let mut core = PersistentCore::open(&path).unwrap();
+        core.handle(CoreCommand::CreateTask { spec: test_spec() })
+            .unwrap();
+        core.handle(active_progress(100)).unwrap();
+        let snapshot = core.snapshot("task-1").unwrap().clone();
+        let base = core.latest_sequence();
+        let mut writer = core.store().open_progress_writer_connection().unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            let mut writes = 0u64;
+            let mut sequence = base;
+            while !thread_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                sequence += 1;
+                let mut snapshot = snapshot.clone();
+                snapshot.downloaded_bytes = sequence;
+                crate::store::write_progress_rows(
+                    &mut writer,
+                    &[crate::store::ProgressRow { snapshot, sequence }],
+                )
+                .unwrap();
+                writes += 1;
+                // The real writer commits batches between queue waits; a
+                // zero-gap loop only measures SQLite busy-handler fairness.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            writes
+        });
+        // Read-then-write transactions on the Core connection (settings,
+        // events) must wait for the writer instead of failing.
+        for index in 0..40 {
+            core.store_mut()
+                .set_setting("download_speed_limit_kib", index)
+                .unwrap();
+            core.handle(CoreCommand::Ping).unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(handle.join().unwrap() > 0);
+        drop(core);
+        remove_db(&path);
     }
 
     fn test_spec() -> TaskSpec {

@@ -68,6 +68,12 @@ impl CoreStore {
             connection,
             path: Some(path.to_path_buf()),
         };
+        // 文件库可能另有进度写线程的连接（见 `progress_writer`）。显式事务一律 IMMEDIATE：
+        // 先拿写锁（受 busy_timeout 等待），避免 WAL 下“先读后写”的延迟事务在另一连接提交后
+        // 直接返回 SQLITE_BUSY_SNAPSHOT 而不重试。单连接时行为与 DEFERRED 等价。
+        store
+            .connection
+            .set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         store.initialize(existing)?;
         mark("initialized");
         Ok(store)
@@ -238,6 +244,66 @@ impl CoreStore {
             .optional()
             .map(|value| value.unwrap_or(0).max(0) as u64)
             .map_err(|error| format!("read Core event checkpoint: {error}"))
+    }
+
+    /// Raises the persisted event checkpoint to `sequence` without writing any
+    /// event. Core uses it before handing out sequences for progress events
+    /// that skip SQLite, so a restart resumes above every sequence already
+    /// published. Never lowers the checkpoint.
+    pub(crate) fn reserve_event_sequence(&mut self, sequence: u64) -> Result<(), String> {
+        let value = i64::try_from(sequence)
+            .map_err(|_| "Core event sequence exceeds SQLite INTEGER range".to_string())?;
+        self.connection
+            .execute(
+                "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
+                 ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)",
+                params![value],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("reserve Core event checkpoint: {error}"))
+    }
+
+    /// Opens a second connection to the same database for the off-lock
+    /// progress writer. `None` for in-memory stores (no shared file).
+    pub(crate) fn open_progress_writer_connection(&self) -> Option<Connection> {
+        let path = self.path.as_ref()?;
+        let mut connection = Connection::open(path).ok()?;
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+            .ok()?;
+        connection.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
+        Some(connection)
+    }
+
+    /// Writes in-memory task snapshots that are newer than their rows (the
+    /// progress Core kept off the hot path). The checkpoint is only raised.
+    pub(crate) fn persist_task_snapshots(
+        &mut self,
+        snapshots: &[TaskSnapshot],
+        sequence: u64,
+    ) -> Result<(), String> {
+        if snapshots.is_empty() {
+            return Ok(());
+        }
+        let value = i64::try_from(sequence)
+            .map_err(|_| "Core event sequence exceeds SQLite INTEGER range".to_string())?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| format!("begin Core progress flush: {error}"))?;
+        for snapshot in snapshots {
+            upsert_task(&transaction, snapshot, sequence)?;
+        }
+        transaction
+            .execute(
+                "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
+                 ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)",
+                params![value],
+            )
+            .map_err(|error| format!("persist Core progress checkpoint: {error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("commit Core progress flush: {error}"))
     }
 
     pub fn apply_events(&mut self, events: &[EventEnvelope]) -> Result<(), String> {
@@ -956,6 +1022,74 @@ fn upsert_task(
         )
         .map_err(|error| format!("persist Core task {}: {error}", snapshot.task_id))?;
     Ok(())
+}
+
+/// One periodic active-progress row handed to the progress writer.
+#[derive(Debug, Clone)]
+pub(crate) struct ProgressRow {
+    pub snapshot: TaskSnapshot,
+    pub sequence: u64,
+}
+
+/// Writes periodic progress rows on the progress writer's own connection.
+///
+/// Each row only *updates* an existing task whose stored `event_sequence` is
+/// older than the row: a newer synchronous write (pause, failure, completion)
+/// or a deletion that happened after the row was queued always wins, so the
+/// off-lock write can never roll a task back or resurrect it. The log line is
+/// appended only when the row was applied, which keeps the log order equal to
+/// the event order. The event checkpoint is only raised (the sequences were
+/// already covered by the Core's reservation before they were published).
+pub(crate) fn write_progress_rows(
+    connection: &mut Connection,
+    rows: &[ProgressRow],
+) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("begin Core progress write: {error}"))?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64;
+    let mut applied = 0;
+    let mut highest = 0u64;
+    for row in rows {
+        let sequence = i64::try_from(row.sequence)
+            .map_err(|_| "Core event sequence exceeds SQLite INTEGER range".to_string())?;
+        let json = serde_json::to_string(&row.snapshot)
+            .map_err(|error| format!("encode Core task {}: {error}", row.snapshot.task_id))?;
+        let changed = transaction
+            .execute(
+                "UPDATE tasks SET snapshot_json = ?2, updated_at_ms = ?3, event_sequence = ?4 \
+                 WHERE task_id = ?1 AND event_sequence < ?4",
+                params![row.snapshot.task_id, json, now, sequence],
+            )
+            .map_err(|error| format!("persist Core task {}: {error}", row.snapshot.task_id))?;
+        if changed == 1 {
+            applied += 1;
+            highest = highest.max(row.sequence);
+            if let Some(line) = row.snapshot.log_tail.last() {
+                append_task_log(&transaction, &row.snapshot, "progress", line)?;
+            }
+        }
+    }
+    if applied > 0 {
+        transaction
+            .execute(
+                "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
+                 ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)",
+                params![highest as i64],
+            )
+            .map_err(|error| format!("persist Core progress checkpoint: {error}"))?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("commit Core progress write: {error}"))?;
+    Ok(applied)
 }
 
 fn append_task_log(

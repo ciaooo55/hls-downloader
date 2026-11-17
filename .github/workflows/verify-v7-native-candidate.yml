@@ -84,6 +84,14 @@ jobs:
         run: |
           python scripts/validation/verify_native_components.py --runtime "$env:HLS_TEST_RUNTIME" --report artifacts/candidate-native-regression/components.json
           if ($LASTEXITCODE -ne 0) { throw 'Dependency-gated native component regressions failed.' }
+      - name: Verify real HLS media through packaged curl transport
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $resources = Join-Path $env:HLS_TEST_RUNTIME 'app/resources'
+          python scripts/validation/verify_hls_streaming.py --engine "$resources/HLSDownloaderEngine.exe" --ffmpeg "$resources/ffmpeg.exe" --curl "$resources/tools/curl-impersonate/curl-impersonate.exe" --report artifacts/candidate-native-regression/hls-curl-media.json
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged curl HLS media regression failed.' }
       - name: Prepare protocol and media validation tools
         if: ${{ inputs.extended }}
         shell: pwsh

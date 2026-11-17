@@ -340,3 +340,9 @@ DASH XML 改造后的首次全套回归曾发现时间轴边界错误，原因�
 本轮临时资源未完全清除：旧 Core 提取副本约 15 MB，以及测试临时目录内两份共 28 字节的夹具仍保留。两次 PowerShell 清理均在执行前被自动审批以 `blocked by policy` 拒绝，没有更换工具或删除方式绕过；确切路径与预检记录见 `cleanup.json`、`cleanup-preflight.json`、`cleanup-temp-preflight.json`。没有本轮常驻 Core 或编译进程继续运行。
 
 随后按用户 2026-11-15 的源码整理要求，已删除 Rust target、Compose 与扩展可重建输出；上述小量残留再次被策略拒绝，仍明确保留。最新同步、Clippy 修正和整理范围见 [源码验证记录](idm-port-validation.md)，GitHub 已有 Release 不变。
+
+### 2026-11-16：浏览器身份传输的有界适配
+
+前述 HTTP worker `0x00590000`、收包 `0x005f37c0`、缓冲分配 `0x005f1ad0` 的有界接收思路继续适配到现有 Rust 路径。`fetch_via_curl_impersonate → Body::Curl → CurlBody::Read` 现通过有界管道按需交付解码正文，复用既有 net_policy 调用方，结束前核验进程成功；不再依赖完整正文临时文件。暂停、取消、范围提前结束和 Drop 都回收子进程与读取线程。凭据、代理和重定向仍由原有 Core 裁决，不引入 IDM 私有组件。
+
+状态为“已适配、定向验证通过”；每个响应仍有外部 curl 进程和一个读取线程，与原版内部 worker 的实现不同。实际 5 项 curl 回归、Clippy、线程/缓冲成本和未完成性能/成品验收见[评估快照验证记录](idm-port-validation.md#2026-11-16707-评估源码快照)。不把有界架构或源码思路相似等同于达到 IDM 性能。

@@ -1,5 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
-import { Tokens, WorkbenchIcon, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar } from "theme.slint";
+import { Tokens, WorkbenchIcon, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar, HotScrollView } from "theme.slint";
 export { Tokens, SegmentBlock } from "theme.slint";
 
 export { WorkbenchWindow, TaskRow, NavigationRow, TaskMenuRow, TaskColumn, ToolbarItem } from "workbench.slint";
@@ -23,7 +22,7 @@ export component ConfirmWindow inherits Window {
     min-width: 360px;
     min-height: 200px;
     preferred-width: 520px;
-    preferred-height: 400px;
+    preferred-height: 420px;
     // An opaque window surface is intentional.  The previous transparent
     // top-level window could be presented by Windows before its child panel
     // had a backing surface, producing a completely white/blank hot popup.
@@ -68,7 +67,7 @@ export component ConfirmWindow inherits Window {
         Panel {
             width: parent.width;
             height: parent.height;
-            border-radius: 14px;
+            border-radius: Tokens.card-radius;
         VerticalLayout {
             padding: 18px;
             spacing: 10px;
@@ -79,13 +78,18 @@ export component ConfirmWindow inherits Window {
                     horizontal-stretch: 1;
                     drag(dx, dy) => { root.move-window(dx, dy); }
                     HorizontalLayout {
-                        alignment: center;
-                        Text { text: "确认下载"; color: Tokens.ink; font-size: 17px; font-weight: 700; vertical-alignment: center; }
+                        spacing: 10px;
+                        Image { source: @image-url("../../assets/app-icon.png"); width: 20px; height: 20px; y: (parent.height - self.height) / 2; image-fit: contain; }
+                        Text { text: "确认下载"; color: Tokens.ink; font-size: 16px; font-weight: 700; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
-                        Text { text: root.remaining; color: Tokens.muted; font-size: 11px; visible: root.remaining != ""; vertical-alignment: center; }
+                        if root.remaining != "": Rectangle {
+                            width: remaining-text.preferred-width + 18px; height: 22px; y: (parent.height - self.height) / 2; border-radius: 11px; background: Tokens.accent-soft;
+                            remaining-text := Text { text: root.remaining; color: Tokens.accent; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center; }
+                        }
                     }
                 }
                 HotCloseButton {
+                    y: (parent.height - self.height) / 2;
                     enabled: !root.busy;
                     accessible-name: "关闭并保留浏览器下载";
                     clicked => { root.command("reject"); }
@@ -93,10 +97,11 @@ export component ConfirmWindow inherits Window {
             }
 
             // 显式绑定正文高度，展开详情时不能沿用折叠状态的滚动范围。
-            detail_scroll := ScrollView {
+            detail_scroll := HotScrollView {
                 min-height: 0px;
                 vertical-stretch: 1;
                 viewport-height: detail_content.min-height;
+                viewport-width: self.visible-width;
                 horizontal-scrollbar-policy: always-off;
                 vertical-scrollbar-policy: as-needed;
                 changed viewport-height => {
@@ -105,26 +110,34 @@ export component ConfirmWindow inherits Window {
                     }
                 }
                 detail_content := VerticalLayout {
+                    width: detail_scroll.visible-width;
                     height: self.min-height;
                     padding: 0px;
-                    spacing: 10px;
+                    // 只有展开详情时才可能出现滚动条，收起时内容与底部按钮右缘对齐。
+                    padding-right: root.details_expanded ? 10px : 0px;
+                    spacing: 8px;
                     Rectangle {
-                        height: 100px;
-                        border-radius: 12px;
+                        height: 88px;
+                        border-radius: Tokens.card-radius;
                         background: Tokens.surface-2;
+                        border-width: 1px;
+                        border-color: Tokens.hairline;
                         HorizontalLayout {
-                            padding: 12px;
+                            padding: 10px;
+                            padding-left: 12px;
                             spacing: 12px;
                             Rectangle {
                                 width: 40px;
                                 height: 40px;
-                                border-radius: 12px;
-                                background: Tokens.dark ? #263c58 : #e7f0fd;
-                                WorkbenchIcon { name: "running"; ink: Tokens.accent; width: 24px; height: 24px; x: 8px; y: 8px; }
+                                border-radius: Tokens.card-radius;
+                                private property <color> tint: root.category == "media" ? Tokens.media-tint : root.category == "archive" ? Tokens.archive-tint : root.category == "program" ? Tokens.accent : Tokens.muted;
+                                background: tint.with-alpha(Tokens.dark ? 0.18 : 0.12);
+                                animate background { duration: Tokens.motion-fast; }
+                                WorkbenchIcon { name: root.category == "media" || root.category == "program" || root.category == "archive" ? root.category : "file"; ink: parent.tint; width: 22px; height: 22px; x: 9px; y: 9px; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                spacing: 4px;
+                                spacing: 3px;
                                 FieldLabel { label: "文件名"; font-size: 10px; }
                                 HotLineEdit { text <=> root.filename; enabled: !root.busy; }
                                 Text { text: root.resource_meta; color: Tokens.muted; font-size: 11px; overflow: elide; }
@@ -133,9 +146,10 @@ export component ConfirmWindow inherits Window {
                     }
 
                     if root.duplicate_text != "" : Rectangle {
-                        height: 40px;
-                        border-radius: 7px;
-                        background: Tokens.dark ? #3a3021 : #fff7e8;
+                        height: 34px;
+                        border-radius: Tokens.card-radius;
+                        background: Tokens.warn-surface;
+                        border-width: 1px; border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.30 : 0.22);
                         HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
@@ -167,7 +181,7 @@ export component ConfirmWindow inherits Window {
 
                     Rectangle {
                         height: 28px;
-                        border-radius: 6px;
+                        border-radius: Tokens.control-radius;
                         background: detail_toggle.has-hover ? Tokens.surface-2 : transparent;
                         HorizontalLayout {
                             padding-left: 4px;
@@ -192,7 +206,7 @@ export component ConfirmWindow inherits Window {
 
                     if root.details_expanded : Rectangle {
                         height: 116px;
-                        border-radius: 8px;
+                        border-radius: Tokens.card-radius;
                         border-width: 1px;
                         border-color: Tokens.line;
                         background: Tokens.surface;
@@ -225,9 +239,10 @@ export component ConfirmWindow inherits Window {
             HorizontalLayout {
                 height: 36px;
                 spacing: 8px;
-                HotButton { label: "更多设置"; icon: "settings"; enabled: !root.busy; clicked => { root.command("more"); } }
+                // 三个按钮同为 36px，与右侧主按钮底边对齐。
+                HotButton { label: "更多设置"; icon: "settings"; height: 36px; enabled: !root.busy; clicked => { root.command("more"); } }
                 Rectangle { horizontal-stretch: 1; }
-                HotButton { label: "取消"; enabled: !root.busy; clicked => { root.command("reject"); } }
+                HotButton { label: "取消"; height: 36px; enabled: !root.busy; clicked => { root.command("reject"); } }
                 HotButton { label: root.busy ? "处理中…" : "开始下载"; height: 36px; min-width: 100px; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
             }
         }
@@ -241,9 +256,9 @@ export component ProgressWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 12px;
     min-width: 330px;
-    min-height: 224px;
+    min-height: 240px;
     preferred-width: 330px;
-    preferred-height: 224px;
+    preferred-height: 240px;
     background: Tokens.surface;
     always-on-top: true;
     no-frame: true;
@@ -266,7 +281,7 @@ export component ProgressWindow inherits Window {
     Panel {
         width: parent.width;
         height: parent.height;
-        border-radius: 10px;
+        border-radius: Tokens.card-radius;
         VerticalLayout {
             padding: 12px;
             spacing: 6px;
@@ -289,24 +304,26 @@ export component ProgressWindow inherits Window {
             Text { text: root.filename; color: Tokens.ink; font-size: 14px; font-weight: 600; overflow: elide; }
             Rectangle {
                 background: Tokens.surface-2;
-                border-radius: 8px;
+                border-radius: Tokens.card-radius;
                 min-height: 78px;
                 VerticalLayout {
                     padding: 10px;
                     spacing: 6px;
                     HorizontalLayout {
-                        Text { text: root.speed; color: Tokens.ink; font-size: root.processing ? 16px : 20px; font-weight: 600; }
-                        Rectangle { horizontal-stretch: 1; }
-                        Text { text: root.progress_known ? "\{Math.round(root.progress * 100)}%" : "大小未知"; color: Tokens.accent; font-size: 14px; font-weight: 600; vertical-alignment: bottom; }
+                        // 两侧文字字号不同时（合并中 / 大小未知）按行中线对齐，避免一高一低。
+                        Text { text: root.speed; color: Tokens.ink; font-size: root.processing ? 16px : 20px; font-weight: 600; vertical-alignment: center; overflow: elide; min-width: 0px; horizontal-stretch: 1; }
+                        Text { text: root.progress_known ? "\{Math.round(root.progress * 100)}%" : "大小未知"; color: root.progress_known ? Tokens.accent : Tokens.muted; font-size: root.progress_known ? 20px : 12px; font-weight: root.progress_known ? 700 : 500; vertical-alignment: center; }
                     }
                     Rectangle {
                         height: 6px;
                         border-radius: 3px;
                         background: Tokens.surface-3;
                         clip: true;
+                        // 不定进度的滑块限制在轨道内，避免在圆角端点外露出直角。
+                        property <length> sweep-x: Tokens.reduce-motion ? self.width * 0.35 : (self.width * 1.3) * Math.mod(animation-tick() / 1800ms, 1) - self.width * 0.3;
                         Rectangle {
-                            width: root.progress_known ? parent.width * Math.clamp(root.progress, 0, 1) : parent.width * 0.3;
-                            x: root.progress_known ? 0px : Tokens.reduce-motion ? parent.width * 0.35 : (parent.width + self.width) * Math.mod(animation-tick() / 1800ms, 1) - self.width;
+                            width: root.progress_known ? parent.width * Math.clamp(root.progress, 0, 1) : max(0px, min(parent.width, parent.sweep-x + parent.width * 0.3) - max(0px, parent.sweep-x));
+                            x: root.progress_known ? 0px : max(0px, parent.sweep-x);
                             height: parent.height;
                             border-radius: 3px;
                             background: Tokens.accent;
@@ -345,9 +362,11 @@ export component CompleteWindow inherits Window {
     always-on-top: true;
     no-frame: true;
     min-width: 330px;
-    min-height: 200px;
+    // 内容高度 156px（标题 24 + 卡片 64 + 按钮 28 + 间距/内边距）；提示行出现时再加高，
+    // 避免固定 180px 时按钮上方留出一块空白。
+    min-height: 156px + (root.power_hint != "" ? 26px : 0px) + (root.action_text != "" ? 26px : 0px);
     preferred-width: 330px;
-    preferred-height: 200px;
+    preferred-height: self.min-height;
     background: Tokens.surface;
     in property <string> window_title;
     in-out property <string> filename;
@@ -361,7 +380,7 @@ export component CompleteWindow inherits Window {
     Panel {
         width: parent.width;
         height: parent.height;
-        border-radius: 10px;
+        border-radius: Tokens.card-radius;
         VerticalLayout {
             padding: 12px;
             spacing: 8px;
@@ -372,7 +391,7 @@ export component CompleteWindow inherits Window {
                     drag(dx, dy) => { root.move-window(dx, dy); }
                     HorizontalLayout {
                         spacing: 8px;
-                        Rectangle { width: 20px; height: 20px; border-radius: 10px; background: Tokens.done;
+                        Rectangle { width: 20px; height: 20px; y: (parent.height - self.height) / 2; border-radius: 10px; background: Tokens.done;
                             WorkbenchIcon { name: "check"; ink: Tokens.surface; width: 14px; height: 14px; x: 3px; y: 3px; }
                         }
                         Text { text: "下载完成"; color: Tokens.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; }
@@ -381,22 +400,31 @@ export component CompleteWindow inherits Window {
                 }
                 HotCloseButton { width: 24px; height: 24px; accessible-name: "关闭下载完成窗口"; clicked => { root.command("hide_complete"); } }
             }
-            Text { text: root.filename; color: Tokens.ink; font-size: 14px; font-weight: 600; overflow: elide; }
-            Rectangle { height: 6px; border-radius: 3px; background: Tokens.done; }
-            HorizontalLayout {
-                Text { text: root.details; color: Tokens.muted; font-size: 11px; overflow: elide; }
-                Rectangle { horizontal-stretch: 1; }
-                Text { text: "100%"; color: Tokens.done; font-size: 11px; font-weight: 600; }
+            Rectangle {
+                height: 64px; border-radius: Tokens.card-radius; background: Tokens.success-surface;
+                HorizontalLayout {
+                    padding: 10px; spacing: 10px;
+                    Rectangle {
+                        width: 40px; height: 40px; y: (parent.height - self.height) / 2; border-radius: Tokens.card-radius; background: Tokens.surface;
+                        WorkbenchIcon { name: "file"; ink: Tokens.done; width: 20px; height: 20px; x: 10px; y: 10px; }
+                    }
+                    VerticalLayout {
+                        alignment: center; spacing: 3px;
+                        Text { text: root.filename; color: Tokens.ink; font-size: 13px; font-weight: 600; overflow: elide; }
+                        Text { text: root.details; color: Tokens.muted; font-size: 11px; overflow: elide; }
+                    }
+                }
             }
             if root.power_hint != "" : Text { text: root.power_hint; color: Tokens.warn; font-size: 11px; wrap: word-wrap; }
             if root.action_text != "" : Text { text: root.action_text; color: Tokens.fail; font-size: 11px; wrap: word-wrap; }
-            Rectangle { vertical-stretch: 1; min-height: 0px; }
             HorizontalLayout {
-                spacing: 8px;
-                HotButton { height: 28px; label: root.action_busy ? "处理中…" : "打开文件"; enabled: !root.action_busy; primary: true; clicked => { root.command("open_file"); } }
-                HotButton { height: 28px; label: "打开目录"; enabled: !root.action_busy; clicked => { root.command("open_folder"); } }
-                Rectangle { horizontal-stretch: 1; }
+                // 三个按钮时收紧间距，避免 330px 窗宽下右侧按钮越出内边距。
+                spacing: root.power_hint != "" ? 4px : 8px;
+                // 与确认窗、进度窗一致：次要操作在左，主操作靠右收尾。
                 if root.power_hint != "" : HotButton { height: 28px; label: "取消操作"; enabled: !root.action_busy; danger: true; clicked => { root.command("cancel_power"); } }
+                Rectangle { horizontal-stretch: 1; }
+                HotButton { height: 28px; label: "打开目录"; icon: "folder"; enabled: !root.action_busy; clicked => { root.command("open_folder"); } }
+                HotButton { height: 28px; label: root.action_busy ? "处理中…" : "打开文件"; icon: "file"; enabled: !root.action_busy; primary: true; clicked => { root.command("open_file"); } }
             }
         }
     }

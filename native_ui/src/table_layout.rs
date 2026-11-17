@@ -18,12 +18,12 @@ pub fn columns(viewport: f32) -> Vec<Column> {
         Column {
             id: "progress",
             label: "进度",
-            width: if compact { 100.0 } else { 180.0 },
+            width: if compact { 112.0 } else { 170.0 },
         },
         Column {
             id: "status",
             label: "状态",
-            width: if compact { 84.0 } else { 110.0 },
+            width: if compact { 84.0 } else { 116.0 },
         },
     ];
     if viewport >= 850.0 {
@@ -37,13 +37,13 @@ pub fn columns(viewport: f32) -> Vec<Column> {
         columns.push(Column {
             id: "size",
             label: "大小",
-            width: if compact { 92.0 } else { 110.0 },
+            width: if compact { 112.0 } else { 150.0 },
         });
     }
     columns.push(Column {
         id: "actions",
         label: "操作",
-        width: if compact { 88.0 } else { 100.0 },
+        width: if compact { 96.0 } else { 104.0 },
     });
     columns[0].width = viewport - columns.iter().map(|column| column.width).sum::<f32>();
     columns

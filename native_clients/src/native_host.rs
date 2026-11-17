@@ -1710,6 +1710,31 @@ mod tests {
         assert_eq!(status["status"], "pending");
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn media_push_with_secrets_fails_closed_without_dpapi_and_rejects_post() {
+        // 非 Windows 平台没有 DPAPI：带凭据的投送必须拒绝，不能把 Cookie/请求头以明文落库。
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let error = session
+            .dispatch(&json!({
+                "op":"media_push", "kind":"cast", "resource":{
+                    "url":"https://cdn.test/media", "request_method":"GET", "resource_kind":"dash",
+                    "cookie":"sid=private", "request_headers":{"Authorization":"Bearer private"},
+                    "request_contexts":{"https://cdn.test":{"cookie":"sid=scoped"}}
+                }
+            }))
+            .unwrap_err();
+        assert!(error.contains("DPAPI"), "{error}");
+        let rows = session.core.query_handoffs(None, None, false).unwrap();
+        assert!(rows
+            .iter()
+            .all(|row| !row.contains("private") && !row.contains("scoped")));
+        assert!(session.dispatch(&json!({"op":"media_push","kind":"cast","resource":{
+            "url":"https://cdn.test/media.m3u8", "request_method":"POST", "request_body":"once=1"
+        }})).unwrap_err().contains("非 GET"));
+    }
+
+    #[cfg(windows)]
     #[test]
     fn media_push_vaults_context_without_exposing_secrets_and_rejects_post() {
         let mut session = NativeHostSession::in_memory().unwrap();

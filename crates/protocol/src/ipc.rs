@@ -283,6 +283,8 @@ pub enum CorePipeResponse {
         #[serde(default = "default_true")]
         skip_ad_segments: bool,
         #[serde(default)]
+        hls_remux_ts_to_mp4: bool,
+        #[serde(default)]
         keep_temp_files: bool,
         #[serde(default)]
         default_user_agent: String,

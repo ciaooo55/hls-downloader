@@ -1832,10 +1832,10 @@ impl CoreCoordinator {
     }
 
     fn reuse_duplicate(&self, task_id: String, status: &str) -> Result<Vec<EventEnvelope>, String> {
-        let output_missing = self
-            .lock()?
-            .task_spec(&task_id)
-            .and_then(|spec| TaskPaths::for_task(&task_id, spec).ok())
+        // 先取出 spec 再释放 Core 锁；路径解析与成品存在性检查不在锁内进行。
+        let spec = self.lock()?.task_spec(&task_id).cloned();
+        let output_missing = spec
+            .and_then(|spec| TaskPaths::for_task(&task_id, &spec).ok())
             .map(|paths| !paths.final_output.exists())
             .unwrap_or(true);
         let action = crate::duplicate::suggest_duplicate_action(status, output_missing);
@@ -2291,7 +2291,12 @@ impl CoreCoordinator {
                 } else {
                     0
                 };
+                let relay_core = Arc::clone(&core);
+                // 结束事件的文件事实同样在取锁前采集（任务登记已随 worker 返回而注销）。
+                let _facts = crate::progress_facts::prepare_for(&core, &task_id);
                 let _ = core.lock().map(|mut core| {
+                    // 先应用中继中排队的最后一次周期进度，结束状态基于最新字节数。
+                    crate::progress_relay::flush_task_locked(&relay_core, &mut core, &task_id);
                     let current = core.snapshot(&task_id).cloned().unwrap_or_default();
                     let downloaded = current.downloaded_bytes;
                     let total = current.total_bytes;
@@ -2450,7 +2455,9 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
 fn current_progress(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> (u64, Option<u64>) {
     core.lock()
         .ok()
-        .and_then(|locked| {
+        .and_then(|mut locked| {
+            // 读取前先应用中继里该任务排队的周期进度，避免随后的状态变化把字节数写回旧值。
+            crate::progress_relay::flush_task_locked(core, &mut locked, task_id);
             locked
                 .snapshot(task_id)
                 .map(|task| (task.downloaded_bytes, task.total_bytes))
@@ -2480,6 +2487,19 @@ fn run_task_with_throttle(
     spec: TaskSpec,
     replay_json: String,
 ) -> Result<(), String> {
+    // 运行期间注册进程内控制令牌：引擎热路径不再每 50 ms 打开控制文件。
+    let _control_registration = TaskPaths::for_task(task_id, &spec)
+        .ok()
+        .map(|paths| crate::task_control::register(&paths.control));
+    // 运行期间登记任务路径：进度事件所需的文件事实由 worker 在取 Core 锁前采集。
+    let _facts_registration = TaskPaths::for_task(task_id, &spec).ok().map(|paths| {
+        crate::progress_facts::register(
+            crate::progress_facts::core_key(&core),
+            task_id,
+            paths,
+            &spec,
+        )
+    });
     if spec.local_source_path.is_some() {
         let paths = TaskPaths::for_task(task_id, &spec)?;
         paths.prepare()?;
@@ -2498,7 +2518,7 @@ fn run_task_with_throttle(
             let (downloaded, total) = current_progress(&core, task_id);
             mark_progress(&core, task_id, downloaded, total, "transfer", "downloading")?;
             let live = matches!(spec.resource_kind, crate::ResourceKind::Live);
-            let (skip_ads, download_subtitles, live_max) = {
+            let (skip_ads, download_subtitles, live_max, remux_ts_to_mp4) = {
                 let guard = core
                     .lock()
                     .map_err(|_| "v7 Core mutex poisoned".to_string())?;
@@ -2506,6 +2526,7 @@ fn run_task_with_throttle(
                     guard.store().setting_bool("skip_ad_segments", true)?,
                     guard.store().setting_bool("download_subtitles", true)?,
                     guard.store().setting_u64("live_record_max_minutes", 0)?,
+                    guard.store().setting_bool("hls_remux_ts_to_mp4", false)?,
                 )
             };
             let url = spec.url.clone();
@@ -2528,6 +2549,7 @@ fn run_task_with_throttle(
                 download_subtitles,
                 live_max_minutes: live_max,
                 progress: Some(progress.clone()),
+                remux_ts_to_mp4,
             };
             let replay_json = replay_json.clone();
             let merged = poll_media_progress(&core, task_id, &progress, live, move || {
@@ -2591,8 +2613,11 @@ fn run_task_with_throttle(
             let output = paths.output.clone();
             let control = paths.control.clone();
             let progress = paths.output.with_extension("progress.json");
+            // 任务连接数沿用 HTTP 的设置；服务器支持 REST STREAM 时分段并行，否则单连接。
+            let connections =
+                (spec.concurrency.max(1) as usize).min(crate::ftp_engine::MAX_FTP_CONNECTIONS);
             let _ = poll_media_progress(&core, task_id, &progress, false, move || {
-                crate::ftp_engine::download_ftp(&url, &output, &control, true)
+                crate::ftp_engine::download_ftp_with(&url, &output, &control, true, connections)
                     .map(|_| output.clone())
             })?;
             complete_payload(&core, task_id, &paths, &paths.output, &spec)
@@ -2758,14 +2783,16 @@ fn copy_local_source_payload(
             .write_all(&buffer[..count])
             .map_err(|error| error.to_string())?;
         copied = copied.saturating_add(count as u64);
-        mark_progress(
+        // 每 MiB 一次的复制进度经中继合并，不再逐块抢 Core 锁。
+        post_progress_speed(
             core,
             task_id,
             copied,
             Some(expected_size),
+            0,
             "transfer",
             "downloading",
-        )?;
+        );
     }
     ensure_publish_allowed(&paths.control)?;
     output.flush().map_err(|error| error.to_string())?;
@@ -2855,7 +2882,7 @@ fn run_http_file(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(progress) = read_progress(&paths.progress) {
-                    let _ = mark_progress_speed(
+                    post_progress_speed(
                         &core,
                         task_id,
                         progress.downloaded,
@@ -3082,17 +3109,48 @@ fn mark_progress_speed(
     stage: &str,
     status: &str,
 ) -> Result<(), String> {
-    core.lock()
-        .map_err(|_| "v7 Core mutex poisoned".to_string())?
-        .handle(CoreCommand::UpdateProgress {
-            task_id: task_id.into(),
-            downloaded_bytes: downloaded,
-            total_bytes: total,
-            speed_bytes_per_sec,
+    // 文件事实在取锁前采集，锁内的 progress_event 只读内存。
+    crate::progress_facts::refresh(crate::progress_facts::core_key(core), task_id);
+    let mut guard = core
+        .lock()
+        .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+    // 同步状态变化前先应用中继里排队的周期进度（同一把 Core 锁内），事件顺序与逐次同步写一致；
+    // 已持锁，顺带应用其他任务的排队样本。
+    crate::progress_relay::flush_task_locked(core, &mut guard, task_id);
+    crate::progress_relay::drain_locked(core, &mut guard);
+    guard.handle(CoreCommand::UpdateProgress {
+        task_id: task_id.into(),
+        downloaded_bytes: downloaded,
+        total_bytes: total,
+        speed_bytes_per_sec,
+        stage: stage.into(),
+        status: status.into(),
+    })?;
+    Ok(())
+}
+
+/// 周期进度：交给进度中继合并，worker 线程不阻塞等待全局 Core 锁（见 `progress_relay`）。
+fn post_progress_speed(
+    core: &Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    downloaded: u64,
+    total: Option<u64>,
+    speed_bytes_per_sec: u64,
+    stage: &str,
+    status: &str,
+) {
+    crate::progress_facts::refresh(crate::progress_facts::core_key(core), task_id);
+    crate::progress_relay::post(
+        core,
+        task_id,
+        crate::progress_relay::ProgressSample {
+            downloaded,
+            total,
+            speed: speed_bytes_per_sec,
             stage: stage.into(),
             status: status.into(),
-        })?;
-    Ok(())
+        },
+    );
 }
 
 fn output_policy(core: &Arc<Mutex<PersistentCore>>) -> (String, bool) {
@@ -3367,6 +3425,7 @@ fn finish_published_task(
         Err(error) => Err(error.clone()),
     };
     let mut recorded = false;
+    crate::progress_facts::refresh(crate::progress_facts::core_key(core), task_id);
     // 先持久化实际成品路径；只有记录成功，才能删除 published.path 恢复信息。
     match core.lock() {
         Ok(mut guard) => {
@@ -3464,6 +3523,8 @@ fn is_link_metadata(metadata: &fs::Metadata) -> bool {
 
 fn cleanup_task_metadata(paths: &TaskPaths) -> Result<(), String> {
     let dir = paths.task_dir();
+    // 删除前丢弃内存进度副本，任务结束注销时不能把已清理的进度文件写回来。
+    crate::task_control::forget_progress_dir(&dir);
     let Some(parent) = dir.parent() else {
         return Ok(());
     };
@@ -3548,6 +3609,7 @@ fn remove_owned_task_directory(paths: &TaskPaths, published: Option<&Path>) -> R
     if published.is_some_and(|path| logical_canonical(path).starts_with(logical_canonical(&dir))) {
         return Err("成品位于任务缓存目录内，请先将成品移出后再删除任务".into());
     }
+    crate::task_control::forget_progress_dir(&dir);
     remove_task_artifact(&dir)?;
     // 仅尝试移除空的任务容器；有其他任务时不会递归删除。
     let _ = fs::remove_dir(parent);
@@ -3584,6 +3646,9 @@ fn cleanup_completed_media(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.to_string()),
     };
+    // 检查点与播放字节优先级的内存副本随文件一起清理。
+    crate::range_cache::forget_dir(&task_dir);
+    crate::media::preview::forget_byte_priority(&task_dir);
     let mut first_error = None;
     for entry in entries {
         let result = (|| -> Result<(), String> {
@@ -3599,6 +3664,8 @@ fn cleanup_completed_media(
                     | "live-subtitles"
                     | "payload.downloading"
                     | "merged.mp4"
+                    | "merged.ts"
+                    | "merged.remux.log"
                     | "muxed.mp4"
                     | "init.mp4"
                     | "local.m3u8"
@@ -3668,12 +3735,7 @@ fn cleanup_completed_media(
 }
 
 fn ensure_publish_allowed(control: &Path) -> Result<(), String> {
-    match fs::read_to_string(control)
-        .unwrap_or_else(|_| "run".into())
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
+    match crate::task_control::read_word(control).as_str() {
         "pause" => Err("paused".into()),
         "cancel" => Err("canceled".into()),
         _ => Ok(()),
@@ -3892,7 +3954,7 @@ where
                     } else {
                         rate.sample(item.downloaded)
                     };
-                    let _ = mark_progress_speed(
+                    post_progress_speed(
                         core,
                         task_id,
                         item.downloaded,
@@ -3982,6 +4044,8 @@ pub(crate) fn task_throttle_context(
     task_id: &str,
     spec: &TaskSpec,
 ) -> Result<crate::net_policy::ThrottleContext, String> {
+    // 路径解析可能 canonicalize 本地源文件，放在取 Core 锁之前。
+    let control = TaskPaths::for_task(task_id, spec)?.control;
     let core = core
         .lock()
         .map_err(|_| "v7 Core mutex poisoned".to_string())?;
@@ -4011,7 +4075,7 @@ pub(crate) fn task_throttle_context(
         queue_limit_kib: profile.speed_limit_kib,
         task_id: task_id.to_string(),
         task_limit_kib: u64::from(spec.speed_limit_kib),
-        control: TaskPaths::for_task(task_id, spec)?.control,
+        control,
     })
 }
 
@@ -4328,13 +4392,10 @@ pub(crate) fn playable_http_total(paths: &TaskPaths, spec: &TaskSpec) -> Option<
     ) {
         return None;
     }
-    let checkpoint: Value = serde_json::from_str(
-        &fs::read_to_string(paths.task_dir().join("native-engine.ranges.json")).ok()?,
-    )
-    .ok()?;
-    let total = checkpoint["total"].as_u64().filter(|total| *total > 0)?;
-    if checkpoint["version"].as_u64() != Some(2)
-        || checkpoint["ranges"].as_array()?.is_empty()
+    let checkpoint = crate::range_cache::load_in(&paths.task_dir())?;
+    let total = checkpoint.total.filter(|total| *total > 0)?;
+    if checkpoint.version != Some(2)
+        || checkpoint.ranges.is_empty()
         || paths.output.metadata().ok()?.len() != total
     {
         return None;
@@ -5589,7 +5650,8 @@ struct Progress {
 }
 
 fn read_progress(path: &Path) -> Option<Progress> {
-    let value: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    let value: Value =
+        serde_json::from_str(&crate::task_control::read_progress_file(path)?).ok()?;
     Some(Progress {
         downloaded: value.get("downloaded")?.as_u64()?,
         total: value.get("total").and_then(Value::as_u64).unwrap_or(0),

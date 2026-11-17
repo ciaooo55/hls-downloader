@@ -1,5 +1,7 @@
 # 发布后源码验证记录
 
+> 本文保留各批次历史结果，含外部第五轮源码的补充说明。2026-11-17 合入后的实际 Windows 复验、采用清单与未验证项见 [外部源码整合记录](../architecture/source-integration-20261117.md)，历史数字不代表当前源码重新通过。
+
 日期：2026-11-16。正式发布版本仍为 [v7.0.6](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6)，受测发布源码为 `1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d`。本文记录在基线 `7636ad417afec41cce81cf078af0a40598db1fff` 上完成的后续源码修改，不能替代新成品的完整发布验收。
 
 ## 已落地修改
@@ -137,7 +139,7 @@ SIZE 已知时在写入前拒绝超界响应，短响应不再等最终回执才
 
 工作集约降 84%，但完成吞吐回退约 69.5%，且低于计划的 20 MiB/s 本地下载门槛，**本场景性能未通过**。存储阶段另做五轮诊断：32 MiB 本地写入、`fsync`、原子替换的中位数分别约 0.0121、0.6492、0.0013 s，记录在 `io-phases.json`。新路径增加成功返回前的数据同步；旧路径只将缓存写交给操作系统，不保证检查点对应数据已同步。同步是已经测出的成本，但此诊断不是最终下载的逐阶段跟踪，不能将全部回退精确归因于它。先前同为 1 MiB 写缓冲的 `after/` 吞吐中位数为 37.002 MiB/s，存在明显批间波动，不能选择较快一批代表最终结果；初始 64 KiB 结果保存在 `after-initial/`。不移除可靠写入保证来换数值，也不据此宣称网络提速。
 
-CPU 受 Windows 时钟粒度影响，不据此宣传降低百分比。上述单分片数据不能推广为多连接、真实 HTTPS、整机占用、启动或完整安装包表现，也没有达到 IDM 的运行对照证据。浏览器身份 curl 分支仍先整段落临时文件，本批只避免其后整段内存复制，该分支的网络过程限速/背压仍未完成。
+CPU 受 Windows 时钟粒度影响，不据此宣传降低百分比。上述单分片数据不能推广为多连接、真实 HTTPS、整机占用、启动或完整安装包表现，也没有达到 IDM 的运行对照证据。浏览器身份 curl 分支当时仍先整段落临时文件（后续已改为有界管道，见下文；2026-11-17 第五轮补充了边写边落盘、逐块限速、中途取消与身份不符不写入的测试）。
 
 ### 本批临时资源
 
@@ -149,7 +151,7 @@ CPU 受 Windows 时钟粒度影响，不据此宣传降低百分比。上述单�
 
 当前源码在独立环境的真实浏览器/Host/Core 接管、安装启动与升级、所有媒体变体和音画同步、其他完整性能场景及原版 IDM 同条件对照仍未执行。已实际验证此前两秒 DASH 视频/双轨及本批三秒 HLS 四种双轨夹具，不能推广为所有媒体或所有音画同步场景已验收。本批 HLS 单分片已有五轮前后采样且发现回退，不能宣称性能回退低于 5% 或达到 IDM。Firefox 永久安装仍需 Mozilla 签名。
 
-FTP 多连接/主动 PORT、DASH 多 Period、无 indexRange 的 SegmentBase 及外置索引尚未实现。嵌套索引沿用已确认的原版拒绝行为；畸形数据校验不作为待实现功能。SegmentList 显式字节范围及带 indexRange 的非嵌套 SegmentBase/sidx 现已实现。现有 FFmpeg 封装、DOM 浮窗、持久回执及额外协议功能按计划保留。
+（2026-11-17 更新：FTP 多连接、主动模式 EPRT/PORT 回退、DASH 点播多 Period、无 indexRange 的 SegmentBase 已在第四、五轮实现；外置 RepresentationIndex 仍未实现。）原记录：FTP 多连接/主动 PORT、DASH 多 Period、无 indexRange 的 SegmentBase 及外置索引尚未实现。嵌套索引沿用已确认的原版拒绝行为；畸形数据校验不作为待实现功能。SegmentList 显式字节范围及带 indexRange 的非嵌套 SegmentBase/sidx 现已实现。现有 FFmpeg 封装、DOM 浮窗、持久回执及额外协议功能按计划保留。
 
 ## 源码与发布文件的边界
 
@@ -158,3 +160,13 @@ FTP 多连接/主动 PORT、DASH 多 Period、无 indexRange 的 SegmentBase 及
 `.tool-cache/`、`artifacts/` 和依赖输出是本地忽略目录；下载文件、任务恢复数据、用户自有备选 UI 和加密凭据备份不能作为编译垃圾删除。清理记录保留实际结果，不将被策略拒绝的删除记录为成功。
 
 2026-11-15 整理结果：GitHub 只保留 `main` 这一条维护源码分支；10 个已发布 Release、94 个附件及 1 个未发布草稿保持原样。根目录 `site-cache/` 纳入项目忽略规则。旧 Rust target、Compose 构建目录和扩展输出此前已删除，后续编译按项目配置重建缓存。用户随后执行清理脚本，已复核 31 个指定旧目标均不存在，包括 `.tool-cache/idm-port` 和 `.tool-cache/test-tmp/idm-port`；之前的策略拒绝记录不再代表当前残留。依赖缓存、用户数据和原始验证证据保留。详细本地记录为 `artifacts/workspace-cleanup-20261115/`。
+
+## 2026-11-16：7.0.7 评估源码快照
+
+按用户最新要求，先导出包含未提交改动的完整评估源码 ZIP。基线为 `e0a2007a8f144cbc213243576732637fbe2803b6`，快照并不等同于该提交；包内逐文件哈希与整包 SHA-256 标识实际内容。本节补充前述历史验证，不将历史通过状态继承给当前完整产品。
+
+curl 正文已从整段临时文件改为有界管道；一个读取线程使用容量 1 的 64 KiB 分块通道，上层当前块及在途块同样有界，另有 256 KiB 线程栈和操作系统管道成本。保留请求凭据、方法、正文、代理及逐跳重定向，分离响应头与 trailer，按解码后的正文验证长度/限额，结束前检查子进程退出；Drop 停止并回收进程与线程。Windows 隐藏辅助控制台。评估打包前修复 Content-Range 长度加一的溢出并加入实际 curl 响应反例。该适配解决了先完整落盘才能交付读取器的结构问题，尚未据此宣称网络性能达标。
+
+本次实际执行：`cargo test --locked -p hls-native-shell --lib curl_transport -- --ignored --test-threads=1 --nocapture`，5 项通过、0 失败；覆盖凭据重试、截断、trailer、溢出、压缩 CRC/解码限额、暂停取消、信息响应、EOF 前交付和提前丢弃清理。随后 Core 全 targets Clippy 以 `-D warnings` 通过，沿用 CI 的 large_enum_variant、too_many_arguments、type_complexity 例外。日志为 `artifacts/idm-curl-release-20261116/source-review-curl.log` 与 `source-review-clippy.log`，副本收入评估 ZIP。Python 脚本 AST、版本 JSON、各模块 7.0.7 版本一致性及 `git diff --check` 通过。
+
+新增真实 HLS 的 `--curl` 路径和候选工作流步骤尚未运行；当前快照完整回归、独立浏览器/安装/UI 验收、最终性能、IDM 同条件比较及正式发布均未完成。前批已记录的 HLS 完成吞吐回退继续为未解决项，不以新管道实现推断它已消失。评估包保留现有全部源码和 UI，不包含依赖缓存、运行数据、外部 IDM 材料或安装成品。

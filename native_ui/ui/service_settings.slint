@@ -1,5 +1,5 @@
-import { ScrollView, LineEdit, ComboBox, CheckBox } from "std-widgets.slint";
-import { Tokens, HotButton } from "theme.slint";
+import { LineEdit } from "std-widgets.slint";
+import { Tokens, HotButton, HotCheckBox, FieldLabel, WorkbenchIcon, HotScrollView, HotComboBox } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component ServiceSettingsWindow inherits Window {
@@ -7,11 +7,13 @@ export component ServiceSettingsWindow inherits Window {
     title: root.mode == "subtitle" ? "字幕翻译设置" : "站点凭据";
     default-font-family: Tokens.type-face; default-font-size: 13px;
     background: Tokens.canvas;
-    preferred-width: 650px; preferred-height: 650px; min-width: 440px; min-height: 360px;
+    preferred-width: 650px; preferred-height: 700px; min-width: 440px; min-height: 360px;
     in property <string> mode;
     in property <bool> busy;
     in property <bool> loaded;
     in property <string> status;
+    // 页脚状态语气：info / success / warning / error，由 Rust 随状态文字一起设置。
+    in property <string> status-tone: "warning";
     in property <string> key-status;
     in-out property <string> provider: "dashscope";
     in-out property <string> workspace;
@@ -31,62 +33,105 @@ export component ServiceSettingsWindow inherits Window {
     in-out property <bool> clear-credential;
     in-out property <bool> default-cookie;
     callback action(string);
+    // 语言下拉显示中文名称，内部仍按语言代码保存（与 Core、浏览器插件一致）。
+    private property <[string]> language-codes: ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th"];
+    private property <[string]> language-names: ["自动检测", "中文", "英语", "日语", "韩语", "法语", "德语", "西班牙语", "俄语", "葡萄牙语", "意大利语", "阿拉伯语", "印尼语", "越南语", "泰语"];
+    private property <[string]> target-names: ["中文", "英语", "日语", "韩语", "法语", "德语", "西班牙语", "俄语", "葡萄牙语", "意大利语", "阿拉伯语", "印尼语", "越南语", "泰语"];
+    pure function language-index(code: string) -> int {
+        return code == "zh" ? 1 : code == "en" ? 2 : code == "ja" ? 3 : code == "ko" ? 4 : code == "fr" ? 5 : code == "de" ? 6 : code == "es" ? 7 : code == "ru" ? 8 : code == "pt" ? 9 : code == "it" ? 10 : code == "ar" ? 11 : code == "id" ? 12 : code == "vi" ? 13 : code == "th" ? 14 : 0;
+    }
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.mode == "subtitle" ? "字幕翻译" : "站点登录信息"; description: root.mode == "subtitle" ? "配置翻译服务、语言与字幕显示" : "管理 Cookie 与身份请求头，已存凭据不会回显"; icon: root.mode == "subtitle" ? "subtitle" : "security"; }
-        ScrollView {
+        HotScrollView {
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;
+            // 内容顶端对齐：窗口变高时不再把多余高度平均塞进标签与输入框之间。
+            // 每个“标签 + 控件”成组（6px），组与组之间 14px，标签统一用 FieldLabel。
             VerticalLayout {
-                padding: 24px; spacing: 14px;
-                if root.key-status != "": Text { text: root.key-status; color: Tokens.muted; wrap: word-wrap; }
-                if root.mode == "subtitle": VerticalLayout {
-                    spacing: 8px;
-                    Text { text: "服务提供方"; color: Tokens.muted; }
-                    ComboBox { height: Tokens.control-height; model: ["dashscope", "qwencloud"]; current-value <=> root.provider; enabled: root.loaded && !root.busy; }
-                    if root.provider == "dashscope": VerticalLayout {
-                        spacing: 5px;
-                        Text { text: "百炼业务空间 ID"; color: Tokens.muted; }
-                        LineEdit { height: Tokens.control-height; text <=> root.workspace; enabled: root.loaded && !root.busy; }
-                        ComboBox { height: Tokens.control-height; model: ["cn-beijing", "ap-southeast-1"]; current-value <=> root.region; enabled: root.loaded && !root.busy; }
-                    }
-                    Text { text: "API Key（留空保留已存密钥）"; color: Tokens.muted; }
-                    LineEdit { height: Tokens.control-height; text <=> root.api-key; input-type: password; enabled: root.loaded && !root.busy; }
-                    CheckBox { text: "清除已存 API Key"; checked <=> root.clear-key; enabled: root.loaded && !root.busy; }
-                    CheckBox { text: "启用在线字幕翻译"; checked <=> root.translation-enabled; }
+                padding: 24px; spacing: 14px; alignment: start;
+                if root.key-status != "": Rectangle {
+                    background: Tokens.info-surface; border-radius: Tokens.card-radius;
+                    // 与详情页诊断横幅同样带一圈同色系细边，浅色画布上不会“消失”。
+                    border-width: 1px; border-color: Tokens.accent.with-alpha(Tokens.dark ? 0.30 : 0.22);
                     HorizontalLayout {
-                        spacing: 8px;
-                        Text { text: "源语言"; color: Tokens.muted; vertical-alignment: center; }
-                        ComboBox { height: Tokens.control-height; model: ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th"]; current-value <=> root.source; }
-                        Text { text: "目标语言"; color: Tokens.muted; vertical-alignment: center; }
-                        ComboBox { height: Tokens.control-height; model: ["zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar", "id", "vi", "th"]; current-value <=> root.target; }
+                        padding: 12px; spacing: 10px;
+                        WorkbenchIcon { name: "info"; ink: Tokens.accent; width: 16px; height: 16px; y: 13px; }
+                        Text { text: root.key-status; color: Tokens.ink; font-size: 12px; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
                     }
-                    Text { text: "字幕偏移（秒，-30 至 30）"; color: Tokens.muted; }
-                    LineEdit { height: Tokens.control-height; text <=> root.offset; }
-                    CheckBox { text: "同时显示原文"; checked <=> root.show-source; }
-                    CheckBox { text: "预取可独立读取的音轨"; checked <=> root.prefetch; }
+                }
+                if root.mode == "subtitle": VerticalLayout {
+                    spacing: 14px; alignment: start;
+                    VerticalLayout { spacing: 6px; FieldLabel { label: "服务提供方"; } HotComboBox {
+                        // 显示产品名称，内部仍保存服务标识；Rust 重新读取配置时同步选中项。
+                        height: Tokens.control-height; model: ["阿里云百炼", "QwenCloud"]; enabled: root.loaded && !root.busy;
+                        property <string> bound: root.provider;
+                        current-index: root.provider == "qwencloud" ? 1 : 0;
+                        changed bound => { self.current-index = root.provider == "qwencloud" ? 1 : 0; }
+                        selected(value) => { root.provider = self.current-index == 1 ? "qwencloud" : "dashscope"; }
+                    } }
+                    if root.provider == "dashscope": HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "百炼业务空间 ID"; } LineEdit { height: Tokens.control-height; text <=> root.workspace; enabled: root.loaded && !root.busy; accessible-label: "百炼业务空间 ID"; } }
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "服务区域"; } HotComboBox {
+                            height: Tokens.control-height; model: ["华北 2（北京）", "新加坡"]; enabled: root.loaded && !root.busy;
+                            property <string> bound: root.region;
+                            current-index: root.region == "ap-southeast-1" ? 1 : 0;
+                            changed bound => { self.current-index = root.region == "ap-southeast-1" ? 1 : 0; }
+                            selected(value) => { root.region = self.current-index == 1 ? "ap-southeast-1" : "cn-beijing"; }
+                        } }
+                    }
+                    VerticalLayout {
+                        spacing: 6px;
+                        FieldLabel { label: "API Key（留空保留已存密钥）"; }
+                        LineEdit { height: Tokens.control-height; text <=> root.api-key; input-type: password; enabled: root.loaded && !root.busy; accessible-label: "API Key"; }
+                        HotCheckBox { text: "清除已存 API Key"; checked <=> root.clear-key; enabled: root.loaded && !root.busy; }
+                    }
+                    Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Tokens.line; } }
+                    HotCheckBox { text: "启用在线字幕翻译"; checked <=> root.translation-enabled; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "源语言"; } HotComboBox {
+                            height: Tokens.control-height; model: root.language-names; min-width: 104px;
+                            property <string> bound: root.source;
+                            current-index: root.language-index(root.source);
+                            changed bound => { self.current-index = root.language-index(root.source); }
+                            selected(value) => { root.source = root.language-codes[self.current-index]; }
+                        } }
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "目标语言"; } HotComboBox {
+                            // 目标语言不含“自动检测”：列表从语言表第 2 项开始。
+                            height: Tokens.control-height; model: root.target-names; min-width: 104px;
+                            property <string> bound: root.target;
+                            current-index: max(0, root.language-index(root.target) - 1);
+                            changed bound => { self.current-index = max(0, root.language-index(root.target) - 1); }
+                            selected(value) => { root.target = root.language-codes[self.current-index + 1]; }
+                        } }
+                        VerticalLayout { spacing: 6px; FieldLabel { label: "字幕偏移（秒）"; } LineEdit { height: Tokens.control-height; text <=> root.offset; min-width: 88px; placeholder-text: "-30 至 30"; accessible-label: "字幕偏移（秒，-30 至 30）"; } }
+                    }
+                    VerticalLayout {
+                        spacing: 2px;
+                        HotCheckBox { text: "同时显示原文"; checked <=> root.show-source; }
+                        HotCheckBox { text: "预取可独立读取的音轨"; checked <=> root.prefetch; }
+                    }
                 }
                 if root.mode == "credentials": VerticalLayout {
-                    spacing: 8px;
-                    CheckBox { text: "设置手动默认 Cookie"; checked <=> root.default-cookie; }
-                    if !root.default-cookie: VerticalLayout {
-                        spacing: 5px;
-                        Text { text: "站点域名（例如 media.example.com）"; color: Tokens.muted; }
-                        LineEdit { height: Tokens.control-height; text <=> root.host; }
-                        Text { text: "Authorization（留空不设置此头）"; color: Tokens.muted; }
-                        LineEdit { height: Tokens.control-height; text <=> root.authorization; input-type: password; }
-                        Text { text: "其他身份请求头（JSON 对象，留空不设置）"; color: Tokens.muted; }
-                        LineEdit { height: Tokens.control-height; text <=> root.identity-headers; input-type: password; placeholder-text: "{\"X-Playback-Token\":\"…\"}"; accessible-label: "其他身份请求头"; }
+                    spacing: 14px; alignment: start;
+                    HotCheckBox { text: "设置手动默认 Cookie"; checked <=> root.default-cookie; }
+                    if !root.default-cookie: VerticalLayout { spacing: 6px; FieldLabel { label: "站点域名（例如 media.example.com）"; } LineEdit { height: Tokens.control-height; text <=> root.host; accessible-label: "站点域名"; } }
+                    if !root.default-cookie: VerticalLayout { spacing: 6px; FieldLabel { label: "Authorization（留空不设置此头）"; } LineEdit { height: Tokens.control-height; text <=> root.authorization; input-type: password; accessible-label: "Authorization"; } }
+                    if !root.default-cookie: VerticalLayout { spacing: 6px; FieldLabel { label: "其他身份请求头（JSON 对象，留空不设置）"; } LineEdit { height: Tokens.control-height; text <=> root.identity-headers; input-type: password; placeholder-text: "{\"X-Playback-Token\":\"…\"}"; accessible-label: "其他身份请求头"; } }
+                    VerticalLayout {
+                        spacing: 6px;
+                        FieldLabel { label: "Cookie"; }
+                        LineEdit { height: Tokens.control-height; text <=> root.cookie; input-type: password; accessible-label: "Cookie"; }
+                        HotCheckBox { text: "清除该站点或默认 Cookie 凭据"; checked <=> root.clear-credential; }
                     }
-                    Text { text: "Cookie"; color: Tokens.muted; }
-                    LineEdit { height: Tokens.control-height; text <=> root.cookie; input-type: password; }
-                    CheckBox { text: "清除该站点或默认 Cookie 凭据"; checked <=> root.clear-credential; }
-                    Text { text: "请先在网络设置中保存该域名的站点规则。默认 Cookie 只用于已允许的站点。\n浏览器实际请求身份优先；已存凭据不会在界面、导出或配置中回显。"; color: Tokens.muted; wrap: word-wrap; }
+                    Text { text: "请先在网络设置中保存该域名的站点规则。默认 Cookie 只用于已允许的站点。\n浏览器实际请求身份优先；已存凭据不会在界面、导出或配置中回显。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
                 }
             }
         }
         DialogFooter {
-            status: root.status;
+            status: root.status; tone: root.status-tone;
             if root.mode == "subtitle": HotButton { label: "重新读取"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("reload"); } }
             HotButton { label: "关闭"; clicked => { root.action("close"); } }
             HotButton { label: root.busy ? "保存中…" : "保存"; icon: "save"; primary: true; enabled: root.loaded && !root.busy; clicked => { root.action("save"); } }

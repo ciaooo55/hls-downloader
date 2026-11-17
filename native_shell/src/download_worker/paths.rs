@@ -18,23 +18,8 @@ pub struct TaskPaths {
 
 impl TaskPaths {
     pub fn for_task(task_id: &str, spec: &TaskSpec) -> Result<Self, String> {
-        if task_id.is_empty() || task_id.contains(['/', '\\', ':']) || matches!(task_id, "." | "..")
-        {
-            return Err("invalid task directory identifier".into());
-        }
-        let root = if !spec.download_dir.trim().is_empty() {
-            PathBuf::from(&spec.download_dir)
-        } else if let Some(root) = std::env::var_os("HLS_V7_DOWNLOAD_DIR") {
-            PathBuf::from(root)
-        } else {
-            PathBuf::from("downloads")
-        };
-        let work_root = if spec.work_dir.trim().is_empty() {
-            root.clone()
-        } else {
-            PathBuf::from(&spec.work_dir)
-        };
-        let task_dir = work_root.join(".hls-tasks").join(task_id);
+        let task_dir = Self::task_dir_for(task_id, spec)?;
+        let root = Self::download_root(spec);
         let mut final_name = if spec.resource_kind == crate::ResourceKind::Torrent
             && !spec.torrent_selection.is_empty()
         {
@@ -95,6 +80,31 @@ impl TaskPaths {
         })
     }
 
+    fn download_root(spec: &TaskSpec) -> PathBuf {
+        if !spec.download_dir.trim().is_empty() {
+            PathBuf::from(&spec.download_dir)
+        } else if let Some(root) = std::env::var_os("HLS_V7_DOWNLOAD_DIR") {
+            PathBuf::from(root)
+        } else {
+            PathBuf::from("downloads")
+        }
+    }
+
+    /// The task's working directory, derived without touching the filesystem
+    /// (unlike [`Self::for_task`], which may canonicalize a local source).
+    pub(crate) fn task_dir_for(task_id: &str, spec: &TaskSpec) -> Result<PathBuf, String> {
+        if task_id.is_empty() || task_id.contains(['/', '\\', ':']) || matches!(task_id, "." | "..")
+        {
+            return Err("invalid task directory identifier".into());
+        }
+        let work_root = if spec.work_dir.trim().is_empty() {
+            Self::download_root(spec)
+        } else {
+            PathBuf::from(&spec.work_dir)
+        };
+        Ok(work_root.join(".hls-tasks").join(task_id))
+    }
+
     pub fn prepare(&self) -> Result<(), String> {
         if let Some(parent) = self.output.parent() {
             fs::create_dir_all(parent)
@@ -112,7 +122,8 @@ impl TaskPaths {
     }
 
     pub fn set_control(&self, value: &str) -> Result<(), String> {
-        fs::write(&self.control, value).map_err(|error| format!("write task control: {error}"))
+        // 运行中的任务同时更新进程内控制令牌；文件仍写入，供崩溃恢复和外部工具读取。
+        crate::task_control::set(&self.control, value)
     }
 
     pub fn task_dir(&self) -> PathBuf {

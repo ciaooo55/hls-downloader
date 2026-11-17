@@ -16,11 +16,11 @@ const ES_AWAYMODE_REQUIRED: u32 = 0x0000_0040;
 const ES_CONTINUOUS: u32 = 0x8000_0000;
 
 pub fn set_active(active: bool) {
-    if ACTIVE.swap(active, Ordering::SeqCst) == active {
-        return;
-    }
+    let changed = ACTIVE.swap(active, Ordering::SeqCst) != active;
+    #[cfg(not(windows))]
+    let _ = changed;
     #[cfg(windows)]
-    {
+    if changed {
         let Some(sender) = power_thread() else {
             if active {
                 ACTIVE.store(false, Ordering::SeqCst);

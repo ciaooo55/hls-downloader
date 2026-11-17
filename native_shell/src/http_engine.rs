@@ -1,7 +1,7 @@
 //! Range GET into one `payload.downloading`.
 //!
-//! No extra process and no TLS crate: loopback/http uses the same tiny
-//! TcpStream client as the core poller; Windows https uses WinHTTP.
+//! Loopback/http uses the small TCP client; Windows https uses WinHTTP.
+//! Browser identity requests use a bounded curl-impersonate response stream.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,16 +20,27 @@ use std::time::{Duration, Instant};
 const WRITE_BATCH: usize = 256 * 1024;
 const FILE_WRITE_BUFFER: usize = 1024 * 1024;
 const DURABLE_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
+// 持久检查点（payload sync_data + 记录 sync_all + 原子替换）代价高：实测 32 MiB fsync 约 0.65 s。
+// 达到 DURABLE_CHECKPOINT_BYTES 后，同一任务内全部 worker 合计至多每 DURABLE_CHECKPOINT_INTERVAL 提交一次；
+// 未同步量超过 DURABLE_CHECKPOINT_MAX_BYTES 时无条件提交，边播边下时保持按字节提交。
+// 只影响“何时登记”，不改变“先 flush/sync 再登记”的顺序，崩溃后最多重下未登记的部分。
+const DURABLE_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
+const DURABLE_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
 const ADAPTIVE_INITIAL_CONNECTIONS: usize = 2;
+// The connection pool is used only by the Windows WinHTTP transport (and tests).
+#[cfg_attr(not(windows), allow(dead_code))]
 const CONNECT_POOL_PER_KEY: usize = 8;
+#[cfg_attr(not(windows), allow(dead_code))]
 const CONNECT_POOL_TOTAL: usize = 32;
 
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Default)]
 struct IdleHandlePool {
     idle: HashMap<String, Vec<usize>>,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 impl IdleHandlePool {
     fn take(&mut self, key: &str) -> Option<usize> {
         let bucket = self.idle.get_mut(key)?;
@@ -93,6 +104,7 @@ fn proxy_route_identity_distinguishes_transports() {
     );
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn origin_connect_key(proxy: &str, host: &str, port: u16) -> String {
     format!("{proxy}|{host}|{port}")
 }
@@ -205,6 +217,13 @@ impl std::fmt::Display for EngineError {
 }
 
 pub fn read_control(path: &Path) -> Control {
+    // 已注册的运行任务直接读进程内令牌；控制文件每秒至多重读一次（见 task_control）。
+    match crate::task_control::current(path) {
+        Some(crate::task_control::PAUSE) => return Control::Pause,
+        Some(crate::task_control::CANCEL) => return Control::Cancel,
+        Some(_) => return Control::Run,
+        None => {}
+    }
     let text = fs::read_to_string(path).unwrap_or_default();
     match text.trim().to_ascii_lowercase().as_str() {
         "pause" => Control::Pause,
@@ -220,10 +239,8 @@ pub fn write_progress(path: &Path, downloaded: u64, total: u64, speed: f64, stat
         "speed": speed,
         "status": status,
     });
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, payload.to_string()).is_ok() {
-        let _ = fs::rename(tmp, path);
-    }
+    // 运行任务内的进度文件至多每秒落盘一次，进程内读者使用内存副本；终态立即落盘。
+    crate::task_control::publish_progress_file(path, &payload.to_string(), status != "downloading");
 }
 
 pub(crate) fn write_media_progress(
@@ -238,14 +255,12 @@ pub(crate) fn write_media_progress(
         "completed_segments": completed, "total_segments": if live { 0 } else { total },
         "status": if live { "recording" } else { "downloading" },
     });
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, payload.to_string()).is_ok() {
-        let _ = fs::rename(tmp, path);
-    }
+    let finished = !live && total > 0 && completed >= total;
+    crate::task_control::publish_progress_file(path, &payload.to_string(), finished);
 }
 
 pub(crate) fn write_media_merging(path: &Path) {
-    let Ok(text) = fs::read_to_string(path) else {
+    let Some(text) = crate::task_control::read_progress_file(path) else {
         return;
     };
     let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -253,10 +268,7 @@ pub(crate) fn write_media_merging(path: &Path) {
     };
     payload["status"] = "merging".into();
     payload["speed"] = 0.into();
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, payload.to_string()).is_ok() {
-        let _ = fs::rename(tmp, path);
-    }
+    crate::task_control::publish_progress_file(path, &payload.to_string(), true);
 }
 
 // 分片间隙和恢复下载的已有字节不能变成零速率闪烁或瞬时尖峰。
@@ -304,13 +316,16 @@ fn active_ranges_path(progress: &Path) -> PathBuf {
 
 fn write_active_ranges(progress: &Path, ranges: &[(u64, u64)]) {
     let path = active_ranges_path(progress);
-    let tmp = path.with_extension("json.tmp");
     let payload = serde_json::json!({
         "ranges": ranges.iter().map(|(start, end)| serde_json::json!([start, end])).collect::<Vec<_>>(),
     });
-    if fs::write(&tmp, payload.to_string()).is_ok() {
-        let _ = crate::atomic_replace::replace_file(&tmp, &path);
-    }
+    crate::task_control::publish_progress_file(&path, &payload.to_string(), false);
+}
+
+fn remove_active_ranges(progress: &Path) {
+    let path = active_ranges_path(progress);
+    crate::task_control::forget_progress_file(&path);
+    let _ = fs::remove_file(path);
 }
 
 fn strong_etag(value: &str) -> String {
@@ -463,7 +478,8 @@ fn save_completed_ranges(job: &Job, ranges: &[(u64, u64)]) -> Result<(), EngineE
         .write(true)
         .open(&tmp)
         .map_err(|err| EngineErrorCode::Failed(format!("checkpoint open failed: {err}")))?;
-    file.write_all(payload.to_string().as_bytes())
+    let text = payload.to_string();
+    file.write_all(text.as_bytes())
         .map_err(|err| EngineErrorCode::Failed(format!("checkpoint write failed: {err}")))?;
     file.flush()
         .map_err(|err| EngineErrorCode::Failed(format!("checkpoint flush failed: {err}")))?;
@@ -471,12 +487,17 @@ fn save_completed_ranges(job: &Job, ranges: &[(u64, u64)]) -> Result<(), EngineE
         .map_err(|err| EngineErrorCode::Failed(format!("checkpoint sync failed: {err}")))?;
     drop(file);
     crate::atomic_replace::replace_file(&tmp, &path)
-        .map_err(|err| EngineErrorCode::Failed(format!("checkpoint replace failed: {err}")))
+        .map_err(|err| EngineErrorCode::Failed(format!("checkpoint replace failed: {err}")))?;
+    // 进程内读者（Core 进度绘制、边播边下）读内存副本，不再每次打开解析检查点文件。
+    crate::range_cache::record_written(&path, &text);
+    Ok(())
 }
 
 struct RangeCheckpoints {
     durable: Mutex<Vec<(u64, u64)>>,
     pending: Mutex<Vec<(u64, u64)>>,
+    // 最近一次真正同步并写出记录的时间，所有 worker 共用，用于限制提交频率。
+    last_commit: Mutex<Instant>,
 }
 
 impl RangeCheckpoints {
@@ -484,8 +505,37 @@ impl RangeCheckpoints {
         Self {
             durable: Mutex::new(durable),
             pending: Mutex::new(Vec::new()),
+            last_commit: Mutex::new(Instant::now()),
         }
     }
+
+    fn since_last_commit(&self) -> Duration {
+        self.last_commit
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .elapsed()
+    }
+
+    fn mark_committed(&self) {
+        *self
+            .last_commit
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Instant::now();
+    }
+}
+
+/// 传输中的周期检查点是否应提交。`playback` 仅在字节门槛已满足、时间门槛未满足时才求值。
+fn durable_checkpoint_due(
+    unsynced: u64,
+    since_last_commit: Duration,
+    playback: impl FnOnce() -> bool,
+) -> bool {
+    if unsynced < DURABLE_CHECKPOINT_BYTES {
+        return false;
+    }
+    unsynced >= DURABLE_CHECKPOINT_MAX_BYTES
+        || since_last_commit >= DURABLE_CHECKPOINT_INTERVAL
+        || playback()
 }
 
 const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
@@ -572,6 +622,26 @@ fn curl_impersonate_exe() -> Option<PathBuf> {
     }
     None
 }
+
+/// The curl executable for one request. Tests route specific URL prefixes to a
+/// fake curl so the pipe/throttle/control paths run without the bundled tool.
+#[cfg_attr(not(test), allow(unused_variables))]
+fn curl_exe_for(url: &str) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        let overrides = TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((_, exe)) = overrides.iter().find(|(prefix, _)| url.starts_with(prefix)) {
+            return Some(exe.clone());
+        }
+    }
+    curl_impersonate_exe()
+}
+
+#[cfg(test)]
+static TEST_CURL_OVERRIDES: std::sync::Mutex<Vec<(String, PathBuf)>> =
+    std::sync::Mutex::new(Vec::new());
 
 fn curl_impersonate_near(dir: &Path) -> Option<PathBuf> {
     [
@@ -786,8 +856,8 @@ fn run_job_once(job: &Job, initial_response: Option<FetchResult>) -> Result<(), 
         || job.sequential
         || job.total == 0
     {
-        let _ = fs::remove_file(completed_ranges_path(job));
-        let _ = fs::remove_file(active_ranges_path(&job.progress));
+        let _ = crate::range_cache::remove(&completed_ranges_path(job));
+        remove_active_ranges(&job.progress);
         download_sequential(job, initial_response)
     } else {
         download_ranges(job)
@@ -1419,7 +1489,7 @@ fn download_sequential(
 }
 
 fn download_ranges(job: &Job) -> Result<(), EngineError> {
-    let _ = fs::remove_file(active_ranges_path(&job.progress));
+    remove_active_ranges(&job.progress);
     let total = job.total;
     if total == 0 {
         return download_sequential(job, None);
@@ -1441,12 +1511,12 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         match load_completed_ranges(job) {
             Some(ranges) => ranges,
             None => {
-                let _ = fs::remove_file(completed_ranges_path(job));
+                let _ = crate::range_cache::remove(&completed_ranges_path(job));
                 Vec::new()
             }
         }
     } else {
-        let _ = fs::remove_file(completed_ranges_path(job));
+        let _ = crate::range_cache::remove(&completed_ranges_path(job));
         Vec::new()
     };
     let already = covered_bytes(&loaded);
@@ -1472,7 +1542,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
             .with_file_name("playback-byte-priority")
             .exists()
         {
-            let _ = fs::remove_file(completed_ranges_path(job));
+            let _ = crate::range_cache::remove(&completed_ranges_path(job));
         }
         write_progress(&job.progress, total, total, 0.0, "done");
         return Ok(());
@@ -1549,10 +1619,8 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
             );
             write_active_ranges(&progress_path, &progress_scheduler.active_ranges());
             if let Some(root) = progress_control.parent() {
-                if let Some(position) = fs::read_to_string(root.join("playback-byte-priority"))
-                    .ok()
-                    .and_then(|text| text.trim().parse::<u64>().ok())
-                {
+                // 播放路径写入时同时更新内存值；文件每任务至多每秒重读一次。
+                if let Some(position) = crate::media::preview::byte_priority(root) {
                     progress_scheduler
                         .playback_priority
                         .store(position, Ordering::Relaxed);
@@ -1569,15 +1637,15 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     }
     stop.store(true, Ordering::SeqCst);
     let _ = progress.join();
-    let _ = fs::remove_file(active_ranges_path(&job.progress));
+    remove_active_ranges(&job.progress);
     if let Some(code) = failed.lock().unwrap_or_else(|err| err.into_inner()).take() {
         // 从零开始的下载遇到"服务器根本不支持 Range"时，退回单流整包下载：
         // 已启动的 worker 全部join 完毕，不会有并发写；download_sequential 会重建输出文件。
         // 这样用户至少能拿到文件（失去分段并发与断点续传），而不是拿着已到手的整包失败。
         if fresh_start && matches!(code, EngineErrorCode::RangeIgnored(_)) {
             check_job_control(job)?;
-            let _ = fs::remove_file(completed_ranges_path(job));
-            let _ = fs::remove_file(active_ranges_path(&job.progress));
+            let _ = crate::range_cache::remove(&completed_ranges_path(job));
+            remove_active_ranges(&job.progress);
             return download_sequential(job, fallback_response);
         }
         return Err(code.into_error());
@@ -1605,7 +1673,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         .with_file_name("playback-byte-priority")
         .exists()
     {
-        let _ = fs::remove_file(completed_ranges_path(job));
+        let _ = crate::range_cache::remove(&completed_ranges_path(job));
     }
     write_progress(&job.progress, total, total, 0.0, "done");
     Ok(())
@@ -2123,6 +2191,7 @@ fn persist_range_progress(
     let next = normalize_ranges(durable.iter().copied().chain(pending).collect());
     save_completed_ranges(job, &next)?;
     *durable = next;
+    completed.mark_committed();
     let elapsed = started.elapsed();
     if std::env::var_os("HLS_HTTP_IO_PROFILE").is_some() {
         eprintln!(
@@ -2148,7 +2217,7 @@ fn wait_before_range_retry(
     let delay_ms = if cfg!(test) {
         1
     } else {
-        200u64.saturating_mul(1u64 << failed_attempts.saturating_sub(1).min(3))
+        range_retry_delay_ms(failed_attempts, retry_jitter_seed())
     };
     let mut waited = 0u64;
     while waited < delay_ms {
@@ -2158,6 +2227,23 @@ fn wait_before_range_retry(
         waited += step;
     }
     Ok(())
+}
+
+/// 指数退避加抖动：基准 200/400/800/1600 ms，实际取 [基准, 1.5×基准]。
+/// 同一任务多个连接常因同一次网络抖动一起失败，固定间隔会让它们同步重连、再次同时触发限流。
+fn range_retry_delay_ms(failed_attempts: u32, seed: u64) -> u64 {
+    let base = 200u64.saturating_mul(1u64 << failed_attempts.saturating_sub(1).min(3));
+    let spread = base / 2;
+    base + seed % (spread + 1)
+}
+
+fn retry_jitter_seed() -> u64 {
+    use std::hash::{BuildHasher, Hash, Hasher};
+    // RandomState 每次构造带不同密钥；再混入线程与时间，不需要额外依赖。
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    thread::current().id().hash(&mut hasher);
+    Instant::now().hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(crate) fn extract_http_status(error: &str) -> Option<u16> {
@@ -2186,6 +2272,8 @@ pub(crate) fn retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
 }
 
+// Same shared range state as range_worker; bundling it would only move the arguments.
+#[allow(clippy::too_many_arguments)]
 fn fetch_range(
     job: &Job,
     file: &mut BufWriter<File>,
@@ -2302,14 +2390,11 @@ fn fetch_range(
                 "Content-Range response length mismatch".into(),
             ));
         }
-        // curl's file-backed response has already consumed the original tail.
-        // Splitting that transport cannot improve network completion time.
-        let splittable = !matches!(&fetched.body, Body::File { .. });
         progress
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .splittable = splittable;
-        if splittable && scheduler.split_minimum.is_some() {
+            .splittable = true;
+        if scheduler.split_minimum.is_some() {
             scheduler.wake.notify_all();
         }
         let mut reader = fetched.body;
@@ -2386,7 +2471,15 @@ fn fetch_range(
                 state.reserved_until = cursor;
             }
             downloaded.fetch_add(take as u64, Ordering::SeqCst);
-            if cursor.saturating_sub(durable_cursor) >= DURABLE_CHECKPOINT_BYTES {
+            if durable_checkpoint_due(
+                cursor.saturating_sub(durable_cursor),
+                completed.since_last_commit(),
+                || {
+                    job.control
+                        .parent()
+                        .is_some_and(crate::media::preview::has_byte_priority)
+                },
+            ) {
                 scheduler.note_storage_latency(persist_range_progress(
                     job, file, completed, start, cursor,
                 )?);
@@ -2473,15 +2566,7 @@ enum Body {
         remaining: Option<u64>,
     },
     Chunked(ChunkedReader<Box<Body>>),
-    /// curl-impersonate streams the entity straight to a temp file.  Reading it
-    /// back into RAM (the only option before this variant existed) turned a
-    /// multi-gigabyte media download into an equally large allocation, which
-    /// ends as an OOM kill mid-download.  The temp dir has to outlive the reader,
-    /// so the variant owns it and `Drop` removes it on every exit path.
-    File {
-        file: File,
-        temp_dir: PathBuf,
-    },
+    Curl(Box<CurlBody>),
     #[cfg(windows)]
     WinHttp(winhttp::WinHttpBody),
 }
@@ -2493,7 +2578,7 @@ impl Body {
             Self::Chunked(body) => body.reader.get_mut().detach_range_stop(),
             #[cfg(windows)]
             Self::WinHttp(body) => body.range_stop = None,
-            Self::File { .. } => {}
+            Self::Curl(body) => body.job.range_stop = None,
         }
     }
 }
@@ -2533,7 +2618,7 @@ impl Read for Body {
                 }
                 Ok(count)
             }
-            Self::File { file, .. } => file.read(buf),
+            Self::Curl(body) => body.read(buf),
             Self::Chunked(body) => body.read(buf),
             #[cfg(windows)]
             Self::WinHttp(body) => body.read(buf),
@@ -2654,13 +2739,147 @@ impl<R: Read> Read for ChunkedReader<R> {
     }
 }
 
-impl Drop for Body {
-    fn drop(&mut self) {
-        // Only the file-backed reader owns a temp dir; the other variants hold
-        // sockets and plain buffers that release themselves.
-        if let Self::File { temp_dir, .. } = self {
-            let _ = fs::remove_dir_all(temp_dir);
+/// One bounded reader lets the caller wait for data and observe task control.
+/// Closing the receiver and killing curl also releases a blocked send/read;
+/// Drop joins the reader, so redirects and abandoned tails leave no thread.
+struct CurlBody {
+    child: std::process::Child,
+    receiver: Option<std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>,
+    reader: Option<thread::JoinHandle<()>>,
+    job: Job,
+    dir: PathBuf,
+    buffer: Vec<u8>,
+    at: usize,
+    received: u64,
+    limit: Option<u64>,
+    expected: Option<u64>,
+    last_control: Instant,
+    idle_since: Instant,
+    finished: bool,
+    // 字段在 Drop::drop（结束子进程）之后才释放：名额覆盖整个进程生命周期。
+    _permit: crate::curl_slots::CurlPermit,
+}
+
+impl CurlBody {
+    fn check_control(&mut self) -> std::io::Result<()> {
+        if self.last_control.elapsed() >= Duration::from_millis(50) {
+            self.last_control = Instant::now();
+            check_job_control(&self.job)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            if fs::metadata(self.dir.join("headers")).is_ok_and(|meta| meta.len() > 64 * 1024) {
+                return Err(std::io::Error::other(
+                    "curl response headers exceed byte limit",
+                ));
+            }
         }
+        Ok(())
+    }
+
+    fn next_buffer(&mut self) -> std::io::Result<bool> {
+        loop {
+            self.check_control()?;
+            match self
+                .receiver
+                .as_ref()
+                .unwrap()
+                .recv_timeout(Duration::from_millis(50))
+            {
+                Ok(result) => {
+                    self.buffer = result?;
+                    self.at = 0;
+                    self.idle_since = Instant::now();
+                    return Ok(true);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.idle_since.elapsed() >= Duration::from_secs(60) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "curl response stalled",
+                        ));
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => loop {
+                    self.check_control()?;
+                    if let Some(status) = self.child.try_wait()? {
+                        if !status.success() {
+                            let error =
+                                fs::read_to_string(self.dir.join("stderr")).unwrap_or_default();
+                            return Err(std::io::Error::other(format!(
+                                "curl-impersonate transfer failed ({status}): {}",
+                                error.trim()
+                            )));
+                        }
+                        self.finished = true;
+                        return Ok(false);
+                    }
+                    if self.idle_since.elapsed() >= Duration::from_secs(60) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "curl did not exit",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                },
+            }
+        }
+    }
+}
+
+impl Read for CurlBody {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() || self.finished {
+            return Ok(0);
+        }
+        self.check_control()?;
+        if self.at == self.buffer.len() && !self.next_buffer()? {
+            if self.expected.is_some_and(|length| length != self.received) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "curl response truncated",
+                ));
+            }
+            return Ok(0);
+        }
+        let count = output.len().min(self.buffer.len() - self.at);
+        let received = self.received + count as u64;
+        if self.limit.is_some_and(|limit| received > limit) {
+            return Err(std::io::Error::other(format!(
+                "byte range response body exceeds {} bytes",
+                self.limit.unwrap()
+            )));
+        }
+        if self.expected.is_some_and(|length| received > length) {
+            return Err(std::io::Error::other(
+                "curl response exceeds expected length",
+            ));
+        }
+        output[..count].copy_from_slice(&self.buffer[self.at..self.at + count]);
+        self.at += count;
+        self.received = received;
+        // Callers may stop exactly at Content-Length/Content-Range. Validate
+        // EOF and process success before releasing that final byte range.
+        if self.expected == Some(received)
+            && (self.at != self.buffer.len() || self.next_buffer()?)
+        {
+            return Err(std::io::Error::other(
+                "curl response exceeds expected length",
+            ));
+        }
+        Ok(count)
+    }
+}
+
+impl Drop for CurlBody {
+    fn drop(&mut self) {
+        self.receiver.take();
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -2729,6 +2948,7 @@ impl Read for MediaResponse {
 /// `spec.url` selects the initial request identity; `request_url` may add validated
 /// LL-HLS delivery directives without losing that identity's exact URL headers.
 /// The callback consumes the response on this thread, where cancellation also interrupts I/O.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn with_media_response<R>(
     spec: &crate::TaskSpec,
     replay: &str,
@@ -2827,7 +3047,7 @@ fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, En
 }
 
 fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResult, EngineError>> {
-    curl_impersonate_exe()?;
+    curl_exe_for(&job.url)?;
     let replay = job_replay_json(job);
     let mut url = job.url.clone();
     let mut headers = headers_for_request(job, &url);
@@ -3188,11 +3408,10 @@ fn fetch_via_curl_impersonate(
     job: &Job,
     range: Option<&str>,
 ) -> Option<Result<FetchResult, EngineError>> {
-    let exe = curl_impersonate_exe()?;
+    let exe = curl_exe_for(&job.url)?;
     if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
         return None;
     }
-    // 逐跳入口已匹配域/路径并处理重试；底层传输不能再次重放而覆盖当前请求头。
     let headers = &job.headers;
     let dir = std::env::temp_dir().join(format!(
         "hls-curl-impersonate-{}-{}",
@@ -3207,37 +3426,40 @@ fn fetch_via_curl_impersonate(
     }
     let result = (|| {
         check_job_control(job)?;
-        let body_path = dir.join("body");
+        // 浏览器身份路径每个响应一个 curl 子进程：按任务（控制文件）与全局封顶，
+        // 超出上限的连接等待同任务的响应结束（等待期间照常响应暂停/取消）。
+        let permit = crate::curl_slots::acquire(
+            &job.control,
+            crate::curl_slots::per_task_limit(),
+            crate::curl_slots::GLOBAL_LIMIT,
+            || check_job_control(job),
+        )?;
         let header_path = dir.join("headers");
-        let status_path = dir.join("status");
-        let error_path = dir.join("stderr");
+        File::create(&header_path).map_err(|error| EngineError::Failed(error.to_string()))?;
+        let mut header_reader = BufReader::new(
+            File::open(&header_path).map_err(|error| EngineError::Failed(error.to_string()))?,
+        );
         let mut command = std::process::Command::new(exe);
         command
+            // Ignore user curlrc: redirects and credential scope belong to Core.
+            .arg("--disable")
             .arg("--compressed")
             .arg("--impersonate")
             .arg("chrome146")
             .arg("-sS")
             .arg("--connect-timeout")
             .arg("15")
-            // A total `--max-time` cap made every download above ~60 s on this
-            // fallback path abort mid-transfer.  The rest of the engine bounds stalls
-            // (Tcp read timeout, WinHttp 60 s receive timeout), so mirror that shape:
-            // abort only when the transfer stalls, never because it is merely long.
             .arg("--speed-time")
             .arg("30")
             .arg("--speed-limit")
             .arg("1024")
-            .arg("-D")
+            .arg("--dump-header")
             .arg(&header_path)
+            .arg("--suppress-connect-headers")
+            .arg("--no-buffer")
             .arg("-o")
-            .arg(&body_path)
-            .arg("-w")
-            .arg("%{http_code}");
+            .arg("-");
         command.arg("-A").arg(request_user_agent(headers));
-        if job.curl_body_limit.is_some() {
-            // 让既有进程等待循环能看到已解码正文，不能留在 curl 的写缓冲中。
-            command.arg("--no-buffer");
-        }
         for (key, value) in headers {
             if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
                 continue;
@@ -3258,101 +3480,154 @@ fn fetch_via_curl_impersonate(
             }
         }
         command.arg(&job.url);
-        // 输出写文件，避免等待退出时 stderr 管道填满；暂停/取消须能中止在途请求。
-        let status_file =
-            File::create(&status_path).map_err(|error| EngineError::Failed(error.to_string()))?;
-        let error_file =
-            File::create(&error_path).map_err(|error| EngineError::Failed(error.to_string()))?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let error_file = File::create(dir.join("stderr"))
+            .map_err(|error| EngineError::Failed(error.to_string()))?;
         let mut child = command
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::from(status_file))
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::from(error_file))
             .spawn()
             .map_err(|error| EngineError::Failed(error.to_string()))?;
         drop(command);
-        let exit = loop {
-            if let Err(error) = check_job_control(job) {
+        let mut stdout = child
+            .stdout
+            .take()
+            .expect("curl stdout was configured as piped");
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let reader = match thread::Builder::new()
+            .name("curl-response".into())
+            .stack_size(256 * 1024)
+            .spawn(move || loop {
+                let mut buffer = vec![0; 64 * 1024];
+                let result = match stdout.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        buffer.truncate(count);
+                        Ok(buffer)
+                    }
+                    Err(error) => Err(error),
+                };
+                let failed = result.is_err();
+                if sender.send(result).is_err() || failed {
+                    break;
+                }
+            }) {
+            Ok(reader) => reader,
+            Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error);
-            }
-            if let Some(limit) = job.curl_body_limit {
-                if fs::metadata(&body_path).is_ok_and(|meta| meta.len() > limit) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(EngineError::Failed(format!(
-                        "byte range response body exceeds {limit} bytes"
-                    )));
-                }
-            }
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    // 进程退出立即唤醒，避免给每个小分片固定增加一次轮询间隔。
-                    #[cfg(windows)]
-                    unsafe {
-                        use std::os::windows::io::AsRawHandle;
-                        windows_sys::Win32::System::Threading::WaitForSingleObject(
-                            child.as_raw_handle() as _,
-                            100,
-                        );
-                    }
-                    #[cfg(not(windows))]
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(EngineError::Failed(error.to_string()));
-                }
+                return Err(EngineError::Failed(error.to_string()));
             }
         };
-        drop(child);
-        if let Some(limit) = job.curl_body_limit {
-            if fs::metadata(&body_path).is_ok_and(|meta| meta.len() > limit) {
-                return Err(EngineError::Failed(format!(
-                    "byte range response body exceeds {limit} bytes"
-                )));
+        let mut body = CurlBody {
+            child,
+            receiver: Some(receiver),
+            reader: Some(reader),
+            job: job.clone(),
+            dir: dir.clone(),
+            buffer: Vec::new(),
+            at: 0,
+            received: 0,
+            limit: None,
+            expected: None,
+            last_control: Instant::now() - Duration::from_millis(50),
+            idle_since: Instant::now(),
+            finished: false,
+            _permit: permit,
+        };
+        // curl flushes each dumped header line. Keep headers/trailers separate
+        // from stdout, otherwise HTTP trailers become part of the media body.
+        // Informational responses cannot supply the final metadata.
+        let mut header_bytes = 0;
+        let (status, head) = loop {
+            let mut head = Vec::new();
+            loop {
+                let mut byte = [0];
+                body.check_control().map_err(|error| {
+                    check_job_control(job)
+                        .err()
+                        .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+                })?;
+                if header_reader
+                    .read(&mut byte)
+                    .map_err(|error| EngineError::Failed(error.to_string()))?
+                    == 0
+                {
+                    if let Some(status) = body
+                        .child
+                        .try_wait()
+                        .map_err(|error| EngineError::Failed(error.to_string()))?
+                    {
+                        let error = fs::read_to_string(dir.join("stderr")).unwrap_or_default();
+                        return Err(EngineError::Failed(format!(
+                            "curl response headers incomplete ({status}): {}",
+                            error.trim()
+                        )));
+                    }
+                    if body.idle_since.elapsed() >= Duration::from_secs(60) {
+                        return Err(EngineError::Failed("curl response headers stalled".into()));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                head.push(byte[0]);
+                header_bytes += 1;
+                if header_bytes > 64 * 1024 {
+                    return Err(EngineError::Failed(
+                        "curl response headers exceed byte limit".into(),
+                    ));
+                }
+                if head.ends_with(b"\r\n\r\n") || head.ends_with(b"\n\n") {
+                    break;
+                }
             }
-        }
-        // HTTP 200 只证明收到响应头；curl 非零退出仍可能表示正文截断，不能交给 HLS 当成完整分片。
-        if !exit.success() {
-            let error = fs::read_to_string(&error_path).unwrap_or_default();
-            return Err(EngineError::Failed(format!(
-                "curl-impersonate transfer failed ({exit}): {}",
-                error.trim()
-            )));
-        }
-        let status = fs::read_to_string(&status_path)
-            .map_err(|error| EngineError::Failed(error.to_string()))?
-            .trim()
-            .parse::<u16>()
-            .unwrap_or(0);
-        let headers = fs::read_to_string(&header_path).unwrap_or_default();
-        let meta = parse_header_meta(&headers);
-        record_download_type(job, status, &headers);
-        // A body read failure must not look like an empty body: `unwrap_or_default`
-        // silently turned a partial transfer into a truncated-but-"successful" file.
-        // The entity itself stays on disk and is streamed (see `Body::File`), so only
-        // the open is checked here and nothing is buffered into RAM.
-        let body_file = File::open(&body_path).map_err(|error| {
-            EngineError::Failed(format!("curl-impersonate body read failed: {error}"))
-        })?;
-        // `--compressed` makes this branch request gzip/br and hand *decoded* bytes
-        // on disk, while the header dump still reports the compressed wire length.
-        // Reporting that wire length as the content length makes `download_sequential`
-        // reject every complete download from a compressing server, so the length of
-        // what curl actually wrote wins.
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let mut fields = head.lines().next().unwrap_or_default().split_whitespace();
+            let protocol = fields.next().unwrap_or_default();
+            let status = fields
+                .next()
+                .and_then(|field| field.parse::<u16>().ok())
+                .unwrap_or(0);
+            if !protocol.starts_with("HTTP/") || !(100..600).contains(&status) || status == 101 {
+                return Err(EngineError::Failed("invalid curl HTTP response".into()));
+            }
+            if status >= 200 {
+                break (status, head);
+            }
+        };
+        let meta = parse_header_meta(&head);
+        record_download_type(job, status, &head);
+        body.limit = job.curl_body_limit;
+        // --compressed returns decoded bytes, so the wire length cannot be
+        // applied to them. A Content-Range still bounds a requested entity.
         let content_length = if meta.content_encoding {
-            fs::metadata(&body_path)
-                .map(|file_meta| file_meta.len())
-                .ok()
+            None
         } else {
             meta.content_length
         };
+        body.expected = if request_method(job) == "HEAD" || matches!(status, 204 | 304) {
+            Some(0)
+        } else if let Some(length) = content_length {
+            Some(length)
+        } else if status == 206 {
+            parse_content_range(meta.content_range.as_deref().unwrap_or_default())
+                .map(|(start, end, _)| {
+                    (end - start)
+                        .checked_add(1)
+                        .ok_or_else(|| EngineError::Failed("Content-Range length overflow".into()))
+                })
+                .transpose()?
+        } else {
+            None
+        };
         Ok(FetchResult {
             status,
-            location: meta.location.clone(),
+            location: meta.location,
             content_range: meta.content_range,
             content_length,
             content_type: meta.content_type,
@@ -3361,12 +3636,7 @@ fn fetch_via_curl_impersonate(
             etag: meta.etag,
             last_modified: meta.last_modified,
             accept_ranges: meta.accept_ranges,
-            // `dir` moves into the reader: `Drop for Body` removes it once the entity
-            // has been consumed, including on the early `?` returns in the caller.
-            body: Body::File {
-                file: body_file,
-                temp_dir: dir.clone(),
-            },
+            body: Body::Curl(Box::new(body)),
         })
     })();
     if result.is_err() {
@@ -4917,6 +5187,61 @@ mod tests {
     }
 
     #[test]
+    fn durable_checkpoints_are_paced_but_bounded() {
+        let mib = 1024 * 1024;
+        let never = || panic!("playback must not be probed below the byte threshold");
+        assert!(!durable_checkpoint_due(
+            DURABLE_CHECKPOINT_BYTES - 1,
+            Duration::from_secs(60),
+            never
+        ));
+        // 字节门槛已到但距上次提交太近：不提交，除非处于边播边下。
+        assert!(!durable_checkpoint_due(
+            8 * mib,
+            Duration::from_millis(100),
+            || false
+        ));
+        assert!(durable_checkpoint_due(
+            8 * mib,
+            Duration::from_millis(100),
+            || true
+        ));
+        assert!(durable_checkpoint_due(
+            8 * mib,
+            DURABLE_CHECKPOINT_INTERVAL,
+            || false
+        ));
+        // 未同步量的硬上限不受时间门槛影响。
+        assert!(durable_checkpoint_due(
+            DURABLE_CHECKPOINT_MAX_BYTES,
+            Duration::ZERO,
+            || false
+        ));
+        let checkpoints = RangeCheckpoints::new(Vec::new());
+        thread::sleep(Duration::from_millis(5));
+        assert!(checkpoints.since_last_commit() >= Duration::from_millis(5));
+        checkpoints.mark_committed();
+        assert!(checkpoints.since_last_commit() < Duration::from_millis(5));
+    }
+
+    #[test]
+    fn range_retry_delay_keeps_exponential_floor_and_bounded_jitter() {
+        for (attempt, base) in [(1u32, 200u64), (2, 400), (3, 800), (4, 1600), (9, 1600)] {
+            assert_eq!(range_retry_delay_ms(attempt, 0), base);
+            assert_eq!(range_retry_delay_ms(attempt, base / 2), base + base / 2);
+            for seed in [1u64, 77, u64::MAX, retry_jitter_seed()] {
+                let delay = range_retry_delay_ms(attempt, seed);
+                assert!(
+                    (base..=base + base / 2).contains(&delay),
+                    "{attempt} {delay}"
+                );
+            }
+        }
+        let seeds: std::collections::HashSet<u64> = (0..8).map(|_| retry_jitter_seed()).collect();
+        assert!(seeds.len() > 1, "jitter seed must vary between calls");
+    }
+
+    #[test]
     fn adaptive_connections_ramp_gradually_and_back_off_immediately() {
         let controller = AdaptiveConnectionController::new(8);
         assert_eq!(controller.desired(), 2);
@@ -5903,6 +6228,73 @@ mod tests {
     }
 
     #[test]
+    fn registered_control_token_stops_a_stalled_transfer_without_polling_the_file() {
+        for action in ["pause", "cancel"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = reader.into_inner();
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc")
+                    .unwrap();
+                ready_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+            let (job, dir) = temp_job(&format!("http://{addr}"), true, 0, 1);
+            let registration = crate::task_control::register(&job.control);
+            let worker_job = job.clone();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = thread::spawn(move || {
+                let _ = done_tx.send(run_job(&worker_job));
+            });
+            ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fs::metadata(&job.output).map(|m| m.len()).unwrap_or(0) != 3 {
+                assert!(Instant::now() < deadline, "body read not reached");
+                thread::sleep(Duration::from_millis(5));
+            }
+            // Stalled for 600 ms: 50 ms file polling would have opened the
+            // control file about a dozen times.
+            thread::sleep(Duration::from_millis(600));
+            let reads = crate::task_control::file_reads(&job.control).unwrap();
+            assert!(reads <= 2, "control file read {reads} times while stalled");
+            let stopped_at = Instant::now();
+            crate::task_control::set(&job.control, action).unwrap();
+            let result = done_rx.recv_timeout(Duration::from_secs(3));
+            let latency = stopped_at.elapsed();
+            let _ = release_tx.send(());
+            server.join().unwrap();
+            worker.join().unwrap();
+            let error = result.expect("stalled read did not stop").unwrap_err();
+            assert!(
+                matches!(
+                    (&error, action),
+                    (EngineError::Pause, "pause") | (EngineError::Cancel, "cancel")
+                ),
+                "{action}: {error}"
+            );
+            assert!(
+                latency < Duration::from_millis(900),
+                "{action} took {latency:?}"
+            );
+            // The file is still written for crash recovery and external tools.
+            assert_eq!(fs::read_to_string(&job.control).unwrap(), action);
+            drop(registration);
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
     fn content_range_parser_accepts_rfc_and_bare_forms() {
         assert_eq!(parse_content_range("bytes 0-7/8"), Some((0, 7, Some(8))));
         assert_eq!(parse_content_range("BYTES 10-19/*"), Some((10, 19, None)));
@@ -5981,9 +6373,10 @@ mod tests {
 
     #[test]
     fn ipv6_loopback_range_redirect_keeps_credentials_on_same_origin() {
-        let mut transports = vec!["raw"];
         #[cfg(windows)]
-        transports.push("winhttp");
+        let transports = vec!["raw", "winhttp"];
+        #[cfg(not(windows))]
+        let transports = vec!["raw"];
         for transport in transports {
             let listener = TcpListener::bind("[::1]:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -7912,9 +8305,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    #[ignore = "Requires bundled curl-impersonate; isolated loopback fixture"]
     fn curl_transport_403_retries_replayed_cookies() {
-        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
         assert!(curl_impersonate_exe().is_some(), "bundled curl required");
         check_cloudflare_replay_retry("curl");
     }
@@ -8041,14 +8433,14 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    #[ignore = "Requires bundled curl-impersonate; isolated loopback fixture"]
     fn curl_transport_preserves_browser_cookies_and_rejects_truncated_body() {
-        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
         assert!(
             curl_impersonate_exe().is_some(),
             "bundled curl-impersonate required"
         );
-        for truncated in [false, true] {
+        for case in ["complete", "truncated", "trailer", "range-overflow"] {
+            let truncated = case == "truncated";
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
             let server = thread::spawn(move || {
@@ -8067,6 +8459,10 @@ mod tests {
                 }
                 let response: &[u8] = if truncated {
                     b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nok"
+                } else if case == "trailer" {
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nETag: initial\r\nTrailer: ETag\r\n\r\n2\r\nok\r\n0\r\nETag: trailer\r\n\r\n"
+                } else if case == "range-overflow" {
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-18446744073709551615/*\r\nConnection: close\r\n\r\nok"
                 } else {
                     b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
                 };
@@ -8091,21 +8487,29 @@ mod tests {
                 request.contains("referer: https://page.test/watch\r\n"),
                 "{request}"
             );
-            if truncated {
+            if case == "range-overflow" {
                 assert!(
-                    result.is_err(),
+                    matches!(result, Err(EngineError::Failed(ref error)) if error.contains("Content-Range length overflow"))
+                );
+            } else if truncated {
+                let mut fetched = result.unwrap();
+                assert!(
+                    fetched.body.read_to_end(&mut Vec::new()).is_err(),
                     "HTTP 200 with an incomplete body must fail"
                 );
             } else {
                 let mut fetched = result.unwrap();
                 assert_eq!(fetched.status, 200);
+                if case == "trailer" {
+                    assert_eq!(fetched.etag, "initial");
+                }
                 let mut body = Vec::new();
                 fetched.body.read_to_end(&mut body).unwrap();
                 assert_eq!(body, b"ok");
-                let Body::File { temp_dir, .. } = &fetched.body else {
-                    panic!("expected file body");
+                let Body::Curl(body) = &fetched.body else {
+                    panic!("expected curl stream");
                 };
-                let temporary = temp_dir.clone();
+                let temporary = body.dir.clone();
                 drop(fetched);
                 assert!(
                     !temporary.exists(),
@@ -8118,13 +8522,13 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    #[ignore = "Requires bundled curl-impersonate; isolated loopback fixture"]
     fn curl_transport_range_body_limit_uses_decoded_bytes_and_stops_before_eof() {
         use std::sync::mpsc;
-        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
         assert!(curl_impersonate_exe().is_some(), "bundled curl required");
         for case in [
             "gzip-valid",
+            "gzip-bad-checksum",
             "gzip-oversize",
             "chunked-oversize",
             "length-oversize",
@@ -8155,6 +8559,8 @@ mod tests {
                     31, 139, 8, 0, 0, 0, 0, 0, 2, 10, 51, 52, 50, 54, 49, 53, 51, 183, 176, 4, 0,
                     38, 57, 244, 203, 9, 0, 0, 0,
                 ];
+                let mut bad_checksum = gzip_valid.to_vec();
+                bad_checksum[20] ^= 1;
                 let (framing, body) = match case {
                     "gzip-valid" => (
                         "Content-Encoding: gzip\r\nContent-Length: 28\r\n",
@@ -8163,6 +8569,10 @@ mod tests {
                     "gzip-oversize" => (
                         "Content-Encoding: gzip\r\nContent-Length: 29\r\n",
                         gzip_oversize,
+                    ),
+                    "gzip-bad-checksum" => (
+                        "Content-Encoding: gzip\r\nContent-Length: 28\r\n",
+                        bad_checksum.as_slice(),
                     ),
                     "chunked-oversize" => {
                         ("Transfer-Encoding: chunked\r\n", &b"9\r\n123456789\r\n"[..])
@@ -8181,31 +8591,39 @@ mod tests {
             let worker_job = job.clone();
             let (done_tx, done_rx) = mpsc::channel();
             let worker = thread::spawn(move || {
-                let _ = done_tx.send(fetch_via_curl_impersonate(&worker_job, Some("bytes=0-7")));
+                let result = fetch_via_curl_impersonate(&worker_job, Some("bytes=0-7"))
+                    .unwrap()
+                    .and_then(|mut fetched| {
+                        let mut bytes = Vec::new();
+                        fetched
+                            .body
+                            .read_to_end(&mut bytes)
+                            .map_err(|error| EngineError::Failed(error.to_string()))?;
+                        Ok((fetched.content_length, bytes))
+                    });
+                let _ = done_tx.send(result);
             });
             ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
             let result = done_rx.recv_timeout(Duration::from_secs(3));
             let _ = release_tx.send(());
             server.join().unwrap();
             worker.join().unwrap();
-            let result = result
-                .expect("curl must reject oversize before EOF")
-                .expect("curl available");
+            let result = result.expect("curl must reject oversize before EOF");
             if case == "gzip-valid" {
-                let mut fetched = result.unwrap();
-                let mut body = Vec::new();
-                fetched.body.read_to_end(&mut body).unwrap();
+                let (length, body) = result.unwrap();
                 assert_eq!(body, b"12345678");
-                assert_eq!(fetched.content_length, Some(8));
+                assert_eq!(length, None);
             } else {
                 let error = match result {
                     Err(error) => error,
                     Ok(_) => panic!("{case}: oversized response accepted"),
                 };
                 assert!(
-                    error
-                        .to_string()
-                        .contains("byte range response body exceeds 8"),
+                    error.to_string().contains(if case == "gzip-bad-checksum" {
+                        "transfer failed"
+                    } else {
+                        "byte range response body exceeds 8"
+                    }),
                     "{case}: {error}"
                 );
             }
@@ -8215,10 +8633,9 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "Requires bundled curl-impersonate; run explicitly in Windows Sandbox"]
+    #[ignore = "Requires bundled curl-impersonate; isolated loopback fixture"]
     fn curl_transport_stalled_headers_and_body_obey_pause_and_cancel() {
         use std::sync::mpsc;
-        assert_eq!(std::env::var("HLS_VM_ACCEPTANCE").as_deref(), Ok("1"));
         assert!(
             curl_impersonate_exe().is_some(),
             "bundled curl-impersonate required"
@@ -8255,7 +8672,20 @@ mod tests {
                 let worker_job = job.clone();
                 let (done_tx, done_rx) = mpsc::channel();
                 let worker = thread::spawn(move || {
-                    let _ = done_tx.send(fetch_via_curl_impersonate(&worker_job, None));
+                    let result = fetch_via_curl_impersonate(&worker_job, None)
+                        .unwrap()
+                        .and_then(|mut fetched| {
+                            fetched
+                                .body
+                                .read_to_end(&mut Vec::new())
+                                .map(|_| ())
+                                .map_err(|error| {
+                                    check_job_control(&worker_job)
+                                        .err()
+                                        .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+                                })
+                        });
+                    let _ = done_tx.send(result);
                 });
                 ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
                 fs::write(&job.control, action).unwrap();
@@ -8264,10 +8694,7 @@ mod tests {
                 let _ = release_tx.send(());
                 server.join().unwrap();
                 worker.join().unwrap();
-                let error = match result
-                    .expect("stalled curl did not stop promptly")
-                    .expect("curl available")
-                {
+                let error = match result.expect("stalled curl did not stop promptly") {
                     Err(error) => error,
                     Ok(_) => panic!("control signal was ignored"),
                 };
@@ -8498,54 +8925,281 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    // The curl-impersonate path used to buffer the whole entity into RAM and only
-    // then hand it to the writer, so a multi-gigabyte download became an equally
-    // large allocation and the process was OOM-killed mid-transfer.  `Body::File`
-    // streams from disk instead; these two properties are what keep it honest.
+    #[cfg(windows)]
     #[test]
-    fn a_file_backed_body_streams_from_disk_and_cleans_up_its_temp_dir() {
-        let root = std::env::temp_dir().join(format!(
-            "hls-body-file-{}-{}",
-            std::process::id(),
-            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&root).unwrap();
-        // 320 KiB forces several 64 KiB reads, so the reader really is streaming
-        // rather than handing back the whole buffer in one call.
-        let data = vec![0x5au8; 320 * 1024];
-        fs::write(root.join("body"), &data).unwrap();
-        let mut body = Body::File {
-            file: File::open(root.join("body")).unwrap(),
-            temp_dir: root.clone(),
-        };
-        let mut copied = Vec::new();
-        body.read_to_end(&mut copied).unwrap();
-        assert_eq!(copied, data);
-        drop(body);
-        assert!(
-            !root.exists(),
-            "the temp dir must not outlive the reader that owns it"
+    #[ignore = "Requires bundled curl-impersonate; isolated loopback fixture"]
+    fn curl_transport_streams_before_eof_and_drop_releases_the_connection() {
+        use std::sync::mpsc;
+        assert!(curl_impersonate_exe().is_some(), "bundled curl required");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/media.ts", listener.local_addr().unwrap());
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            drop(reader);
+            stream.write_all(b"HTTP/1.1 103 Early Hints\r\nETag: ignored\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 6\r\nETag: final\r\n\r\nabc").unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            stream.read(&mut [0]).unwrap_or(0)
+        });
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut fetched = fetch_curl_follow(&job, None).unwrap().unwrap();
+            let mut first = [0; 3];
+            fetched.body.read_exact(&mut first).unwrap();
+            let Body::Curl(body) = &fetched.body else {
+                panic!("expected curl pipe");
+            };
+            let temporary = body.dir.clone();
+            let status = fetched.status;
+            let etag = fetched.etag.clone();
+            drop(fetched);
+            let _ = done_tx.send((status, etag, first, temporary.exists()));
+        });
+        let result = done_rx.recv_timeout(Duration::from_secs(3));
+        let _ = release_tx.send(());
+        let remaining = server.join().unwrap();
+        worker.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        let (status, etag, first, temporary_exists) =
+            result.expect("must stream before server EOF");
+        assert_eq!(status, 200);
+        assert_eq!(etag, "final");
+        assert_eq!(&first, b"abc");
+        assert!(!temporary_exists);
+        assert_eq!(
+            remaining, 0,
+            "early drop must close curl's server connection"
         );
     }
 
-    // Dropping the reader part-way is what happens on every `?` early return in
-    // `download_sequential`, so the cleanup has to hold on that path too.
+    /// Fake curl for the browser-identity pipe: the last argument's final path
+    /// segment names a case directory beside the script holding `head` (the
+    /// dumped headers), `chunk` × `count` (stdout body) and `tail` (`hang`
+    /// execs a long sleep so the pid stays the body writer; `wait` exits once
+    /// `release` exists). The script is written once so concurrent forks in
+    /// other tests cannot keep a write handle open on it (ETXTBSY).
+    #[cfg(unix)]
+    fn fake_curl_script() -> &'static Path {
+        static SCRIPT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        SCRIPT.get_or_init(|| {
+            use std::os::unix::fs::PermissionsExt;
+            let root = std::env::temp_dir().join(format!("hls-fake-curl-{}", std::process::id()));
+            fs::create_dir_all(&root).unwrap();
+            let script = root.join("curl");
+            fs::write(
+                &script,
+                "#!/bin/sh\n\
+                 h=; u=; p=\n\
+                 for a in \"$@\"; do [ \"$p\" = \"--dump-header\" ] && h=\"$a\"; p=\"$a\"; u=\"$a\"; done\n\
+                 d=\"$(dirname \"$0\")/${u##*/}\"\n\
+                 echo $$ > \"$d/pid\"\n\
+                 cat \"$d/head\" > \"$h\"\n\
+                 n=$(cat \"$d/count\"); i=0\n\
+                 while [ \"$i\" -lt \"$n\" ]; do cat \"$d/chunk\"; i=$((i+1)); done\n\
+                 case \"$(cat \"$d/tail\")\" in\n\
+                 hang) exec sleep 30 ;;\n\
+                 wait) while [ ! -f \"$d/release\" ]; do sleep 0.02; done ;;\n\
+                 esac\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+            thread::sleep(Duration::from_millis(100));
+            script
+        })
+    }
+
+    /// Native requests to this origin get 403, so `fetch` falls back to curl,
+    /// which the override routes to the fake script.
+    #[cfg(unix)]
+    fn fake_curl_case(head: &str, chunk: &[u8], count: usize, tail: &str) -> (String, PathBuf) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!(
+            "http://127.0.0.1:{}/",
+            listener.local_addr().unwrap().port()
+        );
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = reader.into_inner().write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+        let script = fake_curl_script();
+        let name = format!("case-{}", NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed));
+        let case = script.parent().unwrap().join(&name);
+        fs::create_dir_all(&case).unwrap();
+        fs::write(case.join("head"), head).unwrap();
+        fs::write(case.join("chunk"), chunk).unwrap();
+        fs::write(case.join("count"), count.to_string()).unwrap();
+        fs::write(case.join("tail"), tail).unwrap();
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap()
+            .push((origin.clone(), script.to_path_buf()));
+        (format!("{origin}{name}"), case)
+    }
+
+    #[cfg(unix)]
+    fn pid_alive(case: &Path) -> bool {
+        let pid = fs::read_to_string(case.join("pid")).unwrap();
+        std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[cfg(unix)]
+    fn wait_for_len(path: &Path, len: u64) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(10) {
+            if fs::metadata(path).is_ok_and(|meta| meta.len() >= len) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn a_file_backed_body_dropped_early_still_cleans_up_its_temp_dir() {
-        let root = std::env::temp_dir().join(format!(
-            "hls-body-file-early-{}-{}",
-            std::process::id(),
+    fn curl_pipe_streams_before_exit_and_rejects_short_entity() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 8192\r\nETag: \"native-test\"\r\n\r\n";
+        let (url, case) = fake_curl_case(head, &[7u8; 4096], 1, "wait");
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let output = job.output.clone();
+        let worker = thread::spawn(move || run_job(&job));
+        // Half the declared body is on disk while curl is still running.
+        assert!(
+            wait_for_len(&output, 4096),
+            "first chunk not streamed to disk"
+        );
+        assert!(pid_alive(&case), "curl must still be running");
+        assert!(!worker.is_finished());
+        // curl then exits cleanly with only half the declared entity.
+        fs::write(case.join("release"), "").unwrap();
+        let error = worker.join().unwrap().unwrap_err();
+        assert!(
+            error.to_string().contains("truncated") || error.to_string().contains("mismatch"),
+            "{error}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+        let _ = fs::remove_dir_all(case);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn curl_pipe_streams_full_entity_and_validates_exit() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 12288\r\nETag: \"native-test\"\r\n\r\n";
+        let (url, case) = fake_curl_case(head, &[3u8; 4096], 3, "wait");
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let output = job.output.clone();
+        let worker = thread::spawn(move || run_job(&job));
+        // The final bytes are held until curl's exit status is known, but the
+        // earlier ones are already written.
+        assert!(wait_for_len(&output, 8192), "body not streamed before exit");
+        assert!(pid_alive(&case));
+        fs::write(case.join("release"), "").unwrap();
+        worker.join().unwrap().unwrap();
+        assert_eq!(fs::read(&output).unwrap(), vec![3u8; 12288]);
+        fs::remove_dir_all(dir).unwrap();
+        let _ = fs::remove_dir_all(case);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn curl_pipe_obeys_task_rate_limit_per_chunk() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 49152\r\n\r\n";
+        let (url, case) = fake_curl_case(head, &[9u8; 8192], 6, "none");
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let task_id = format!(
+            "fake-curl-{}",
             NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("body"), b"0123456789").unwrap();
-        let mut body = Body::File {
-            file: File::open(root.join("body")).unwrap(),
-            temp_dir: root.clone(),
+        );
+        crate::net_policy::configure_scoped_limit(&format!("task:{task_id}"), 32);
+        let context = crate::net_policy::ThrottleContext {
+            task_id: task_id.clone(),
+            control: job.control.clone(),
+            ..Default::default()
         };
-        let mut one = [0u8; 4];
-        assert_eq!(body.read(&mut one).unwrap(), 4);
-        drop(body);
-        assert!(!root.exists(), "an early drop must still clean up");
+        let started = Instant::now();
+        let result = crate::net_policy::with_throttle_context(Some(context), || run_job(&job));
+        let elapsed = started.elapsed();
+        crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
+        result.unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), vec![9u8; 49152]);
+        // 48 KiB at 32 KiB/s from an empty bucket takes ~1.5 s; the fake curl
+        // itself finishes immediately, so the wait is the limiter's.
+        assert!(elapsed >= Duration::from_millis(1200), "{elapsed:?}");
+        fs::remove_dir_all(dir).unwrap();
+        let _ = fs::remove_dir_all(case);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn curl_pipe_cancel_mid_stream_kills_curl_and_frees_slot() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 65536\r\n\r\n";
+        let (url, case) = fake_curl_case(head, &[1u8; 8192], 1, "hang");
+        let (job, dir) = temp_job(&url, true, 0, 1);
+        let control = job.control.clone();
+        let output = job.output.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _ = done_tx.send(run_job(&job));
+        });
+        assert!(wait_for_len(&output, 8192), "chunk not streamed");
+        assert!(pid_alive(&case));
+        fs::write(&control, "cancel").unwrap();
+        let result = done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("cancel must not wait for curl to finish");
+        worker.join().unwrap();
+        assert!(matches!(result, Err(EngineError::Cancel)), "{result:?}");
+        assert!(!pid_alive(&case), "curl child must be killed and reaped");
+        // The task's curl slot is free again: a cap-1 acquire succeeds at once.
+        let permit = thread::spawn(move || {
+            crate::curl_slots::acquire(&control, 1, usize::MAX, || Err::<(), _>(()))
+        })
+        .join()
+        .unwrap();
+        assert!(permit.is_ok(), "curl slot leaked after cancel");
+        drop(permit);
+        fs::remove_dir_all(dir).unwrap();
+        let _ = fs::remove_dir_all(case);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn curl_pipe_identity_mismatch_writes_nothing() {
+        let head = "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 4-8195/8196\r\nContent-Length: 8192\r\nETag: \"changed\"\r\n\r\n";
+        let (url, case) = fake_curl_case(head, &[5u8; 8192], 1, "none");
+        let (mut job, dir) = temp_job(&url, true, 8196, 1);
+        fs::write(&job.output, b"keep").unwrap();
+        job.resume_from = 4;
+        let error = download_sequential(&job, None).unwrap_err();
+        assert!(matches!(error, EngineError::RangeUnsupported(_)), "{error}");
+        assert_eq!(fs::read(&job.output).unwrap(), b"keep");
+        fs::remove_dir_all(dir).unwrap();
+        let _ = fs::remove_dir_all(case);
     }
 }

@@ -1355,10 +1355,17 @@ mod tests {
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        client.read_to_end(&mut remainder).unwrap();
-        assert!(remainder.is_empty());
+        let closed = client.read_to_end(&mut remainder);
         release.send(()).unwrap();
         upstream.join().unwrap();
+        // Unmount aborts the active response; Windows may report RST instead
+        // of EOF. A read timeout would still mean cancellation failed.
+        assert!(
+            closed.is_ok()
+                || matches!(&closed, Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+            "{closed:?}"
+        );
+        assert!(remainder.is_empty());
         assert!(request(&server, "GET", "/media/test", "")
             .0
             .starts_with("HTTP/1.1 404"));

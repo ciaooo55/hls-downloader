@@ -65,6 +65,18 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
         .and_then(|name| name.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    // 扫描命令按 Windows 语义解析：`\`、`/` 与盘符 `:` 都是路径分隔符。只靠宿主 `Path`
+    // 时，非 Windows 平台会把 `C:\Windows\System32\mshta.exe` 整体当成文件名而漏判。
+    // 两种解析任一命中黑名单即拒绝，Windows 上的判断不会放宽。
+    let windows_name = token
+        .rsplit(['\\', '/', ':'])
+        .next()
+        .map(|leaf| match leaf.rsplit_once('.') {
+            Some((stem, _)) if !stem.is_empty() => stem,
+            _ => leaf,
+        })
+        .unwrap_or("")
+        .to_ascii_lowercase();
     const BLOCKED: &[&str] = &[
         "cmd",
         "powershell",
@@ -100,7 +112,7 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
         "ssh",
         "start",
     ];
-    if BLOCKED.contains(&name.as_str()) {
+    if BLOCKED.contains(&name.as_str()) || BLOCKED.contains(&windows_name.as_str()) {
         return Err("扫描命令不能调用系统脚本解释器".into());
     }
     Ok(())

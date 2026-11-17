@@ -495,6 +495,9 @@ pub struct HlsDownloadOptions {
     pub download_subtitles: bool,
     pub live_max_minutes: u64,
     pub progress: Option<PathBuf>,
+    /// 纯 TS 点播（可直接拼接）时，拼接后用 FFmpeg 无损重封装为真正的 MP4。
+    /// 默认关闭，保持旧行为（拼接后的 TS 字节流直接作为成品）。
+    pub remux_ts_to_mp4: bool,
 }
 
 impl Default for HlsDownloadOptions {
@@ -509,6 +512,7 @@ impl Default for HlsDownloadOptions {
             download_subtitles: true,
             live_max_minutes: 0,
             progress: None,
+            remux_ts_to_mp4: false,
         }
     }
 }
@@ -566,6 +570,9 @@ pub fn download_hls(
         },
     )
 }
+
+/// Staging name of the concatenated TS before the optional MP4 remux.
+pub(crate) const REMUX_STAGING_TS: &str = "merged.ts";
 
 pub fn download_hls_with(
     url: &str,
@@ -742,6 +749,60 @@ pub fn download_hls_with(
                 )?;
             }
         }
+        if !live {
+            // A slot about to be downloaded again must not keep an old record:
+            // its new file is only synced at group commit, and an old record of
+            // the same identity and size would vouch for an unsynced file.
+            let mut forgot = false;
+            for item in prepared.iter().filter(|item| item.needs_download) {
+                forgot |= vod.forget(item.slot);
+            }
+            if forgot {
+                vod.save(task_dir)?;
+            }
+            let mut forgot = false;
+            for item in audio_prepared.iter().filter(|item| item.needs_download) {
+                forgot |= audio_vod.forget(item.slot);
+            }
+            if forgot {
+                audio_vod.save(&audio_dir)?;
+            }
+        }
+        let durable_slots: HashMap<PathBuf, (bool, usize, String)> = prepared
+            .iter()
+            .map(|item| (item.path.clone(), (false, item.slot, item.identity.clone())))
+            .chain(
+                audio_prepared
+                    .iter()
+                    .map(|item| (item.path.clone(), (true, item.slot, item.identity.clone()))),
+            )
+            .collect();
+        let checkpoints = Mutex::new((&mut vod, &mut audio_vod));
+        let record_durable = |paths: &[PathBuf]| -> Result<(), String> {
+            let mut guard = checkpoints
+                .lock()
+                .map_err(|_| "HLS checkpoint lock poisoned".to_string())?;
+            let (video, audio) = &mut *guard;
+            let (mut video_changed, mut audio_changed) = (false, false);
+            for path in paths {
+                if let Some((is_audio, slot, identity)) = durable_slots.get(path) {
+                    if *is_audio {
+                        audio.remember(*slot, identity, file_len(path));
+                        audio_changed = true;
+                    } else {
+                        video.remember(*slot, identity, file_len(path));
+                        video_changed = true;
+                    }
+                }
+            }
+            if video_changed {
+                video.save(task_dir)?;
+            }
+            if audio_changed {
+                audio.save(&audio_dir)?;
+            }
+            Ok(())
+        };
         let preview_update = Mutex::new(((0usize, 0usize), std::time::Instant::now()));
         let (completed, stop_error) = download_prepared_segments(
             &prepared,
@@ -813,6 +874,7 @@ pub fn download_hls_with(
                     eprintln!("HLS preview playlist update failed: {error}");
                 }
             },
+            (!live).then_some(&record_durable as DurableSegments<'_>),
         );
         if let Some(error) = stop_error {
             // A stopping run must still vouch for the segments that landed:
@@ -998,7 +1060,22 @@ pub fn download_hls_with(
             && !entry.discontinuity
             && extension(entry.path.to_string_lossy().as_ref()).eq_ignore_ascii_case("ts")
     });
-    if can_concat {
+    if can_concat && options.remux_ts_to_mp4 && super::merge::locate_ffmpeg().is_some() {
+        // 可选：先拼接到 merged.ts，再无损重封装为 MP4；FFmpeg 失败时回落为原拼接结果。
+        let staged = task_dir.join(REMUX_STAGING_TS);
+        concat_files(&files, &staged)?;
+        match super::merge::remux_ts_to_mp4(&staged, &output, control) {
+            Ok(()) => {
+                let _ = fs::remove_file(&staged);
+            }
+            Err(error) if error == "paused" || error == "canceled" => return Err(error),
+            Err(error) => {
+                eprintln!("HLS TS→MP4 remux failed, keeping concatenated TS: {error}");
+                crate::atomic_replace::replace_file(&staged, &output)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    } else if can_concat {
         concat_files(&files, &output)?;
     } else {
         merge_with_ffmpeg(task_dir, &output, control)?;
@@ -1506,11 +1583,104 @@ fn prepare_segments(
     Ok(prepared)
 }
 
+/// VOD segment group commit: landed segments are fsynced in batches of at most
+/// this many files, bytes, or age, then handed to the checkpoint callback.
+const SEGMENT_COMMIT_MAX_FILES: usize = 32;
+const SEGMENT_COMMIT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const SEGMENT_COMMIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Called with segment files that were just made durable; it records them in
+/// the resume checkpoint.
+type DurableSegments<'a> = &'a (dyn Fn(&[PathBuf]) -> Result<(), String> + Sync);
+
+#[derive(Default)]
+struct SegmentBatch {
+    files: Vec<PathBuf>,
+    bytes: u64,
+    oldest: Option<std::time::Instant>,
+}
+
+impl SegmentBatch {
+    /// Adds a landed segment; returns the batch to commit when one is due.
+    fn push(&mut self, path: PathBuf, bytes: u64) -> Option<Vec<PathBuf>> {
+        self.files.push(path);
+        self.bytes = self.bytes.saturating_add(bytes);
+        let oldest = *self.oldest.get_or_insert_with(std::time::Instant::now);
+        let due = self.files.len() >= SEGMENT_COMMIT_MAX_FILES
+            || self.bytes >= SEGMENT_COMMIT_MAX_BYTES
+            || oldest.elapsed() >= SEGMENT_COMMIT_INTERVAL;
+        due.then(|| self.take())
+    }
+
+    fn take(&mut self) -> Vec<PathBuf> {
+        self.bytes = 0;
+        self.oldest = None;
+        std::mem::take(&mut self.files)
+    }
+}
+
+/// Flushes already-published segment files to stable storage. On Unix the
+/// containing directories are synced too, so the renames survive power loss.
+fn sync_segment_files(paths: &[PathBuf]) -> Result<(), String> {
+    for path in paths {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.sync_data())
+            .map_err(|error| format!("同步 HLS 分片失败 {}: {error}", path.display()))?;
+    }
+    #[cfg(unix)]
+    {
+        let parents: BTreeSet<&Path> = paths.iter().filter_map(|path| path.parent()).collect();
+        for parent in parents {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Commits one batch: fsync, then the checkpoint callback. A batch that could
+/// not be made durable is dropped from `completed`, so nothing vouches for it
+/// and a resumed run downloads it again.
+fn commit_segment_batch(
+    batch: &[PathBuf],
+    durable: DurableSegments<'_>,
+    completed: &Mutex<HashSet<PathBuf>>,
+) -> Result<(), String> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    if let Err(error) = sync_segment_files(batch) {
+        if let Ok(mut completed) = completed.lock() {
+            for path in batch {
+                completed.remove(path);
+            }
+        }
+        return Err(error);
+    }
+    // A failed checkpoint write is not fatal: the stop/finish path writes the
+    // checkpoint again for every durable segment.
+    if let Err(error) = durable(batch) {
+        eprintln!("HLS segment checkpoint update failed: {error}");
+    }
+    Ok(())
+}
+
 /// Returns the segment files that actually landed, plus the first error.
 ///
 /// The caller persists the VOD checkpoint for the landed segments even when the
 /// run is stopping, so a segment that completed before a pause is not
 /// re-downloaded on resume -- which is what the reused-segment contract needs.
+///
+/// With `durable` (VOD), segments are not fsynced one by one: they are synced
+/// in groups ([`SEGMENT_COMMIT_MAX_FILES`] / [`SEGMENT_COMMIT_MAX_BYTES`] /
+/// [`SEGMENT_COMMIT_INTERVAL`]) and each group is passed to `durable` for the
+/// checkpoint. Before returning, every remaining landed segment is synced, so
+/// every path in the returned set is durable. Without it (live), each segment
+/// is synced before it is published, as before.
+#[allow(clippy::too_many_arguments)]
 fn download_prepared_segments(
     prepared: &[PreparedSegment],
     audio: &[PreparedSegment],
@@ -1520,6 +1690,7 @@ fn download_prepared_segments(
     concurrency: usize,
     progress: Option<(&Path, u64, u64, u64, bool)>,
     on_completed: &(dyn Fn(&HashSet<PathBuf>) + Sync),
+    durable: Option<DurableSegments<'_>>,
 ) -> (HashSet<PathBuf>, Option<String>) {
     let video_durations: Vec<_> = prepared.iter().map(|item| item.segment.duration).collect();
     let audio_durations: Vec<_> = audio.iter().map(|item| item.segment.duration).collect();
@@ -1568,6 +1739,7 @@ fn download_prepared_segments(
     let queue = Arc::new(Mutex::new(queue));
     let errors = Arc::new(Mutex::new(Vec::new()));
     let completed: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+    let batch = Mutex::new(SegmentBatch::default());
     let replay = crate::credentials::scoped_replay_json();
     let throttle = crate::net_policy::current_throttle_context();
     // VOD 一次提交全部分片；不能等整批结束后才报告下载字节。
@@ -1589,6 +1761,7 @@ fn download_prepared_segments(
             let replay = replay.clone();
             let throttle = throttle.clone();
             let downloaded = &downloaded;
+            let batch = &batch;
             scope.spawn(move || {
                 crate::net_policy::with_throttle_context(throttle, || {
                     crate::with_replay_json(&replay, || loop {
@@ -1616,6 +1789,7 @@ fn download_prepared_segments(
                             work.key_bytes.as_ref(),
                             work.segment.key.as_ref(),
                             work.segment.media_sequence,
+                            durable.is_none(),
                         ) {
                             Ok(_) => {
                                 if let Some(root) = control.parent() {
@@ -1633,6 +1807,24 @@ fn download_prepared_segments(
                                 if let Ok(mut completed) = completed.lock() {
                                     completed.insert(work.path.clone());
                                     on_completed(&completed);
+                                }
+                                if let Some(durable) = durable {
+                                    let due = batch.lock().ok().and_then(|mut batch| {
+                                        batch.push(work.path.clone(), file_len(&work.path))
+                                    });
+                                    if let Some(due) = due {
+                                        if let Err(error) =
+                                            commit_segment_batch(&due, durable, &completed)
+                                        {
+                                            if let Ok(mut queue) = queue.lock() {
+                                                queue.clear();
+                                            }
+                                            if let Ok(mut errors) = errors.lock() {
+                                                errors.push(error);
+                                            }
+                                            break;
+                                        }
+                                    }
                                 }
                                 if let Some((path, _, previous, total, live)) = progress {
                                     if let Ok(mut bytes) = downloaded.lock() {
@@ -1664,6 +1856,19 @@ fn download_prepared_segments(
             });
         }
     });
+    // Pause, cancel and failure keep completed segments: sync what is still
+    // pending so every returned path is durable before the caller vouches for it.
+    if let Some(durable) = durable {
+        let remaining = batch
+            .lock()
+            .map(|mut batch| batch.take())
+            .unwrap_or_default();
+        if let Err(error) = commit_segment_batch(&remaining, durable, &completed) {
+            if let Ok(mut errors) = errors.lock() {
+                errors.push(error);
+            }
+        }
+    }
     let completed = completed
         .lock()
         .map(|guard| guard.clone())
@@ -1741,6 +1946,7 @@ fn ensure_init_map(
         control,
         init_map.byterange,
         encryption.as_ref().map(|(key, iv)| (key.as_slice(), *iv)),
+        true,
     )
     .map_err(|error| error.to_string())?;
     map_cache.insert(identity, path.clone());
@@ -2095,6 +2301,7 @@ fn download_vod_subtitle(
                 key.as_ref(),
                 segment.key.as_ref(),
                 segment.media_sequence,
+                true,
             )?;
             texts.push(fs::read_to_string(path).map_err(|error| error.to_string())?);
         }
@@ -2141,6 +2348,7 @@ fn download_segment(
     key_bytes: Option<&Vec<u8>>,
     media_key: Option<&MediaKey>,
     sequence: u64,
+    sync: bool,
 ) -> Result<PathBuf, String> {
     let encryption = key_bytes
         .zip(media_key)
@@ -2161,6 +2369,7 @@ fn download_segment(
             control,
             segment.byterange,
             encryption,
+            sync,
         ) {
             Ok(path) => return Ok(path),
             Err(MediaTransferError::Output(error)) => return Err(error.to_string()),
@@ -2250,6 +2459,11 @@ impl VodCheckpoint {
             // same as "it is fine".
             None => false,
         }
+    }
+
+    /// Drops the record of a slot that is about to be downloaded again.
+    fn forget(&mut self, slot: usize) -> bool {
+        self.records.remove(&slot.to_string()).is_some()
     }
 
     fn remember(&mut self, slot: usize, identity: &str, size: u64) {
@@ -2403,10 +2617,18 @@ fn download_one_with_range(
     control: &Path,
     byterange: Option<(u64, u64)>,
 ) -> Result<PathBuf, String> {
-    save_segment(url, headers, proxy, output, control, byterange, None)
+    save_segment(url, headers, proxy, output, control, byterange, None, true)
         .map_err(|error| error.to_string())
 }
 
+/// Downloads one segment into a temporary file and publishes it at `output`.
+///
+/// With `sync` the payload is flushed to stable storage before the rename
+/// (init maps, subtitles, live segments). Without it the data is only handed
+/// to the OS; the caller must make the file durable through
+/// [`sync_segment_files`] before any checkpoint vouches for it (VOD group
+/// commit).
+#[allow(clippy::too_many_arguments)]
 fn save_segment(
     url: &str,
     headers: &HashMap<String, String>,
@@ -2415,6 +2637,7 @@ fn save_segment(
     control: &Path,
     byterange: Option<(u64, u64)>,
     encryption: Option<(&[u8], [u8; 16])>,
+    sync: bool,
 ) -> Result<PathBuf, MediaTransferError> {
     match read_control(control).as_str() {
         "cancel" => return Err(EngineError::Cancel.into()),
@@ -2470,7 +2693,9 @@ fn save_segment(
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "HLS 媒体段为空").into(),
             );
         }
-        writer.get_ref().sync_data()?;
+        if sync {
+            writer.get_ref().sync_data()?;
+        }
         drop(writer);
         match read_control(control).as_str() {
             "pause" => return Err(EngineError::Pause.into()),
@@ -2693,10 +2918,8 @@ fn extension(uri: &str) -> &str {
 }
 
 fn read_control(path: &Path) -> String {
-    fs::read_to_string(path)
-        .unwrap_or_else(|_| "run".into())
-        .trim()
-        .to_ascii_lowercase()
+    // 运行任务读进程内令牌，未注册路径仍读控制文件（行为不变）。
+    crate::task_control::read_word(path)
 }
 
 #[cfg(test)]
@@ -2909,6 +3132,7 @@ mod tests {
                             None,
                             None,
                             0,
+                            true,
                         ))
                         .unwrap();
                 });
@@ -3003,6 +3227,7 @@ mod tests {
             None,
             None,
             0,
+            true,
         );
         let elapsed = start.elapsed().as_secs_f64();
         server.join().unwrap();
@@ -3145,6 +3370,7 @@ mod tests {
                     encrypted.then_some(&key_bytes),
                     encrypted.then_some(&key),
                     0,
+                    true,
                 );
                 let count = requests
                     .lock()
@@ -3189,6 +3415,48 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn optional_ts_remux_falls_back_to_the_concatenated_stream() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-remux-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let origin = super::super::harness::serve_dynamic(Arc::new(move |path, _| {
+            Some(match path {
+                "/index.m3u8" => b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\ns0.ts\n#EXTINF:4,\ns1.ts\n#EXT-X-ENDLIST\n".to_vec(),
+                "/s0.ts" => b"first-".to_vec(),
+                _ => b"second".to_vec(),
+            })
+        }));
+        for remux in [false, true] {
+            let merged = download_hls_with(
+                &format!("{}/index.m3u8", origin.base),
+                &HashMap::new(),
+                "",
+                &root,
+                &control,
+                HlsDownloadOptions {
+                    concurrency: 1,
+                    download_subtitles: false,
+                    remux_ts_to_mp4: remux,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+            .unwrap();
+            // Invalid TS cannot be remuxed: the setting must never lose the download.
+            assert_eq!(fs::read(&merged).unwrap(), b"first-second", "remux={remux}");
+            assert!(!root.join(REMUX_STAGING_TS).exists(), "remux={remux}");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4051,6 +4319,88 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn segment_group_commit_is_bounded_by_count_bytes_and_age() {
+        let mut batch = SegmentBatch::default();
+        for index in 0..SEGMENT_COMMIT_MAX_FILES - 1 {
+            assert!(batch
+                .push(PathBuf::from(format!("{index}.ts")), 1)
+                .is_none());
+        }
+        let due = batch.push(PathBuf::from("last.ts"), 1).unwrap();
+        assert_eq!(due.len(), SEGMENT_COMMIT_MAX_FILES);
+        assert!(batch.files.is_empty() && batch.oldest.is_none());
+        let due = batch
+            .push(PathBuf::from("big.ts"), SEGMENT_COMMIT_MAX_BYTES)
+            .unwrap();
+        assert_eq!(due, vec![PathBuf::from("big.ts")]);
+        assert!(batch.push(PathBuf::from("a.ts"), 1).is_none());
+        batch.oldest = Some(
+            std::time::Instant::now()
+                .checked_sub(SEGMENT_COMMIT_INTERVAL)
+                .unwrap(),
+        );
+        assert_eq!(batch.push(PathBuf::from("b.ts"), 1).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn segment_group_commit_vouches_only_for_synced_batches() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-group-commit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("000000.ts");
+        let second = root.join("000001.ts");
+        fs::write(&first, b"one").unwrap();
+        fs::write(&second, b"two").unwrap();
+        let recorded = Mutex::new(Vec::new());
+        let record = |paths: &[PathBuf]| -> Result<(), String> {
+            recorded.lock().unwrap().extend_from_slice(paths);
+            Ok(())
+        };
+        let completed = Mutex::new(HashSet::from([first.clone(), second.clone()]));
+        commit_segment_batch(std::slice::from_ref(&first), &record, &completed).unwrap();
+        assert_eq!(*recorded.lock().unwrap(), vec![first.clone()]);
+        // A batch that cannot be synced is never recorded and leaves `completed`,
+        // so a resumed run downloads it again instead of trusting it.
+        let missing = root.join("000002.ts");
+        completed.lock().unwrap().insert(missing.clone());
+        let batch = vec![second.clone(), missing.clone()];
+        assert!(commit_segment_batch(&batch, &record, &completed).is_err());
+        assert_eq!(*recorded.lock().unwrap(), vec![first.clone()]);
+        let completed = completed.into_inner().unwrap();
+        assert!(completed.contains(&first));
+        assert!(!completed.contains(&second) && !completed.contains(&missing));
+        // An empty batch is a no-op.
+        commit_segment_batch(&[], &record, &Mutex::new(HashSet::new())).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn redownloaded_slot_loses_its_old_checkpoint_record() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-forget-slot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut vod = VodCheckpoint::load(&root);
+        vod.remember(3, "identity", 10);
+        assert!(vod.can_reuse(3, "identity", 10));
+        assert!(vod.forget(3));
+        assert!(!vod.forget(3));
+        assert!(!vod.can_reuse(3, "identity", 10));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

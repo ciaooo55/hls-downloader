@@ -1,5 +1,4 @@
-import { ScrollView } from "std-widgets.slint";
-import { Tokens, HotButton, ChoiceButton } from "theme.slint";
+import { Tokens, HotButton, ChoiceButton, WorkbenchIcon, HotScrollView } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component SystemWindow inherits Window {
@@ -9,11 +8,14 @@ export component SystemWindow inherits Window {
     default-font-size: 13px;
     background: Tokens.canvas;
     preferred-width: 780px; preferred-height: 620px;
-    min-width: 620px; min-height: 380px;
+    // 最小高度保证“浏览器插件”页的说明、按钮与提示完整显示，不需要在卡片里滚动。
+    min-width: 620px; min-height: 520px;
     in-out property <string> page: "browser";
     in property <string> browser-status;
     in property <string> content;
     in property <string> notice;
+    // 页脚状态语气：info / success / warning / error，由 Rust 随状态文字一起设置。
+    in property <string> notice-tone: "warning";
     in property <bool> can-download;
     in property <bool> can-install;
     in property <bool> busy;
@@ -26,9 +28,10 @@ export component SystemWindow inherits Window {
             icon: root.page == "browser" ? "extension" : root.page == "updates" ? "refresh" : root.page == "notices" ? "notices" : "info";
         }
         VerticalLayout {
-        padding: 20px; spacing: 16px;
+        padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 16px;
+        // 页签按内容宽度靠左排列，不再被拉伸成宽窄不一的四段。
         HorizontalLayout {
-            spacing: 8px;
+            spacing: 8px; alignment: start;
             for item[index] in ["浏览器插件", "通知", "更新", "关于"]: ChoiceButton {
                 label: item;
                 icon: index == 0 ? "extension" : index == 1 ? "notices" : index == 2 ? "refresh" : "info";
@@ -40,7 +43,7 @@ export component SystemWindow inherits Window {
             vertical-stretch: 1;
             background: Tokens.surface; border-radius: Tokens.panel-radius;
             border-width: 1px; border-color: Tokens.line;
-            ScrollView {
+            HotScrollView {
                 x: 16px; y: 16px; width: parent.width - 32px; height: parent.height - 32px;
                 horizontal-scrollbar-policy: always-off;
                 viewport-width: self.width;
@@ -49,36 +52,51 @@ export component SystemWindow inherits Window {
                     height: self.min-height; spacing: 14px; alignment: start;
                     if root.page == "browser": VerticalLayout {
                         spacing: 14px; alignment: start;
-                        Text { text: root.browser-status; color: Tokens.ink; font-size: 16px; }
+                        Text { text: root.browser-status; color: Tokens.ink; font-size: 15px; font-weight: 600; wrap: word-wrap; }
                         Text {
                             text: "识别网页音视频、HLS、DASH 和播放器；接管下载并保留请求身份。\n安装或重载扩展后，请刷新正在播放的网页。";
                             color: Tokens.muted; wrap: word-wrap;
                         }
                         HorizontalLayout {
-                            spacing: 8px;
+                            spacing: 8px; alignment: start;
                             HotButton { label: "Chrome / Edge 扩展"; icon: "extension"; clicked => { root.action("chromium"); } }
                             HotButton { label: "Firefox Add-ons"; icon: "extension"; clicked => { root.action("firefox"); } }
+                            HotButton { label: "刷新接管状态"; icon: "refresh"; clicked => { root.action("handoffs"); } }
                         }
-                        HotButton { label: "刷新接管状态"; icon: "refresh"; clicked => { root.action("handoffs"); } }
+                        Rectangle { height: 1px; background: Tokens.line; }
                         Text {
                             text: "Chrome / Edge：在扩展管理页加载解压目录，已有扩展选择重新加载。\nFirefox：使用商店签名版。Cookie 仅按具体站点授权读取。\n交接结果未查清时按原请求恢复；桌面接收后取消，本次下载结束。";
                             color: Tokens.muted; wrap: word-wrap;
                         }
                     }
-                    if root.content != "" || root.page != "browser": Text {
-                        text: root.content == "" && root.page == "notices" ? "暂无通知" : root.content == "" && root.page == "updates" ? "点击「检查更新」查看可用版本" : root.content;
+                    if root.content != "": Text {
+                        text: root.content;
                         color: Tokens.ink; wrap: word-wrap;
                     }
                 }
             }
+            // 空状态居中显示图标与说明，而不是贴在卡片左上角的一行字。
+            if root.content == "" && root.page != "browser": VerticalLayout {
+                width: parent.width; height: parent.height;
+                alignment: center; spacing: 10px;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 48px; height: 48px; border-radius: Tokens.card-radius; background: Tokens.surface-2;
+                        WorkbenchIcon { name: root.page == "notices" ? "notices" : root.page == "updates" ? "refresh" : "info"; ink: Tokens.faint; width: 24px; height: 24px; x: 12px; y: 12px; }
+                    }
+                }
+                Text { text: root.page == "notices" ? "暂无通知" : root.page == "updates" ? "尚未检查更新" : "正在读取版本信息…"; color: Tokens.ink; font-size: 14px; font-weight: 600; horizontal-alignment: center; }
+                Text { text: root.page == "notices" ? "任务完成、失败和系统消息会显示在这里" : root.page == "updates" ? "点击「检查更新」查看可用版本" : ""; color: Tokens.faint; font-size: 12px; horizontal-alignment: center; }
+            }
         }
         }
         DialogFooter {
-            status: root.notice;
-            if root.page == "updates": HotButton { label: "检查更新"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("check_update"); } }
-            if root.page == "updates": HotButton { label: "下载并校验"; icon: "running"; enabled: root.can-download && !root.busy; primary: true; clicked => { root.action("download_update"); } }
-            if root.page == "updates": HotButton { label: "安装更新"; icon: "check"; enabled: root.can-install && !root.busy; primary: true; clicked => { root.action("install_update"); } }
-            if root.page == "notices": HotButton { label: "清空通知"; clicked => { root.action("clear_notices"); } }
+            status: root.notice; tone: root.notice-tone;
+            if root.page == "updates": HotButton { label: "检查更新"; icon: "refresh"; enabled: !root.busy; primary: !root.can-download && !root.can-install; clicked => { root.action("check_update"); } }
+            if root.page == "updates": HotButton { label: "下载并校验"; icon: "running"; enabled: root.can-download && !root.busy; primary: root.can-download && !root.can-install; clicked => { root.action("download_update"); } }
+            if root.page == "updates": HotButton { label: "安装更新"; icon: "check"; enabled: root.can-install && !root.busy; primary: root.can-install; clicked => { root.action("install_update"); } }
+            if root.page == "notices": HotButton { label: "清空通知"; icon: "delete"; enabled: root.content != ""; clicked => { root.action("clear_notices"); } }
             if root.page == "about": HotButton { label: "打开日志目录"; icon: "folder"; clicked => { root.action("logs"); } }
             HotButton { label: "关闭"; clicked => { root.action("close"); } }
         }
@@ -101,7 +119,7 @@ export component DecisionWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.heading; description: "请确认后继续"; icon: "info"; }
-        ScrollView {
+        HotScrollView {
             vertical-stretch: 1;
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;

@@ -719,6 +719,7 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             live_record_max_minutes: settings.live_record_max_minutes,
             download_subtitles: settings.download_subtitles,
             skip_ad_segments: settings.skip_ad_segments,
+            hls_remux_ts_to_mp4: settings.hls_remux_ts_to_mp4,
             keep_temp_files: settings.keep_temp_files,
             default_user_agent: settings.default_user_agent,
             tvbox_endpoint: settings.tvbox_endpoint,
@@ -1034,6 +1035,39 @@ mod tests {
             }
             other => panic!("unexpected capabilities response: {other:?}"),
         }
+        server.shutdown();
+    }
+
+    #[test]
+    fn hls_remux_setting_round_trips_through_presenter_protocol() {
+        let server = CoreServer::in_memory().unwrap();
+        let initial = (server.handler())(CorePipeRequest::LoadSettings { request_id: 90 });
+        assert!(matches!(
+            initial,
+            CorePipeResponse::Settings {
+                hls_remux_ts_to_mp4: false,
+                ..
+            }
+        ));
+        let saved = (server.handler())(CorePipeRequest::StoreSettings {
+            request_id: 91,
+            values: BTreeMap::from([("hls_remux_ts_to_mp4".into(), Value::Bool(true))]),
+        });
+        assert!(matches!(
+            saved,
+            CorePipeResponse::Settings {
+                hls_remux_ts_to_mp4: true,
+                ..
+            }
+        ));
+        let loaded = (server.handler())(CorePipeRequest::LoadSettings { request_id: 92 });
+        assert!(matches!(
+            loaded,
+            CorePipeResponse::Settings {
+                hls_remux_ts_to_mp4: true,
+                ..
+            }
+        ));
         server.shutdown();
     }
 

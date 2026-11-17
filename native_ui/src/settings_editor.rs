@@ -76,6 +76,7 @@ const FIELDS: &[(&str, &str, &str)] = &[
     ),
     ("媒体", "download_subtitles", "下载关联字幕"),
     ("媒体", "skip_ad_segments", "跳过已识别广告分段"),
+    ("媒体", "hls_remux_ts_to_mp4", "将 TS 点播无损封装为 MP4"),
     ("BT", "torrent_watch", "种子监视目录"),
     ("BT", "torrent_watch_enabled", "监视新种子"),
     ("BT", "bt_upload_limit_kib", "BT 上传上限 KiB/s"),
@@ -92,6 +93,48 @@ const FIELDS: &[(&str, &str, &str)] = &[
     ("外观", "reduce_motion", "减少动态效果"),
     ("外观", "task_sort", "任务排序"),
 ];
+
+// Choice settings keep Core values in storage and show product copy in the UI.
+fn choice_options(key: &str) -> &'static [(&'static str, &'static str)] {
+    match key {
+        "proxy_mode" => &[
+            ("direct", "直连"),
+            ("system", "系统代理"),
+            ("manual", "手动代理"),
+        ],
+        "existing_file_policy" => &[
+            ("rename", "自动重命名"),
+            ("overwrite", "覆盖已有文件"),
+            ("skip", "跳过下载"),
+        ],
+        "completion_power_action" => &[
+            ("none", "无操作"),
+            ("shutdown", "关机"),
+            ("sleep", "睡眠"),
+            ("hibernate", "休眠"),
+            ("exit", "退出程序"),
+        ],
+        "task_sort" => &[
+            ("queue:asc", "队列顺序"),
+            ("name:asc", "名称 A→Z"),
+            ("name:desc", "名称 Z→A"),
+            ("progress:asc", "进度从低到高"),
+            ("size:asc", "大小从小到大"),
+            ("size:desc", "大小从大到小"),
+            ("status:asc", "按状态"),
+            ("speed:desc", "速度从快到慢"),
+        ],
+        _ => &[],
+    }
+}
+
+fn choice_label<'a>(key: &str, code: &'a str) -> &'a str {
+    choice_options(key)
+        .iter()
+        .find(|(value, _)| *value == code)
+        .map(|(_, label)| *label)
+        .unwrap_or(code)
+}
 
 pub struct SettingsEditor {
     pub window: SettingsWindow,
@@ -145,6 +188,12 @@ impl SettingsEditor {
 
     pub fn edit(&mut self, key: &str, text: &str) -> Result<(), String> {
         let original = self.values.get(key).ok_or("未知设置项")?;
+        // 下拉框显示中文选项，保存时换回 Core 使用的取值。
+        let text = choice_options(key)
+            .iter()
+            .find(|(_, label)| *label == text)
+            .map(|(code, _)| *code)
+            .unwrap_or(text);
         let value = match original {
             Value::Bool(_) => Value::Bool(text.parse().map_err(|_| "开关值无效")?),
             Value::Number(_) => {
@@ -174,31 +223,18 @@ impl SettingsEditor {
             .filter(|(category, _, _)| *category == group)
             .filter_map(|(_, key, label)| {
                 let value = self.dirty.get(*key).or_else(|| self.values.get(*key))?;
-                let choices: &[&str] = match *key {
-                    "proxy_mode" => &["direct", "system", "manual"],
-                    "existing_file_policy" => &["rename", "overwrite", "skip"],
-                    "completion_power_action" => {
-                        &["none", "shutdown", "sleep", "hibernate", "exit"]
-                    }
-                    "task_sort" => &[
-                        "queue:asc",
-                        "name:asc",
-                        "name:desc",
-                        "progress:asc",
-                        "size:asc",
-                        "size:desc",
-                        "status:asc",
-                        "speed:desc",
-                    ],
-                    _ => &[],
-                };
+                let options = choice_options(key);
+                let choices: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
                 let kind = if value.is_boolean() {
                     "bool"
                 } else if value.is_number() {
                     "number"
                 } else if !choices.is_empty() {
                     "choice"
-                } else if key.ends_with("_dir") || *key == "torrent_watch" {
+                } else if key.ends_with("_dir")
+                    || key.starts_with("category_dir_")
+                    || *key == "torrent_watch"
+                {
                     "directory"
                 } else {
                     "text"
@@ -213,7 +249,7 @@ impl SettingsEditor {
                         .unwrap_or_else(|| {
                             value
                                 .as_str()
-                                .map(str::to_owned)
+                                .map(|code| choice_label(key, code).to_owned())
                                 .unwrap_or_else(|| value.to_string())
                         })
                         .into(),
@@ -239,6 +275,7 @@ impl SettingsEditor {
                 .collect::<Vec<_>>(),
         )));
         if let Some(error) = &self.rules_error {
+            self.window.set_status_tone("warning".into());
             self.window.set_status(error.clone().into());
         }
     }

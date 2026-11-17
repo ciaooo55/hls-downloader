@@ -1,6 +1,6 @@
 /**
  * Shared design tokens for every extension surface (popup and in-page
- * shadow-DOM panels), aligned with the desktop app's Cockpit-style palette
+ * shadow-DOM panels), aligned with the desktop app's Graphite + Cobalt palette
  * so the browser surface and Compose workbench read as one product family.
  *
  * Theme resolution: the stored preference is 'auto' | 'dark' | 'light'.
@@ -17,24 +17,26 @@ export const THEME_STORAGE_KEY = 'themePreference'
 export const THEME_TOKENS_CSS = `
 [data-hlsd-theme="dark"]{
   color-scheme:dark;
-  --bg:#151719;--surface:#1c1f23;--surface-2:#23272b;--surface-3:#2b3035;
-  --border:#383d43;--control-border:#767a7e;--text:#f4f5f6;--muted:#c5c9cf;--faint:#969ca4;
-  --primary:#5ea2f3;--primary-hover:#7eb7f6;--on-primary:#151719;
-  --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--purple:#a78bfa;
-  --primary-ink:#7eb7f6;--green-ink:#55d283;--red-ink:#f27070;--purple-ink:#c4b5fd;
-  --shadow:rgba(0,0,0,.35);--rail:#1c1f23;
-  --overlay-border:#464c53;
+  --bg:#0f1115;--surface:#171a20;--surface-2:#1c2027;--surface-3:#262b34;
+  --border:#2a2f39;--control-border:#717a8a;--text:#eef1f6;--muted:#b6bcc8;--faint:#8b93a1;
+  --primary:#7aa2ff;--primary-hover:#97b6ff;--on-primary:#0f1115;
+  --green:#3ccf7a;--amber:#f5a524;--red:#ff7a73;--purple:#b69cff;
+  --primary-ink:#9dbaff;--green-ink:#62e19c;--red-ink:#ff9b95;--purple-ink:#d0c0ff;
+  --shadow:rgba(0,0,0,.42);--rail:#12141a;
+  --overlay-border:#3a404b;
+  --radius:4px;--radius-lg:8px;
   --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 [data-hlsd-theme="light"]{
   color-scheme:light;
-  --bg:#eef2f6;--surface:#ffffff;--surface-2:#f5f7fa;--surface-3:#e8edf3;
-  --border:#d8e0ea;--control-border:#808896;--text:#0f172a;--muted:#475569;--faint:#5f6e83;
-  --primary:#2563eb;--primary-hover:#1d4ed8;--on-primary:#ffffff;
-  --green:#15803d;--amber:#d97706;--red:#dc2626;--purple:#7c3aed;
-  --primary-ink:#1d4ed8;--green-ink:#166534;--red-ink:#b91c1c;--purple-ink:#5b21b6;
-  --shadow:rgba(15,23,42,.12);--rail:#e8edf3;
-  --overlay-border:#c7d0dc;
+  --bg:#f2f3f6;--surface:#ffffff;--surface-2:#f6f7f9;--surface-3:#eceef2;
+  --border:#e2e5eb;--control-border:#7d8594;--text:#0c111d;--muted:#475467;--faint:#5f6b7d;
+  --primary:#2e5bea;--primary-hover:#2149cf;--on-primary:#ffffff;
+  --green:#157f3c;--amber:#b54708;--red:#c4271b;--purple:#6941c6;
+  --primary-ink:#1f45c4;--green-ink:#0d5c28;--red-ink:#9a1d17;--purple-ink:#4b2f91;
+  --shadow:rgba(16,24,40,.10);--rail:#f8f9fb;
+  --overlay-border:#d0d5dd;
+  --radius:4px;--radius-lg:8px;
   --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 `
@@ -42,10 +44,10 @@ export const THEME_TOKENS_CSS = `
 /*
  * Why `--on-primary` is NOT white in the dark theme
  * --------------------------------------------------
- * The dark scheme's `--primary` (#5ea2f3) is a *light* blue, because it is
+ * The dark scheme's `--primary` (#7aa2ff) is a *light* blue, because it is
  * used far more often as text/icon ink on a near-black canvas (`.scan-button`,
  * `.video-more`, `.hlsd-badge`, `.section-title b`, focus rings, ...) than as a
- * fill. A light ink needs a dark surface: #5ea2f3 on --bg reads at 6.8:1.
+ * fill. A light ink needs a dark surface: #7aa2ff on --bg reads at 7.6:1.
  *
  * White text on that same light blue is only 2.65:1, and on the hover blue
  * (#7eb7f6) 2.10:1 -- both far below the 3.0:1 floor for UI text. That is the
@@ -130,12 +132,12 @@ export const THEME_TOKENS_CSS = `
  * 悬停只改变颜色，保持紧凑列表里的按钮位置稳定；按压给一次短缩放。
  */
 export const THEME_BASE_CSS = `
-.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:7px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
+.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:4px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
 .hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}
 .hlsd-button:active:not(:disabled){transform:scale(.975)}
 .hlsd-button:disabled{opacity:.45;cursor:default}
 .hlsd-button.busy:disabled{opacity:1;cursor:progress}
-.hlsd-button.primary{background:var(--primary);color:var(--on-primary)}
+.hlsd-button.primary{background:var(--primary);color:var(--on-primary);box-shadow:0 1px 2px var(--shadow),0 4px 12px color-mix(in srgb,var(--primary) 22%,transparent)}
 .hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover)}
 .hlsd-button.subtle{background:transparent;color:var(--muted)}
 .hlsd-button.subtle:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
@@ -147,7 +149,10 @@ export const THEME_BASE_CSS = `
 .hlsd-button.primary .hlsd-icon{width:14px;height:14px}
 .hlsd-button.busy .hlsd-icon{animation:hlsd-spin .8s linear infinite}
 @keyframes hlsd-spin{to{transform:rotate(360deg)}}
-.hlsd-select{height:30px;border:1px solid var(--control-border);border-radius:7px;background:var(--surface-2);color:var(--text);padding:0 8px;font:12.5px system-ui,sans-serif}
+.hlsd-select{height:30px;border:1px solid var(--control-border);border-radius:4px;background:var(--surface-2);color:var(--text);font:12.5px system-ui,sans-serif;-webkit-appearance:none;appearance:none;padding:0 26px 0 8px;background-image:linear-gradient(45deg,transparent calc(50% - .75px),var(--muted) calc(50% - .75px),var(--muted) calc(50% + .75px),transparent calc(50% + .75px)),linear-gradient(135deg,transparent calc(50% - .75px),var(--muted) calc(50% - .75px),var(--muted) calc(50% + .75px),transparent calc(50% + .75px));background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat;cursor:pointer;text-overflow:ellipsis}
+.hlsd-select:hover:not(:disabled){border-color:var(--primary)}
+.hlsd-select:disabled{opacity:.55;cursor:default}
+.hlsd-select option{background:var(--surface);color:var(--text)}
 .hlsd-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:color-mix(in srgb,var(--primary) 20%,var(--surface-2));color:var(--primary-ink);font:700 11.5px system-ui,sans-serif}
 `
 

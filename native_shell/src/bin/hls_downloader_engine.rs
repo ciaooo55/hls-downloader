@@ -136,14 +136,8 @@ fn main() -> ExitCode {
             }
         }
     } else {
-        if automatic_native_host_repair_enabled() {
-            if let Ok(engine) = std::env::current_exe() {
-                if let Err(error) = hls_native_shell::register_packaged_native_host(&engine) {
-                    eprintln!("Native Host automatic registration skipped: {error}");
-                }
-            }
-        }
-        mark("registration");
+        // 先取得单实例锁：重复启动（浏览器 Host 拉起、用户双击、开机项）直接退出，
+        // 不再重复写清单和注册表。Native Host 注册与 Core 就绪无依赖，移出启动关键路径。
         if let Err(error) = hls_native_shell::claim_v7_instance() {
             if hls_native_shell::is_already_running_error(&error) {
                 return ExitCode::SUCCESS;
@@ -152,6 +146,22 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
         mark("instance_lock");
+        if automatic_native_host_repair_enabled() {
+            let spawned = std::thread::Builder::new()
+                .name("v7-native-host-repair".into())
+                .spawn(|| {
+                    if let Ok(engine) = std::env::current_exe() {
+                        if let Err(error) = hls_native_shell::register_packaged_native_host(&engine)
+                        {
+                            eprintln!("Native Host automatic registration skipped: {error}");
+                        }
+                    }
+                });
+            if let Err(error) = spawned {
+                eprintln!("Native Host automatic registration skipped: {error}");
+            }
+        }
+        mark("registration_dispatched");
         let database = hls_native_shell::default_v7_database_path();
         if let Some(directory) = database.parent() {
             if let Err(error) = hls_native_shell::init_runtime_log(directory) {
@@ -174,7 +184,9 @@ fn main() -> ExitCode {
             }
         };
         mark("store_ready");
-        start_resident_tray();
+        if !args.iter().any(|arg| arg == "--no-tray") {
+            start_resident_tray();
+        }
         mark("tray");
         match server.bind_local() {
             Ok((address, worker)) => {

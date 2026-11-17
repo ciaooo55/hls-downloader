@@ -1,5 +1,5 @@
-import { ScrollView, LineEdit, TextEdit, ComboBox, CheckBox, SpinBox } from "std-widgets.slint";
-import { Tokens, HotButton, FieldLabel } from "theme.slint";
+import { LineEdit, TextEdit, SpinBox } from "std-widgets.slint";
+import { Tokens, HotButton, FieldLabel, HotCheckBox, HotScrollView, HotComboBox } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component TaskEditorWindow inherits Window {
@@ -34,18 +34,25 @@ export component TaskEditorWindow inherits Window {
     in-out property <bool> allow-duplicate: false;
     in-out property <bool> legal-accepted: false;
     in-out property <string> result;
+    // 页脚状态语气：info / success / warning / error，由 Rust 随状态文字一起设置。
+    in property <string> result-tone: "warning";
     in-out property <bool> busy: false;
     callback action(string);
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.title; description: root.mode == "batch" ? "每行一个链接，批量添加到下载队列" : root.mode == "curl" ? "粘贴浏览器复制的 cURL 命令" : "粘贴下载地址，选择保存位置与下载选项"; icon: root.mode == "new" ? "new" : root.mode == "curl" ? "import" : "batch"; }
-        ScrollView {
+        HotScrollView {
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;
             VerticalLayout {
                 padding: 24px; spacing: 12px;
-                if root.mode == "new": LineEdit { height: Tokens.control-height; text <=> root.url; accessible-label: "下载地址"; placeholder-text: "下载地址（HTTP、HLS、DASH、FTP、SFTP、磁力链接）"; }
-                if root.mode != "new": TextEdit { text <=> root.url; accessible-label: "下载地址"; min-height: 140px; preferred-height: 140px; }
+                // 所有字段统一“左侧 80px 标签列 + 右侧控件”，多行输入的标签与首行对齐。
+                if root.mode == "new": HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "下载地址"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.url; accessible-label: "下载地址"; placeholder-text: "HTTP、HLS、DASH、FTP、SFTP 或磁力链接"; } }
+                if root.mode != "new": HorizontalLayout {
+                    spacing: Tokens.control-gap;
+                    FieldLabel { label: root.mode == "curl" ? "cURL 命令" : "下载地址"; width: 80px; height: Tokens.control-height; vertical-alignment: center; y: 0px; }
+                    TextEdit { text <=> root.url; accessible-label: "下载地址"; min-height: 140px; preferred-height: 140px; }
+                }
                 HorizontalLayout {
                     spacing: Tokens.control-gap;
                     FieldLabel { label: "保存位置"; width: 80px; }
@@ -56,36 +63,44 @@ export component TaskEditorWindow inherits Window {
                 HorizontalLayout {
                     spacing: Tokens.control-gap;
                     FieldLabel { label: "类型"; width: 80px; }
-                    ComboBox { height: Tokens.control-height; model: ["自动识别", "普通文件", "HLS", "DASH", "直播", "种子 / 磁力"]; current-value <=> root.kind; }
+                    HotComboBox { height: Tokens.control-height; model: ["自动识别", "普通文件", "HLS", "DASH", "直播", "种子 / 磁力"]; current-value <=> root.kind; }
                     HotButton { label: "识别 / 探测"; icon: "search"; enabled: !root.busy; clicked => { root.action("probe"); } }
                 }
-                if root.variants.length > 0: ComboBox { height: Tokens.control-height; model: root.variants; current-index <=> root.variant-index; }
+                if root.variants.length > 0: HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "清晰度"; width: 80px; } HotComboBox { height: Tokens.control-height; model: root.variants; current-index <=> root.variant-index; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "音轨"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.audio; accessible-label: "音轨标识"; placeholder-text: "语言或音轨标识，留空自动选择"; } }
                 HorizontalLayout {
                     spacing: Tokens.control-gap;
                     FieldLabel { label: "请求方法"; width: 80px; }
-                    ComboBox { height: Tokens.control-height; model: ["GET", "POST", "PUT", "PATCH", "HEAD"]; current-value <=> root.method; }
-                    FieldLabel { label: "并发"; }
+                    HotComboBox { height: Tokens.control-height; model: ["GET", "POST", "PUT", "PATCH", "HEAD"]; current-value <=> root.method; }
+                    FieldLabel { label: "并发连接"; }
                     SpinBox { value <=> root.concurrency; accessible-label: "并发连接"; height: Tokens.control-height; minimum: 0; maximum: 128; }
                 }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "正文文件"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.body-path; accessible-label: "正文文件"; placeholder-text: "POST 等请求的可重放正文文件"; } }
-                FieldLabel { label: "请求头（每行 Name: Value）"; }
-                TextEdit { text <=> root.headers; accessible-label: "请求头"; min-height: 85px; preferred-height: 85px; }
+                HorizontalLayout {
+                    spacing: Tokens.control-gap;
+                    FieldLabel { label: "请求头"; width: 80px; height: Tokens.control-height; vertical-alignment: center; y: 0px; }
+                    VerticalLayout {
+                        spacing: 4px;
+                        TextEdit { text <=> root.headers; accessible-label: "请求头"; min-height: 85px; preferred-height: 85px; }
+                        Text { text: "每行一个，格式 Name: Value"; color: Tokens.faint; font-size: 11px; }
+                    }
+                }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "Cookie"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.cookie; accessible-label: "Cookie"; input-type: password; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "代理"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.proxy; accessible-label: "代理"; placeholder-text: "留空使用设置"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "校验值"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.checksum; accessible-label: "校验值"; placeholder-text: "SHA-256、SHA-1 或 MD5"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "镜像地址"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.mirrors; accessible-label: "镜像地址"; placeholder-text: "多个地址使用 | 分隔"; } }
-                HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "限速 KiB/s"; width: 80px; } SpinBox { value <=> root.speed-limit; accessible-label: "任务限速 KiB/s"; height: Tokens.control-height; minimum: 0; maximum: 1000000; } FieldLabel { label: "0 表示不限速"; } }
+                HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "限速 KiB/s"; width: 80px; } SpinBox { value <=> root.speed-limit; accessible-label: "任务限速 KiB/s"; height: Tokens.control-height; minimum: 0; maximum: 1000000; } Text { text: "0 表示不限速"; color: Tokens.faint; font-size: 11px; vertical-alignment: center; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划开始"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.start-at; accessible-label: "计划开始"; placeholder-text: "YYYY-MM-DD HH:mm"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划停止"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.stop-at; accessible-label: "计划停止"; placeholder-text: "YYYY-MM-DD HH:mm"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "队列 ID"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.queue-id; accessible-label: "队列 ID"; } }
-                CheckBox { text: "添加后暂不开始"; checked <=> root.start-paused; }
-                CheckBox { text: "允许重复任务"; checked <=> root.allow-duplicate; }
-                CheckBox { text: "我已确认有权下载，并接受使用条款"; checked <=> root.legal-accepted; }
+                Rectangle { height: 4px; }
+                HotCheckBox { text: "添加后暂不开始"; checked <=> root.start-paused; }
+                HotCheckBox { text: "允许重复任务"; checked <=> root.allow-duplicate; }
+                HotCheckBox { text: "我已确认有权下载，并接受使用条款"; checked <=> root.legal-accepted; }
             }
         }
         DialogFooter {
-            status: root.result;
+            status: root.result; tone: root.result-tone;
             HotButton { label: "取消"; clicked => { root.action("close"); } }
             HotButton { label: root.busy ? "处理中…" : "添加任务"; icon: "new"; primary: true; enabled: !root.busy && root.legal-accepted && root.url != ""; clicked => { root.action("create"); } }
         }

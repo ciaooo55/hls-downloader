@@ -74,6 +74,7 @@ impl ResourceTools {
         this.window.on_action(move |action| {
             if let Some(this) = weak.upgrade() {
                 if let Err(error) = this.action(&action) {
+                    this.window.set_status_tone("warning".into());
                     this.window.set_status(error.into());
                 }
             }
@@ -115,6 +116,7 @@ impl ResourceTools {
             self.window.set_status("".into());
             true
         } else {
+            self.window.set_status_tone("error".into());
             self.window.set_status("命令队列已满，请稍后重试".into());
             false
         }
@@ -332,6 +334,7 @@ impl ResourceTools {
                         })
                         .collect();
                     if (self.batch)(commands) {
+                        self.window.set_status_tone("success".into());
                         self.window
                             .set_status("所选资源已提交，结果见任务列表".into());
                     }
@@ -517,6 +520,7 @@ impl ResourceTools {
                 self.creating_project.set(false);
                 self.listing_projects.set(false);
                 self.window.set_busy(false);
+                self.window.set_status_tone("error".into());
                 self.window.set_status(message.clone().into());
             }
             _ => {}
@@ -578,6 +582,7 @@ impl ResourceTools {
                 if self.window.get_mode() == "torrent"
                     && self.window.get_source().trim() == source =>
             {
+                self.window.set_status_tone("success".into());
                 self.window
                     .set_status("文件选择已保存，添加该种子任务后生效".into())
             }
@@ -587,6 +592,7 @@ impl ResourceTools {
             {
                 self.waiting_torrent.set(false);
                 self.window.set_busy(false);
+                self.window.set_status_tone("error".into());
                 self.window.set_status(message.clone().into());
             }
             _ => {}

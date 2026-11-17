@@ -32,6 +32,7 @@ import { SessionListStore } from '../lib/sessionListStore'
 import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
 import { contextMenuCapabilities } from '../lib/contextMenuActions'
 import { installSubtitleBackground } from '../lib/subtitleBackground'
+import { errorText } from '../lib/productCopy'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const dynamicContextMenus = browser.contextMenus as typeof browser.contextMenus & {
@@ -1344,7 +1345,7 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: Res
     // original ownership unresolved instead of replaying through old admission.
     response = await native({ op: recovering ? 'recover_offer' : 'offer', resource: payload })
   } catch (error) {
-    response = { ok: false, transport_error: true, error: String(error) }
+    response = { ok: false, transport_error: true, error: errorText(error) }
   }
   if (response?.transport_error || (recovering && !response?.ok)) {
     // Read the durable outcome; do not issue another offer or regenerate its
@@ -2245,7 +2246,7 @@ export default defineBackground(() => {
       if (tab?.id !== undefined) {
         void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' },
           Number.isInteger(frameId) && frameId >= 0 ? { frameId } : undefined)
-          .catch(error => reportDownloadError(tab.id!, `无法读取选中的链接：${String(error)}`))
+          .catch(error => reportDownloadError(tab.id!, `无法读取选中的链接：${errorText(error)}`))
       }
       return
     }
@@ -2331,9 +2332,9 @@ export default defineBackground(() => {
         } catch (error) {
           // offer 发送后失联可能已持久接收，不能自动重新导航产生第二份下载。
           await reportDownloadError(tabId, '无法确认下载交接，请检查主程序后重试')
-          return { ok: false, browserFallback: false, error: String(error) }
+          return { ok: false, browserFallback: false, error: errorText(error) }
         }
-      })().then(sendResponse, error => sendResponse({ ok: false, browserFallback: true, error: String(error) }))
+      })().then(sendResponse, error => sendResponse({ ok: false, browserFallback: true, error: errorText(error) }))
       return true
     }
     if (message?.type === 'blob-source') {
@@ -2369,7 +2370,7 @@ export default defineBackground(() => {
         at: Date.now(),
       })
         .then(() => sendResponse({ ok: true }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'resource') {
@@ -2392,7 +2393,7 @@ export default defineBackground(() => {
       }
       void saveResource(resource, sender.tab?.id ?? -1)
         .then(() => sendResponse({ ok: true }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       void inspectAdaptive(resource, sender.tab?.id ?? -1)
       return true
     }
@@ -2406,13 +2407,13 @@ export default defineBackground(() => {
       // 插件加载前已播放或命中缓存的媒体可能没有响应链；用户主动点击仍应交给 Core。
       void requestDownload(resource, undefined, { allowUnverified: true })
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'handoff-status') {
       void native({ op: 'handoff_status', handoff_id: String(message.handoffId || '') }, 2_500)
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'pending-downloads') {
@@ -2475,7 +2476,7 @@ export default defineBackground(() => {
           await setResourceBadge(tabId, cleaned)
           sendResponse(visible)
         }))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'ping') {
@@ -2484,7 +2485,7 @@ export default defineBackground(() => {
         .catch(error => sendResponse({
           ok: false,
           reconnecting: lastDesktopPingAt > 0 && Date.now() - lastDesktopPingAt < 90_000,
-          error: String(error),
+          error: errorText(error),
         }))
       return true
     }
@@ -2497,33 +2498,33 @@ export default defineBackground(() => {
         ? takeoverSettingsSync.queue(update)
         : Promise.reject(new Error('接管设置同步尚未初始化')))
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'push-to-tv') {
       const resource = { ...message.resource }
       void pushToTv(resource)
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'cast-to-device') {
       const resource = { ...message.resource }
       void castToDevice(resource)
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'media-push-status') {
       void native({ op: 'media_push_status', request_id: String(message.requestId || '') })
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'activate') {
       void native({ op: 'activate' })
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: String(error) }))
+        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
   })

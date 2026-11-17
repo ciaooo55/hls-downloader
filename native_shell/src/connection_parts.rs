@@ -52,6 +52,7 @@ fn paint_file_map(total: u64, done: &[(u64, u64)], active: &[(u64, u64)]) -> Vec
     parts
 }
 
+#[cfg(test)]
 pub(crate) fn paint_from_progress(
     progress_path: &Path,
     downloaded: u64,
@@ -62,13 +63,42 @@ pub(crate) fn paint_from_progress(
     if !downloading && total > 0 && downloaded >= total {
         return (paint_file_map(downloaded, &[(0, downloaded)], &[]), 0);
     }
-    let total = total.max(downloaded);
     let ranges = load_completed_ranges(progress_path).unwrap_or_default();
-    let mut active = if downloading {
+    let active = if downloading {
         load_active_ranges(progress_path).unwrap_or_default()
     } else {
         Vec::new()
     };
+    paint_from_ranges(ranges, active, downloaded, total, downloading)
+}
+
+/// Checkpoint ranges a progress sample is painted from, read from the task
+/// directory (memory copies first) *before* the Core lock is taken; see
+/// `progress_facts`.
+/// `(completed, active)` end-exclusive checkpoint ranges.
+pub(crate) type PaintRanges = (Vec<(u64, u64)>, Vec<(u64, u64)>);
+
+pub(crate) fn load_paint_ranges(progress_path: &Path) -> PaintRanges {
+    (
+        load_completed_ranges(progress_path).unwrap_or_default(),
+        load_active_ranges(progress_path).unwrap_or_default(),
+    )
+}
+
+/// Pure painting step of [`paint_from_progress`]: no filesystem access, safe
+/// under the Core lock.
+pub(crate) fn paint_from_ranges(
+    ranges: Vec<(u64, u64)>,
+    active: Vec<(u64, u64)>,
+    downloaded: u64,
+    total: u64,
+    downloading: bool,
+) -> (Vec<ConnectionPart>, u32) {
+    if !downloading && total > 0 && downloaded >= total {
+        return (paint_file_map(downloaded, &[(0, downloaded)], &[]), 0);
+    }
+    let total = total.max(downloaded);
+    let mut active = if downloading { active } else { Vec::new() };
     // 相邻连接绘制时会合并，连接数仍须取合并前的同一份活动检查点。
     let workers = active.len().min(u32::MAX as usize) as u32;
     if downloading && active.is_empty() {
@@ -126,10 +156,12 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn load_completed_ranges(progress_path: &Path) -> Option<Vec<(u64, u64)>> {
-    load_ranges(&progress_path.with_file_name("native-engine.ranges.json"))
-        .map(|ranges| {
-            ranges
-                .into_iter()
+    // 持久检查点经内存缓存读取（引擎写入时直接更新，外部改动按元数据校验）。
+    crate::range_cache::load(&progress_path.with_file_name(crate::range_cache::FILE_NAME))
+        .map(|view| {
+            view.ranges
+                .iter()
+                .copied()
                 .map(|(start, end)| (start, end.saturating_add(1)))
                 .collect::<Vec<_>>()
         })
@@ -146,7 +178,7 @@ fn load_active_ranges(progress_path: &Path) -> Option<Vec<(u64, u64)>> {
 }
 
 fn load_ranges(path: &Path) -> Option<Vec<(u64, u64)>> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::task_control::read_progress_file(path)?;
     let value: Value = serde_json::from_str(&text).ok()?;
     let items = value.get("ranges")?.as_array()?;
     let ranges: Vec<(u64, u64)> = items

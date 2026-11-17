@@ -3,7 +3,7 @@
 //! Persistence and transfer workers attach to this state machine; clients
 //! exchange the shared contract instead of owning separate task state.
 
-use crate::connection_parts::{paint_from_progress, summarize};
+use crate::connection_parts::{paint_from_ranges, summarize};
 use crate::contract::{
     AvScanStatus, CoreCommand, CoreEvent, EventEnvelope, MediaPushRequest, MirrorStatus,
     ResourceKind, ResourceOffer, TaskFailure, TaskSnapshot, TaskSpec,
@@ -735,9 +735,17 @@ impl CoreRuntime {
                     message: format!("unknown task {task_id}"),
                 };
             };
-            let paths = spec
-                .as_ref()
-                .and_then(|spec| crate::TaskPaths::for_task(task_id, spec).ok());
+            // 文件事实（媒体分片计数、预览/可播放检查点、区间检查点）由运行中的 worker 在取锁前
+            // 采集（`progress_facts`）；这里只查内存。未登记或过期时才按原方式就地采集。
+            let facts = spec.as_ref().and_then(|spec| {
+                let task_dir = crate::TaskPaths::task_dir_for(task_id, spec).ok()?;
+                crate::progress_facts::fresh(&task_dir).or_else(|| {
+                    crate::progress_facts::note_gathered_in_place();
+                    crate::TaskPaths::for_task(task_id, spec)
+                        .ok()
+                        .map(|paths| crate::progress_facts::ProgressFacts::gather(&paths, spec))
+                })
+            });
             let stale_active_progress =
                 matches!(
                     snapshot.status.as_str(),
@@ -778,12 +786,7 @@ impl CoreRuntime {
             }
             snapshot.playback_ready = (matches!(effective_status.as_str(), "completed" | "done")
                 && !snapshot.output_missing)
-                || spec.as_ref().is_some_and(|spec| {
-                    paths.as_ref().is_some_and(|paths| {
-                        crate::download_worker::playable_task_playlist(paths).is_some()
-                            || crate::download_worker::playable_http_total(paths, spec).is_some()
-                    })
-                });
+                || facts.as_ref().is_some_and(|facts| facts.playable);
             snapshot.completed_ranges =
                 if snapshot.total_ranges > 0 && snapshot.total_bytes.unwrap_or(0) > 0 {
                     snapshot
@@ -795,32 +798,17 @@ impl CoreRuntime {
                 } else {
                     0
                 };
-            let spec = spec.as_ref();
-            if let (Some(spec), Some(paths)) = (spec, paths.as_ref()) {
-                let progress = &paths.progress;
-                let media_counts = std::fs::read_to_string(progress)
-                    .ok()
-                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                    .and_then(|value| {
-                        Some((
-                            value.get("completed_segments")?.as_u64()?,
-                            value.get("total_segments")?.as_u64()?,
-                        ))
-                    });
-                if let Some((completed, total)) = media_counts {
+            if let Some(facts) = facts {
+                if let Some((completed, total)) = facts.media_counts {
                     snapshot.completed_ranges = completed;
                     snapshot.total_ranges = total;
                 }
-                if media_counts.is_none()
-                    && !matches!(
-                        spec.resource_kind,
-                        ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
-                    )
-                {
+                if let Some((ranges, active)) = facts.ranges {
                     let downloading =
                         matches!(effective_status.as_str(), "downloading" | "recording");
-                    let (parts, active_workers) = paint_from_progress(
-                        progress,
+                    let (parts, active_workers) = paint_from_ranges(
+                        ranges,
+                        active,
                         snapshot.downloaded_bytes,
                         snapshot.total_bytes.unwrap_or(0),
                         downloading,

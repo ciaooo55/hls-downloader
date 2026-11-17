@@ -178,6 +178,7 @@ impl CastTools {
             .and_then(|v| v["request_id"].as_u64())
             .unwrap_or(0);
         if self.jobs.try_send(request).is_err() {
+            self.window.set_notice_tone("error".into());
             self.window.set_notice("操作队列已满，请稍后重试".into());
             return false;
         }
@@ -308,7 +309,10 @@ impl CastTools {
                             self.window.set_path(path.clone().into());
                         }
                     }
-                    Err(error) => self.window.set_notice(error.into()),
+                    Err(error) => {
+                        self.window.set_notice_tone("error".into());
+                        self.window.set_notice(error.into())
+                    }
                 }
             }
             "connect" | "publish" if !self.window.get_busy() && !self.window.get_discovering() => {
@@ -352,6 +356,7 @@ impl CastTools {
                 (String::new(), self.window.get_url().trim().to_owned())
             };
             if path.is_empty() && url.is_empty() {
+                self.window.set_notice_tone("warning".into());
                 self.window
                     .set_notice("请选择媒体文件或输入媒体链接".into());
                 return;
@@ -366,6 +371,7 @@ impl CastTools {
         };
         if self.command(command, Pending::Connect { push, device }) {
             self.window.set_busy(true);
+            self.window.set_notice_tone("info".into());
             self.window.set_notice("正在连接接收端…".into());
         }
     }
@@ -384,6 +390,7 @@ impl CastTools {
             return;
         }
         if action != "status" && !self.controls_supported.get() {
+            self.window.set_notice_tone("warning".into());
             self.window
                 .set_notice("Core 不支持此版本的投屏控制，请使用同版本组件".into());
             return;
@@ -513,6 +520,14 @@ impl CastTools {
                     if request.status != "done" {
                         let _ = self.window.hide();
                     }
+                    self.window.set_notice_tone(
+                        if request.status == "done" {
+                            "success"
+                        } else {
+                            "warning"
+                        }
+                        .into(),
+                    );
                     self.window.set_notice(request.message.clone().into());
                     self.next_push();
                 }
@@ -621,6 +636,7 @@ impl CastTools {
             } else {
                 error
             };
+            self.window.set_notice_tone("error".into());
             self.window.set_notice(message.into());
             if matches!(response,CorePipeResponse::Error{code,..} if code=="cast_connection")
                 && matches!(kind, Pending::Connect { .. } | Pending::Resolve { .. })
@@ -661,6 +677,7 @@ impl CastTools {
             Pending::Connect { push, device } => {
                 self.window.set_busy(false);
                 self.window.set_page("session".into());
+                self.window.set_notice_tone("success".into());
                 self.window.set_notice("已提交到接收端".into());
                 if !device.is_empty() {
                     self.command(
@@ -725,6 +742,7 @@ impl CastTools {
                         .as_ref()
                         .is_some_and(|push| push.id == id)
                     {
+                        self.window.set_notice_tone("warning".into());
                         self.window.set_notice("未找到这次浏览器推送的保存记录，请核对接收端状态后关闭窗口；不会自动重复投送。".into());
                     }
                 }

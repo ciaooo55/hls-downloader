@@ -1283,6 +1283,7 @@ impl Workbench {
                                     variants,
                                     ..
                                 } => {
+                                    editor.set_result_tone("info".into());
                                     editor.set_result(label.clone().into());
                                     editor.set_kind(kind_label(*resource_kind).into());
                                     *self.editor_variants.borrow_mut() = variants.clone();
@@ -1302,9 +1303,11 @@ impl Workbench {
                                     )));
                                 }
                                 CoreEvent::TaskCreated { .. } => {
+                                    editor.set_result_tone("success".into());
                                     editor.set_result("任务已交给下载引擎".into())
                                 }
                                 CoreEvent::Error { message, .. } => {
+                                    editor.set_result_tone("error".into());
                                     editor.set_result(message.clone().into())
                                 }
                                 _ => {}
@@ -1402,6 +1405,7 @@ impl Workbench {
                     let save = self.queue_save.borrow_mut().take().unwrap();
                     if let Some(editor) = self.queues.borrow().as_ref() {
                         editor.window.set_busy(false);
+                        editor.window.set_status_tone("success".into());
                         editor.window.set_status("队列已保存".into());
                     }
                     if let Some((task_ids, queue_id)) = save.assignment {
@@ -1416,6 +1420,7 @@ impl Workbench {
                     self.settings_save_id.set(None);
                     if let Some(editor) = self.settings.borrow_mut().as_mut() {
                         editor.window.set_busy(false);
+                        editor.window.set_status_tone("success".into());
                         editor.window.set_status("设置已保存".into());
                     }
                 }
@@ -1442,6 +1447,7 @@ impl Workbench {
                 if request_id == Some(self.editor_id.get()) {
                     if let Some(editor) = self.editor.borrow().as_ref() {
                         editor.set_busy(false);
+                        editor.set_result_tone("error".into());
                         editor.set_result(message.clone().into());
                     }
                 }
@@ -1449,6 +1455,7 @@ impl Workbench {
                     self.settings_save_id.set(None);
                     if let Some(settings) = self.settings.borrow().as_ref() {
                         settings.window.set_busy(false);
+                        settings.window.set_status_tone("error".into());
                         settings.window.set_status(message.into());
                     }
                 }
@@ -1461,6 +1468,7 @@ impl Workbench {
                     self.queue_save.borrow_mut().take();
                     if let Some(editor) = self.queues.borrow().as_ref() {
                         editor.window.set_busy(false);
+                        editor.window.set_status_tone("error".into());
                         editor.window.set_status(self.window.get_notice());
                     }
                 }
@@ -1525,7 +1533,10 @@ impl Workbench {
             }
             "folder" => match file_dialogs::folder(native_window::hwnd(editor.window())) {
                 Ok(Some(path)) => editor.set_download_dir(path.into()),
-                Err(error) => editor.set_result(error.into()),
+                Err(error) => {
+                    editor.set_result_tone("error".into());
+                    editor.set_result(error.into())
+                }
                 _ => {}
             },
             "probe" | "create" => {
@@ -1533,6 +1544,7 @@ impl Workbench {
                 let spec = match result {
                     Ok(spec) => spec,
                     Err(error) => {
+                        editor.set_result_tone("warning".into());
                         editor.set_result(error.into());
                         return;
                     }
@@ -1565,6 +1577,7 @@ impl Workbench {
                                 .map(str::to_owned)
                                 .collect();
                             if urls.len() > 1000 {
+                                editor.set_result_tone("warning".into());
                                 editor.set_result("每批最多 1000 个地址".into());
                                 return;
                             }
@@ -1783,6 +1796,7 @@ impl Workbench {
             if let Some(this) = weak.upgrade() {
                 if let Some(editor) = this.queues.borrow_mut().as_mut() {
                     if let Err(error) = editor.select(index.max(0) as usize) {
+                        editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
                     }
                 }
@@ -1825,9 +1839,13 @@ impl Workbench {
                             editor.window.set_busy(true);
                         }
                     }
-                    Err(error) => editor.window.set_status(error.into()),
+                    Err(error) => {
+                        editor.window.set_status_tone("warning".into());
+                        editor.window.set_status(error.into())
+                    }
                 }
             } else if let Err(error) = editor.edit(&action) {
+                editor.window.set_status_tone("warning".into());
                 editor.window.set_status(error.into());
             }
         });
@@ -1859,6 +1877,7 @@ impl Workbench {
             if let Some(this) = weak.upgrade() {
                 if let Some(editor) = this.settings.borrow_mut().as_mut() {
                     if let Err(error) = editor.edit(&key, &value) {
+                        editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
                     } else {
                         editor.window.set_status("".into());
@@ -1894,6 +1913,7 @@ impl Workbench {
                     action => editor.rule_action(index, action),
                 };
                 if let Err(error) = result {
+                    editor.window.set_status_tone("warning".into());
                     editor.window.set_status(error.into());
                 }
             }
@@ -1919,6 +1939,7 @@ impl Workbench {
                             .as_ref()
                             .is_some_and(|service| service.window.get_busy())
                         {
+                            editor.window.set_status_tone("warning".into());
                             editor
                                 .window
                                 .set_status("请等待服务配置或登录信息保存完成".into());
@@ -1934,10 +1955,14 @@ impl Workbench {
                                     this.settings_save_id.set(Some(id));
                                     editor.window.set_busy(true);
                                 } else {
+                                    editor.window.set_status_tone("error".into());
                                     editor.window.set_status("命令队列已满，请稍后重试".into());
                                 }
                             }
-                            Err(error) => editor.window.set_status(error.into()),
+                            Err(error) => {
+                                editor.window.set_status_tone("warning".into());
+                                editor.window.set_status(error.into())
+                            }
                         }
                     }
                     "update" => {
@@ -1961,9 +1986,12 @@ impl Workbench {
                             editor.render(&editor.window.get_selected_group());
                         }
                     }
-                    _ => editor
-                        .window
-                        .set_status("该设置页面的专用编辑器尚在迁移中".into()),
+                    _ => {
+                        editor.window.set_status_tone("info".into());
+                        editor
+                            .window
+                            .set_status("该设置页面的专用编辑器尚在迁移中".into())
+                    }
                 }
             }
         });

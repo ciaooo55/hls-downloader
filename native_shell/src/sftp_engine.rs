@@ -388,10 +388,8 @@ fn resume_offset(
 }
 
 fn read_control(path: &Path) -> String {
-    fs::read_to_string(path)
-        .unwrap_or_else(|_| "run".into())
-        .trim()
-        .to_ascii_lowercase()
+    // 运行任务读进程内令牌，未注册路径仍读控制文件（行为不变）。
+    crate::task_control::read_word(path)
 }
 
 fn transfer_from_session(

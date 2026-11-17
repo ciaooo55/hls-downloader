@@ -28,6 +28,8 @@ def run(args):
               'scope': 'Isolated headless Core, loopback HTTP, generated legal media; no desktop, browser, IDM or release install'}
     signature = 'sig=a%2Fb+z'
     requests = Counter()
+    attempts = Counter()
+    request_lock = threading.Lock()
     ranges = []
     expected_ranges = []
     denied = []
@@ -60,7 +62,18 @@ def run(args):
                 denied.append(self.path)
                 self.send_error(403)
                 return
-            requests[parsed.path] += 1
+            with request_lock:
+                requests[parsed.path] += 1
+                identity = (parsed.path, self.headers.get('Range', ''))
+                attempts[identity] += 1
+                first_attempt = attempts[identity] == 1
+            if args.curl and first_attempt:
+                # The ordinary HTTP client must fall back to the supplied curl
+                # transport. No personal browser or external service is used.
+                self.send_response(403)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             path = fixture / parsed.path.lstrip('/')
             if parsed.path.startswith('/range-fmp4/') and path.suffix == '.m4s':
                 value = self.headers.get('Range', '')
@@ -135,6 +148,7 @@ def run(args):
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         with Core(args.engine, root / 'core', environment={'HLS_FFMPEG': str(args.ffmpeg),
+                  'HLS_V7_CURL_IMPERSONATE': str(args.curl) if args.curl else '',
                   'TEMP': str(root), 'TMP': str(root)}) as core:
             core.call({'type': 'store_settings', 'request_id': 4, 'values': {
                 'legal_terms_accepted': True, 'legal_terms_version': '2026-08-06-cn-1', 'keep_temp_files': True}})
@@ -165,6 +179,8 @@ def run(args):
         assert not denied, denied
         assert requests['/encrypted/key.bin'] > 0 and any('/fmp4/' in path and path.endswith('.mp4') for path in requests)
         assert Counter(ranges) == Counter(expected_ranges), (ranges, expected_ranges)
+        if args.curl:
+            assert all(count == 2 for count in attempts.values()), attempts
         report['passed'] = True
     except BaseException as error:
         report['error'] = repr(error)
@@ -180,6 +196,9 @@ def run(args):
         report['denied_requests'] = denied
         report['range_requests'] = ranges
         report['expected_ranges'] = expected_ranges
+        report['transport'] = 'forced curl fallback after first HTTP 403' if args.curl else 'direct HTTP'
+        report['attempts'] = [{'path': path, 'range': value, 'count': count}
+                              for (path, value), count in sorted(attempts.items())]
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2), encoding='utf-8')
         # Keep diagnostics on failure; remove only this script's successful fixture.
@@ -191,5 +210,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine', type=lambda p: Path(p).resolve(strict=True), required=True)
     parser.add_argument('--ffmpeg', type=lambda p: Path(p).resolve(strict=True), required=True)
+    parser.add_argument('--curl', type=lambda p: Path(p).resolve(strict=True))
     parser.add_argument('--report', type=Path, required=True)
     run(parser.parse_args())

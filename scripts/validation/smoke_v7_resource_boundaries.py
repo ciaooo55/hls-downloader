@@ -47,7 +47,7 @@ class Core:
                'HLS_V7_PIPE': rf'\\.\pipe\HLSResource-{uuid.uuid4().hex}'}
         env.update(self.environment)
         self.log = (self.root/'core.log').open('ab')
-        self.process = subprocess.Popen([str(self.engine)], env=env,
+        self.process = subprocess.Popen([str(self.engine), '--no-tray'], env=env,
             stdout=self.log, stderr=self.log, creationflags=subprocess.CREATE_NO_WINDOW)
         self.ps = psutil.Process(self.process.pid)
         try:

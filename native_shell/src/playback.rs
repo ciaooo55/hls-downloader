@@ -19,12 +19,13 @@ struct MediaConnectionSlot(Arc<AtomicUsize>);
 
 impl MediaConnectionSlot {
     fn claim(active: &Arc<AtomicUsize>) -> Option<Self> {
-        active
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                (count < MAX_MEDIA_CONNECTIONS).then_some(count + 1)
-            })
-            .ok()
-            .map(|_| Self(Arc::clone(active)))
+        // `fetch_update` is deprecated in favour of `try_update` on newer
+        // toolchains; keep the older name for MSRV compatibility.
+        #[allow(deprecated)]
+        let claimed = active.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            (count < MAX_MEDIA_CONNECTIONS).then_some(count + 1)
+        });
+        claimed.ok().map(|_| Self(Arc::clone(active)))
     }
 }
 
@@ -573,16 +574,11 @@ fn serve_file(
 }
 
 fn downloaded_range_end(root: &Path, start: u64, total: u64) -> Option<u64> {
-    let value: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(root.join("native-engine.ranges.json")).ok()?,
-    )
-    .ok()?;
-    if value["total"].as_u64() != Some(total) {
+    let checkpoint = crate::range_cache::load_in(root)?;
+    if checkpoint.total != Some(total) {
         return None;
     }
-    value["ranges"].as_array()?.iter().find_map(|range| {
-        let first = range[0].as_u64()?;
-        let last = range[1].as_u64()?;
+    checkpoint.ranges.iter().find_map(|&(first, last)| {
         (first <= start && start <= last && last < total).then_some(last)
     })
 }
@@ -688,12 +684,45 @@ fn stream_bytes(
         if read == 0 {
             break;
         }
-        stream
-            .write_all(&buf[..read])
-            .map_err(|error| error.to_string())?;
+        write_all_within(stream, &buf[..read], WRITE_TIMEOUT).map_err(|error| error.to_string())?;
         remaining -= read as u64;
     }
     Ok(())
+}
+
+/// Writes `buf` within `limit` in total. A blocking send with a timeout may
+/// return after a partial write (Linux does when a non-reading peer's receive
+/// queue is compacted and briefly reopens its window), so `write_all` alone
+/// could keep a stalled client's slot for many timeout periods per chunk.
+/// The whole chunk now has one budget, which is also what one blocking send
+/// with `SO_SNDTIMEO` gives on Windows.
+fn write_all_within(
+    stream: &mut TcpStream,
+    mut buf: &[u8],
+    limit: std::time::Duration,
+) -> std::io::Result<()> {
+    let started = std::time::Instant::now();
+    let result = (|| {
+        while !buf.is_empty() {
+            let left = limit
+                .checked_sub(started.elapsed())
+                .filter(|left| !left.is_zero())
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "media client stalled")
+                })?;
+            stream.set_write_timeout(Some(left))?;
+            match stream.write(buf) {
+                Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+                Ok(count) => buf = &buf[count..],
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    })();
+    // 头部与状态写入仍按整连接的写超时。
+    let restored = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+    result.and(restored)
 }
 
 fn content_type(path: &Path) -> &'static str {

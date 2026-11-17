@@ -60,9 +60,12 @@ pub(crate) fn logical_canonical(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn reject_path_escape(path: &str) -> Result<(), String> {
+    // 设置值按 Windows 路径书写：`\\` 在任何平台上都按分隔符检查 `..`（非 Windows 的
+    // `Path` 会把 `..\\Windows` 当成单个普通名字而放行）。
     if Path::new(path)
         .components()
         .any(|item| matches!(item, Component::ParentDir))
+        || path.split(['/', '\\']).any(|part| part == "..")
     {
         return Err("下载目录不能包含 ..".into());
     }
