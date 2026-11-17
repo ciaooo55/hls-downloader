@@ -98,7 +98,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          python -m pip install --disable-pip-version-check paramiko==3.5.1 pyftpdlib
+          python -m pip install --disable-pip-version-check paramiko==3.5.1 pyftpdlib pyOpenSSL
           $media = & ./scripts/build/bootstrap-v7-media-tools.ps1
           "HLS_TEST_FFPROBE=$media/ffprobe.exe" >> $env:GITHUB_ENV
       - name: Exercise actual packaged workbench on isolated desktop
@@ -158,11 +158,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python scripts/validation/compare_v7_range_tail.py --candidate "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --report artifacts/candidate-native-regression/range-tail.json
           if ($LASTEXITCODE -ne 0) { throw 'Default tail splitting regression failed.' }
-      - name: Verify packaged FTP SFTP and protocol recovery
+      - name: Verify packaged FTP FTPS SFTP and protocol recovery
         if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}
         shell: pwsh
         run: |
-          python scripts/validation/smoke_v7_protocol_features.py --engine "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --no-firewall-rule --report artifacts/candidate-native-regression/protocols.json
+          python scripts/validation/smoke_v7_protocol_features.py --engine "$env:HLS_TEST_RUNTIME/app/resources/HLSDownloaderEngine.exe" --local-ftps --no-firewall-rule --report artifacts/candidate-native-regression/protocols.json
           if ($LASTEXITCODE -ne 0) { throw 'Packaged protocol/recovery acceptance failed.' }
       - name: Verify packaged HLS DASH live and audio recovery with decoded output
         if: ${{ !cancelled() && steps.receive.outcome == 'success' && inputs.extended }}

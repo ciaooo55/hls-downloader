@@ -571,6 +571,8 @@ def run(args):
                         ftps_payload = (bytes(range(256))*313)[:80000]
                         ftps_file = root/"ftps-payload.bin"
                         ftps_file.write_bytes(ftps_payload)
+                        segmented_payload = (bytes(range(251))*20906)[:5*1024*1024+4321]
+                        (root/"ftps-segmented.bin").write_bytes(segmented_payload)
                         now = datetime.now(timezone.utc).replace(tzinfo=None)
                         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
                         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
@@ -591,6 +593,7 @@ def run(args):
                         servers = []
                         server_threads = []
                         commands = []
+                        transfers = []
                         from pyftpdlib.ioloop import IOLoop
 
                         def run_certutil(arguments):
@@ -615,6 +618,8 @@ def run(args):
                             def pre_process_command(self, line, cmd, arg):
                                 if cmd != "PASS":
                                     commands.append([cmd, arg])
+                                if cmd == "RETR":
+                                    transfers.append(self.remote_port)
                                 return super().pre_process_command(line, cmd, arg)
 
                         class ImplicitFtps(Ftps):
@@ -666,6 +671,32 @@ def run(args):
                                 assert Path(done["output_path"]).read_bytes() == ftps_payload
                                 assert any(cmd == "REST" and int(arg) > 0 for cmd, arg in commands[boundary:]), commands[boundary:]
                                 checkpoints.append({"mode": mode, "paused_bytes": checkpoint})
+                                boundary = len(transfers)
+                                task = create(f"ftps://qa:test-password@localhost:{port}/ftps-segmented.bin",
+                                              resource_kind="ftp", concurrency=4, speed_limit_kib=512)
+                                action(task, "start")
+                                started = wait_task(ipc, task["task_id"],
+                                    lambda t: (t["downloaded_bytes"] > 0 and len(set(transfers[boundary:])) >= 2)
+                                    or t["status"] in ("completed", "failed"), 15)
+                                assert started["status"] not in ("completed", "failed"), started
+                                connection_count = len(set(transfers[boundary:]))
+                                assert connection_count >= 2, transfers[boundary:]
+                                action(task, "pause")
+                                paused = wait_task(ipc, task["task_id"],
+                                    lambda t: t["status"] == "paused" and t["active_workers"] == 0, 15)
+                                assert 0 < paused["downloaded_bytes"] < len(segmented_payload), paused
+                                action(task, "speed:0")
+                                boundary = len(commands)
+                                action(task, "resume")
+                                done = wait_task(ipc, task["task_id"],
+                                    lambda t: t["status"] in ("completed", "failed"), 20)
+                                assert done["status"] == "completed", done
+                                actual = Path(done["output_path"]).read_bytes()
+                                assert actual == segmented_payload
+                                assert any(cmd == "REST" and int(arg) > 0 for cmd, arg in commands[boundary:]), commands[boundary:]
+                                checkpoints.append({"mode": mode, "connections": connection_count,
+                                    "paused_bytes": paused["downloaded_bytes"], "bytes": len(actual),
+                                    "sha256": hashlib.sha256(actual).hexdigest()})
                             return {"modes": ["explicit", "implicit"], "bytes": len(ftps_payload),
                                 "sha256": expected, "resume_checkpoints": checkpoints,
                                 "server_certificate_subject": "localhost"}
