@@ -1,0 +1,46 @@
+name: Check installed browser launch
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  launch:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [edge, firefox]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install the public EXE and its matching extension
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $assets = gh release view --json assets | ConvertFrom-Json
+          $family = if ($env:BROWSER -eq 'edge') { 'Chromium' } else { 'Firefox' }
+          $root = New-Item -ItemType Directory -Path artifacts/installed-browser -Force
+          foreach ($pattern in @('*-Windows-x64.exe', "*-$family.zip")) {
+            $asset = @($assets.assets | Where-Object name -like $pattern)
+            if ($asset.Count -ne 1) { throw "Expected one release asset matching $pattern" }
+            Invoke-WebRequest $asset[0].url -OutFile "$root/$($asset[0].name)"
+            $path = Join-Path $root $asset[0].name
+            if ("sha256:$((Get-FileHash $path).Hash.ToLowerInvariant())" -ne $asset[0].digest) { throw 'Release digest mismatch' }
+            if ($path.EndsWith('.exe')) {
+              $process = Start-Process $path -ArgumentList '/install /quiet /norestart' -Wait -PassThru
+              if ($process.ExitCode -ne 0) { throw "Install failed: $($process.ExitCode)" }
+            } else { Expand-Archive $path "$root/extension" }
+          }
+          python -m pip install --disable-pip-version-check selenium websocket-client
+      - name: Open the desktop from the installed extension
+        shell: pwsh
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $base = Join-Path $PWD artifacts/installed-browser
+          if (Get-Process HLSDownloaderEngine,HLSDownloaderPresenter -ErrorAction SilentlyContinue) { throw 'Expected a cold desktop after install' }
+          python scripts/validation/check_installed_browser_launch.py $env:BROWSER "$base"
