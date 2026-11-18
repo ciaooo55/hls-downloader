@@ -1,6 +1,6 @@
 # 文档索引
 
-当前源码版本为 7.0.4；原生实现、验证和交付状态见[原生迁移记录](validation/native-migration-progress.md)和[功能映射](validation/native-feature-mapping.md)。历史记录通过 Git 查看，历史通过不能代替当前源码验收。
+桌面程序及浏览器扩展从[正式版下载页](https://github.com/ciaooo55/hls-downloader/releases/latest)获取。[7.0.7 发布说明](releases/v7.0.7.md)列出了功能、安装方式和验证范围。
 
 目录按用途划分：`guides/` 为使用说明，`architecture/` 为架构与维护约束，`releases/` 为发布说明和流程，`validation/` 为当前验收范围和证据索引，`images/` 为项目介绍图片。维护入口见 [脚本索引](../scripts/README.md)，产品合同见 [配置说明](../config/README.md)。
 

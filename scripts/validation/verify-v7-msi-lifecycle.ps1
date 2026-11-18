@@ -8,8 +8,8 @@ param(
     [string]$CandidateManifestPath,
 
     [string]$OldMsiPath = '',
-    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.5/HLSDownloader-7.0.5-Windows-x64.msi',
-    [string]$OldMsiSha256 = 'd87bd30d874d23d88f69a13add28ff4a87a57ebc06dc5a3ac5af69079facf401',
+    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.7/HLSDownloader-7.0.7-Windows-x64.msi',
+    [string]$OldMsiSha256 = '74ebcbf7dea650f94e0d90e09eb472ef2ae9b39387f64eb0d93646fc0768032f',
     [string]$InstallDir = '',
     [ValidateSet('Direct', 'Wmi')]
     [string]$ApplicationLaunchMode = 'Direct',
@@ -237,19 +237,19 @@ try {
     $originPort = Get-FreeTcpPort
     $manifestPath = (Resolve-Path -LiteralPath $CandidateManifestPath).Path
     $manifest = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion '7.0.5'
     $candidate = Resolve-FullPath ([string]$manifest.artifacts.msi.path) (Split-Path $manifestPath -Parent)
     Add-Step 'candidate-msi-exists' (Test-Path -LiteralPath $candidate -PathType Leaf) $candidate
     $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'candidate-manifest-sha256' ($candidateHash -eq ([string]$manifest.artifacts.msi.sha256).ToLowerInvariant()) $candidateHash
 
-    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.5-Windows-x64.msi' }
+    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.7-Windows-x64.msi' }
     if (-not (Test-Path -LiteralPath $old -PathType Leaf)) { Invoke-WebRequest -Uri $OldMsiUrl -OutFile $old -UseBasicParsing }
     if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
     $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'old-msi-sha256' ($oldHash -eq $OldMsiSha256.ToLowerInvariant()) $oldHash
     $oldVersion = Get-V7MsiProperty $old 'ProductVersion'
     Add-Step 'old-msi-version' ($oldVersion -match '^\d+\.\d+\.\d+$') $oldVersion
+    $expectedCandidateVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $manifest -BaselineVersion $oldVersion
 
     $candidateVersion = Get-V7MsiProperty $candidate 'ProductVersion'
     $upgradeCode = Get-V7MsiProperty $candidate 'UpgradeCode'
