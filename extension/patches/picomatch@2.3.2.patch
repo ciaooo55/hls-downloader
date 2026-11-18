@@ -1,0 +1,21 @@
+diff --git a/lib/parse.js b/lib/parse.js
+--- a/lib/parse.js
++++ b/lib/parse.js
+@@ -492,6 +492,17 @@
+   };
+ 
+   const extglobOpen = (type, value) => {
++    // Accept only literal repetitions with unambiguous word boundaries.
++    // WXT uses these for extension filters, including "styl" and "stylus".
++    if (type === 'plus' || type === 'star') {
++      const group = /^\(([a-z0-9]{1,32}(?:\|[a-z0-9]{1,32}){0,31})\)/i.exec(input.slice(state.index + 1));
++      const words = group ? group[1].toLowerCase().split('|') : [];
++      const initials = new Set(words.map(word => word[0]));
++      if (!words.length || new Set(words).size !== words.length || words.some(short =>
++        words.some(long => long.startsWith(short) && initials.has(long[short.length])))) {
++        throw new SyntaxError('Unsupported repeated extglob in the HLS build');
++      }
++    }
+     const token = { ...EXTGLOB_CHARS[value], conditions: 1, inner: '' };
+ 
+     token.prev = prev;
