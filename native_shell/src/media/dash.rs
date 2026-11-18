@@ -834,6 +834,7 @@ fn match_period_track<'a>(
     chosen: &Representation,
 ) -> Option<&'a Representation> {
     let kind = track_kind(chosen);
+    let chosen_codec = codec_family(&chosen.codecs);
     representations
         .iter()
         .filter(|item| item.period == period && track_kind(item) == kind)
@@ -841,7 +842,9 @@ fn match_period_track<'a>(
             kind != 2 || chosen.lang.is_empty() || item.lang.eq_ignore_ascii_case(&chosen.lang)
         })
         .min_by_key(|item| {
+            let codec = codec_family(&item.codecs);
             (
+                !chosen_codec.is_empty() && !codec.is_empty() && codec != chosen_codec,
                 !item.content_type.eq_ignore_ascii_case(&chosen.content_type),
                 !item.lang.eq_ignore_ascii_case(&chosen.lang),
                 !item.mime.eq_ignore_ascii_case(&chosen.mime),
@@ -1820,6 +1823,9 @@ fn is_audio(item: &Representation) -> bool {
     }
     if !mime.is_empty() {
         return false;
+    }
+    if item.content_type.eq_ignore_ascii_case("audio") {
+        return true;
     }
     let codecs = item.codecs.to_ascii_lowercase();
     codecs.starts_with("mp4a")
@@ -3911,6 +3917,17 @@ mod tests {
                 period_parts(&parsed, &parsed.representations[0]).and_then(concat_period_parts);
             if codec == "hvc1" {
                 assert!(stitched.unwrap_err().contains("编码"));
+                let mut options = parsed.clone();
+                let mut compatible = options.representations[1].clone();
+                compatible.codecs = "avc1.64001f".into();
+                compatible.bandwidth = 2;
+                compatible.media = vec!["https://cdn.test/compatible.m4s".into()];
+                options.representations.push(compatible);
+                let selected = period_parts(&options, &options.representations[0]).unwrap();
+                assert_eq!(
+                    concat_period_parts(selected).unwrap().media.last().unwrap(),
+                    "https://cdn.test/compatible.m4s"
+                );
             } else {
                 assert_eq!(
                     stitched.unwrap().media,
@@ -4104,7 +4121,7 @@ mod tests {
         let xml = r#"<MPD type="static"><Period>
 <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="800000" height="720"><SegmentURL media="v.m4s"/></Representation></AdaptationSet>
 <AdaptationSet mimeType="text/vtt" lang="en" label="English"><Representation id="sub"><SegmentURL media="en-0.vtt"/><SegmentURL media="en-1.vtt"/></Representation></AdaptationSet>
-<AdaptationSet mimeType="audio/mp4"><Representation id="a" bandwidth="128000" codecs="mp4a.40.2"><SegmentURL media="a.m4s"/></Representation></AdaptationSet>
+<AdaptationSet contentType="audio"><Representation id="a" bandwidth="128000"><SegmentURL media="a.m4s"/></Representation></AdaptationSet>
 </Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
         let subs = select_subtitles(&parsed.representations);
