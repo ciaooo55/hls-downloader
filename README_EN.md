@@ -29,7 +29,7 @@ Unlike downloaders whose transfer lifetime is tied to the visible window, HLS Do
 
 For Windows x64, open the [stable release](https://github.com/ciaooo55/hls-downloader/releases/latest) and choose **Windows-x64.exe**. For Chrome or Edge download handoff, also download the Chromium extension from the same release. Choose MSI for deployment or Portable ZIP for use without installation.
 
-The current stable version is [7.0.7](docs/releases/v7.0.7.md). Windows installers are unsigned and updates require manual installation. The Firefox package and its source are available for signing. Permanent installation in standard Firefox requires Mozilla signing.
+The current stable version is [7.0.8](docs/releases/v7.0.8.md). Windows installers are unsigned and updates require manual installation. The Firefox package and its source are available for signing. Permanent installation in standard Firefox requires Mozilla signing.
 
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
 
@@ -41,13 +41,13 @@ Current native implementation, component builds and validation are tracked in th
 | --- | --- |
 | Operating system | Windows 10 or Windows 11 (x64) |
 | CPU architecture | **x64 only.** Playback and part of the capture path rely on the x64 native libraries shipped in the package (libmpv, curl-impersonate), so ARM64 Windows cannot run it |
-| Runtime | The native 7.0.7 stable release requires no Java and contains no JRE; historical Compose packages bundle a JRE |
+| Runtime | The native 7.0.8 stable release requires no Java and contains no JRE; historical Compose packages bundle a JRE |
 | Privileges | MSI installation or upgrade requires administrator rights; see the corresponding release instructions for portable packages |
 | Browser | Chromium-based (Chrome / Edge) or Firefox, for download handoff |
 | Display | 1024×600 minimum; the UI follows the system DPI scaling |
 
 > [!NOTE]
-> **7.0.7 stable** was tested at source commit `4f7c3d45`. `main` may contain later commits; `ARTIFACT-MANIFEST.json` identifies the shipped components.
+> **7.0.8 stable** was tested at source commit `18fc26fa`. `main` may contain later commits; `ARTIFACT-MANIFEST.json` identifies the shipped components.
 
 Online subtitles can be enabled from the video player button or the extension popup, and dragged directly over the video; if the page has multiple videos, you can switch the bound player from the popup. Subtitle translation service, API key, global toggle, target language, sync mode, source text display, and default offset are configured in the desktop main window under `Settings -> Subtitle Translation` (the key is encrypted at rest by the local Core), while the browser extension only controls the per-page toggle, player selection, and starting/stopping subtitles; see the [QwenCloud subtitle guide](docs/guides/qwencloud-subtitles.md).
 
@@ -85,7 +85,7 @@ Online subtitles can be enabled from the video player button or the extension po
 
 In the current source, explicit links intercepted before a browser request are sent to the Core through Native Messaging. File and audio/video responses already requested by the browser, POST forms, and Blob/data-generated files finish in the browser and are then imported. The source file is removed only after a successful import; rejection or failure preserves it. Holding `Alt`, disabling takeover, or matching an exclusion rule keeps the download in the browser.
 
-Preserving the original response avoids replaying one-use URLs. These transfers remain browser-owned until completion, so closing the browser can interrupt them and the desktop confirmation appears after completion. HLS/DASH manifests still use the Core media engine. Version 7.0.7 passed hosted Windows Edge / Firefox regressions for recognition, credentials, receipt recovery and real Host / Core handoff. Browser download creation remains recorded per entry point.
+Preserving the original response avoids replaying one-use URLs. These transfers remain browser-owned until completion, so closing the browser can interrupt them and the desktop confirmation appears after completion. HLS/DASH manifests still use the Core media engine. Version 7.0.8 passed hosted Windows Edge / Firefox regressions for recognition, credentials, receipt recovery and real Host / Core handoff. Browser download creation remains recorded per entry point.
 
 That keeps the browser as an entry point rather than the owner of the download lifecycle. Once a task has entered the Core, its persistent state is managed independently of the browser connection.
 
@@ -101,7 +101,7 @@ flowchart LR
     C --> M["Local Player · LAN Cast"]
 ```
 
-**The Core is the only owner of download state and SQLite**. The native workbench, extension, player and casting path cooperate through it. The stable 7.0.7 package uses the Rust / Slint native entry point; Compose source remains as a migration reference. Matching-source acceptance and publication records are in the [current evidence](docs/validation/current-evidence.json).
+**The Core is the only owner of download state and SQLite**. The native workbench, extension, player and casting path cooperate through it. The stable 7.0.8 package uses the Rust / Slint native entry point; Compose source remains as a migration reference. Matching-source acceptance and publication records are in the [current evidence](docs/validation/current-evidence.json).
 
 ## 📁 Repository layout
 
