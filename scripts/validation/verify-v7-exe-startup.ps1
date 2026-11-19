@@ -4,7 +4,8 @@ param(
     [string]$ProbeInstallDir = '',
     [string]$ProbeShortcut = '',
     [string]$ProbeReport = '',
-    [switch]$ProbeExpectedFailure
+    [switch]$ProbeExpectedFailure,
+    [switch]$CheckBrowserLaunch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,6 +86,9 @@ if ($null -ne (Get-V7InstalledProduct $upgradeCode)) { throw 'EXE startup requir
 $nativeKey = 'HKCU:\Software\HLS Downloader\Native'
 if (Test-Path -LiteralPath $nativeKey) { throw 'EXE startup requires no existing native installation settings.' }
 $result = [ordered]@{ schema = 1; passed = $false; scenarios = @(); scope = 'Frozen EXE install, real Start Menu shortcut, visible responsive workbench; isolated hosted Windows only.' }
+if ($CheckBrowserLaunch) {
+    $result.scope += ' Matching Edge and Firefox extensions verify cold launch and reactivation.'
+}
 $ownedInstallDir = $null
 $bundle = $null
 $installed = $false
@@ -176,6 +180,32 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
         $result.scenarios += [ordered]@{ name = $scenario; install_dir = $ownedInstallDir; install_exit = $installExit; components_match = $true; probe = $probe }
         if (-not $probe.passed) { throw $probe.error }
         Stop-TestApplication
+        if ($CheckBrowserLaunch -and $scenario -eq 'fresh-default') {
+            $result.scenarios[-1].browser_launch = [ordered]@{}
+            foreach ($browser in @('edge', 'firefox')) {
+                if (Get-Process HLSDownloaderEngine,HLSDownloaderPresenter -ErrorAction SilentlyContinue) {
+                    throw "Expected a cold desktop before testing $browser"
+                }
+                $browserRoot = Join-Path $scenarioRoot $browser
+                $family = if ($browser -eq 'edge') { 'Chromium' } else { 'Firefox' }
+                $extension = $manifest.extensions.$family
+                $archive = Join-Path (Split-Path $manifestPath -Parent) $extension.path
+                if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $extension.sha256) {
+                    throw "Candidate extension SHA256 mismatch: $family"
+                }
+                Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $browserRoot 'extension')
+                try {
+                    & python (Join-Path $PSScriptRoot 'check_installed_browser_launch.py') $browser $browserRoot --install-dir $ownedInstallDir
+                    $result.scenarios[-1].browser_launch[$browser] = @{
+                        extension_sha256 = $extension.sha256
+                        passed = ($LASTEXITCODE -eq 0)
+                    }
+                    if ($LASTEXITCODE -ne 0) { throw "Installed candidate extension failed to open the workbench: $browser" }
+                } finally {
+                    Stop-TestApplication
+                }
+            }
+        }
         if ($scenario -eq 'legacy-custom-path') {
             $schema = & python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('pragma user_version').fetchone()[0]); c.close()" (Join-Path $data 'data.db')
             if ($LASTEXITCODE -ne 0 -or $schema -ne '7') { throw "Legacy database was not migrated to schema 7: $schema" }

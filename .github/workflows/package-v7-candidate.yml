@@ -181,11 +181,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Verify EXE installation and visible shortcut startup
+      - name: Verify EXE installation, shortcut and browser startup
         id: exe_startup
         shell: pwsh
         run: |
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check selenium websocket-client
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json -CheckBrowserLaunch
           if ($LASTEXITCODE -ne 0) { throw 'EXE installation/startup regression failed.' }
 
       - name: Upload EXE startup evidence
@@ -193,6 +195,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: HLSDownloader-v7-exe-startup-${{ github.sha }}
-          path: artifacts/v7-productization/exe-startup/**
+          path: |
+            artifacts/v7-productization/exe-startup/**
+            !artifacts/v7-productization/exe-startup/fresh-default/*/extension/**
           if-no-files-found: error
           retention-days: 14
