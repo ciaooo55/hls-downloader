@@ -2,6 +2,21 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Whether the file name has a reserved Windows device name before its extension.
+pub fn reserved_dos_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim();
+    let stem = stem.to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) || ["COM", "LPT"].into_iter().any(|prefix| {
+        matches!(
+            stem.strip_prefix(prefix),
+            Some("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+        )
+    })
+}
+
 pub fn validate_local_source_path(
     url: &str,
     source_path: &str,

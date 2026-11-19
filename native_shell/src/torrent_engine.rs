@@ -414,7 +414,7 @@ fn torrent_path_is_safe(path: &str) -> bool {
                 || part == "."
                 || part == ".."
                 || part.ends_with([' ', '.'])
-                || crate::output_path::reserved_dos_device_name(part)
+                || hls_client::request_validation::reserved_dos_device_name(part)
         })
 }
 

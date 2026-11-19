@@ -4,6 +4,7 @@
 //! most common avoidable failures (path too long, no write permission, a file
 //! name Windows refuses) into an actionable message *before* the handoff is
 //! accepted. The browser handoff state determines whether a browser source file still exists.
+use hls_client::request_validation::reserved_dos_device_name;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -66,15 +67,6 @@ impl TargetIssue {
 
 const INVALID: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
-fn reserved(stem: &str) -> bool {
-    let upper = stem.trim_end_matches([' ', '.']).to_ascii_uppercase();
-    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (upper.len() == 4
-            && (upper.starts_with("COM") || upper.starts_with("LPT"))
-            && upper.as_bytes()[3].is_ascii_digit()
-            && upper.as_bytes()[3] != b'0')
-}
-
 pub fn check_name(filename: &str) -> Result<(), TargetIssue> {
     let name = filename.trim();
     if name.is_empty() {
@@ -92,8 +84,7 @@ pub fn check_name(filename: &str) -> Result<(), TargetIssue> {
     if name.ends_with('.') {
         return Err(TargetIssue::TrailingDot);
     }
-    let stem = name.split('.').next().unwrap_or(name);
-    if reserved(stem) {
+    if reserved_dos_device_name(name) {
         return Err(TargetIssue::ReservedName);
     }
     Ok(())
@@ -167,9 +158,8 @@ pub fn fix_name(filename: &str) -> String {
             }
         })
         .collect();
-    let stem = name.split('.').next().unwrap_or("").to_string();
-    if reserved(&stem) {
-        name.insert(stem.len(), '_');
+    if reserved_dos_device_name(&name) {
+        name.insert(name.find('.').unwrap_or(name.len()), '_');
     }
     if name.is_empty() {
         name = "download".into();
@@ -262,7 +252,11 @@ mod tests {
         assert_eq!(check_name("a:b.mp4"), Err(TargetIssue::InvalidName(':')));
         assert_eq!(check_name("CON.txt"), Err(TargetIssue::ReservedName));
         assert_eq!(check_name("com1"), Err(TargetIssue::ReservedName));
-        assert!(check_name("COM0.mp4").is_ok());
+        for name in ["COM0.mp4", "lpt².txt", "CONIN$.txt", "CONOUT$.txt"] {
+            assert_eq!(check_name(name), Err(TargetIssue::ReservedName));
+            assert!(check_name(&fix_name(name)).is_ok());
+        }
+        assert!(check_name("COM10.mp4").is_ok());
         assert!(check_name("示例视频 · 1080p.mp4").is_ok());
         assert_eq!(fix_name("a:b?.mp4"), "a_b_.mp4");
         assert_eq!(fix_name("con.txt"), "con_.txt");

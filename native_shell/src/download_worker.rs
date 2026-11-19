@@ -2,16 +2,14 @@
 
 use crate::http_engine::extract_http_status;
 use crate::net_policy::queue_profile_allowed;
-use crate::output_path::{
-    constrain_untrusted_download_dir, logical_canonical, reject_path_escape,
-    reserved_dos_device_name,
-};
+use crate::output_path::{constrain_untrusted_download_dir, logical_canonical, reject_path_escape};
 use crate::{
     apply_replay_json_for, run_job_report, with_replay_json, AvScanStatus, CoreCommand, CoreEvent,
     CredentialVault, EventEnvelope, MediaPushRequest, MirrorStatus, PersistentCore, QueueProfile,
     TaskSpec, TorrentSession,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+use hls_client::request_validation::reserved_dos_device_name;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
