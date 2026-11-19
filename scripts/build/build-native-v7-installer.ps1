@@ -106,7 +106,10 @@ try {
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
  <Bundle Name="HLS Downloader" Version="$ProductVersion" Manufacturer="HLS Downloader" UpgradeCode="D327B622-48B2-465D-A71B-07F6EF4B79D9" IconSourceFile="$icon">
   <BootstrapperApplicationRef Id="WixStandardBootstrapperApplication.HyperlinkLicense"><bal:WixStandardBootstrapperApplication LicenseUrl="https://github.com/ciaooo55/hls-downloader/blob/main/LICENSE" /></BootstrapperApplicationRef>
-  <Chain><MsiPackage SourceFile="$(Escape-Xml ([IO.Path]::GetFullPath($OutMsi)))" DisplayInternalUI="yes" Compressed="yes" Vital="yes" /></Chain>
+  <Chain><MsiPackage SourceFile="$(Escape-Xml ([IO.Path]::GetFullPath($OutMsi)))" DisplayInternalUI="yes" Compressed="yes" Vital="yes">
+   <!-- Folder chosen on the Options page; empty keeps the MSI default or saved directory. -->
+   <MsiProperty Name="INSTALLDIR" Value="[InstallFolder]" />
+  </MsiPackage></Chain>
  </Bundle>
 </Wix>
 "@

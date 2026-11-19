@@ -153,6 +153,9 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
         $databaseBefore = if ($scenario -eq 'unsupported-schema') { (Get-FileHash -LiteralPath (Join-Path $data 'data.db') -Algorithm SHA256).Hash } else { $null }
         $installed = $true
         $installExit = Invoke-Bundle '/install' (Join-Path $scenarioRoot 'install.log')
+        # The Options page stores its folder in InstallFolder; Burn must hand it to the MSI.
+        $bundleLog = [IO.File]::ReadAllText((Join-Path $scenarioRoot 'install.log'))
+        if ($bundleLog -notmatch 'Applying execute package: .*, action: Install, .* INSTALLDIR="') { throw 'EXE does not pass the Options install folder to the MSI.' }
         $product = Get-V7InstalledProduct $upgradeCode
         if (-not $product -or $product.product_code -ne $productCode) { throw 'EXE did not register the exact candidate MSI.' }
         $actualDir = (Get-ItemProperty -LiteralPath $nativeKey -Name InstallDir).InstallDir
