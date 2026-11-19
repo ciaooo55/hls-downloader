@@ -247,7 +247,8 @@ IDM 侧依据：参考目录 `README.md`、`RECONSTRUCTION.md`（§5、§9–§1
 
 ## §11 第五轮（2026-11-17）
 
-- **DASH 多 Period（点播）**：按 Period 计算起止时间并分别解析 BaseURL；在第 1 个 Period 选轨，后续 Period 按类型、contentType、语言、mimeType、码率/高度匹配同类轨道并按顺序拼接；初始化段变化时写入 `#EXT-X-DISCONTINUITY` 与新的 `#EXT-X-MAP`，交给现有 FFmpeg 无重编码合并（真实 FFmpeg 两 Period 音视频端到端测试通过）。编解码器族变化、某 Period 无匹配轨/无分段、整文件 SegmentBase 跨 Period 时给出中文错误，不产出坏文件。直播多 Period 仍拒绝。
+- **DASH 多 Period（点播）**：按 Period 解析 BaseURL 和时间范围，在首个 Period 选轨，后续匹配类型、语言、格式与码率。初始化段变化时，局部清单标记不连续并切换初始化段，由 FFmpeg 无重编码封装。编码族变化、选定轨道缺失或整文件 SegmentBase 跨 Period 时会报错。
+- **DASH 多 Period（直播）**：刷新后按 Period ID 或明确的开始时间继续跟踪。分片 URL 和字节范围在同一 Period 内去重，切换 Period 时为音视频标记各自的边界。回归使用真实音视频验证滑动窗口、旧清单、共享及独立初始化段，逐帧比较封装后的时间戳和校验和。字幕目前只保存录制起始 Period 的轨道。参考 [DASH-IF 清单更新约定](https://dashif.org/Guidelines-TimingModel/#mpd-updates)。
 - **无 indexRange 的 SegmentBase**：整个 BaseURL 作为一个分段下载，时长取 Period 时长；外置 RepresentationIndex 与嵌套 SIDX 仍拒绝。
 - **FTP 主动模式**：EPSV/PASV 被拒或被动端口连不上时，自动在控制连接本地地址上监听并发送 EPRT（IPv4 不支持时回落 PORT）；只接受来自控制连接对端 IP 的数据连接，30 秒超时并响应暂停/取消。同一任务内记住主动模式，分段辅助连接直接使用。FTPS 主动模式在 accept 后建立数据 TLS（仅编译验证）。
 - **curl 浏览器身份分支**：确认已是有界管道边收边写，响应头校验先于写入，逐块限速与进度；补 5 项测试（退出前已落盘、限速、中途取消回收进程与名额、身份不符不写入）。

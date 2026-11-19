@@ -1,10 +1,9 @@
-//! Native DASH downloader. Static multi-period manifests are stitched per
-//! track in Period order; multi-period live manifests fail closed.
+//! Native DASH downloader. Compatible tracks are stitched in Period order.
 
 use crate::http_engine::{fetch_bytes_limited, run_job, Job};
 use crate::media::merge::merge_with_ffmpeg;
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,6 +13,23 @@ pub struct DashManifest {
     pub dynamic: bool,
     pub period_count: usize,
     pub representations: Vec<Representation>,
+    periods: Vec<DashPeriod>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DashPeriod {
+    id: Option<String>,
+    start: Option<f64>,
+}
+
+impl DashPeriod {
+    fn same_as(&self, other: &Self) -> bool {
+        match (&self.id, &other.id) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => self.start == other.start,
+            _ => self.start.is_some() && self.start == other.start,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -44,7 +60,7 @@ pub struct Representation {
     pub whole_file: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ByteRange {
     pub start: u64,
     pub length: u64,
@@ -209,13 +225,6 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         return Err("not a DASH manifest".into());
     }
     let dynamic = root.attribute("type") == Some("dynamic");
-    let period_count = root
-        .children()
-        .filter(|node| mpd_element(*node, "Period", root))
-        .count();
-    if period_count > 1 && dynamic {
-        return Err("暂不支持多 Period 的直播 DASH（multi-period live）".into());
-    }
     let periods: Vec<_> = root
         .children()
         .filter(|node| mpd_element(*node, "Period", root))
@@ -445,7 +454,17 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
     }
     Ok(DashManifest {
         dynamic,
-        period_count,
+        period_count: periods.len(),
+        periods: periods
+            .iter()
+            .map(|period| DashPeriod {
+                id: period
+                    .attribute("id")
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned),
+                start: period.attribute("start").and_then(parse_duration_seconds),
+            })
+            .collect(),
         representations,
     })
 }
@@ -548,246 +567,430 @@ pub fn download_dash_selected(
     if status != 200 && status != 206 {
         return Err(format!("DASH manifest HTTP {status}"));
     }
-    let xml = String::from_utf8_lossy(&body);
-    fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
-    let mut files = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    let mut xml = xml.into_owned();
+    let xml = String::from_utf8_lossy(&body).into_owned();
+    let manifest = parse_mpd(&xml, url)?;
     let mut vod = DashCheckpoint::load(task_dir);
-    let mut recorded_audio: Option<Representation> = None;
-    let mut recorded_subs: Vec<Representation> = Vec::new();
-    loop {
-        let manifest = parse_mpd(&xml, url)?;
-        // 选择以第一个 Period 为准，后续 Period 按同类特征匹配后顺序拼接。
-        let first_period: Vec<_> = manifest
-            .representations
-            .iter()
-            .filter(|item| item.period == 0)
-            .cloned()
-            .collect();
-        let video = select_video(&first_period, preferred_bandwidth, preferred_height).cloned();
-        let audio = select_audio(&first_period, preferred_audio).cloned();
-        let subtitles = if download_subtitles {
-            select_subtitles(&first_period)
-        } else {
-            Vec::new()
-        };
-        let video = video
-            .map(|track| expand_periods(&manifest, track, headers, proxy, control))
-            .transpose()?;
-        let audio = audio
-            .map(|track| expand_periods(&manifest, track, headers, proxy, control))
-            .transpose()?;
-        // Subtitles remain best effort, as in save_dash_subtitles; a bad sidecar
-        // index must not prevent downloading the selected audio/video.
-        let subtitles: Vec<_> = subtitles
+    fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
+    if manifest.dynamic {
+        return download_live_dash(
+            manifest,
+            xml,
+            url,
+            headers,
+            proxy,
+            task_dir,
+            control,
+            preferred_bandwidth,
+            preferred_height,
+            download_subtitles,
+            preferred_audio,
+            &mut vod,
+        );
+    }
+
+    // 后续 Period 跟随首个 Period 的轨道选择。
+    let first_period: Vec<_> = manifest
+        .representations
+        .iter()
+        .filter(|item| item.period == 0)
+        .cloned()
+        .collect();
+    let video = select_video(&first_period, preferred_bandwidth, preferred_height)
+        .cloned()
+        .map(|track| expand_periods(&manifest, track, headers, proxy, control))
+        .transpose()?;
+    let audio = select_audio(&first_period, preferred_audio)
+        .cloned()
+        .map(|track| expand_periods(&manifest, track, headers, proxy, control))
+        .transpose()?;
+    let subtitles = if download_subtitles {
+        select_subtitles(&first_period)
             .into_iter()
             .filter_map(|track| expand_periods(&manifest, track, headers, proxy, control).ok())
             .filter(|track| track.init_markers.is_empty())
-            .collect();
-        if read_control(control) != "run" {
-            return Err(control_stop_error(control));
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if read_control(control) != "run" {
+        return Err(control_stop_error(control));
+    }
+    let track = video
+        .as_ref()
+        .or(audio.as_ref())
+        .ok_or("DASH has no audio or video representation")?;
+    if video
+        .iter()
+        .chain(audio.iter())
+        .any(|item| item.media.is_empty())
+    {
+        return Err("DASH representation produced no media segments".into());
+    }
+    let total = video
+        .iter()
+        .chain(audio.iter())
+        .map(|track| (usize::from(track.init.is_some()) + track.media.len()) as u64)
+        .sum();
+    let (files, merged_audio) = download_dash_primary(
+        track,
+        video.is_some(),
+        task_dir,
+        headers,
+        proxy,
+        control,
+        &mut vod,
+        audio.as_ref().filter(|_| video.is_some()),
+        total,
+    )?;
+    write_dash_playlist(task_dir, &files)?;
+    finish_dash(
+        task_dir,
+        merged_audio,
+        subtitles,
+        headers,
+        proxy,
+        control,
+        &mut vod,
+    )
+}
+
+#[derive(Default)]
+struct LiveDashTrack {
+    files: Vec<PathBuf>,
+    durations: Vec<f64>,
+    seen: HashSet<(String, Option<ByteRange>)>,
+    init: Option<(String, Option<ByteRange>)>,
+    bytes: u64,
+}
+
+impl LiveDashTrack {
+    #[allow(clippy::too_many_arguments)]
+    fn append(
+        &mut self,
+        track: &Representation,
+        next_period: bool,
+        kind: &str,
+        dir: &Path,
+        task_dir: &Path,
+        headers: &HashMap<String, String>,
+        proxy: &str,
+        control: &Path,
+        vod: &mut DashCheckpoint,
+        checkpoint_scope: Option<&str>,
+        other: &Self,
+    ) -> Result<(), String> {
+        fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+        let init = track.init.clone().map(|url| (url, track.init_range));
+        let initial = self.files.is_empty();
+        let change_init = init != self.init;
+        if !initial && ((!next_period && change_init) || (change_init && init.is_none())) {
+            return Err("直播 DASH 初始化段改变，无法安全接续当前轨道".into());
         }
-        if video.is_none() && audio.is_none() {
-            return Err("DASH has no audio or video representation".into());
+        if next_period {
+            self.seen.clear();
         }
-        if !manifest.dynamic
-            && video
+        let checkpoint_id = checkpoint_scope.map(|scope| format!("{scope}:{}", track.id));
+        let mut index = self.files.len();
+        let mut push =
+            |url: &str, range, name: String, duration: Option<f64>| -> Result<(), String> {
+                if read_control(control) != "run" {
+                    return Err(control_stop_error(control));
+                }
+                let path = resume_or_fetch(
+                    url,
+                    range,
+                    headers,
+                    proxy,
+                    &dir.join(&name),
+                    control,
+                    task_dir,
+                    kind,
+                    &name,
+                    checkpoint_id.as_deref().unwrap_or(&track.id),
+                    &track.mime,
+                    checkpoint_id.is_some(),
+                    vod,
+                )?;
+                self.bytes = self
+                    .bytes
+                    .saturating_add(path.metadata().map_err(|error| error.to_string())?.len());
+                self.files.push(path);
+                if let Some(duration) = duration {
+                    self.durations.push(duration);
+                }
+                crate::http_engine::write_media_progress(
+                    &task_dir.join("progress.json"),
+                    self.bytes.saturating_add(other.bytes),
+                    (self.files.len() + other.files.len()) as u64,
+                    0,
+                    true,
+                );
+                Ok(())
+            };
+
+        if change_init {
+            if let Some((url, range)) = &init {
+                let (name, duration) = if initial {
+                    ("init.mp4".into(), None)
+                } else {
+                    (format!("seg-{index:04}-init.mp4"), Some(0.0))
+                };
+                push(url, *range, name, duration)?;
+                index += 1;
+            }
+            self.init = init;
+        }
+        let mut boundary = next_period && !change_init;
+        for (media_index, url) in track.media.iter().enumerate() {
+            let range = track.media_ranges[media_index];
+            if !self.seen.insert((url.clone(), range)) {
+                continue;
+            }
+            let name = if boundary {
+                format!("seg-{index:04}-period.m4s")
+            } else {
+                format!("seg-{index:04}.m4s")
+            };
+            let duration = track
+                .media_durations
+                .get(media_index)
+                .copied()
+                .unwrap_or(0.0);
+            push(url, range, name, Some(duration))?;
+            index += 1;
+            boundary = false;
+        }
+        Ok(())
+    }
+
+    fn write_playlist(&self, dir: &Path) -> Result<(), String> {
+        if !write_dash_preview_track(&dir.join("local.m3u8"), &self.files, &self.durations, true)? {
+            write_dash_playlist(dir, &self.files)?;
+        }
+        Ok(())
+    }
+}
+
+fn live_period_begin(periods: &[DashPeriod], active: Option<&DashPeriod>) -> Result<usize, String> {
+    // DASH-IF: MPD refreshes may remove expired Periods. Their list indices
+    // can change, so follow Period@id (or an explicit start if the ID is absent).
+    let mut ids = HashSet::new();
+    let mut previous_start = None;
+    for period in periods {
+        if let Some(id) = &period.id {
+            if !ids.insert(id) {
+                return Err("直播 DASH 清单包含重复的 Period ID".into());
+            }
+        } else if periods.len() > 1 && period.start.is_none() {
+            return Err("直播 DASH 有多个 Period，但缺少可用于跟踪的 ID 或开始时间".into());
+        }
+        if let Some(start) = period.start {
+            if previous_start.is_some_and(|previous| previous >= start) {
+                return Err("直播 DASH 清单的 Period 开始时间未按顺序排列".into());
+            }
+            previous_start = Some(start);
+        }
+    }
+    let Some(active) = active else {
+        return Ok(0);
+    };
+    if let Some(index) = periods.iter().position(|period| period.same_as(active)) {
+        return Ok(index);
+    }
+    if let Some(start) = active.start {
+        if periods.iter().all(|period| period.start.is_some()) {
+            return Ok(periods
                 .iter()
-                .chain(audio.iter())
-                .any(|item| item.media.is_empty())
-        {
-            return Err("DASH representation produced no media segments".into());
+                .position(|period| period.start.unwrap() > start)
+                .unwrap_or(periods.len()));
         }
-        let checkpoint = !manifest.dynamic;
-        let total_segments = video
-            .iter()
-            .chain(audio.iter())
-            .map(|track| (usize::from(track.init.is_some()) + track.media.len()) as u64)
-            .sum();
-        let audio_files = Vec::new();
-        if !manifest.dynamic {
-            let track = video.as_ref().or(audio.as_ref()).unwrap();
-            let (downloaded, prepared_audio) = download_dash_primary(
-                track,
-                video.is_some(),
+    }
+    Err("直播 DASH 更换了 Period，无法确定新旧时间轴顺序".into())
+}
+
+fn continuing_live_track<'a>(
+    representations: &'a [Representation],
+    index: usize,
+    selected: &Representation,
+    same_period: bool,
+) -> Result<&'a Representation, String> {
+    let part = if same_period {
+        representations.iter().find(|item| {
+            item.period == index
+                && item.id == selected.id
+                && track_kind(item) == track_kind(selected)
+        })
+    } else {
+        match_period_track(representations, index, selected)
+    }
+    .ok_or("直播 DASH 的新清单缺少选定音视频轨道")?;
+    if !part.mime.eq_ignore_ascii_case(&selected.mime)
+        || (!selected.lang.is_empty() && !part.lang.eq_ignore_ascii_case(&selected.lang))
+        || (!part.codecs.is_empty()
+            && !selected.codecs.is_empty()
+            && codec_family(&part.codecs) != codec_family(&selected.codecs))
+    {
+        return Err("直播 DASH 轨道格式变化，无法无损拼接".into());
+    }
+    Ok(part)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn download_live_dash(
+    mut manifest: DashManifest,
+    mut xml: String,
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    task_dir: &Path,
+    control: &Path,
+    preferred_bandwidth: u64,
+    preferred_height: u32,
+    download_subtitles: bool,
+    preferred_audio: &str,
+    vod: &mut DashCheckpoint,
+) -> Result<PathBuf, String> {
+    let mut active = None;
+    let mut primary = LiveDashTrack::default();
+    let mut audio = LiveDashTrack::default();
+    let mut choices: Option<(Representation, Option<Representation>)> = None;
+    let mut first_period = None;
+    let mut subtitles = Vec::new();
+    let audio_dir = task_dir.join("audio");
+
+    loop {
+        let start = live_period_begin(&manifest.periods, active.as_ref())?;
+        for (index, period) in manifest.periods.iter().enumerate().skip(start) {
+            let same_period = active.as_ref().is_some_and(|old| period.same_as(old));
+            if let (Some(old_start), Some(new_start)) =
+                (active.as_ref().and_then(|old| old.start), period.start)
+            {
+                if (same_period && new_start != old_start)
+                    || (!same_period && new_start <= old_start)
+                {
+                    return Err("直播 DASH 的 Period 开始时间不连续".into());
+                }
+            }
+            let (mut track, mut secondary) = if let Some((track, secondary)) = &choices {
+                let track =
+                    continuing_live_track(&manifest.representations, index, track, same_period)?;
+                let secondary = secondary
+                    .as_ref()
+                    .map(|item| {
+                        continuing_live_track(&manifest.representations, index, item, same_period)
+                    })
+                    .transpose()?;
+                (track.clone(), secondary.cloned())
+            } else {
+                let candidates: Vec<_> = manifest
+                    .representations
+                    .iter()
+                    .filter(|item| item.period == index)
+                    .cloned()
+                    .collect();
+                let video = select_video(&candidates, preferred_bandwidth, preferred_height);
+                let music = select_audio(&candidates, preferred_audio);
+                let Some(track) = video.or(music) else {
+                    continue;
+                };
+                (track.clone(), music.filter(|_| video.is_some()).cloned())
+            };
+            expand_segment_base(&mut track, headers, proxy, control)?;
+            if let Some(secondary) = &mut secondary {
+                expand_segment_base(secondary, headers, proxy, control)?;
+            }
+            if track.media.is_empty()
+                || secondary.as_ref().is_some_and(|item| item.media.is_empty())
+            {
+                // Future Periods can be present before they advertise both tracks.
+                break;
+            }
+            if track.whole_file || secondary.as_ref().is_some_and(|item| item.whole_file) {
+                return Err("直播 DASH 无法使用没有分片索引的整文件轨道".into());
+            }
+            let next_period = active.is_some() && !same_period;
+            let kind = if is_video(&track) { "video" } else { "audio" };
+            primary.append(
+                &track,
+                next_period,
+                kind,
+                task_dir,
                 task_dir,
                 headers,
                 proxy,
                 control,
-                &mut vod,
-                audio.as_ref().filter(|_| video.is_some()),
-                total_segments,
-            )?;
-            files = downloaded;
-            write_dash_playlist(task_dir, &files)?;
-            return finish_dash(
-                task_dir,
-                &files,
-                total_segments,
+                vod,
                 None,
-                prepared_audio,
-                subtitles,
-                headers,
-                proxy,
-                control,
-                &mut vod,
-            );
-        }
-        if let Some(video) = video.as_ref() {
-            if let Some(init) = &video.init {
-                if seen.insert((init.clone(), video.init_range)) {
-                    files.push(resume_or_fetch(
-                        init,
-                        video.init_range,
-                        headers,
-                        proxy,
-                        &task_dir.join("init.mp4"),
-                        control,
-                        task_dir,
-                        "init",
-                        "init",
-                        &video.id,
-                        &video.mime,
-                        checkpoint,
-                        &mut vod,
-                    )?);
-                    report_dash_tracks_progress(
-                        task_dir,
-                        &files,
-                        &audio_files,
-                        total_segments,
-                        manifest.dynamic,
-                    );
-                }
-            }
-            for (media_index, media) in video.media.iter().enumerate() {
-                let range = video.media_ranges[media_index];
-                if !seen.insert((media.clone(), range)) {
-                    continue;
-                }
-                if read_control(control) != "run" {
-                    return Err(control_stop_error(control));
-                }
-                let index = files.len();
-                let dest = task_dir.join(format!("seg-{index:04}.m4s"));
-                files.push(resume_or_fetch(
-                    media,
-                    range,
-                    headers,
-                    proxy,
-                    &dest,
-                    control,
-                    task_dir,
-                    "video",
-                    &index.to_string(),
-                    &video.id,
-                    &video.mime,
-                    checkpoint,
-                    &mut vod,
-                )?);
-                report_dash_tracks_progress(
-                    task_dir,
-                    &files,
-                    &audio_files,
-                    total_segments,
-                    manifest.dynamic,
-                );
-            }
-        } else if let Some(audio) = audio.as_ref() {
-            if let Some(init) = &audio.init {
-                if seen.insert((init.clone(), audio.init_range)) {
-                    files.push(resume_or_fetch(
-                        init,
-                        audio.init_range,
-                        headers,
-                        proxy,
-                        &task_dir.join("init.mp4"),
-                        control,
-                        task_dir,
-                        "init",
-                        "audio-init",
-                        &audio.id,
-                        &audio.mime,
-                        checkpoint,
-                        &mut vod,
-                    )?);
-                    report_dash_tracks_progress(
-                        task_dir,
-                        &files,
-                        &[],
-                        total_segments,
-                        manifest.dynamic,
-                    );
-                }
-            }
-            for (media_index, media) in audio.media.iter().enumerate() {
-                let range = audio.media_ranges[media_index];
-                if !seen.insert((media.clone(), range)) {
-                    continue;
-                }
-                if read_control(control) != "run" {
-                    return Err(control_stop_error(control));
-                }
-                let index = files.len();
-                let dest = task_dir.join(format!("seg-{index:04}.m4s"));
-                files.push(resume_or_fetch(
-                    media,
-                    range,
-                    headers,
-                    proxy,
-                    &dest,
-                    control,
-                    task_dir,
+                &audio,
+            )?;
+            if let Some(item) = &secondary {
+                let scope = period
+                    .id
+                    .clone()
+                    .or_else(|| period.start.map(|time| time.to_string()));
+                audio.append(
+                    item,
+                    next_period,
                     "audio",
-                    &index.to_string(),
-                    &audio.id,
-                    &audio.mime,
-                    checkpoint,
-                    &mut vod,
-                )?);
-                report_dash_tracks_progress(
+                    &audio_dir,
                     task_dir,
-                    &files,
-                    &[],
-                    total_segments,
-                    manifest.dynamic,
-                );
+                    headers,
+                    proxy,
+                    control,
+                    vod,
+                    Some(scope.as_deref().unwrap_or("implicit")),
+                    &primary,
+                )?;
+            }
+            if !same_period {
+                // Keep only the selected representation metadata across refreshes.
+                for item in std::iter::once(&mut track).chain(secondary.iter_mut()) {
+                    item.media.clear();
+                    item.media_ranges.clear();
+                    item.media_durations.clear();
+                }
+                choices = Some((track, secondary));
+            }
+            active = Some(period.clone());
+            // Sidecars currently keep their original timeline. Do not append
+            // later Periods' cues without rebasing their timestamps.
+            if download_subtitles
+                && period.same_as(first_period.get_or_insert_with(|| period.clone()))
+            {
+                let tracks: Vec<_> = manifest
+                    .representations
+                    .iter()
+                    .filter(|item| item.period == index)
+                    .cloned()
+                    .collect();
+                for mut item in select_subtitles(&tracks) {
+                    if expand_segment_base(&mut item, headers, proxy, control).is_ok() {
+                        merge_sub_track(&mut subtitles, &item);
+                    }
+                }
+                save_dash_subtitles(task_dir, &subtitles, headers, proxy, control, vod);
             }
         }
-        if video.is_some() {
-            if let Some(audio) = audio.as_ref() {
-                merge_representation(&mut recorded_audio, audio);
-            }
-        }
-        if download_subtitles {
-            for track in subtitles {
-                merge_sub_track(&mut recorded_subs, &track);
-            }
-        }
-        if manifest.dynamic {
-            if let Some(audio) = recorded_audio.as_ref() {
-                let _ = pull_dash_audio_segments(
-                    audio, task_dir, headers, proxy, control, &mut vod, &files, 0,
-                );
-            }
-            if download_subtitles {
-                save_dash_subtitles(task_dir, &recorded_subs, headers, proxy, control, &mut vod);
-            }
-        }
-        match read_control(control).as_str() {
-            "run" => {}
-            "pause" => return Err("paused".into()),
-            "cancel" => return Err("canceled".into()),
-            _ => break,
+        if !manifest.dynamic {
+            break;
         }
         let wait = minimum_update_period(&xml).unwrap_or(3.0).clamp(0.4, 8.0);
-        std::thread::sleep(std::time::Duration::from_secs_f64(wait));
-        match read_control(control).as_str() {
-            "run" => {}
-            "pause" => return Err("paused".into()),
-            "cancel" => return Err("canceled".into()),
-            _ => break,
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
+        loop {
+            match read_control(control).as_str() {
+                "run" => {}
+                "pause" => return Err("paused".into()),
+                "cancel" => return Err("canceled".into()),
+                _ => break,
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
+        }
+        if read_control(control) != "run" {
+            return Err(control_stop_error(control));
         }
         let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
             .map_err(|error| error.to_string())?;
@@ -795,22 +998,29 @@ pub fn download_dash_selected(
             break;
         }
         xml = String::from_utf8_lossy(&body).into_owned();
+        manifest = parse_mpd(&xml, url)?;
     }
-    if files.is_empty() {
+    if primary.durations.is_empty() {
         return Err("DASH representation produced no segments".into());
     }
-    write_dash_playlist(task_dir, &files)?;
+    primary.write_playlist(task_dir)?;
+    let merged_audio = if audio.durations.is_empty() {
+        None
+    } else {
+        audio.write_playlist(&audio_dir)?;
+        crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
+        let output = audio_dir.join("merged.m4a");
+        merge_with_ffmpeg(&audio_dir, &output, control)?;
+        Some(output)
+    };
     finish_dash(
         task_dir,
-        &files,
-        0,
-        recorded_audio,
-        None,
-        recorded_subs,
+        merged_audio,
+        subtitles,
         headers,
         proxy,
         control,
-        &mut vod,
+        vod,
     )
 }
 
@@ -1176,29 +1386,13 @@ fn download_dash_primary(
 #[allow(clippy::too_many_arguments)]
 fn finish_dash(
     task_dir: &Path,
-    video_files: &[PathBuf],
-    total_segments: u64,
-    audio: Option<Representation>,
-    prefetched_audio: Option<PathBuf>,
+    audio_merged: Option<PathBuf>,
     subtitles: Vec<Representation>,
     headers: &HashMap<String, String>,
     proxy: &str,
     control: &Path,
     vod: &mut DashCheckpoint,
 ) -> Result<PathBuf, String> {
-    let mut audio_merged = prefetched_audio;
-    if let Some(audio) = audio.filter(|_| audio_merged.is_none()) {
-        audio_merged = Some(fetch_dash_audio(
-            &audio,
-            task_dir,
-            headers,
-            proxy,
-            control,
-            vod,
-            video_files,
-            total_segments,
-        )?);
-    }
     crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
     let output = task_dir.join("merged.mp4");
     merge_with_ffmpeg(task_dir, &output, control)?;
@@ -1211,34 +1405,6 @@ fn finish_dash(
     };
     save_dash_subtitles(task_dir, &subtitles, headers, proxy, control, vod);
     Ok(published)
-}
-
-fn merge_representation(dst: &mut Option<Representation>, src: &Representation) {
-    match dst {
-        None => *dst = Some(src.clone()),
-        Some(existing) => {
-            if existing.init.is_none() {
-                existing.init = src.init.clone();
-                existing.init_range = src.init_range;
-            }
-            for (index, media) in src.media.iter().enumerate() {
-                let range = src.media_ranges[index];
-                if !existing
-                    .media
-                    .iter()
-                    .zip(&existing.media_ranges)
-                    .any(|(url, saved)| url == media && *saved == range)
-                {
-                    existing.media_durations.resize(existing.media.len(), 1.0);
-                    existing.media.push(media.clone());
-                    existing.media_ranges.push(range);
-                    existing
-                        .media_durations
-                        .push(src.media_durations.get(index).copied().unwrap_or(1.0));
-                }
-            }
-        }
-    }
 }
 
 fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) {
@@ -1268,112 +1434,6 @@ fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) 
         return;
     }
     tracks.push(incoming.clone());
-}
-
-#[allow(clippy::too_many_arguments)]
-fn pull_dash_audio_segments(
-    audio: &Representation,
-    task_dir: &Path,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    control: &Path,
-    vod: &mut DashCheckpoint,
-    video_files: &[PathBuf],
-    total_segments: u64,
-) -> Result<Vec<PathBuf>, String> {
-    let audio_dir = task_dir.join("audio");
-    fs::create_dir_all(&audio_dir).map_err(|error| error.to_string())?;
-    let mut audio_files = Vec::new();
-    // 选定音轨的请求失败必须传递给任务，不能发布缺失或截断音频的成功成品。
-    if let Some(init) = &audio.init {
-        let path = resume_or_fetch(
-            init,
-            audio.init_range,
-            headers,
-            proxy,
-            &audio_dir.join("init.mp4"),
-            control,
-            task_dir,
-            "init",
-            "audio-init",
-            &audio.id,
-            &audio.mime,
-            true,
-            vod,
-        )?;
-        audio_files.push(path);
-        report_dash_tracks_progress(
-            task_dir,
-            video_files,
-            &audio_files,
-            total_segments,
-            total_segments == 0,
-        );
-    }
-    for (index, media) in audio.media.iter().enumerate() {
-        if read_control(control) != "run" {
-            break;
-        }
-        let path = resume_or_fetch(
-            media,
-            audio.media_ranges[index],
-            headers,
-            proxy,
-            &audio_dir.join(format!("seg-{index:04}.m4s")),
-            control,
-            task_dir,
-            "audio",
-            &index.to_string(),
-            &audio.id,
-            &audio.mime,
-            true,
-            vod,
-        )?;
-        audio_files.push(path);
-        report_dash_tracks_progress(
-            task_dir,
-            video_files,
-            &audio_files,
-            total_segments,
-            total_segments == 0,
-        );
-    }
-    Ok(audio_files)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn fetch_dash_audio(
-    audio: &Representation,
-    task_dir: &Path,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    control: &Path,
-    vod: &mut DashCheckpoint,
-    video_files: &[PathBuf],
-    total_segments: u64,
-) -> Result<PathBuf, String> {
-    let audio_files = pull_dash_audio_segments(
-        audio,
-        task_dir,
-        headers,
-        proxy,
-        control,
-        vod,
-        video_files,
-        total_segments,
-    )?;
-    if read_control(control) != "run" {
-        return Err(control_stop_error(control));
-    }
-    if audio_files.is_empty() {
-        return Err("DASH audio track has no downloadable segments".into());
-    }
-    let audio_dir = task_dir.join("audio");
-    write_dash_playlist(&audio_dir, &audio_files)?;
-    let audio_out = audio_dir.join("merged.m4a");
-    crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
-    merge_with_ffmpeg(&audio_dir, &audio_out, control)?;
-    Ok(audio_out)
 }
 
 fn download_one(
@@ -1602,6 +1662,7 @@ fn parse_duration_seconds(value: &str) -> Option<f64> {
         let mut total = 0.0;
         let mut number = String::new();
         let mut in_time = false;
+        let mut has_component = false;
         for ch in rest.chars() {
             if ch == 'T' {
                 in_time = true;
@@ -1613,6 +1674,7 @@ fn parse_duration_seconds(value: &str) -> Option<f64> {
             }
             let parsed = number.parse::<f64>().ok()?;
             number.clear();
+            has_component = true;
             total += match (in_time, ch) {
                 (false, 'Y') => parsed * 31_536_000.0,
                 (false, 'M') => parsed * 2_592_000.0,
@@ -1624,9 +1686,11 @@ fn parse_duration_seconds(value: &str) -> Option<f64> {
                 _ => return None,
             };
         }
-        return (number.is_empty() && total > 0.0).then_some(total);
+        return (number.is_empty() && has_component && total.is_finite()).then_some(total);
     }
-    text.parse().ok()
+    text.parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 fn read_control(path: &Path) -> String {
@@ -2836,7 +2900,7 @@ mod tests {
                 std::env::temp_dir().join(format!("hls-dash-real-periods-{}", std::process::id()));
             let _ = fs::remove_dir_all(&root);
             let mut files = HashMap::new();
-            let mut periods = String::new();
+            let mut periods = Vec::new();
             let mut requests = 1;
             for (period, tone) in [("p1", 440), ("p2", 880)] {
                 let dir = root.join("src").join(period);
@@ -2928,16 +2992,20 @@ mod tests {
                     let init_prefix = if shared_init { "/" } else { "" };
                     sets.push_str(&format!(r#"<AdaptationSet contentType="{kind}" mimeType="{kind}/mp4"><Representation id="{period}-{kind}" bandwidth="1000"><SegmentList><Initialization sourceURL="{init_prefix}init-{id}.m4s"/>{list}</SegmentList></Representation></AdaptationSet>"#));
                 }
-                periods.push_str(&format!(
-                    r#"<Period duration="PT2S"><BaseURL>{period}/</BaseURL>{sets}</Period>"#
+                let start = if period == "p1" { 0 } else { 2 };
+                periods.push(format!(
+                    r#"<Period id="{period}" start="PT{start}S" duration="PT2S"><BaseURL>{period}/</BaseURL>{sets}</Period>"#
                 ));
             }
             files.insert(
                 "/manifest.mpd".into(),
-                format!(r#"<MPD type="static" mediaPresentationDuration="PT4S">{periods}</MPD>"#)
-                    .into_bytes(),
+                format!(
+                    r#"<MPD type="static" mediaPresentationDuration="PT4S">{}</MPD>"#,
+                    periods.concat()
+                )
+                .into_bytes(),
             );
-            let (base, server) = serve_dash_files(files, requests);
+            let (base, server) = serve_dash_files(files.clone(), requests);
             let task = root.join("task");
             let control = root.join("control");
             fs::write(&control, "run").unwrap();
@@ -2954,14 +3022,21 @@ mod tests {
             )
             .unwrap();
             assert_eq!(server.join().unwrap().len(), requests);
-            let frames = Command::new(&ffmpeg)
-                .args(["-v", "error", "-nostdin", "-i"])
-                .arg(&output)
-                .args(["-f", "framecrc", "-"])
-                .output()
-                .unwrap();
-            assert!(frames.status.success());
-            let text = String::from_utf8_lossy(&frames.stdout);
+            let decode = |output: &Path| {
+                let frames = Command::new(&ffmpeg)
+                    .args(["-v", "error", "-nostdin", "-i"])
+                    .arg(output)
+                    .args(["-f", "framecrc", "-"])
+                    .output()
+                    .unwrap();
+                assert!(
+                    frames.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&frames.stderr)
+                );
+                String::from_utf8(frames.stdout).unwrap()
+            };
+            let text = decode(&output);
             let video = text.lines().filter(|line| line.starts_with("0,")).count();
             let audio = text.lines().filter(|line| line.starts_with("1,")).count();
             assert_eq!(video, 100, "both Periods' video frames survive the merge");
@@ -2969,6 +3044,67 @@ mod tests {
                 audio >= 180,
                 "both Periods' audio survive the merge: {audio}"
             );
+            // Keep the media URLs identical across Periods to catch URL-only
+            // deduplication. Initialization URLs still cover both variants.
+            let periods: Vec<_> = periods
+                .iter()
+                .map(|period| period.replace(r#"media="chunk-"#, r#"media="/reused-chunk-"#))
+                .collect();
+            let manifest_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let hits = manifest_hits.clone();
+            let origin =
+                super::super::harness::serve_dynamic(std::sync::Arc::new(move |path, hit| {
+                    if path == "/manifest.mpd" {
+                        hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let (kind, periods) = match hit {
+                            1 => ("dynamic", periods[0].clone()),
+                            2 if shared_init => ("dynamic", periods[1].clone()), // no overlap
+                            2 => ("dynamic", periods.concat()),
+                            3 => ("dynamic", periods[1].clone()),
+                            4 => ("dynamic", periods[0].clone()), // stale cache after the rollover
+                            _ => ("static", periods[1].clone()),
+                        };
+                        return Some(
+                            format!(
+                                r#"<MPD type="{kind}" minimumUpdatePeriod="PT0.4S">{periods}</MPD>"#
+                            )
+                            .into_bytes(),
+                        );
+                    }
+                    if let Some(name) = path.strip_prefix("/reused-") {
+                        assert!(hit <= 2, "duplicate segment requested: {path}");
+                        let period = if hit == 1 { "p1" } else { "p2" };
+                        return files.get(&format!("/{period}/{name}")).cloned();
+                    }
+                    files.get(path).cloned()
+                }));
+            let live_task = root.join("live");
+            let live_output = download_dash_selected(
+                &format!("{}/manifest.mpd", origin.base),
+                &HashMap::new(),
+                "",
+                &live_task,
+                &control,
+                0,
+                0,
+                false,
+                "",
+            )
+            .unwrap();
+            assert_eq!(manifest_hits.load(std::sync::atomic::Ordering::Relaxed), 5);
+            let live_frames = decode(&live_output);
+            assert_eq!(live_frames.lines().count(), text.lines().count());
+            for (live, vod) in live_frames.lines().zip(text.lines()) {
+                assert_eq!(live, vod, "live and VOD decoded timestamps and checksums");
+            }
+            for playlist in ["local.m3u8", "audio/local.m3u8"] {
+                let listed = fs::read_to_string(live_task.join(playlist)).unwrap();
+                assert_eq!(listed.matches("#EXT-X-DISCONTINUITY").count(), 1);
+                assert_eq!(
+                    listed.matches("#EXT-X-MAP:").count(),
+                    if shared_init { 1 } else { 2 }
+                );
+            }
             fs::remove_dir_all(root).unwrap();
         }
     }
@@ -3255,19 +3391,25 @@ mod tests {
         fs::write(&control, "run").unwrap();
         let xml = r#"<MPD><Period><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><Initialization range="0-3"/><SegmentURL mediaRange="4-7"/><SegmentURL mediaRange="8-11"/></SegmentList></Representation></Period></MPD>"#;
         let track = parse_mpd(xml, &url).unwrap().representations.remove(0);
-        let files = pull_dash_audio_segments(
-            &track,
-            &root,
-            &HashMap::new(),
-            "",
-            &control,
-            &mut DashCheckpoint::load(&root),
-            &[],
-            3,
-        )
-        .unwrap();
+        let mut output = LiveDashTrack::default();
+        output
+            .append(
+                &track,
+                false,
+                "audio",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut DashCheckpoint::load(&root),
+                None,
+                &LiveDashTrack::default(),
+            )
+            .unwrap();
         assert_eq!(
-            files
+            output
+                .files
                 .iter()
                 .map(|p| fs::read(p).unwrap())
                 .collect::<Vec<_>>(),
@@ -3298,35 +3440,6 @@ mod tests {
             .contains("range subtitle"));
         sub_server.join().unwrap();
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn live_same_url_ranges_accumulate_with_their_durations() {
-        let first = parse_mpd(r#"<MPD type="dynamic"><Period><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><SegmentURL mediaRange="0-3"/></SegmentList></Representation></Period></MPD>"#, "https://cdn.test/all.mp4").unwrap().representations.remove(0);
-        let next = parse_mpd(r#"<MPD type="dynamic"><Period><Representation id="a" mimeType="audio/mp4"><SegmentList duration="2"><SegmentURL mediaRange="0-3"/><SegmentURL mediaRange="4-7"/></SegmentList></Representation></Period></MPD>"#, "https://cdn.test/all.mp4").unwrap().representations.remove(0);
-        let mut audio = None;
-        merge_representation(&mut audio, &first);
-        merge_representation(&mut audio, &next);
-        let audio = audio.unwrap();
-        assert_eq!(audio.media.len(), 2);
-        assert_eq!(
-            audio.media_ranges,
-            vec![
-                Some(ByteRange {
-                    start: 0,
-                    length: 4
-                }),
-                Some(ByteRange {
-                    start: 4,
-                    length: 4
-                })
-            ]
-        );
-        assert_eq!(audio.media_durations, vec![1.0, 2.0]);
-        let mut subs = Vec::new();
-        merge_sub_track(&mut subs, &first);
-        merge_sub_track(&mut subs, &next);
-        assert_eq!(subs, vec![audio]);
     }
 
     #[test]
@@ -3603,9 +3716,6 @@ mod tests {
         write_dash_playlist(&task, &files).unwrap();
         let output = finish_dash(
             &task,
-            &files,
-            3,
-            None,
             None,
             Vec::new(),
             &HashMap::new(),
@@ -3935,10 +4045,6 @@ mod tests {
                 );
             }
         }
-        let live = r#"<MPD type="dynamic"><Period><Representation id="v"/></Period><Period><Representation id="v"/></Period></MPD>"#;
-        assert!(parse_mpd(live, "https://cdn.test/manifest.mpd")
-            .unwrap_err()
-            .contains("multi-period"));
     }
 
     #[test]
@@ -4142,68 +4248,7 @@ mod tests {
     }
 
     #[test]
-    fn live_audio_and_sub_urls_accumulate_across_mpd_refreshes() {
-        let mut audio = None;
-        merge_representation(
-            &mut audio,
-            &Representation {
-                id: "a".into(),
-                bandwidth: 128000,
-                height: 0,
-                mime: "audio/mp4".into(),
-                lang: "en".into(),
-                codecs: "mp4a.40.2".into(),
-                content_type: "audio".into(),
-                label: String::new(),
-                base_url: String::new(),
-                init: Some("https://cdn.test/a-init.mp4".into()),
-                init_range: None,
-                index_range: None,
-                media: vec!["https://cdn.test/a0.m4s".into()],
-                media_ranges: vec![None],
-                media_durations: vec![4.0],
-                period: 0,
-                init_markers: Vec::new(),
-                period_markers: Vec::new(),
-                whole_file: false,
-            },
-        );
-        merge_representation(
-            &mut audio,
-            &Representation {
-                id: "a".into(),
-                bandwidth: 128000,
-                height: 0,
-                mime: "audio/mp4".into(),
-                lang: "en".into(),
-                codecs: "mp4a.40.2".into(),
-                content_type: "audio".into(),
-                label: String::new(),
-                base_url: String::new(),
-                init: Some("https://cdn.test/a-init.mp4".into()),
-                init_range: None,
-                index_range: None,
-                media: vec![
-                    "https://cdn.test/a1.m4s".into(),
-                    "https://cdn.test/a0.m4s".into(),
-                ],
-                media_ranges: vec![None, None],
-                media_durations: vec![4.0, 4.0],
-                period: 0,
-                init_markers: Vec::new(),
-                period_markers: Vec::new(),
-                whole_file: false,
-            },
-        );
-        let audio = audio.unwrap();
-        assert_eq!(audio.init.as_deref(), Some("https://cdn.test/a-init.mp4"));
-        assert_eq!(
-            audio.media,
-            vec![
-                "https://cdn.test/a0.m4s".to_string(),
-                "https://cdn.test/a1.m4s".to_string()
-            ]
-        );
+    fn live_subtitle_urls_accumulate_across_mpd_refreshes() {
         let mut subs = Vec::new();
         merge_sub_track(
             &mut subs,
