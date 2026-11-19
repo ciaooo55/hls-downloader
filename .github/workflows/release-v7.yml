@@ -206,7 +206,7 @@ jobs:
           $evidence = 'artifacts/v7-productization/release-evidence/formal-exe-startup'
           New-Item -ItemType Directory -Path $evidence | Out-Null
           Copy-Item -LiteralPath "$startup/result.json" -Destination $evidence
-          foreach ($scenario in @('fresh-default', 'legacy-custom-path', 'unsupported-schema')) {
+          foreach ($scenario in @('fresh-default', 'fresh-custom', 'legacy-custom-path', 'unsupported-schema')) {
             Copy-Item -LiteralPath "$startup/$scenario/window.json" -Destination "$evidence/$scenario.json"
           }
 

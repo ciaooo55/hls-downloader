@@ -93,8 +93,10 @@ $ownedInstallDir = $null
 $bundle = $null
 $installed = $false
 
-function Invoke-Bundle([string]$Action, [string]$Log) {
-    $process = Start-Process -FilePath $bundle -ArgumentList @($Action, '/quiet', '/norestart', '/log', ('"' + $Log + '"')) -PassThru
+function Invoke-Bundle([string]$Action, [string]$Log, [string]$InstallFolder = '') {
+    $arguments = @($Action, '/quiet', '/norestart', '/log', ('"' + $Log + '"'))
+    if ($InstallFolder) { $arguments += ('InstallFolder="' + $InstallFolder + '"') }
+    $process = Start-Process -FilePath $bundle -ArgumentList $arguments -PassThru
     if (-not $process.WaitForExit(120000)) { throw 'Burn operation timed out; installation evidence was retained.' }
     $process.Refresh()
     if ($process.ExitCode -notin @(0, 3010, 1641)) { throw "Burn $Action failed with exit code $($process.ExitCode)." }
@@ -129,18 +131,18 @@ try {
     $result.candidate_manifest_sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $result.candidate_exe_sha256 = $exeHash
 
-    foreach ($scenario in @('fresh-default', 'legacy-custom-path', 'unsupported-schema')) {
+    foreach ($scenario in @('fresh-default', 'fresh-custom', 'legacy-custom-path', 'unsupported-schema')) {
         $scenarioRoot = Join-Path $artifacts $scenario
         New-Item -ItemType Directory -Force -Path $scenarioRoot | Out-Null
-        $ownedInstallDir = if ($scenario -eq 'fresh-default') { Join-Path $env:LOCALAPPDATA 'HLSDownloader' } else { Join-Path $fixture ('custom install\HLS ' + [char]0x4e0b + [char]0x8f7d + [char]0x5668) }
+        $ownedInstallDir = if ($scenario -eq 'fresh-default') { Join-Path $env:LOCALAPPDATA 'HLSDownloader' } else { Join-Path $fixture ("$scenario\HLS " + [char]0x4e0b + [char]0x8f7d + [char]0x5668) }
         if (Test-Path -LiteralPath (Join-Path $ownedInstallDir 'HLSDownloader.exe')) { throw 'Refusing to replace an existing installation.' }
-        if ($scenario -ne 'fresh-default') {
+        if ($scenario -in @('legacy-custom-path', 'unsupported-schema')) {
             New-Item -Path $nativeKey -Force | Out-Null
             New-ItemProperty -LiteralPath $nativeKey -Name InstallDir -Value $ownedInstallDir -PropertyType String -Force | Out-Null
         }
         $data = Join-Path $scenarioRoot 'data'
         New-Item -ItemType Directory -Force -Path $data | Out-Null
-        if ($scenario -ne 'fresh-default') {
+        if ($scenario -in @('legacy-custom-path', 'unsupported-schema')) {
             # Reproduce the old candidate's confirmed schema-6 startup failure.
             @'
 import pathlib, sqlite3, sys
@@ -152,7 +154,8 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
         }
         $databaseBefore = if ($scenario -eq 'unsupported-schema') { (Get-FileHash -LiteralPath (Join-Path $data 'data.db') -Algorithm SHA256).Hash } else { $null }
         $installed = $true
-        $installExit = Invoke-Bundle '/install' (Join-Path $scenarioRoot 'install.log')
+        $selectedFolder = if ($scenario -eq 'fresh-custom') { $ownedInstallDir } else { '' }
+        $installExit = Invoke-Bundle '/install' (Join-Path $scenarioRoot 'install.log') $selectedFolder
         $product = Get-V7InstalledProduct $upgradeCode
         if (-not $product -or $product.product_code -ne $productCode) { throw 'EXE did not register the exact candidate MSI.' }
         $actualDir = (Get-ItemProperty -LiteralPath $nativeKey -Name InstallDir).InstallDir
