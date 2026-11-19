@@ -2,6 +2,43 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+pub(crate) fn hls_input_options(command: &mut Command) {
+    static SUPPORT: OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> = OnceLock::new();
+    let mut cache = SUPPORT.get_or_init(Mutex::default).lock().unwrap();
+    let supported = *cache
+        .entry(PathBuf::from(command.get_program()))
+        .or_insert_with(|| {
+            let mut probe = Command::new(command.get_program());
+            probe.args(["-hide_banner", "-h", "demuxer=hls"]);
+            probe.stdin(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                probe.creation_flags(0x08000000);
+            }
+            probe.output().is_ok_and(|output| {
+                output.status.success()
+                    && (has_extension_picky(&output.stdout) || has_extension_picky(&output.stderr))
+            })
+        });
+    command.args(hls_input_args(supported));
+}
+
+fn has_extension_picky(help: &[u8]) -> bool {
+    String::from_utf8_lossy(help)
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some("-extension_picky"))
+}
+
+fn hls_input_args(extension_picky: bool) -> &'static [&'static str] {
+    if extension_picky {
+        &["-allowed_extensions", "ALL", "-extension_picky", "0"]
+    } else {
+        &["-allowed_extensions", "ALL"]
+    }
+}
 
 pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
     if inputs.is_empty() {
@@ -58,21 +95,18 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Resu
         return Err("local playlist missing for ffmpeg mux".into());
     };
     let mut command = Command::new(ffmpeg);
+    command.args([
+        "-y",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        "file,crypto",
+    ]);
+    // 清单由本程序生成，仅引用已下载的本地分片；站点后缀可能是 jpeg/bin。
+    hls_input_options(&mut command);
     command
-        .args([
-            "-y",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-protocol_whitelist",
-            "file,crypto",
-            // 清单由本程序生成，仅引用已下载的本地分片；站点后缀可能是 jpeg/bin。
-            "-allowed_extensions",
-            "ALL",
-            "-extension_picky",
-            "0",
-            "-i",
-        ])
+        .arg("-i")
         .arg(&input)
         .args(["-c", "copy", "-movflags", "+faststart"]);
     run_ffmpeg_to_output(
@@ -344,6 +378,83 @@ fn which(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hls_options_match_demuxer_support() {
+        assert_eq!(hls_input_args(false), ["-allowed_extensions", "ALL"]);
+        assert_eq!(
+            hls_input_args(true),
+            ["-allowed_extensions", "ALL", "-extension_picky", "0"]
+        );
+    }
+
+    #[test]
+    fn detects_only_advertised_extension_picky_option() {
+        assert!(has_extension_picky(
+            b"hls demuxer AVOptions:\n  -extension_picky <boolean> .D......... (default true)\r\n"
+        ));
+        for help in [
+            &b""[..],
+            &b"  -allowed_extensions <string>"[..],
+            &b"Unrecognized option 'extension_picky'"[..],
+            &b"  -extension_picky_other <boolean>"[..],
+        ] {
+            assert!(!has_extension_picky(help));
+        }
+    }
+
+    #[test]
+    fn missing_ffmpeg_omits_unsupported_option() {
+        let mut command = Command::new("/nonexistent/hls-test-ffmpeg");
+        hls_input_options(&mut command);
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            hls_input_args(false)
+        );
+    }
+
+    #[test]
+    fn hls_merge_works_with_available_ffmpeg() {
+        let Some(ffmpeg) = locate_ffmpeg() else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "hls-option-compat-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let generated = Command::new(ffmpeg)
+            .args([
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-c:a",
+                "aac",
+                "-f",
+                "hls",
+            ])
+            .arg(root.join("local.m3u8"))
+            .output()
+            .unwrap();
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let output = root.join("merged.mp4");
+        merge_with_ffmpeg(&root, &output, &root.join("control")).unwrap();
+        let bytes = fs::read(output).unwrap();
+        assert_eq!(&bytes[4..8], b"ftyp");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn ts_remux_produces_mp4_with_the_same_streams_when_ffmpeg_is_available() {
