@@ -103,9 +103,17 @@ function Invoke-Bundle([string]$Action, [string]$Log) {
 
 function Stop-TestApplication {
     if (-not $ownedInstallDir) { return }
-    @(Get-CimInstance Win32_Process | Where-Object {
-        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($ownedInstallDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
-    }) | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $installPrefix = $ownedInstallDir.TrimEnd('\') + '\'
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $ownedProcesses = @(Get-Process | Where-Object {
+            $_.Path -and $_.Path.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($ownedProcesses.Count -eq 0) { return }
+        $ownedProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'Installed test processes did not exit before the next scenario.'
 }
 
 try {
@@ -223,7 +231,8 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
     $result.passed = $true
 } catch { $result.error = $_.Exception.Message }
 finally {
-    Stop-TestApplication
+    try { Stop-TestApplication }
+    catch { $result.cleanup_error = $_.Exception.Message; $result.passed = $false }
     if ($installed -and $bundle) {
         try { [void](Invoke-Bundle '/uninstall' (Join-Path $artifacts 'cleanup.log')) }
         catch { $result.cleanup_error = $_.Exception.Message; $result.passed = $false }
