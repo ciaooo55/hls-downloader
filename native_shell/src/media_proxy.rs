@@ -152,7 +152,7 @@ impl MediaProxy {
 
     pub fn serve(
         &self,
-        stream: &mut TcpStream,
+        stream: TcpStream,
         request: &str,
         sub: &str,
         prefix: &str,
@@ -163,13 +163,13 @@ impl MediaProxy {
             .and_then(|l| l.split_whitespace().next())
             .unwrap_or("");
         if !matches!(method, "GET" | "HEAD") {
-            return status(stream, 405);
+            return status(&stream, 405);
         }
         if self.canceled.load(Ordering::Relaxed) {
-            return status(stream, 404);
+            return status(&stream, 404);
         }
         let Ok(url) = self.source(sub) else {
-            return status(stream, 404);
+            return status(&stream, 404);
         };
         let kind = manifest_kind(
             &url,
@@ -188,7 +188,7 @@ impl MediaProxy {
             .map(|(_, query)| query)
             .unwrap_or("");
         let Some(request_url) = hls_reload_url(&url, query, kind == Some("hls")) else {
-            return status(stream, 400);
+            return status(&stream, 400);
         };
         let range = request
             .lines()
@@ -202,11 +202,14 @@ impl MediaProxy {
                     .bytes()
                     .all(|b| b.is_ascii_digit() || matches!(b, b'-' | b',' | b' '))
         }) {
-            return status(stream, 416);
+            return status(&stream, 416);
         }
         let mut spec = self.spec.clone();
         spec.url = url;
         let range = if kind.is_some() { None } else { range };
+        // Share the accepted socket without creating an inheritable Windows handle.
+        let peer = Arc::new(stream);
+        let mut stream = peer.as_ref();
         let mut started = false;
         let result = crate::http_engine::with_media_response(
             &spec,
@@ -215,7 +218,7 @@ impl MediaProxy {
             method,
             range,
             &self.canceled,
-            stream.try_clone().map_err(|e| e.to_string())?,
+            Arc::clone(&peer),
             |mut response| {
                 if !(200..300).contains(&response.status) {
                     started = true;
@@ -383,12 +386,12 @@ fn hls_reload_url(source: &str, query: &str, known_hls: bool) -> Option<String> 
     Some(url)
 }
 
-fn status(stream: &mut TcpStream, code: u16) -> Result<(), String> {
+fn status(stream: &TcpStream, code: u16) -> Result<(), String> {
     write_head(stream, code, "text/plain", Some(0), None, false)
 }
 
 fn write_head(
-    stream: &mut TcpStream,
+    mut stream: &TcpStream,
     code: u16,
     content_type: &str,
     length: Option<u64>,
@@ -1400,6 +1403,60 @@ mod tests {
         drop(receiver);
         assert!(observed.recv_timeout(Duration::from_secs(3)).unwrap());
         upstream.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_proxy_finishes_while_a_child_process_is_running() {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (finish, wait_for_child) = mpsc::channel();
+        let upstream = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_headers(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4097\r\nContent-Type: video/mp4\r\n\r\n",
+                )
+                .unwrap();
+            stream.write_all(&[b'x'; 4096]).unwrap();
+            if wait_for_child.recv_timeout(Duration::from_secs(10)).is_ok() {
+                stream.write_all(b"!").unwrap();
+            }
+        });
+        let server = MediaServer::start_local().unwrap();
+        mount(&server, &format!("http://{address}/movie.mp4"), json!({}));
+        let mut receiver = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        receiver
+            .write_all(b"GET /media/test HTTP/1.1\r\n\r\n")
+            .unwrap();
+        assert!(read_headers(&mut receiver).starts_with("HTTP/1.1 200"));
+
+        // The open stdin keeps the child alive until after the proxy should close.
+        let mut child = Command::new("cmd.exe")
+            .args(["/d", "/q", "/c", "set /p hold="])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .unwrap();
+        let sent = finish.send(());
+        let mut body = Vec::new();
+        let closed = receiver.read_to_end(&mut body);
+        let child_status = child.try_wait();
+        let _ = child.kill();
+        let _ = child.wait();
+        upstream.join().unwrap();
+
+        sent.unwrap();
+        assert!(child_status.unwrap().is_none());
+        closed.unwrap();
+        assert_eq!(body.len(), 4097);
+        assert_eq!(body[4096], b'!');
     }
 
     #[test]

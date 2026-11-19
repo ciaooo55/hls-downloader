@@ -394,7 +394,7 @@ fn handle_client(
     };
     let file_path = match mount {
         Mount::Proxy(proxy) => {
-            return proxy.serve(&mut stream, &request, sub, &format!("/media/{token}"));
+            return proxy.serve(stream, &request, sub, &format!("/media/{token}"));
         }
         Mount::Growing { root, file, total } => {
             if !sub.is_empty() {

@@ -2931,7 +2931,7 @@ struct FetchResult {
 
 struct MediaCancellation {
     flag: Arc<AtomicBool>,
-    peer: TcpStream,
+    peer: Arc<TcpStream>,
     last_check: Instant,
 }
 
@@ -2988,7 +2988,7 @@ pub(crate) fn with_media_response<R>(
     method: &str,
     range: Option<&str>,
     canceled: &Arc<AtomicBool>,
-    peer: TcpStream,
+    peer: Arc<TcpStream>,
     consume: impl FnOnce(MediaResponse) -> Result<R, String>,
 ) -> Result<R, String> {
     struct Restore(Option<MediaCancellation>);
