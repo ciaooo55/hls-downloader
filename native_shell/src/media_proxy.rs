@@ -215,7 +215,7 @@ impl MediaProxy {
             method,
             range,
             &self.canceled,
-            stream.try_clone().map_err(|e| e.to_string())?,
+            clone_for_disconnect_watch(stream)?,
             |mut response| {
                 if !(200..300).contains(&response.status) {
                     started = true;
@@ -381,6 +381,23 @@ fn hls_reload_url(source: &str, query: &str, known_hls: bool) -> Option<String> 
         url.push_str(fragment);
     }
     Some(url)
+}
+
+/// `TcpStream::try_clone` 在 Windows 上得到的是可继承句柄。之后启动的子进程
+/// （如 FFmpeg）会带走这份副本，本端关闭后连接仍被它占着，直到子进程退出时
+/// 被系统重置，播放端读到 10054 而不是正常结束。
+fn clone_for_disconnect_watch(stream: &TcpStream) -> Result<TcpStream, String> {
+    let clone = stream.try_clone().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        if unsafe { SetHandleInformation(clone.as_raw_socket() as _, HANDLE_FLAG_INHERIT, 0) } == 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    Ok(clone)
 }
 
 fn status(stream: &mut TcpStream, code: u16) -> Result<(), String> {
@@ -957,6 +974,41 @@ mod tests {
         };
         crate::apply_replay_json_for(&mut spec.headers, &replay, url);
         server.mount_proxy("test", spec, replay).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disconnect_watch_clone_is_not_inherited_by_child_processes() {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut accepted, _) = listener.accept().unwrap();
+        let watch = clone_for_disconnect_watch(&accepted).unwrap();
+        let mut flags = u32::MAX;
+        assert_ne!(
+            unsafe { GetHandleInformation(watch.as_raw_socket() as _, &mut flags) },
+            0
+        );
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+
+        // 子进程存活期间关闭连接，接收端必须立刻读到正常结束而不是等子进程退出后被重置。
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 3 127.0.0.1 >nul"])
+            .spawn()
+            .unwrap();
+        accepted.write_all(b"body").unwrap();
+        drop(watch);
+        drop(accepted);
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut body = Vec::new();
+        let closed = client.read_to_end(&mut body);
+        let _ = child.kill();
+        let _ = child.wait();
+        closed.unwrap();
+        assert_eq!(body, b"body");
     }
 
     #[test]
