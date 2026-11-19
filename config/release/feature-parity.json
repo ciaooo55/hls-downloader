@@ -1,6 +1,6 @@
 {
     "schema":  1,
-    "product_version":  "7.0.8",
+    "product_version":  "7.0.9",
     "generated_from":  {
                            "v3":  "git:v3.0.39",
                            "v5":  "git:v5.0.13",
@@ -16,7 +16,7 @@
                             "partial":  "主要路径可用，但未达到 v3 行为或发布门禁",
                             "blocked":  "缺少真实实现或发布级验证"
                         },
-    "release_ready":  true,
+    "release_ready":  false,
     "browser_takeover_acceptance":  {
                                         "decision_date":  "2026-10-29",
                                         "authority":  "用户确认：可靠性交接为必过门槛，零创建按入口记录",
@@ -53,7 +53,7 @@
                                    "reason":  "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
                                }
                            ],
-    "audit_state":  "v7_0_8_release_ready",
+    "audit_state":  "v7_0_9_iteration_in_progress",
     "current_evidence_table":  "docs/validation/current-evidence.json",
     "features":  [
                      {
