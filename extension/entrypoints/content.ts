@@ -5,6 +5,7 @@ import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../lib/downloadConfirmation'
+import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from '../lib/downloadSendState'
 import { mediaPushTerminalResult } from '../lib/mediaPush'
 import { selectedDownloadUrls } from '../lib/selectionLinks'
 import { formatBitrate, formatBytes, formatDuration } from '../lib/format'
@@ -228,7 +229,7 @@ export default defineContentScript({
     activationObservers.length = 0
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
-    const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string }>()
+    const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string, state?: SendState }>()
     const preferredVariants = new Map<string, { height: number, bandwidth: number }>()
     let renderedListSignature = ''
     let renderedVideoSignature = ''
@@ -320,8 +321,8 @@ export default defineContentScript({
           .pin,.close{height:27px;border:0;border-radius:4px;background:var(--surface-3);color:var(--text);cursor:pointer}.pin{padding:0 8px;font:11px system-ui}.pin.active{background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green-ink)}.close{display:grid;place-items:center;width:27px;font:700 18px/1 system-ui}.pin:hover,.close:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(520px,calc(100vh - 20px)) - 78px);overflow-y:auto;overscroll-behavior:contain}
           .item{padding:9px 10px;border-bottom:1px solid var(--border)}.item:last-child{border-bottom:0}.item:hover{background:var(--surface-2)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12px/1.35 system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:10.5px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:4px;color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{display:block;width:min(184px,100%);height:29px;margin-top:6px;font-size:11.5px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:29px;border:0;border-radius:4px;background:var(--primary);color:var(--on-primary);padding:4px 6px;cursor:pointer;font-weight:600;font-size:11px}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv,.download.cast{background:var(--surface-3);color:var(--text)}.download.push-tv:hover{background:var(--purple);color:var(--on-primary)}.download.cast:hover{background:var(--green);color:var(--on-primary)}.result{padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green-ink);font:11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red-ink)}
           .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:4px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid color-mix(in srgb,var(--primary) 60%,transparent);border-radius:4px;background:var(--primary);color:var(--on-primary);box-shadow:0 3px 8px var(--shadow);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:600 12px system-ui;transition:background-color .16s ease,transform .16s ease}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:color-mix(in srgb,var(--surface) 88%,var(--primary));color:var(--muted)}.video-download.identifying:hover{background:color-mix(in srgb,var(--surface) 88%,var(--primary))}.video-download img{width:18px;height:18px;border-radius:4px}.video-download b{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--on-primary);color:var(--primary);font:700 10px system-ui}.video-more{display:grid;width:34px;height:34px;place-items:center;padding:2px 0 0;border:1px solid var(--overlay-border);border-radius:4px;background:var(--surface);color:var(--primary);box-shadow:0 3px 8px var(--shadow);cursor:pointer;font:700 18px/1 system-ui}.video-more:hover{background:var(--surface-2)}
-          .video-hover{position:absolute;top:38px;left:0;width:292px;padding:10px;background:var(--surface);color:var(--text);border:1px solid var(--overlay-border);border-radius:8px;box-shadow:0 4px 8px var(--shadow);opacity:0;visibility:hidden;transform:translateY(-3px);pointer-events:auto;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:38px;transform:translateY(3px)}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0);transition-delay:.05s,.05s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12px/1.35 system-ui;overflow-wrap:anywhere}.hover-state{flex:none;color:var(--green-ink);font:600 10px/16px system-ui;white-space:nowrap}.hover-copy{margin-top:4px;color:var(--muted);font:11px/1.4 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}.hover-fact{height:20px;padding:2px 6px;border-radius:4px;background:var(--surface-2);color:var(--muted);font:600 10px/16px system-ui;white-space:nowrap}.hover-source{margin-top:7px;overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-actions{display:flex;gap:5px;margin-top:9px}.hover-action{min-width:0;flex:1;height:28px;padding:0 6px;border:0;border-radius:4px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 10.5px/1 system-ui}.hover-action:hover{background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{background:var(--primary);color:var(--on-primary)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}
-          button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+          .video-hover{position:absolute;top:38px;left:0;width:292px;padding:10px;background:var(--surface);color:var(--text);border:1px solid var(--overlay-border);border-radius:8px;box-shadow:0 4px 8px var(--shadow);opacity:0;visibility:hidden;transform:translateY(-3px);pointer-events:auto;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:38px;transform:translateY(3px)}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0);transition-delay:.05s,.05s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12px/1.35 system-ui;overflow-wrap:anywhere}.hover-state{flex:none;color:var(--green-ink);font:600 10px/16px system-ui;white-space:nowrap}.hover-copy{margin-top:4px;color:var(--muted);font:11px/1.4 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}.hover-fact{height:20px;padding:2px 6px;border-radius:4px;background:var(--surface-2);color:var(--muted);font:600 10px/16px system-ui;white-space:nowrap}.hover-source{margin-top:7px;overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-actions{display:flex;gap:5px;margin-top:9px}.hover-action{min-width:0;flex:1;height:28px;padding:0 6px;border:0;border-radius:4px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 10.5px/1 system-ui}.hover-action:hover{background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{background:var(--primary);color:var(--on-primary)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}button[data-state=checking]{box-shadow:inset 0 0 0 1px var(--amber,#b7791f)}button[data-state=recoverable]{box-shadow:inset 0 0 0 1px var(--red,#c53030)}button[data-state=canceled]{opacity:.8}button[data-state=sending][disabled],button[data-state=confirming][disabled],button[data-state=queued][disabled],button[data-state=done][disabled]{opacity:1;cursor:progress}button[data-state=sending]::before{content:"";display:inline-block;width:9px;height:9px;margin-right:5px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:hlsd-overlay-spin .8s linear infinite}/* :is() 让这几条压过 .hover-action.primary 及其 :hover，进行中的按钮不再显示成普通蓝底。 */:is(.video-hover,.panel) button[data-state=confirming],:is(.video-hover,.panel) button[data-state=confirming]:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3));color:var(--primary-ink,var(--text))}:is(.video-hover,.panel) button[data-state=queued],:is(.video-hover,.panel) button[data-state=done],:is(.video-hover,.panel) button[data-state=queued]:hover,:is(.video-hover,.panel) button[data-state=done]:hover{background:color-mix(in srgb,var(--green) 14%,var(--surface-3));color:var(--green-ink)}button[data-state=done]{cursor:default}@keyframes hlsd-overlay-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.video-hover,.video-hover *{transition:none!important;animation:none!important}}
+          button:focus-visible{outline:2px solid var(--focus-ring, var(--primary));outline-offset:2px}
           /* 统一按钮微交互。视频悬浮按钮与面板按钮此前要么完全没有 transition，
              要么声明了 transform 过渡却没有任何状态去改 transform（等于死代码），
              点击时只剩颜色硬切。这里给它们一套与 .hlsd-button（transform .12s）和
@@ -566,11 +567,14 @@ export default defineContentScript({
       if (state?.error) button.title = state.error
       else if (button.dataset.sendError) button.removeAttribute('title')
       button.dataset.sendError = state?.error || ''
+      // 与弹窗共用同一套状态名，样式按 data-state 统一（发送中/等待确认/核对中…）。
+      if (state?.state) button.dataset.state = state.state
+      else delete button.dataset.state
     }
 
-    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download', error = '') => {
+    const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download', error = '', state?: SendState) => {
       const key = overlaySendKey(resourceFingerprint(resource), action)
-      if (label) resourceSendStates.set(key, { label, disabled, error })
+      if (label) resourceSendStates.set(key, { label, disabled, error, state })
       else resourceSendStates.delete(key)
       applySendState(resource, button, button.dataset.sendFallback || fallbackLabel, action)
       // 等待桌面确认期间控件可能因资源或布局更新而换代；同步当前仍在页面上的同一操作。
@@ -593,26 +597,69 @@ export default defineContentScript({
     }
 
     const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
-      const key = resourceFingerprint(resource)
-      if (resourceSendStates.get(key)?.disabled) return
+      const key = overlaySendKey(resourceFingerprint(resource), 'download')
+      const current = resourceSendStates.get(key)
       const result = ui.shadow.querySelector<HTMLElement>('.result')
-      setSendState(resource, button, '发送中', true)
-      void withDeadline(runtimeMessage({ type: 'download-now', resource }), 10_000, '下载器响应超时，请重试').then(async response => {
-        if (!response?.ok) throw new Error(response?.error || '桌面端未接受请求')
-        setSendState(resource, button, '等待确认', true)
-        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载窗口确认文件名和保存位置' }
-        if (!await waitForDownloadConfirmation(runtimeMessage, String(response.handoff?.id || ''))) {
-          setSendState(resource, button, '', false)
-          if (result) result.textContent = '已取消下载'
+      const showResult = (text: string, error = false) => {
+        if (!result) return
+        result.hidden = false
+        result.classList.toggle('error', error)
+        result.textContent = text
+      }
+      const show = (state: SendState, error = '') => setSendState(
+        resource, button, SEND_LABELS[state], SEND_LOCKED.has(state), '下载', 'download', error || (state === 'checking' || state === 'recoverable' ? SEND_TITLES[state] : ''), state,
+      )
+      const click = sendClickAction(current?.state)
+      if (current?.disabled || click === 'none') return
+      if (click === 'open_desktop') {
+        // 失败或暂停的任务在主程序里续传；不在网页上再建一个任务。
+        void runtimeMessage({ type: 'activate' }).catch(() => undefined)
+        showResult('已请求打开主程序，可在任务列表中继续下载')
+        return
+      }
+      show('sending')
+      let delivered = false
+      // 重试或核对都发同一条 download-now：后台按资源摘要找回原请求编号，只回查，不重复创建。
+      void withDeadline(runtimeMessage({ type: 'download-now', resource }), 10_000, '下载器响应超时，正在按原请求核对').then(async response => {
+        delivered = true
+        if (!response?.ok && response?.ownership_uncertain) {
+          show('checking', response.error || SEND_TITLES.checking)
+          showResult(response.error || SEND_TITLES.checking, true)
           return
         }
-        setSendState(resource, button, '已加入', true)
-        if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = `已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}` }
+        if (!response?.ok) throw new Error(response?.error || '桌面端未接受请求')
+        const handoff = response.handoff || {}
+        const state = sendStateFromHandoff({ status: handoff.status, presentation: handoff.presentation, taskStatus: handoff.task_status })
+        if (state !== 'confirming') {
+          show(state)
+          if (state === 'queued' || state === 'done') ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
+          return
+        }
+        show('confirming')
+        showResult('请在桌面下载窗口确认文件名和保存位置')
+        let accepted: boolean
+        try {
+          accepted = await waitForDownloadConfirmation(runtimeMessage, String(handoff.id || ''))
+        } catch (reason) {
+          // Core 已持久化交接：读不到结果只能“核对中”，再点按原编号回查。
+          const error = reason instanceof Error ? reason.message : SEND_TITLES.checking
+          show('checking', error)
+          showResult(error, true)
+          return
+        }
+        if (!accepted) {
+          show('canceled')
+          showResult('已在桌面端取消，浏览器原下载按交接结果保留')
+          ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
+          return
+        }
+        show('queued')
+        showResult(`已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}`)
         ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
       }).catch(reason => {
         const error = reason?.message || String(reason) || '发送失败'
-        setSendState(resource, button, '重试', false, '下载', 'download', error)
-        if (result) { result.hidden = false; result.classList.add('error'); result.textContent = error }
+        show(delivered ? 'retry' : 'checking', error)
+        showResult(error, true)
       })
     }
 

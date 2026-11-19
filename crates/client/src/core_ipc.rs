@@ -712,12 +712,22 @@ fn save_handoff_response(response: CorePipeResponse) -> Result<(), String> {
 
 impl CoreIpcClient {
     pub fn connect_addr(addr: std::net::SocketAddr) -> Result<Self, String> {
+        Self::connect_addr_timeout(addr, Duration::from_secs(5))
+    }
+
+    /// TCP 回环连接，总时限由调用方给出（包含所有重试）。
+    pub fn connect_addr_timeout(
+        addr: std::net::SocketAddr,
+        timeout: Duration,
+    ) -> Result<Self, String> {
         if !addr.ip().is_loopback() {
             return Err(format!("v7 Core TCP client requires loopback, got {addr}"));
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + timeout;
         loop {
-            match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let attempt = remaining.clamp(Duration::from_millis(1), Duration::from_millis(200));
+            match TcpStream::connect_timeout(&addr, attempt) {
                 Ok(stream) => {
                     let _ = stream.set_nodelay(true);
                     let mut client = Self {
@@ -752,9 +762,9 @@ impl CoreIpcClient {
     /// startup wait. Native Messaging uses this short probe before it decides
     /// whether it needs to launch the single-instance engine.
     pub fn connect_existing(timeout: Duration) -> Result<Self, String> {
+        let deadline = std::time::Instant::now() + timeout;
         #[cfg(windows)]
         {
-            let deadline = std::time::Instant::now() + timeout;
             let last_error = loop {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
                 let pipe_timeout = remaining.as_millis().clamp(1, 40) as u32;
@@ -775,7 +785,12 @@ impl CoreIpcClient {
                 return Err(last_error);
             }
         }
-        Self::connect_addr(default_core_bind()?)
+        // 调用方给的时限覆盖整个探测：管道用剩的时间才留给 TCP，不再固定等 5 秒。
+        // 至少留 200ms，保证回环端口有一次完整的连接尝试。
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .max(Duration::from_millis(200));
+        Self::connect_addr_timeout(default_core_bind()?, remaining)
     }
 
     #[cfg(windows)]
@@ -1669,5 +1684,22 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(NamedPipeClient::connect(&missing, 40).is_err());
         assert!(started.elapsed() >= Duration::from_millis(40));
+    }
+
+    #[test]
+    fn short_probe_to_absent_core_respects_its_deadline() {
+        // 端口先占用再释放，确保没有 Core 在监听。
+        let addr = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        let started = std::time::Instant::now();
+        let result = CoreIpcClient::connect_addr_timeout(addr, Duration::from_millis(300));
+        assert!(result.is_err());
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "probe took {:?}",
+            started.elapsed()
+        );
     }
 }

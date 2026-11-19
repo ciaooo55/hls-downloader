@@ -19,7 +19,7 @@ export const THEME_TOKENS_CSS = `
   color-scheme:dark;
   --bg:#0f1115;--surface:#171a20;--surface-2:#1c2027;--surface-3:#262b34;
   --border:#2a2f39;--control-border:#717a8a;--text:#eef1f6;--muted:#b6bcc8;--faint:#8b93a1;
-  --primary:#7aa2ff;--primary-hover:#97b6ff;--on-primary:#0f1115;
+  --primary:#7aa2ff;--primary-hover:#97b6ff;--primary-pressed:#6489e6;--focus-ring:#97b6ff;--on-primary:#0f1115;
   --green:#3ccf7a;--amber:#f5a524;--red:#ff7a73;--purple:#b69cff;
   --primary-ink:#9dbaff;--green-ink:#62e19c;--red-ink:#ff9b95;--purple-ink:#d0c0ff;
   --shadow:rgba(0,0,0,.42);--rail:#12141a;
@@ -31,7 +31,7 @@ export const THEME_TOKENS_CSS = `
   color-scheme:light;
   --bg:#f2f3f6;--surface:#ffffff;--surface-2:#f6f7f9;--surface-3:#eceef2;
   --border:#e2e5eb;--control-border:#7d8594;--text:#0c111d;--muted:#475467;--faint:#5f6b7d;
-  --primary:#2e5bea;--primary-hover:#2149cf;--on-primary:#ffffff;
+  --primary:#2e5bea;--primary-hover:#2149cf;--primary-pressed:#1a3cb0;--focus-ring:#2e5bea;--on-primary:#ffffff;
   --green:#157f3c;--amber:#b54708;--red:#c4271b;--purple:#6941c6;
   --primary-ink:#1f45c4;--green-ink:#0d5c28;--red-ink:#9a1d17;--purple-ink:#4b2f91;
   --shadow:rgba(16,24,40,.10);--rail:#f8f9fb;
@@ -134,7 +134,7 @@ export const THEME_TOKENS_CSS = `
 export const THEME_BASE_CSS = `
 .hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:4px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
 .hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}
-.hlsd-button:active:not(:disabled){transform:scale(.975)}
+.hlsd-button:active:not(:disabled){transform:scale(.975)}.hlsd-button.primary:active:not(:disabled){background:var(--primary-pressed)}.hlsd-button.subtle:active:not(:disabled){background:var(--surface-3)}
 .hlsd-button:disabled{opacity:.45;cursor:default}
 .hlsd-button.busy:disabled{opacity:1;cursor:progress}
 .hlsd-button.primary{background:var(--primary);color:var(--on-primary);box-shadow:0 1px 2px var(--shadow),0 4px 12px color-mix(in srgb,var(--primary) 22%,transparent)}
@@ -143,7 +143,7 @@ export const THEME_BASE_CSS = `
 .hlsd-button.subtle:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
 .hlsd-button.active{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 34%,transparent)}
 .hlsd-button.active:hover:not(:disabled){background:color-mix(in srgb,var(--green) 22%,var(--surface-3))}
-.hlsd-button:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.hlsd-button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .hlsd-icon{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none}
 .hlsd-icon svg{display:block;width:100%;height:100%;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.8}
 .hlsd-button.primary .hlsd-icon{width:14px;height:14px}

@@ -176,7 +176,7 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
     Ok(executable)
 }
 
-pub fn spawn_desktop_ui(root: &Path) -> bool {
+pub fn spawn_desktop_ui(root: &Path, launch_id: Option<&str>) -> bool {
     let (executable, pass_workbench) = if let Some(desktop) = locate_desktop_executable(root) {
         (desktop, false)
     } else if let Some(presenter) = locate_presenter_executable(root) {
@@ -187,6 +187,10 @@ pub fn spawn_desktop_ui(root: &Path) -> bool {
     // 工作台的单实例入口负责恢复自身窗口，避免跨进程焦点限制被误报成启动失败。
     let mut command = Command::new(&executable);
     command.current_dir(executable.parent().unwrap_or(root));
+    command.env_remove("HLS_V7_WORKBENCH_LAUNCH");
+    if let Some(launch_id) = launch_id {
+        command.env("HLS_V7_WORKBENCH_LAUNCH", launch_id);
+    }
     if pass_workbench {
         command.arg("--workbench");
     }
@@ -200,6 +204,24 @@ pub fn spawn_desktop_ui(root: &Path) -> bool {
     }
     #[cfg(not(windows))]
     command.spawn().is_ok()
+}
+
+/// Correlates the launcher, presenter and browser for an explicit browser activation.
+pub fn workbench_launch_id() -> Option<String> {
+    std::env::var("HLS_V7_WORKBENCH_LAUNCH")
+        .ok()
+        .filter(|id| !id.is_empty() && id.len() <= 80)
+}
+
+pub fn report_workbench_launch(launch_id: String, surface: &str) {
+    if let Ok(mut client) =
+        crate::CoreIpcClient::connect_existing(std::time::Duration::from_secs(2))
+    {
+        let _ = client.command(crate::CoreCommand::UiReady {
+            launch_id,
+            surface: surface.into(),
+        });
+    }
 }
 
 pub fn ensure_presenter(root: &Path) -> Result<(), String> {

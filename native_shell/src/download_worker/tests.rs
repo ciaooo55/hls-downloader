@@ -3384,6 +3384,7 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
             handoff_id: "handoff-coord".into(),
             filename: "a.bin".into(),
             download_dir: "../escape".into(),
+            allow_duplicate: false,
             trusted_ui: false,
         })
         .is_err());
@@ -3392,6 +3393,7 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
             handoff_id: "handoff-coord".into(),
             filename: "a.bin".into(),
             download_dir: String::new(),
+            allow_duplicate: false,
             trusted_ui: false,
         })
         .unwrap();
@@ -3399,6 +3401,62 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
         .iter()
         .any(|envelope| matches!(envelope.event, crate::CoreEvent::HandoffResolved { .. })));
     assert_eq!(coordinator.tasks().unwrap().len(), 1);
+}
+
+#[test]
+fn only_explicit_desktop_copy_bypasses_handoff_deduplication() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    let url = "https://cdn.test/same.bin";
+    coordinator
+        .dispatch_created(TaskSpec {
+            url: url.into(),
+            filename: "same.bin".into(),
+            start_paused: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    for (id, trusted_ui) in [("browser", false), ("desktop-copy", true)] {
+        coordinator
+            .dispatch(CoreCommand::OfferResource {
+                offer: crate::ResourceOffer {
+                    handoff_id: id.into(),
+                    url: url.into(),
+                    filename: "same.bin".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        let events = coordinator
+            .dispatch(CoreCommand::AcceptHandoff {
+                handoff_id: id.into(),
+                filename: "same (2).bin".into(),
+                download_dir: String::new(),
+                allow_duplicate: true,
+                trusted_ui,
+            })
+            .unwrap();
+        let copy = events.iter().find_map(|event| match &event.event {
+            crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot),
+            _ => None,
+        });
+        if trusted_ui {
+            let copy = copy.expect("explicit desktop copy creates a new task");
+            let guard = coordinator.lock().unwrap();
+            let spec = guard.task_spec(&copy.task_id).unwrap();
+            assert!(spec.preserve_existing_output);
+            assert_eq!(spec.filename, "same (2).bin");
+        } else {
+            assert!(
+                copy.is_none(),
+                "browser cannot bypass ordinary deduplication"
+            );
+        }
+    }
+    assert_eq!(coordinator.tasks().unwrap().len(), 2);
 }
 
 #[test]
@@ -3431,6 +3489,7 @@ fn coordinator_accept_handoff_carries_local_source_into_task_spec() {
             handoff_id: "handoff-local-source".into(),
             filename: spec.filename.clone(),
             download_dir: String::new(),
+            allow_duplicate: false,
             trusted_ui: false,
         })
         .unwrap();

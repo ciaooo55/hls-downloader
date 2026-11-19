@@ -11,6 +11,9 @@ use std::{
 
 fn main() {
     if let Err(error) = launch() {
+        if let Some(id) = hls_client::workbench_launch_id() {
+            hls_client::report_workbench_launch(id, "main_failed");
+        }
         #[cfg(windows)]
         if !env::args_os().any(|arg| arg == "--self-test") {
             unsafe {

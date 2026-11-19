@@ -144,3 +144,31 @@ describe('reduced motion', () => {
     expect(popupCss).toContain('@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }')
   })
 })
+
+describe('pressed and in-flight states (slice 1 · round 2)', () => {
+  const themeCss = readFileSync(`${extensionRoot}/lib/theme.ts`, 'utf8')
+  it('primary buttons darken on press instead of only shrinking', () => {
+    expect(themeCss).toContain('.hlsd-button.primary:active:not(:disabled){background:var(--primary-pressed)}')
+    expect(themeCss.match(/--primary-pressed:#[0-9a-f]{6}/g)?.length).toBe(2)
+  })
+  it('overlay in-flight states stay fully opaque and show progress', () => {
+    const css = overlayCss()
+    for (const state of ['sending', 'confirming', 'queued', 'done']) {
+      expect(css).toContain(`button[data-state=${state}][disabled]`)
+    }
+    expect(css).toMatch(/button\[data-state=sending\]::before\{[^}]*animation:hlsd-overlay-spin/)
+    expect(css).toContain('@keyframes hlsd-overlay-spin')
+    // 减少动态效果时整套覆盖层动画都被关闭（含新加的转圈）。
+    expect(css).toMatch(/prefers-reduced-motion:reduce\)\{\*\{transition:none!important;animation:none!important/)
+  })
+})
+
+describe("focus ring token", () => {
+  it("matches the desktop focus-ring colors in both themes and is used for keyboard focus", async () => {
+    const theme = await import("./theme");
+    const css = Object.values(theme).filter((v) => typeof v === "string").join("\n");
+    expect(css).toContain("--focus-ring:#97b6ff");
+    expect(css).toContain("--focus-ring:#2e5bea");
+    expect(css).toContain(".hlsd-button:focus-visible{outline:2px solid var(--focus-ring)");
+  });
+});

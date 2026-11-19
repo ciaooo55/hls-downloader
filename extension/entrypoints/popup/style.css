@@ -202,3 +202,38 @@ footer { min-height: 32px; padding: 0 12px; background: var(--surface); }
 .subtitle-panel summary:active { background: var(--surface-3); }
 .subtitle-panel details[open] > summary { margin-bottom: 4px; }
 .view-tab b { position: relative; top: 1px; display: inline-grid; place-items: center; height: 18px; padding-top: 3px; line-height: 1; }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 启动反馈与统一状态（7.0.9）
+ * 时长取桌面 theme.slint 的 motion-fast 90ms / motion 160ms；减少动画时由上方
+ * prefers-reduced-motion 规则整体关闭。语义色只用 *-ink 文字配低透明度底色，
+ * 与既有 .send-error / .hlsd-button.active 的对比度约束一致。
+ * ─────────────────────────────────────────────────────────────────────────── */
+:root { --motion-fast: 90ms; --motion: 160ms; }
+.launch-status { display: flex; flex: none; gap: 10px; align-items: flex-start; margin: 10px 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); animation: launch-in var(--motion) ease-out; }
+.launch-status[data-tone=progress] { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); background: color-mix(in srgb, var(--primary) 6%, var(--surface)); }
+.launch-status[data-tone=success] { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); background: color-mix(in srgb, var(--green) 8%, var(--surface)); }
+.launch-status[data-tone=error] { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); background: color-mix(in srgb, var(--red) 6%, var(--surface)); }
+.launch-icon { display: grid; flex: none; width: 24px; height: 24px; place-items: center; border-radius: 6px; background: var(--surface-3); color: var(--primary-ink); }
+.launch-status[data-tone=progress] .launch-icon .hlsd-icon { animation: hlsd-spin .8s linear infinite; }
+.launch-status[data-tone=success] .launch-icon { color: var(--green-ink); }
+.launch-status[data-tone=error] .launch-icon { color: var(--red-ink); }
+.launch-icon .hlsd-icon { width: 14px; height: 14px; }
+.launch-text { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.launch-text strong { font-size: 12px; font-weight: 650; }
+.launch-status[data-tone=error] .launch-text strong { color: var(--red-ink); }
+.launch-status[data-tone=success] .launch-text strong { color: var(--green-ink); }
+.launch-text > span { color: var(--muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.launch-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.launch-actions .hlsd-button { height: 28px; padding: 0 10px; font-size: 11px; }
+@keyframes launch-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.header-actions .hlsd-button.desktop-open[data-state=ready] { border-color: color-mix(in srgb, var(--green) 40%, var(--border)); color: var(--green-ink); }
+.header-actions .hlsd-button.desktop-open[data-state=failed] { border-color: color-mix(in srgb, var(--red) 40%, var(--border)); color: var(--red-ink); }
+/* 统一按下反馈：所有按钮按下时同样 90ms 的轻缩放，不移动布局。 */
+.header-actions .hlsd-button, .article-actions .hlsd-button, .launch-actions .hlsd-button, .scan-button, .empty-retry, .copy-link, .view-tab { transition-duration: var(--motion-fast); }
+/* 下载按钮的终态与可恢复态：完成=绿，核对中/可恢复=琥珀边框（可点击），已取消=中性。 */
+.article-actions .hlsd-button[data-state=done] { opacity: 1; background: color-mix(in srgb, var(--green) 12%, var(--surface)); color: var(--green-ink); }
+.article-actions .hlsd-button[data-state=checking], .article-actions .hlsd-button[data-state=recoverable] { border-color: color-mix(in srgb, var(--amber) 55%, var(--border)); background: var(--surface); color: var(--text); }
+.article-actions .hlsd-button[data-state=canceled] { background: var(--surface-2); color: var(--muted); }
+article[data-state=checking], article[data-state=recoverable] { border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+article[data-state=done] { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }

@@ -3,7 +3,7 @@ import { browser } from 'wxt/browser'
 import { downloadSelectionKey, localDownloadIntentUrl } from '../lib/resources'
 import { mediaPushRequestId } from '../lib/mediaPush'
 import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggregateTabMedia } from '../lib/sniffCommand'
-import { NativeBridge, type NativePortLike } from '../lib/nativeBridge'
+import { NativeBridge, NativeHostError, type NativePortLike } from '../lib/nativeBridge'
 import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageIdentity, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, responseIdentity, type RequestChain, type DownloadLike } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, localFileTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload } from '../lib/takeover'
@@ -877,6 +877,11 @@ async function cookieRecordsFor(url: string, pageUrl = '', tabId = -1, frameId =
 
 async function cookiesFor(url: string, pageUrl = '', tabId = -1, frameId = 0): Promise<string> {
   return cookieHeaderForUrl(await cookieRecordsFor(url, pageUrl, tabId, frameId), url)
+}
+
+function nativeErrorCode(error: unknown): string {
+  // 端口仍在但请求超时：宿主或 Core 卡住，归为下载引擎无响应。
+  return error instanceof NativeHostError ? error.code : 'core_unreachable'
 }
 
 async function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
@@ -2416,6 +2421,15 @@ export default defineBackground(() => {
         .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
+    if (message?.type === 'download-states') {
+      // 弹窗重开时按交接 ID 恢复每个资源的真实状态（含已入队、已取消、核对中）。
+      if (sender.tab) return false
+      const tabId = Number(message.tabId ?? -1)
+      void hydrateHandoffTracker().then(() => {
+        sendResponse([...trackedHandoffs.values()].filter(item => item.tabId === tabId).map(item => ({ ...item })))
+      }).catch(() => sendResponse([]))
+      return true
+    }
     if (message?.type === 'pending-downloads') {
       const tabId = Number(message.tabId ?? sender.tab?.id ?? -1)
       void hydrateHandoffTracker().then(() => {
@@ -2522,9 +2536,16 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'activate') {
-      void native({ op: 'activate' })
+      // 只请求启动并返回启动编号及 Core 事件序号；“已打开”由 workbench-status 的就绪回执确认。
+      void native({ op: 'activate' }, 12_000)
         .then(response => sendResponse(response))
-        .catch(error => sendResponse({ ok: false, error: errorText(error) }))
+        .catch(error => sendResponse({ ok: false, code: nativeErrorCode(error), error: errorText(error) }))
+      return true
+    }
+    if (message?.type === 'workbench-status') {
+      void native({ op: 'workbench_status', launch_id: message.launchId, since_sequence: message.sinceSequence, wait_ms: 0 }, 4_000)
+        .then(response => sendResponse(response))
+        .catch(error => sendResponse({ ok: false, code: nativeErrorCode(error), error: errorText(error) }))
       return true
     }
   })

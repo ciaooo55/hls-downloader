@@ -1,4 +1,4 @@
-import { Tokens, WorkbenchIcon, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar, HotScrollView } from "theme.slint";
+import { Tokens, WorkbenchIcon, FocusRing, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar, HotScrollView } from "theme.slint";
 export { Tokens, SegmentBlock } from "theme.slint";
 
 export { WorkbenchWindow, TaskRow, NavigationRow, TaskMenuRow, TaskColumn, ToolbarItem } from "workbench.slint";
@@ -12,6 +12,80 @@ export { SystemWindow, DecisionWindow } from "system.slint";
 export { ServiceSettingsWindow } from "service_settings.slint";
 export { CastWindow } from "cast_tools.slint";
 
+// 确认窗内的一条可操作提示：标题行 + 换行正文 + 最多两个恢复操作。
+// 错误（红）与提醒（琥珀）共用同一结构，按钮直接给出可执行的下一步。
+component ConfirmNotice inherits Rectangle {
+    in property <bool> error: false;
+    in property <string> text;
+    in property <string> primary-label;
+    in property <string> secondary-label;
+    in property <bool> enabled: true;
+    callback primary();
+    callback secondary();
+    private property <color> tone: root.error ? Tokens.fail : Tokens.warn;
+    // 提示出现时淡入：它通常是对“开始下载”等操作的回应，淡入让用户看清是哪里变了。
+    private property <bool> entered: false;
+    init => { root.entered = true; }
+    opacity: root.entered ? 1 : 0;
+    animate opacity { duration: Tokens.motion-slow; easing: ease-out; }
+    border-radius: Tokens.card-radius;
+    background: root.error ? Tokens.fail-surface : Tokens.warn-surface;
+    border-width: 1px;
+    border-color: tone.with-alpha(Tokens.dark ? 0.34 : 0.26);
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    VerticalLayout {
+        padding: 9px;
+        padding-left: 10px;
+        spacing: 7px;
+        HorizontalLayout {
+            spacing: 8px;
+            WorkbenchIcon { name: root.error ? "failed" : "info"; ink: root.tone; width: 16px; height: 16px; }
+            Text { text: root.text; color: Tokens.ink; font-size: 11px; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+        }
+        if root.primary-label != "" || root.secondary-label != "": HorizontalLayout {
+            padding-left: 24px;
+            spacing: 6px;
+            alignment: start;
+            if root.primary-label != "": HotButton { label: root.primary-label; height: 28px; enabled: root.enabled; clicked => { root.primary(); } }
+            if root.secondary-label != "": HotButton { label: root.secondary-label; height: 28px; enabled: root.enabled; clicked => { root.secondary(); } }
+        }
+    }
+}
+
+// 仅图标的方形按钮，用于窄窗时的次要操作；与 HotButton 同高同圆角。
+component ConfirmIconButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    callback clicked;
+    width: Tokens.control-height;
+    height: Tokens.control-height;
+    border-radius: Tokens.control-radius;
+    border-width: 1px;
+    private property <bool> focus-visible: false;
+    border-color: root.active ? Tokens.accent.with-alpha(0.55) : Tokens.line;
+    background: touch.pressed && root.enabled ? Tokens.control-pressed : (touch.has-hover && root.enabled) || root.active ? Tokens.control-hover : Tokens.surface;
+    FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
+    opacity: root.enabled ? 1 : 0.48;
+    animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    WorkbenchIcon { name: root.icon; ink: root.active ? Tokens.accent : touch.has-hover && root.enabled ? Tokens.ink : Tokens.muted; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2 + (touch.pressed && root.enabled ? 1px : 0px); }
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { focus.focus(); root.clicked(); } }
+}
+
 export component ConfirmWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
     title: root.window_title;
@@ -20,7 +94,7 @@ export component ConfirmWindow inherits Window {
     always-on-top: true;
     no-frame: true;
     min-width: 360px;
-    min-height: 200px;
+    min-height: 240px;
     preferred-width: 520px;
     preferred-height: 420px;
     // An opaque window surface is intentional.  The previous transparent
@@ -41,15 +115,25 @@ export component ConfirmWindow inherits Window {
     in-out property <bool> remember_directory: true;
     in-out property <bool> suppress_site_kind: false;
     in-out property <bool> busy: false;
+    in-out property <bool> rejecting: false;
     in-out property <string> error_text;
+    // 错误提示的两个恢复操作：label 为空时不显示；command 原样回传给 Rust。
+    in-out property <string> error_primary_label;
+    in-out property <string> error_primary_command;
+    in-out property <string> error_secondary_label;
+    in-out property <string> error_secondary_command;
     in-out property <string> duplicate_text;
     in-out property <string> remaining;
     in-out property <bool> details_expanded: false;
     callback core-events-ready();
     callback core-resynced(string);
-    callback open-workbench(bool);
+    callback open-workbench(bool, string);
     callback command(string);
     callback move-window(float, float);
+    // 窄窗（< 440px）时次要操作收为图标，保证四个主控件同屏完整可用。
+    // 用 changed 回调而不是绑定：布局本身决定窗口最小宽度，直接绑定会形成布局循环。
+    private property <bool> compact: false;
+    changed width => { root.compact = root.width < 440px; }
     FocusScope {
         width: parent.width;
         height: parent.height;
@@ -69,7 +153,8 @@ export component ConfirmWindow inherits Window {
             height: parent.height;
             border-radius: Tokens.card-radius;
         VerticalLayout {
-            padding: 18px;
+            padding: root.compact ? 14px : 18px;
+            padding-bottom: root.compact ? 12px : 16px;
             spacing: 10px;
             HorizontalLayout {
                 height: 30px;
@@ -96,7 +181,7 @@ export component ConfirmWindow inherits Window {
                 }
             }
 
-            // 显式绑定正文高度，展开详情时不能沿用折叠状态的滚动范围。
+            // 正文可滚动；页脚（详情入口与确认按钮）固定在窗口底部，任何高度下都完整可见。
             detail_scroll := HotScrollView {
                 min-height: 0px;
                 vertical-stretch: 1;
@@ -113,64 +198,72 @@ export component ConfirmWindow inherits Window {
                     width: detail_scroll.visible-width;
                     height: self.min-height;
                     padding: 0px;
-                    // 只有展开详情时才可能出现滚动条，收起时内容与底部按钮右缘对齐。
+                    // 展开详情时为滚动条留出 10px；收起时与页脚按钮右缘对齐。
+                    // 不能按“是否溢出”判断：换行文本的高度依赖宽度，会形成布局循环。
                     padding-right: root.details_expanded ? 10px : 0px;
                     spacing: 8px;
                     Rectangle {
-                        height: 88px;
+                        height: 72px;
                         border-radius: Tokens.card-radius;
                         background: Tokens.surface-2;
                         border-width: 1px;
                         border-color: Tokens.hairline;
                         HorizontalLayout {
-                            padding: 10px;
-                            padding-left: 12px;
-                            spacing: 12px;
+                            padding: 8px;
+                            padding-left: 10px;
+                            spacing: 10px;
                             Rectangle {
-                                width: 40px;
-                                height: 40px;
+                                width: 36px;
+                                height: 36px;
+                                y: (parent.height - self.height) / 2;
                                 border-radius: Tokens.card-radius;
                                 private property <color> tint: root.category == "media" ? Tokens.media-tint : root.category == "archive" ? Tokens.archive-tint : root.category == "program" ? Tokens.accent : Tokens.muted;
                                 background: tint.with-alpha(Tokens.dark ? 0.18 : 0.12);
                                 animate background { duration: Tokens.motion-fast; }
-                                WorkbenchIcon { name: root.category == "media" || root.category == "program" || root.category == "archive" ? root.category : "file"; ink: parent.tint; width: 22px; height: 22px; x: 9px; y: 9px; }
+                                WorkbenchIcon { name: root.category == "media" || root.category == "program" || root.category == "archive" ? root.category : "file"; ink: parent.tint; width: 20px; height: 20px; x: 8px; y: 8px; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 spacing: 3px;
-                                FieldLabel { label: "文件名"; font-size: 10px; }
-                                HotLineEdit { text <=> root.filename; enabled: !root.busy; }
+                                alignment: center;
+                                HotLineEdit { text <=> root.filename; enabled: !root.busy; accessible-label: "文件名"; placeholder-text: "文件名"; }
                                 Text { text: root.resource_meta; color: Tokens.muted; font-size: 11px; overflow: elide; }
                             }
                         }
                     }
 
-                    if root.duplicate_text != "" : Rectangle {
-                        height: 34px;
-                        border-radius: Tokens.card-radius;
-                        background: Tokens.warn-surface;
-                        border-width: 1px; border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.30 : 0.22);
-                        HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            spacing: 8px;
-                            WorkbenchIcon { name: "failed"; ink: Tokens.warn; y: (parent.height - self.height) / 2; }
-                            Text { text: root.duplicate_text; color: Tokens.ink; font-size: 11px; overflow: elide; vertical-alignment: center; }
-                        }
+                    if root.error_text != "" : ConfirmNotice {
+                        error: true;
+                        text: root.error_text;
+                        enabled: !root.busy;
+                        primary-label: root.error_primary_label;
+                        secondary-label: root.error_secondary_label;
+                        primary => { root.command(root.error_primary_command); }
+                        secondary => { root.command(root.error_secondary_command); }
+                    }
+
+                    if root.duplicate_text != "" && root.error_text == "" : ConfirmNotice {
+                        text: root.duplicate_text;
+                        enabled: !root.busy;
+                        primary-label: "查看已有任务";
+                        secondary-label: "另存为新文件";
+                        primary => { root.command("open_existing"); }
+                        secondary => { root.command("rename_copy"); }
                     }
 
                     HorizontalLayout {
-                        height: 36px;
+                        height: Tokens.control-height;
                         spacing: 8px;
-                        FieldLabel { label: "保存到"; width: 40px; }
-                        HotLineEdit { text <=> root.download_dir; enabled: !root.busy; horizontal-stretch: 1; height: 36px; }
-                        HotButton { label: "选择"; icon: "folder"; min-width: 60px; height: 36px; enabled: !root.busy; clicked => { root.command("browse"); } }
+                        FieldLabel { label: "保存到"; width: 42px; vertical-alignment: center; }
+                        HotLineEdit { text <=> root.download_dir; enabled: !root.busy; horizontal-stretch: 1; accessible-label: "保存位置"; }
+                        if root.compact: ConfirmIconButton { icon: "folder"; label: "选择保存位置"; enabled: !root.busy; clicked => { root.command("browse"); } }
+                        if !root.compact: HotButton { label: "选择"; icon: "folder"; min-width: 64px; enabled: !root.busy; clicked => { root.command("browse"); } }
                     }
 
                     HorizontalLayout {
                         height: 28px;
                         spacing: 6px;
-                        FieldLabel { label: "分类"; width: 42px; }
+                        FieldLabel { label: "分类"; width: 42px; vertical-alignment: center; }
                         ChoiceButton { label: "媒体"; height: 28px; enabled: !root.busy; selected: root.category == "media"; clicked => { root.category = "media"; root.command("category:media"); } }
                         ChoiceButton { label: "程序"; height: 28px; enabled: !root.busy; selected: root.category == "program"; clicked => { root.category = "program"; root.command("category:program"); } }
                         ChoiceButton { label: "压缩包"; height: 28px; enabled: !root.busy; selected: root.category == "archive"; clicked => { root.category = "archive"; root.command("category:archive"); } }
@@ -179,37 +272,16 @@ export component ConfirmWindow inherits Window {
 
                     CheckRow { height: 26px; label: "记住此分类的保存位置"; enabled: !root.busy; checked <=> root.remember_directory; toggled(value) => { root.remember_directory = value; } }
 
-                    Rectangle {
-                        height: 28px;
-                        border-radius: Tokens.control-radius;
-                        background: detail_toggle.has-hover ? Tokens.surface-2 : transparent;
-                        HorizontalLayout {
-                            padding-left: 4px;
-                            padding-right: 4px;
-                            spacing: 8px;
-                            WorkbenchIcon { name: root.details_expanded ? "up" : "down"; ink: Tokens.muted; y: (parent.height - self.height) / 2; }
-                            Text { text: "下载详情"; color: Tokens.muted; font-size: 11px; vertical-alignment: center; }
-                            Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.source_host != "" ? root.source_host : root.download_host; color: Tokens.muted; font-size: 10px; overflow: elide; vertical-alignment: center; }
-                        }
-                        detail_toggle := TouchArea {
-                            enabled: !root.busy;
-                            mouse-cursor: pointer;
-                            accessible-role: button;
-                            accessible-label: root.details_expanded ? "收起下载详情" : "展开下载详情";
-                            clicked => {
-                                root.details_expanded = !root.details_expanded;
-                                detail_scroll.viewport-y = root.details_expanded ? min(0px, detail_scroll.height - detail_scroll.viewport-height) : 0px;
-                            }
-                        }
-                    }
-
                     if root.details_expanded : Rectangle {
-                        height: 116px;
+                        private property <bool> entered: false;
+                        init => { self.entered = true; }
+                        opacity: self.entered ? 1 : 0;
+                        animate opacity { duration: Tokens.motion-slow; easing: ease-out; }
                         border-radius: Tokens.card-radius;
                         border-width: 1px;
                         border-color: Tokens.line;
                         background: Tokens.surface;
+                        // 详情逐行换行显示完整地址，不再固定 116px 高度并截断。
                         VerticalLayout {
                             padding: 10px;
                             spacing: 5px;
@@ -218,10 +290,11 @@ export component ConfirmWindow inherits Window {
                                 Rectangle { horizontal-stretch: 1; }
                                 Text { text: root.request_context; color: Tokens.muted; font-size: 10px; }
                             }
-                            if root.source_host != "" : Text { text: "来源网页  " + root.source_host; color: Tokens.muted; font-size: 11px; overflow: elide; }
-                            if root.source_url != "" : Text { text: root.source_url; color: Tokens.muted; font-size: 10px; overflow: elide; }
-                            Text { text: "下载地址  " + root.url; color: Tokens.muted; font-size: 10px; overflow: elide; }
-                            Text { text: root.request_details; color: Tokens.muted; font-size: 10px; overflow: elide; }
+                            if root.source_host != "" : Text { text: "来源网页  " + root.source_host; color: Tokens.muted; font-size: 11px; wrap: word-wrap; }
+                            if root.source_url != "" : Text { text: root.source_url; color: Tokens.muted; font-size: 10px; wrap: char-wrap; }
+                            Text { text: "下载地址  " + root.url; color: Tokens.muted; font-size: 10px; wrap: char-wrap; }
+                            Text { text: "保存为  " + root.download_dir + (root.download_dir == "" ? "" : "\\") + root.filename; color: Tokens.muted; font-size: 10px; wrap: char-wrap; }
+                            Text { text: root.request_details; color: Tokens.muted; font-size: 10px; wrap: word-wrap; }
                         }
                     }
 
@@ -231,19 +304,31 @@ export component ConfirmWindow inherits Window {
                         checked <=> root.suppress_site_kind;
                         toggled(value) => { root.suppress_site_kind = value; }
                     }
-
-                    if root.error_text != "" : Text { text: root.error_text; color: Tokens.fail; font-size: 11px; wrap: word-wrap; }
                 }
             }
             Rectangle { height: 1px; background: Tokens.line; }
             HorizontalLayout {
-                height: 36px;
+                height: Tokens.control-height;
                 spacing: 8px;
-                // 三个按钮同为 36px，与右侧主按钮底边对齐。
-                HotButton { label: "更多设置"; icon: "settings"; height: 36px; enabled: !root.busy; clicked => { root.command("more"); } }
+                // 详情入口在页脚，与确认按钮同一行，不随正文滚出首屏。
+                if !root.compact: HotButton {
+                    label: root.details_expanded ? "收起详情" : "详情";
+                    icon: root.details_expanded ? "up" : "down";
+                    enabled: !root.busy;
+                    clicked => { root.details_expanded = !root.details_expanded; detail_scroll.viewport-y = root.details_expanded ? min(0px, detail_scroll.visible-height - detail_scroll.viewport-height) : 0px; }
+                }
+                if root.compact: ConfirmIconButton {
+                    icon: root.details_expanded ? "up" : "details";
+                    label: root.details_expanded ? "收起下载详情" : "展开下载详情";
+                    active: root.details_expanded;
+                    enabled: !root.busy;
+                    clicked => { root.details_expanded = !root.details_expanded; detail_scroll.viewport-y = root.details_expanded ? min(0px, detail_scroll.visible-height - detail_scroll.viewport-height) : 0px; }
+                }
+                if !root.compact: HotButton { label: "更多设置"; icon: "settings"; enabled: !root.busy; clicked => { root.command("more"); } }
+                if root.compact: ConfirmIconButton { icon: "settings"; label: "更多设置"; enabled: !root.busy; clicked => { root.command("more"); } }
                 Rectangle { horizontal-stretch: 1; }
-                HotButton { label: "取消"; height: 36px; enabled: !root.busy; clicked => { root.command("reject"); } }
-                HotButton { label: root.busy ? "处理中…" : "开始下载"; height: 36px; min-width: 100px; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
+                HotButton { label: "取消"; busy-label: "正在取消"; busy: root.busy && root.rejecting; enabled: !root.busy; clicked => { root.command("reject"); } }
+                HotButton { label: "开始下载"; busy-label: "正在开始"; busy: root.busy && !root.rejecting; min-width: root.compact ? 88px : 100px; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
             }
         }
     }
@@ -276,6 +361,7 @@ export component ProgressWindow inherits Window {
     in-out property <bool> action_busy: false;
     in-out property <bool> action_error: false;
     in-out property <string> action_text;
+    private property <string> pending-action;
     callback command(string);
     callback move-window(float, float);
     Panel {
@@ -347,8 +433,9 @@ export component ProgressWindow inherits Window {
             HorizontalLayout {
                 spacing: 8px;
                 Text { text: root.action_text; color: root.action_error ? Tokens.fail : Tokens.muted; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
-                HotButton { min-width: 60px; height: 28px; label: root.action_busy ? "处理中…" : "暂停"; enabled: !root.action_busy && !root.processing; clicked => { root.command("pause"); } }
-                HotButton { min-width: 60px; height: 28px; label: "取消"; danger: true; enabled: !root.action_busy; clicked => { root.command("cancel"); } }
+                // 只有被点的那个按钮显示进行中，另一个按钮暂时禁用；文字说明仍在左侧。
+                HotButton { min-width: 60px; height: 28px; label: "暂停"; busy-label: "暂停中"; busy: root.action_busy && root.pending-action == "pause"; enabled: !root.action_busy && !root.processing; clicked => { root.pending-action = "pause"; root.command("pause"); } }
+                HotButton { min-width: 60px; height: 28px; label: "取消"; busy-label: "取消中"; danger: true; busy: root.action_busy && root.pending-action == "cancel"; enabled: !root.action_busy; clicked => { root.pending-action = "cancel"; root.command("cancel"); } }
             }
         }
     }
@@ -364,7 +451,7 @@ export component CompleteWindow inherits Window {
     min-width: 330px;
     // 内容高度 156px（标题 24 + 卡片 64 + 按钮 28 + 间距/内边距）；提示行出现时再加高，
     // 避免固定 180px 时按钮上方留出一块空白。
-    min-height: 156px + (root.power_hint != "" ? 26px : 0px) + (root.action_text != "" ? 26px : 0px);
+    min-height: 156px + (root.power_hint != "" ? 36px : 0px) + (root.action_text != "" ? 26px : 0px);
     preferred-width: 330px;
     preferred-height: self.min-height;
     background: Tokens.surface;
@@ -372,7 +459,13 @@ export component CompleteWindow inherits Window {
     in-out property <string> filename;
     in-out property <string> details;
     in-out property <string> power_hint;
+    // 计划中的系统操作名称（关机 / 睡眠 / 休眠）与剩余秒数；秒数大于 0 时窗口自己倒计时。
+    in-out property <string> power_action_label;
+    in-out property <int> power_seconds: 0;
     in-out property <string> task_id;
+    private property <string> pending-action;
+    // 进场动效由 Rust 在每次 show() 前置 false、首帧后置 true；窗口是复用的，不能靠 init。
+    in-out property <bool> entered: true;
     in-out property <bool> action_busy;
     in-out property <string> action_text;
     callback command(string);
@@ -391,8 +484,15 @@ export component CompleteWindow inherits Window {
                     drag(dx, dy) => { root.move-window(dx, dy); }
                     HorizontalLayout {
                         spacing: 8px;
-                        Rectangle { width: 20px; height: 20px; y: (parent.height - self.height) / 2; border-radius: 10px; background: Tokens.done;
-                            WorkbenchIcon { name: "check"; ink: Tokens.surface; width: 14px; height: 14px; x: 3px; y: 3px; }
+                        // 完成标记：窗口出现时从 12px 长到 20px，是这个窗口唯一的一次进场动效。
+                        Rectangle { width: 20px; height: 20px;
+                            Rectangle {
+                                width: root.entered ? 20px : 12px; height: self.width;
+                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                border-radius: self.width / 2; background: Tokens.done;
+                                animate width { duration: Tokens.motion-slow; easing: ease-out-back; }
+                                WorkbenchIcon { name: "check"; ink: Tokens.surface; width: parent.width * 0.7; height: self.width; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+                            }
                         }
                         Text { text: "下载完成"; color: Tokens.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
@@ -415,16 +515,37 @@ export component CompleteWindow inherits Window {
                     }
                 }
             }
-            if root.power_hint != "" : Text { text: root.power_hint; color: Tokens.warn; font-size: 11px; wrap: word-wrap; }
+            if root.power_hint != "" : Rectangle {
+                border-radius: Tokens.control-radius;
+                background: Tokens.warn-surface;
+                border-width: 1px;
+                border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.34 : 0.26);
+                accessible-role: AccessibleRole.text;
+                accessible-label: power-text.text;
+                HorizontalLayout {
+                    padding: 6px; padding-left: 8px; spacing: 6px;
+                    WorkbenchIcon { name: "queued"; ink: Tokens.warn; width: 14px; height: 14px; y: (parent.height - self.height) / 2; }
+                    power-text := Text {
+                        text: root.power_action_label == "" ? root.power_hint : root.power_seconds > 0 ? "将在 \{root.power_seconds} 秒后\{root.power_action_label}" : "即将\{root.power_action_label}";
+                        color: Tokens.ink; font-size: 11px; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1;
+                    }
+                }
+            }
+            Timer {
+                interval: 1s;
+                running: root.power_hint != "" && root.power_seconds > 0;
+                triggered => { root.power_seconds -= 1; }
+            }
             if root.action_text != "" : Text { text: root.action_text; color: Tokens.fail; font-size: 11px; wrap: word-wrap; }
             HorizontalLayout {
                 // 三个按钮时收紧间距，避免 330px 窗宽下右侧按钮越出内边距。
                 spacing: root.power_hint != "" ? 4px : 8px;
                 // 与确认窗、进度窗一致：次要操作在左，主操作靠右收尾。
-                if root.power_hint != "" : HotButton { height: 28px; label: "取消操作"; enabled: !root.action_busy; danger: true; clicked => { root.command("cancel_power"); } }
+                // 按钮写明取消的是什么（取消关机 / 取消睡眠），而不是笼统的“取消操作”。
+                if root.power_hint != "" : HotButton { height: 28px; label: root.power_action_label != "" ? "取消" + root.power_action_label : "取消操作"; busy-label: "正在取消"; busy: root.action_busy && root.pending-action == "cancel_power"; enabled: !root.action_busy; danger: true; clicked => { root.pending-action = "cancel_power"; root.command("cancel_power"); } }
                 Rectangle { horizontal-stretch: 1; }
-                HotButton { height: 28px; label: "打开目录"; icon: "folder"; enabled: !root.action_busy; clicked => { root.command("open_folder"); } }
-                HotButton { height: 28px; label: root.action_busy ? "处理中…" : "打开文件"; icon: "file"; enabled: !root.action_busy; primary: true; clicked => { root.command("open_file"); } }
+                HotButton { height: 28px; label: "打开目录"; icon: "folder"; busy-label: "正在打开"; busy: root.action_busy && root.pending-action == "open_folder"; enabled: !root.action_busy; clicked => { root.pending-action = "open_folder"; root.command("open_folder"); } }
+                HotButton { height: 28px; label: "打开文件"; icon: "file"; busy-label: "正在打开"; busy: root.action_busy && root.pending-action == "open_file"; enabled: !root.action_busy; primary: true; clicked => { root.pending-action = "open_file"; root.command("open_file"); } }
             }
         }
     }

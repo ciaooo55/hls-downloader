@@ -908,9 +908,16 @@ impl CoreCoordinator {
             filename,
             download_dir,
             trusted_ui,
+            allow_duplicate,
         } = command
         {
-            return self.accept_handoff_command(handoff_id, filename, download_dir, trusted_ui);
+            return self.accept_handoff_command(
+                handoff_id,
+                filename,
+                download_dir,
+                trusted_ui,
+                allow_duplicate,
+            );
         }
         if let CoreCommand::RejectHandoff {
             handoff_id,
@@ -1901,6 +1908,7 @@ impl CoreCoordinator {
         filename: String,
         download_dir: String,
         trusted_ui: bool,
+        allow_duplicate: bool,
     ) -> Result<Vec<EventEnvelope>, String> {
         self.require_legal()?;
         let settings = self.settings()?;
@@ -1946,6 +1954,8 @@ impl CoreCoordinator {
             },
             filename,
             download_dir,
+            allow_duplicate: trusted_ui && allow_duplicate,
+            preserve_existing_output: trusted_ui && allow_duplicate,
             request_method: offer.request_method.clone(),
             mime_type: offer.mime_type.clone(),
             credential_ref: offer.credential_ref.clone(),
@@ -3292,6 +3302,11 @@ fn complete_payload(
         }
     }
     let (policy, keep_temp) = output_policy(core);
+    let policy = if spec.preserve_existing_output {
+        "rename"
+    } else {
+        &policy
+    };
     let download_subtitles = core
         .lock()
         .ok()
@@ -3319,7 +3334,7 @@ fn complete_payload(
             .and_then(Value::as_str)
             .unwrap_or(""),
     )?;
-    let published = crate::output_path::publish_file(payload, &destination, &policy, keep_temp)?;
+    let published = crate::output_path::publish_file(payload, &destination, policy, keep_temp)?;
     remember_published(paths, &published);
     // Returns Ok by construction; the signature keeps the "must never fail" contract
     // visible and lets the regression test assert it directly.

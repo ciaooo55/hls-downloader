@@ -77,6 +77,24 @@ interface PendingRequest {
 const NATIVE_HOST_MISSING = /native messaging host not found|no such native application/i
 const NATIVE_HOST_FORBIDDEN = /access to the specified native messaging host is forbidden/i
 
+export type NativeErrorCode = 'host_missing' | 'host_forbidden' | 'host_disconnected'
+
+/** Transport failure with a stable code; callers must not parse the Chinese message. */
+export class NativeHostError extends Error {
+  constructor(message: string, readonly code: NativeErrorCode) {
+    super(message)
+    this.name = 'NativeHostError'
+  }
+}
+
+export function nativeDisconnectError(detail: string): NativeHostError {
+  return NATIVE_HOST_MISSING.test(detail)
+    ? new NativeHostError('下载器连接已断开：未检测到 HLS Downloader 桌面端，请确认主程序已安装并运行', 'host_missing')
+    : NATIVE_HOST_FORBIDDEN.test(detail)
+      ? new NativeHostError('下载器连接已断开：浏览器禁止访问下载器，请检查扩展授权与浏览器集成注册', 'host_forbidden')
+      : new NativeHostError('下载器连接已断开', 'host_disconnected')
+}
+
 /** Reason the browser gives for a native port disconnect (Firefox port.error, Chrome runtime.lastError). */
 export function nativeDisconnectDetail(port: unknown): string {
   const portError = (port as { error?: { message?: unknown } } | null)?.error?.message
@@ -321,13 +339,7 @@ export class NativeBridge {
   private handleDisconnect(port: NativePortLike, detail = ''): void {
     if (this.port !== port) return
     this.port = null
-    this.retryOrRejectActive(port, new Error(
-      NATIVE_HOST_MISSING.test(detail)
-        ? '下载器连接已断开：未检测到 HLS Downloader 桌面端，请确认主程序已安装并运行'
-        : NATIVE_HOST_FORBIDDEN.test(detail)
-          ? '下载器连接已断开：浏览器禁止访问下载器，请检查扩展授权与浏览器集成注册'
-          : '下载器连接已断开',
-    ))
+    this.retryOrRejectActive(port, nativeDisconnectError(detail))
   }
 
   private retryOrRejectActive(port: NativePortLike, error: Error): void {

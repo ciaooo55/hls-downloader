@@ -10,6 +10,8 @@ export global Tokens {
     in-out property <bool> reduce-motion: false;
     out property <duration> motion: reduce-motion ? 1ms : 160ms;
     out property <duration> motion-fast: reduce-motion ? 1ms : 90ms;
+    // 面板展开、提示出现等“回应用户操作”的过渡；减少动态效果时同样降到 1ms。
+    out property <duration> motion-slow: reduce-motion ? 1ms : 220ms;
     out property <string> type-face: "Noto Sans CJK SC";
     // 统一视觉系统 "Graphite + Cobalt"：中性石墨底色 + 单一钴蓝强调色。
     // 只改取值、不改名字，所有窗口和 Rust 绑定保持兼容。
@@ -41,6 +43,10 @@ export global Tokens {
     out property <color> accent: dark ? #7aa2ff : #2e5bea;
     out property <color> accent-hover: dark ? #97b6ff : #2149cf;
     out property <color> accent-soft: dark ? #7aa2ff26 : #2e5bea14;
+    // 主按钮按下：比悬停再深一档，代替原来整体降透明度（降透明度会让按钮看起来像被禁用）。
+    out property <color> accent-pressed: dark ? #6489e6 : #1a3cb0;
+    // 键盘焦点环：只在 Tab 导航时出现，鼠标点击不出现，颜色取强调色。
+    out property <color> focus-ring: dark ? #97b6ff : #2e5bea;
     out property <color> on-accent: dark ? #0f1115 : #ffffff;
     // 状态色按主题取值，浅色/深色底上都保持 ≥4.5:1。
     out property <color> done: dark ? #3ccf7a : #157f3c;
@@ -113,59 +119,105 @@ export component WorkbenchIcon inherits Rectangle {
     }
 }
 
+// 键盘焦点环：画在控件外侧 2px，不改变控件自身的边框和尺寸，因此主按钮（本身就是强调色边框）
+// 也能看出焦点。shown 由各控件按 FocusReason 决定：Tab 导航显示，鼠标点击不显示。
+export component FocusRing inherits Rectangle {
+    in property <bool> shown;
+    in property <length> radius: Tokens.control-radius;
+    // 使用处给出 x/y = -3px、宽高 = 控件 + 6px（组件定义里不能引用 parent）。
+    border-radius: root.radius + 3px;
+    border-width: 2px;
+    border-color: Tokens.focus-ring;
+    opacity: root.shown ? 1 : 0;
+    animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
+}
+
+// 进行中指示：三个圆点依次明暗。不用旋转，软件渲染器也能正确绘制；减少动态效果时静止。
+export component BusyDots inherits HorizontalLayout {
+    in property <color> ink: Tokens.on-accent;
+    private property <float> phase: Tokens.reduce-motion ? 0 : mod(animation-tick() / 1ms, 900) / 300;
+    spacing: 3px;
+    alignment: center;
+    for i in 3: Rectangle {
+        width: 4px; height: 4px; y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: root.ink;
+        opacity: Tokens.reduce-motion ? 0.85 : (Math.floor(root.phase) == i ? 1 : 0.38);
+    }
+}
+
 export component HotButton inherits Rectangle {
     in property <string> label;
     in property <string> icon;
     in property <bool> primary: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    // 进行中：保留按钮颜色与宽度、显示进行中圆点并拦截点击。与 enabled=false 区分，
+    // 避免“正在开始下载”看起来像按钮被禁用。
+    in property <bool> busy: false;
+    in property <string> busy-label: root.label;
     callback clicked;
+    private property <bool> active: root.enabled && !root.busy;
+    private property <bool> focus-visible: false;
+    private property <bool> down: touch.pressed && root.active;
     forward-focus: key-focus;
     accessible-role: button;
-    accessible-label: root.label;
-    accessible-enabled: root.enabled;
-    accessible-action-default => { if root.enabled { root.clicked(); } }
+    accessible-label: root.busy ? root.busy-label : root.label;
+    accessible-enabled: root.active;
+    accessible-action-default => { if root.active { root.clicked(); } }
     min-width: max(72px, content.min-width);
     preferred-width: content.min-width;
     horizontal-stretch: 0;
     height: Tokens.control-height;
     border-radius: Tokens.control-radius;
-    opacity: enabled ? (touch.pressed ? 0.8 : 1) : 0.48;
+    opacity: root.enabled || root.busy ? 1 : 0.48;
     animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
-    background: primary ? (touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : danger && touch.has-hover && enabled ? Tokens.fail-surface : (touch.pressed && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.control-hover : Tokens.surface);
+    background: root.primary
+        ? (root.down ? Tokens.accent-pressed : touch.has-hover && root.active ? Tokens.accent-hover : Tokens.accent)
+        : root.danger && touch.has-hover && root.active
+            ? (root.down ? Tokens.fail-surface.darker(0.06) : Tokens.fail-surface)
+            : (root.down ? Tokens.control-pressed : touch.has-hover && root.active ? Tokens.control-hover : Tokens.surface);
     border-width: 1px;
-    border-color: key-focus.has-focus ? Tokens.accent : (danger ? Tokens.fail.with-alpha(0.45) : primary ? Tokens.accent : Tokens.line);
-    drop-shadow-offset-y: primary ? 2px : 1px;
-    drop-shadow-blur: primary ? 8px : 2px;
-    drop-shadow-color: !enabled ? transparent : primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.18 : 0.26) : Tokens.shadow;
-    animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    border-color: root.danger ? Tokens.fail.with-alpha(0.45) : root.primary ? Tokens.accent : touch.has-hover && root.active ? Tokens.faint.with-alpha(0.5) : Tokens.line;
+    // 按下时阴影收起，配合内容下移 1px，形成“按进去”的反馈。
+    drop-shadow-offset-y: root.down ? 0px : root.primary ? 2px : 1px;
+    drop-shadow-blur: root.down ? 0px : root.primary ? 8px : 2px;
+    drop-shadow-color: !root.enabled && !root.busy ? transparent : root.primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.18 : 0.26) : Tokens.shadow;
+    animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
+    animate drop-shadow-blur, drop-shadow-offset-y { duration: Tokens.motion-fast; easing: ease-out; }
+    FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && key-focus.has-focus; }
     content := HorizontalLayout {
+        y: root.down ? 1px : 0px;
+        animate y { duration: Tokens.motion-fast; easing: ease-out; }
         padding-left: root.primary ? 16px : 12px;
         padding-right: root.primary ? 16px : 12px;
         spacing: 6px;
         alignment: center;
-        if root.icon != "": WorkbenchIcon {
+        if root.busy: BusyDots { ink: root.primary ? Tokens.on-accent : Tokens.accent; }
+        if root.icon != "" && !root.busy: WorkbenchIcon {
             name: root.icon;
-            ink: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : Tokens.muted;
+            ink: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : touch.has-hover && root.active ? Tokens.ink : Tokens.muted;
             y: (parent.height - self.height) / 2;
         }
         Text {
-            text: root.label;
-            color: primary ? Tokens.on-accent : (danger ? Tokens.fail : Tokens.ink);
+            text: root.busy ? root.busy-label : root.label;
+            color: root.primary ? Tokens.on-accent : (root.danger ? Tokens.fail : Tokens.ink);
             font-size: 13px;
-            font-weight: primary ? 600 : 500;
+            font-weight: root.primary ? 600 : 500;
             vertical-alignment: center;
             horizontal-alignment: center;
         }
     }
     key-focus := FocusScope {
-        enabled: root.enabled;
+        enabled: root.active;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
         key-pressed(event) => {
-            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            if event.text == Key.Return || event.text == " " { root.focus-visible = true; root.clicked(); return accept; }
             return reject;
         }
     }
-    touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { key-focus.focus(); root.clicked(); } }
+    touch := TouchArea { enabled: root.active; mouse-cursor: root.active ? pointer : root.busy ? progress : default; clicked => { key-focus.focus(); root.clicked(); } }
 }
 
 export component HotCloseButton inherits Rectangle {
@@ -175,16 +227,20 @@ export component HotCloseButton inherits Rectangle {
     width: 28px;
     height: 28px;
     border-radius: Tokens.control-radius;
+    private property <bool> focus-visible: false;
     opacity: enabled ? 1 : 0.45;
-    background: touch.has-hover && enabled ? Tokens.surface-3 : transparent;
+    background: touch.pressed && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.surface-3 : transparent;
     animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
     WorkbenchIcon {
-        name: "close"; ink: Tokens.muted;
+        name: "close"; ink: touch.has-hover && root.enabled ? Tokens.ink : Tokens.muted;
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
     }
     forward-focus: focus;
     focus := FocusScope {
         enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
         key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; }
     }
     touch := TouchArea {
@@ -207,8 +263,8 @@ export component ChoiceButton inherits Rectangle {
     border-radius: Tokens.control-radius;
     border-width: 1px;
     border-color: selected ? Tokens.accent.with-alpha(0.7) : Tokens.line;
-    background: selected ? Tokens.selected : (touch.has-hover ? Tokens.control-hover : Tokens.surface);
-    animate background { duration: Tokens.motion-fast; easing: ease-out; }
+    background: selected ? Tokens.selected : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
+    animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     min-width: choice-content.min-width;
     preferred-width: choice-content.preferred-width;
     choice-content := HorizontalLayout {
@@ -228,12 +284,15 @@ export component ChoiceButton inherits Rectangle {
         if root.align-start && root.selected: WorkbenchIcon { name: "check"; ink: Tokens.accent; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
     }
     opacity: enabled ? 1 : 0.48;
+    private property <bool> focus-visible: false;
     forward-focus: focus;
     focus := FocusScope {
         enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
         key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; }
     }
-    Rectangle { width: parent.width; height: parent.height; border-radius: Tokens.control-radius; border-width: focus.has-focus ? 2px : 0px; border-color: Tokens.accent; }
+    FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
     touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; accessible-role: button; accessible-label: root.label; clicked => { focus.focus(); root.clicked(); } }
 }
 
@@ -260,6 +319,8 @@ export component HotCheckBox inherits Rectangle {
     in-out property <bool> checked: false;
     out property <bool> has-focus: focus.has-focus;
     callback toggled;
+    private property <bool> focus-visible: false;
+    private property <bool> ring: root.focus-visible && focus.has-focus;
     min-height: 22px;
     horizontal-stretch: 0;
     min-width: layout.min-width;
@@ -278,9 +339,9 @@ export component HotCheckBox inherits Rectangle {
             width: 18px; height: 18px; y: (parent.height - self.height) / 2;
             border-radius: Tokens.control-radius;
             background: !root.enabled ? (root.checked ? Tokens.faint : Tokens.surface-2) : root.checked ? (touch.has-hover ? Tokens.accent-hover : Tokens.accent) : (touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : Tokens.surface);
-            border-width: root.checked && !focus.has-focus ? 0px : focus.has-focus ? 2px : 1px;
-            border-color: focus.has-focus ? (root.checked ? Tokens.accent-hover : Tokens.accent) : touch.has-hover && root.enabled ? Tokens.muted : Tokens.faint;
-            animate background { duration: Tokens.motion-fast; easing: ease-out; }
+            border-width: root.checked && !root.ring ? 0px : root.ring ? 2px : 1px;
+            border-color: root.ring ? (root.checked ? Tokens.accent-hover : Tokens.accent) : touch.has-hover && root.enabled ? Tokens.muted : Tokens.faint;
+            animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
             if root.checked: Path {
                 x: 3px; y: 3px; width: 12px; height: 12px; viewbox-width: 24; viewbox-height: 24;
                 fill: transparent; stroke: Tokens.on-accent; stroke-width: 2.2px; stroke-line-cap: round; stroke-line-join: round;
@@ -297,6 +358,8 @@ export component HotCheckBox inherits Rectangle {
     }
     focus := FocusScope {
         enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
         key-pressed(event) => {
             if event.text == " " { root.checked = !root.checked; root.toggled(); return accept; }
             return reject;

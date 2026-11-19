@@ -224,7 +224,7 @@ export component WorkbenchWindow inherits Window {
                                 }
                             }
                             if root.selected-count > 0: WorkbenchButton { label: "删除所选任务"; icon: "delete"; danger: true; icon-only: true; y: (parent.height - self.height) / 2; enabled: root.can-delete; clicked => { root.action("delete"); } }
-                            tools-button := WorkbenchButton { label: "工具"; icon: "more"; icon-only: root.viewport-width < 700px; y: (parent.height - self.height) / 2; clicked => { root.context-open = false; root.tools-x = self.absolute-position.x; root.tools-y = self.absolute-position.y + self.height + 4px; root.tools-open = !root.tools-open; } }
+                            tools-button := WorkbenchButton { label: "工具"; icon: "more"; open: root.tools-open; icon-only: root.viewport-width < 700px; y: (parent.height - self.height) / 2; clicked => { root.context-open = false; root.tools-x = self.absolute-position.x; root.tools-y = self.absolute-position.y + self.height + 4px; root.tools-open = !root.tools-open; } }
                             Rectangle {
                                 width: root.viewport-width < 700px ? 108px : root.viewport-width < 980px ? 150px : 240px; height: Tokens.control-height;
                                 y: (parent.height - self.height) / 2;
@@ -504,6 +504,11 @@ export component WorkbenchWindow inherits Window {
             y: min(max(0px, root.context-open ? root.context-y : root.tools-y), root.height - self.height);
             background: Tokens.surface; border-width: 1px; border-color: Tokens.line; border-radius: Tokens.card-radius;
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: Tokens.dark ? #00000066 : #10182826;
+            // 菜单每次打开都重新创建，init 即可触发淡入；减少动态效果下 motion-fast 为 1ms。
+            private property <bool> menu-entered: false;
+            init => { self.menu-entered = true; }
+            opacity: self.menu-entered ? 1 : 0;
+            animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
             HotScrollView {
                 menu-layout := VerticalLayout {
                     padding: 6px; spacing: 1px;

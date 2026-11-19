@@ -386,6 +386,9 @@ pub struct TaskSpec {
     pub preferred_audio: String,
     #[serde(default)]
     pub allow_duplicate: bool,
+    /// A download copy always receives a separate output, even with global overwrite enabled.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_existing_output: bool,
     #[serde(default)]
     pub scheduled_start_at: String,
     #[serde(default)]
@@ -432,6 +435,7 @@ impl Default for TaskSpec {
             preferred_height: 0,
             preferred_audio: String::new(),
             allow_duplicate: false,
+            preserve_existing_output: false,
             scheduled_start_at: String::new(),
             scheduled_stop_at: String::new(),
             completion_action: String::new(),
@@ -569,8 +573,17 @@ pub enum CoreCommand {
     OfferResource {
         offer: ResourceOffer,
     },
-    OpenMain,
+    OpenMain {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        launch_id: Option<String>,
+    },
     HideMain,
+    /// Sent by a presenter after a surface window was actually shown. Core
+    /// republishes it as a transient event so launchers can confirm readiness.
+    UiReady {
+        launch_id: String,
+        surface: String,
+    },
     Shutdown,
     Ping,
     SetSetting {
@@ -581,6 +594,8 @@ pub enum CoreCommand {
         handoff_id: String,
         filename: String,
         download_dir: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        allow_duplicate: bool,
         #[serde(default)]
         trusted_ui: bool,
     },
@@ -753,6 +768,11 @@ pub enum CoreEvent {
         task_id: Option<String>,
     },
     UiShow {
+        surface: String,
+    },
+    /// Transient: a presenter reports that `surface` is visible and accepts input.
+    UiReady {
+        launch_id: String,
         surface: String,
     },
     ProbeResult {

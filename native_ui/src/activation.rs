@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 pub struct ActivationServer {
-    pub requests: mpsc::Receiver<()>,
+    pub requests: mpsc::Receiver<Option<String>>,
     stop: Arc<AtomicBool>,
 }
 
@@ -17,7 +17,7 @@ fn pipe_name() -> String {
 
 impl ActivationServer {
     pub fn start() -> Result<Self, String> {
-        let (tx, requests) = mpsc::sync_channel(1);
+        let (tx, requests) = mpsc::sync_channel(32);
         let stop = Arc::new(AtomicBool::new(false));
         #[cfg(windows)]
         {
@@ -28,17 +28,22 @@ impl ActivationServer {
                 let handler = Arc::new(move |request| match request {
                     CorePipeRequest::Command {
                         request_id,
-                        command: CoreCommand::OpenMain,
+                        command: CoreCommand::OpenMain { launch_id },
                     } => {
-                        // Coalesce repeated launches while the first window is loading.
-                        match tx.try_send(()) {
-                            Ok(()) | Err(mpsc::TrySendError::Full(())) => {
+                        // Preserve each browser launch receipt. Legacy untracked opens may coalesce.
+                        match tx.try_send(launch_id) {
+                            Ok(()) | Err(mpsc::TrySendError::Full(None)) => {
                                 CorePipeResponse::Events {
                                     request_id,
                                     events: Vec::new(),
                                 }
                             }
-                            Err(mpsc::TrySendError::Disconnected(())) => CorePipeResponse::Error {
+                            Err(mpsc::TrySendError::Full(Some(_))) => CorePipeResponse::Error {
+                                request_id: Some(request_id),
+                                code: "ui_busy".into(),
+                                message: "界面正在处理打开请求，请重试".into(),
+                            },
+                            Err(mpsc::TrySendError::Disconnected(_)) => CorePipeResponse::Error {
                                 request_id: Some(request_id),
                                 code: "ui_stopping".into(),
                                 message: "界面正在退出，请重试".into(),
@@ -73,7 +78,7 @@ impl Drop for ActivationServer {
     }
 }
 
-pub fn forward_workbench() -> Result<(), String> {
+pub fn forward_workbench(launch_id: Option<String>) -> Result<(), String> {
     #[cfg(windows)]
     {
         // The instance lock is claimed before Core/font initialization. Wait for
@@ -84,7 +89,9 @@ pub fn forward_workbench() -> Result<(), String> {
             match hls_client::NamedPipeClient::connect(&pipe_name(), 200).and_then(|mut pipe| {
                 pipe.request(&CorePipeRequest::Command {
                     request_id: 1,
-                    command: CoreCommand::OpenMain,
+                    command: CoreCommand::OpenMain {
+                        launch_id: launch_id.clone(),
+                    },
                 })
             }) {
                 Ok(CorePipeResponse::Events { .. }) => return Ok(()),
@@ -98,6 +105,7 @@ pub fn forward_workbench() -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        let _ = launch_id;
         Err("UI 激活需要 Windows".into())
     }
 }

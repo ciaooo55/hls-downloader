@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NativeBridge, nativeDisconnectDetail, type NativePortLike } from './nativeBridge'
+import { NativeBridge, NativeHostError, nativeDisconnectDetail, nativeDisconnectError, type NativePortLike } from './nativeBridge'
 
 class FakeEvent<T extends (...args: any[]) => void> {
   listener: T | null = null
@@ -585,5 +585,15 @@ describe('native host missing', () => {
     const previous = g.chrome
     g.chrome = { runtime: { lastError: { message: 'Native host has exited.' } } }
     try { expect(nativeDisconnectDetail({})).toBe('Native host has exited.') } finally { g.chrome = previous }
+  })
+})
+
+describe('nativeDisconnectError codes', () => {
+  it('classifies Chrome and Firefox missing-host errors', () => {
+    expect(nativeDisconnectError('Specified native messaging host not found.').code).toBe('host_missing')
+    expect(nativeDisconnectError('No such native application com.hls.downloader').code).toBe('host_missing')
+    expect(nativeDisconnectError('Access to the specified native messaging host is forbidden.').code).toBe('host_forbidden')
+    expect(nativeDisconnectError('Native host has exited.').code).toBe('host_disconnected')
+    expect(nativeDisconnectError('')).toBeInstanceOf(NativeHostError)
   })
 })

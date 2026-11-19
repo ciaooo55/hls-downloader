@@ -1,4 +1,4 @@
-import { Tokens, WorkbenchIcon } from "theme.slint";
+import { Tokens, WorkbenchIcon, FocusRing } from "theme.slint";
 export { WorkbenchIcon } from "theme.slint";
 
 export component WorkbenchButton inherits Rectangle {
@@ -12,6 +12,8 @@ export component WorkbenchButton inherits Rectangle {
     in property <bool> menu-item: false;
     in property <bool> outlined: false;
     in property <bool> drag-source: false;
+    // 菜单按钮在菜单展开期间保持按下底色，说明菜单从哪里来。
+    in property <bool> open: false;
     private property <bool> drag-started: false;
     callback clicked;
     callback dragged;
@@ -20,9 +22,10 @@ export component WorkbenchButton inherits Rectangle {
     preferred-width: icon-only ? Tokens.control-height : content.min-width;
     horizontal-stretch: menu-item ? 1 : 0;
     border-radius: Tokens.control-radius;
-    border-width: focus.has-focus || outlined || primary ? 1px : 0px;
-    border-color: focus.has-focus || primary ? Tokens.accent : Tokens.line;
-    background: primary ? (touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : danger && menu-item && touch.has-hover && enabled ? Tokens.fail-surface : touch.pressed && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.control-hover : outlined ? Tokens.surface : transparent;
+    private property <bool> focus-visible: false;
+    border-width: outlined || primary ? 1px : 0px;
+    border-color: primary ? Tokens.accent : Tokens.line;
+    background: primary ? (touch.pressed && enabled ? Tokens.accent-pressed : touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : danger && menu-item && touch.has-hover && enabled ? Tokens.fail-surface : (touch.pressed || root.open) && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.control-hover : outlined ? Tokens.surface : transparent;
     drop-shadow-offset-y: primary || outlined ? 1px : 0px;
     drop-shadow-blur: primary ? 8px : outlined ? 2px : 0px;
     drop-shadow-color: !enabled ? transparent : primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.18 : 0.26) : outlined ? Tokens.shadow : transparent;
@@ -32,6 +35,7 @@ export component WorkbenchButton inherits Rectangle {
     accessible-action-default => { if root.enabled { root.clicked(); } }
     forward-focus: focus;
     Tooltip { text: @markdown("\{root.hint}"); }
+    FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
     content := HorizontalLayout {
         padding-left: root.icon-only ? 0px : root.primary ? 16px : 10px;
         padding-right: root.icon-only ? 0px : root.primary ? 16px : 10px;
@@ -42,6 +46,8 @@ export component WorkbenchButton inherits Rectangle {
     }
     focus := FocusScope {
         enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
         key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; }
     }
     touch := TouchArea {
@@ -66,12 +72,15 @@ export component NavigationItem inherits Rectangle {
     in property <bool> enabled: true;
     callback clicked;
     height: 36px; border-radius: Tokens.control-radius;
-    background: active ? Tokens.selected : touch.pressed ? Tokens.surface-3 : touch.has-hover ? Tokens.control-hover : transparent;
+    private property <bool> focus-visible: false;
+    background: active ? Tokens.selected : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
     animate background { duration: Tokens.motion-fast; }
     opacity: root.enabled ? 1 : 0.48;
     accessible-role: tab; accessible-label: root.show-count ? root.label + "，" + root.count + " 项" : root.label; accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
     Tooltip { text: root.show-count ? @markdown("\{root.label}（\{root.count}）") : @markdown("\{root.label}"); }
+    // 与按钮一致：只在 Tab 键切换时显示焦点环，鼠标点击不显示。侧栏内收 1px，避免被侧栏裁掉。
+    FocusRing { x: -1px; y: -1px; width: root.width + 2px; height: root.height + 2px; shown: root.focus-visible && focus.has-focus; }
     // 选中指示条贴在左缘，紧凑模式下同样可见。
     Rectangle { x: 3px; width: 3px; height: root.active ? 16px : 0px; y: (parent.height - self.height) / 2; border-radius: 1.5px; background: Tokens.accent; animate height { duration: Tokens.motion; easing: ease-out; } }
     HorizontalLayout {
@@ -90,7 +99,10 @@ export component NavigationItem inherits Rectangle {
         background: root.active ? Tokens.accent : Tokens.surface-3;
         compact-count := Text { text: root.count > 99 ? "99+" : root.count; color: root.active ? Tokens.on-accent : Tokens.muted; font-size: 8px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
     }
-    focus := FocusScope { enabled: root.enabled; key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; } }
+    focus := FocusScope { enabled: root.enabled;
+        focus-gained(reason) => { root.focus-visible = reason == FocusReason.tab-navigation; }
+        focus-lost(reason) => { root.focus-visible = false; }
+        key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; } }
     forward-focus: focus;
     touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { focus.focus(); root.clicked(); } }
 }

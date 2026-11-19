@@ -438,6 +438,7 @@ fn dispatch(
                 "task_action",
                 "open_main",
                 "hide_main",
+                "workbench_launch_receipt",
                 "shutdown",
                 "set_setting",
                 "accept_handoff",
@@ -1234,6 +1235,7 @@ mod tests {
                 handoff_id: "first".into(),
                 filename: "setup.exe".into(),
                 download_dir: String::new(),
+                allow_duplicate: false,
                 trusted_ui: true,
             })
             .unwrap();
@@ -1326,6 +1328,7 @@ mod tests {
             handoff_id: "handoff-ipc".into(),
             filename: "setup.exe".into(),
             download_dir: String::new(),
+            allow_duplicate: false,
             trusted_ui: true,
         })
         .unwrap();

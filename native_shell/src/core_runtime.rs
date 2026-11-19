@@ -128,7 +128,7 @@ impl CoreRuntime {
                 handoff_id,
                 filename,
                 download_dir,
-                trusted_ui: _,
+                ..
             } => self.accept_handoff(&handoff_id, &filename, &download_dir),
             CoreCommand::RejectHandoff {
                 handoff_id,
@@ -162,7 +162,7 @@ impl CoreRuntime {
                     });
                 }
             }
-            CoreCommand::OpenMain => {
+            CoreCommand::OpenMain { .. } => {
                 self.publish(CoreEvent::UiShow {
                     surface: "main".into(),
                 });
@@ -171,6 +171,9 @@ impl CoreRuntime {
                 self.publish(CoreEvent::UiShow {
                     surface: "hide".into(),
                 });
+            }
+            CoreCommand::UiReady { launch_id, surface } => {
+                self.publish(CoreEvent::UiReady { launch_id, surface });
             }
             CoreCommand::Shutdown => {}
             CoreCommand::ReorderQueue { task_id, delta } => self.reorder(&task_id, delta),
@@ -1642,6 +1645,7 @@ mod tests {
             handoff_id: "handoff-ui".into(),
             filename: "installer.exe".into(),
             download_dir: String::new(),
+            allow_duplicate: false,
             trusted_ui: false,
         });
         assert!(matches!(accepted[0].event, CoreEvent::TaskCreated { .. }));

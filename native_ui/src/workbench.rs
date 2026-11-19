@@ -487,6 +487,10 @@ impl Workbench {
     }
 
     pub fn show(&self) -> Result<(), slint::PlatformError> {
+        self.show_for_launch(None)
+    }
+
+    pub fn show_for_launch(&self, launch_id: Option<String>) -> Result<(), slint::PlatformError> {
         self.closing.set(false);
         let visible = self.window.window().is_visible();
         self.window.show()?;
@@ -495,10 +499,12 @@ impl Workbench {
             let weak = self.window.as_weak();
             let _ = slint::spawn_local(async move {
                 let Some(ui) = weak.upgrade() else {
+                    report_ui_ready(launch_id, "main_failed");
                     return;
                 };
                 use slint::winit_030::WinitWindowAccessor;
-                if ui.window().winit_window().await.is_err() {
+                if ui.window().winit_window().await.is_err() || !ui.window().is_visible() {
+                    report_ui_ready(launch_id, "main_failed");
                     return;
                 }
                 native_window::apply_theme(&ui, ui.global::<Tokens>().get_dark());
@@ -506,11 +512,17 @@ impl Workbench {
                     native_window::restore_geometry(ui.window());
                 }
                 native_window::activate(ui.window());
+                // Windows can refuse foreground activation. The receipt confirms
+                // the window is visible and can be reached from the taskbar.
+                report_ui_ready(launch_id, "main");
             });
         }
         #[cfg(not(windows))]
-        if !visible {
-            native_window::restore_geometry(self.window.window());
+        {
+            if !visible {
+                native_window::restore_geometry(self.window.window());
+            }
+            report_ui_ready(launch_id, "main");
         }
         Ok(())
     }
@@ -2394,5 +2406,11 @@ mod file_selection_tests {
         assert!(!task_action_allowed(&task, "play"));
         assert!(task_action_allowed(&task, "cast"));
         assert!(task_action_allowed(&task, "push_tvbox"));
+    }
+}
+
+pub(crate) fn report_ui_ready(launch_id: Option<String>, surface: &'static str) {
+    if let Some(launch_id) = launch_id {
+        std::thread::spawn(move || hls_client::report_workbench_launch(launch_id, surface));
     }
 }

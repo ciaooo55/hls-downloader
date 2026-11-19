@@ -26,6 +26,44 @@ const MINIMUM_EXTENSION_VERSION: &str = "2.0.11";
 const EXTENSION_RELEASE_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases";
 static NEXT_HANDOFF: AtomicU64 = AtomicU64::new(1);
 
+static NEXT_WORKBENCH: AtomicU64 = AtomicU64::new(1);
+
+/// What a workbench readiness poll observed after `since_sequence`.
+#[derive(Debug, PartialEq, Eq)]
+enum WorkbenchObservation {
+    Ready,
+    Failed,
+    Waiting,
+}
+
+fn observe_workbench(
+    events: &[EventEnvelope],
+    since_sequence: u64,
+    launch_id: &str,
+) -> WorkbenchObservation {
+    let mut observation = WorkbenchObservation::Waiting;
+    for envelope in events
+        .iter()
+        .filter(|envelope| envelope.sequence > since_sequence)
+    {
+        match &envelope.event {
+            // 一次成功即视为可用；之后的失败可能来自另一个重复窗口，不覆盖已就绪。
+            CoreEvent::UiReady {
+                launch_id: id,
+                surface,
+            } if id == launch_id && surface == "main" => return WorkbenchObservation::Ready,
+            CoreEvent::UiReady {
+                launch_id: id,
+                surface,
+            } if id == launch_id && surface == "main_failed" => {
+                observation = WorkbenchObservation::Failed
+            }
+            _ => {}
+        }
+    }
+    observation
+}
+
 struct NativeHostSession {
     core: HostCore,
     media_push_ui_request_id: Option<String>,
@@ -40,7 +78,7 @@ enum HostCore {
 
 impl HostCore {
     fn open_workbench(&mut self) -> Result<(), String> {
-        self.handle(CoreCommand::OpenMain)?;
+        self.handle(CoreCommand::OpenMain { launch_id: None })?;
         // In-process protocol fixtures must not launch a cached real desktop
         // binary. Packaged integration tests exercise the remote Core path.
         #[cfg(test)]
@@ -48,11 +86,60 @@ impl HostCore {
             return Ok(());
         }
         if let Some(root) = crate::install_root() {
-            if !crate::spawn_desktop_ui(&root) {
+            if !crate::spawn_desktop_ui(&root, None) {
                 return Err("无法启动桌面工作台".into());
             }
         }
         Ok(())
+    }
+
+    fn request_workbench(&mut self) -> Result<Option<(String, u64)>, String> {
+        let launch_id = format!(
+            "{}-{}-{}",
+            std::process::id(),
+            unix_time_ms(),
+            NEXT_WORKBENCH.fetch_add(1, Ordering::Relaxed),
+        );
+        let sequence = self
+            .handle(CoreCommand::Ping)
+            .map_err(|error| format!("core:{error}"))?
+            .last()
+            .map_or(0, |envelope| envelope.sequence);
+        if !self.supports_command("workbench_launch_receipt") {
+            return self.open_workbench().map(|()| None);
+        }
+        #[cfg(test)]
+        if matches!(self, Self::Local(_)) {
+            return Ok(Some((launch_id, sequence)));
+        }
+        let root = crate::install_root().ok_or("spawn:找不到桌面工作台安装目录")?;
+        if !crate::spawn_desktop_ui(&root, Some(&launch_id)) {
+            return Err("spawn:找不到或无法启动桌面工作台程序".into());
+        }
+        Ok(Some((launch_id, sequence)))
+    }
+
+    fn supports_command(&mut self, name: &str) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Local(_) => true,
+            Self::Remote(client) => matches!(
+                client.request(&crate::CorePipeRequest::Capabilities { request_id: 1 }),
+                Ok(crate::CorePipeResponse::Capabilities { commands, .. })
+                    if commands.iter().any(|command| command == name)
+            ),
+        }
+    }
+
+    fn events_after(&mut self, after: u64, wait_ms: u64) -> Result<hls_client::EventBatch, String> {
+        match self {
+            #[cfg(test)]
+            Self::Local(core) => {
+                let _ = wait_ms;
+                core.event_batch_after(after)
+            }
+            Self::Remote(client) => client.wait_event_batch(after, wait_ms),
+        }
     }
 
     fn admit_handoff(&mut self, handoff_json: &str) -> Result<crate::CorePipeResponse, String> {
@@ -256,10 +343,8 @@ impl NativeHostSession {
                 }
             }
             "ping" => self.ping(),
-            "activate" => {
-                self.core.open_workbench()?;
-                Ok(json!({"ok": true, "activated": true}))
-            }
+            "activate" => self.activate(),
+            "workbench_status" => self.workbench_status(message),
             "offer" => self.offer(message, false),
             "recover_offer" => {
                 if field(resource_payload(message)?, "client_request_id")
@@ -280,6 +365,86 @@ impl NativeHostSession {
             "media_push_status" => self.media_push_status(message),
             _ => Err(format!("不支持的 Native Messaging 操作: {operation}")),
         }
+    }
+
+    /// Staged desktop activation. The response never claims the workbench is
+    /// open: callers poll `workbench_status` until Core relays `UiReady`.
+    fn activate(&mut self) -> Result<Value, String> {
+        match self.core.request_workbench() {
+            Ok(Some((launch_id, since_sequence))) => Ok(json!({
+                "ok": true,
+                "activated": true,
+                "stage": "launching",
+                "launch_id": launch_id,
+                "since_sequence": since_sequence,
+                "verifiable": true,
+            })),
+            // 旧版 Core 不认识 UiReady：只能说明已请求打开，不能冒充“已打开”。
+            Ok(None) => Ok(json!({
+                "ok": true,
+                "activated": true,
+                "stage": "requested",
+                "verifiable": false,
+            })),
+            Err(error) => {
+                let (code, detail) = match error.split_once(':') {
+                    Some(("core", detail)) => ("core_unreachable", detail.to_string()),
+                    Some(("spawn", detail)) => ("workbench_spawn_failed", detail.to_string()),
+                    _ => ("workbench_spawn_failed", error.clone()),
+                };
+                Ok(json!({
+                    "ok": false,
+                    "code": code,
+                    "stage": if code == "core_unreachable" { "core" } else { "workbench" },
+                    "error": detail,
+                }))
+            }
+        }
+    }
+
+    fn workbench_status(&mut self, message: &Value) -> Result<Value, String> {
+        let launch_id = message
+            .get("launch_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 80)
+            .ok_or("缺少工作台启动编号")?;
+        let since_sequence = message
+            .get("since_sequence")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "缺少工作台启动序号".to_string())?;
+        // 每次最多占用宿主端口 1.5 秒，避免阻塞同一端口上的下载交接。
+        let wait_ms = message
+            .get("wait_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(1_200)
+            .min(1_500);
+        let batch = match self.core.events_after(since_sequence, wait_ms) {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(json!({
+                    "ok": false,
+                    "code": "core_unreachable",
+                    "stage": "core",
+                    "error": error,
+                }))
+            }
+        };
+        if batch.resync_required {
+            return Ok(json!({ "ok": false, "code": "launch_status_lost" }));
+        }
+        let observation = observe_workbench(&batch.events, since_sequence, launch_id);
+        Ok(json!({
+            "ok": true,
+            "ready": observation == WorkbenchObservation::Ready,
+            "failed": observation == WorkbenchObservation::Failed,
+            // 只前进到已检查过的事件，未出现的就绪回执仍可在下一次轮询读到。
+            "since_sequence": if observation == WorkbenchObservation::Waiting {
+                batch.events.last().map_or(since_sequence, |envelope| envelope.sequence)
+            } else {
+                since_sequence
+            },
+            "latest_sequence": batch.latest_sequence,
+        }))
     }
 
     fn ping(&mut self) -> Result<Value, String> {
@@ -540,6 +705,7 @@ impl NativeHostSession {
             handoff_id: id.clone(),
             filename,
             download_dir,
+            allow_duplicate: false,
             trusted_ui: false,
         })?;
         self.handoff_status(&json!({"handoff_id": id}))
@@ -843,11 +1009,13 @@ pub fn run() -> i32 {
     if profile {
         eprintln!("native_host_startup stage=entry elapsed_us=0");
     }
+    // Core 不可达时不再直接退出：浏览器只会看到“宿主已退出”，无法与“宿主未注册”
+    // 区分。保持端口，按请求重试连接，并以 core_unreachable 明确回复。
     let mut session = match NativeHostSession::open_default() {
-        Ok(session) => session,
+        Ok(session) => Some(session),
         Err(error) => {
             eprintln!("v7 Core startup failed: {error}");
-            return 1;
+            None
         }
     };
     if profile {
@@ -872,9 +1040,17 @@ pub fn run() -> i32 {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let response = match session.dispatch(&message) {
-            Ok(value) => value,
-            Err(error) => json!({"ok": false, "error": error}),
+        if session.is_none() {
+            session = NativeHostSession::open_default()
+                .map_err(|error| eprintln!("v7 Core still unavailable: {error}"))
+                .ok();
+        }
+        let response = match session.as_mut() {
+            Some(session) => match session.dispatch(&message) {
+                Ok(value) => value,
+                Err(error) => json!({"ok": false, "error": error}),
+            },
+            None => core_unreachable_response(),
         };
         let response = attach_request_id(response, request_id);
         if let Err(error) = write_response(&mut output, &response) {
@@ -882,6 +1058,15 @@ pub fn run() -> i32 {
             return 1;
         }
     }
+}
+
+fn core_unreachable_response() -> Value {
+    json!({
+        "ok": false,
+        "code": "core_unreachable",
+        "stage": "core",
+        "error": "下载引擎未启动或无响应，请重试；仍失败时从开始菜单启动 HLS Downloader",
+    })
 }
 
 fn attach_request_id(response: Value, request_id: String) -> Value {
@@ -1774,6 +1959,51 @@ mod tests {
         assert!(session.dispatch(&json!({"op":"media_push","kind":"cast","resource":{
             "url":"https://cdn.test/media.m3u8", "request_method":"POST", "request_body":"once=1"
         }})).unwrap_err().contains("非 GET"));
+    }
+
+    #[test]
+    fn workbench_receipts_are_scoped_to_the_launch() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let first = session.dispatch(&json!({"op": "activate"})).unwrap();
+        let second = session.dispatch(&json!({"op": "activate"})).unwrap();
+        assert_eq!(first["stage"], "launching");
+        assert_ne!(first["launch_id"], second["launch_id"]);
+        let query = |launch: &Value| {
+            json!({
+                "op": "workbench_status",
+                "launch_id": launch["launch_id"],
+                "since_sequence": launch["since_sequence"],
+                "wait_ms": 0,
+            })
+        };
+        let send = |session: &mut NativeHostSession, launch: &Value, surface: &str| {
+            session
+                .core
+                .handle(CoreCommand::UiReady {
+                    launch_id: launch["launch_id"].as_str().unwrap().into(),
+                    surface: surface.into(),
+                })
+                .unwrap();
+        };
+        send(&mut session, &second, "main_failed");
+        assert_eq!(session.dispatch(&query(&first)).unwrap()["failed"], false);
+        assert_eq!(session.dispatch(&query(&second)).unwrap()["failed"], true);
+        send(&mut session, &first, "main");
+        assert_eq!(session.dispatch(&query(&first)).unwrap()["ready"], true);
+        assert_eq!(session.dispatch(&query(&second)).unwrap()["ready"], false);
+    }
+
+    #[test]
+    fn workbench_status_requires_launch_identity_and_cursor() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        assert!(session
+            .dispatch(&json!({"op": "workbench_status"}))
+            .unwrap_err()
+            .contains("启动编号"));
+        assert!(session
+            .dispatch(&json!({"op": "workbench_status", "launch_id": "current"}))
+            .unwrap_err()
+            .contains("启动序号"));
     }
 
     #[test]

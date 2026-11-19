@@ -9,6 +9,7 @@ mod cast_tools;
 mod file_dialogs;
 mod media_controller;
 mod native_window;
+mod offscreen;
 mod player_subtitles;
 mod queue_editor;
 mod resource_tools;
@@ -17,6 +18,7 @@ mod settings_editor;
 mod site_rules;
 mod system_tools;
 mod table_layout;
+mod target_check;
 mod task_list;
 mod workbench;
 
@@ -162,6 +164,11 @@ fn main() -> std::process::ExitCode {
             if !env::args_os().any(|arg| {
                 arg == "--self-test" || arg == "--lock-test" || arg == "--visual-fixture"
             }) {
+                // 图形后端初始化失败等早于工作台创建的错误，也要告诉等待中的插件
+                // “工作台启动失败”，否则插件只能等到超时。必须同步发送：进程随即退出。
+                if let Some(launch_id) = hls_client::workbench_launch_id() {
+                    hls_client::report_workbench_launch(launch_id, "main_failed");
+                }
                 report_startup_error(&message);
             }
             std::process::ExitCode::FAILURE
@@ -210,20 +217,24 @@ fn report_startup_error(error: &str) {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     native_window::initialize_app_id();
-    // 确认弹窗必须在沙盒、远程桌面和无 OpenGL 驱动的电脑上正常显示。
-    #[cfg(windows)]
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name("software".into())
-        .select()?;
     let args: Vec<String> = env::args().collect();
     if let Some(kind) = args
         .windows(2)
         .find(|pair| pair[0] == "--visual-fixture")
         .map(|pair| pair[1].as_str())
     {
+        if let Some(platform) = offscreen::OffscreenPlatform::from_env() {
+            slint::platform::set_platform(Box::new(platform))
+                .map_err(|error| format!("offscreen renderer: {error}"))?;
+        }
         return run_visual_fixture(kind, args.iter().any(|arg| arg == "--dark"));
     }
+    // 确认弹窗必须在沙盒、远程桌面和无 OpenGL 驱动的电脑上正常显示。
+    #[cfg(windows)]
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .select()?;
     if args.iter().any(|arg| arg == "--self-test") {
         let confirm = ConfirmWindow::new()?;
         confirm.on_move_window({
@@ -246,7 +257,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = claim_v7_presenter_instance() {
         if is_already_running_error(&error) && !lock_test {
             if args.iter().any(|arg| arg == "--workbench") {
-                activation::forward_workbench()?;
+                activation::forward_workbench(hls_client::workbench_launch_id())?;
             }
             return Ok(());
         }
@@ -321,16 +332,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let runtime_settings = Rc::clone(&runtime_settings);
         let ui_sequence = Rc::clone(&ui_sequence);
         let native_workbench = Rc::clone(&native_workbench);
-        move |explicit_native| {
+        move |explicit_native, launch_id: slint::SharedString| {
+            let launch_id = (!launch_id.is_empty()).then(|| launch_id.to_string());
             if explicit_native {
                 native_workbench.set(true);
             }
             // Keep the complete workbench available until native parity is verified.
             if !native_workbench.get() {
                 thread::spawn(|| {
-                    if let Err(error) = CoreIpcClient::connect()
-                        .and_then(|mut client| client.command(CoreCommand::OpenMain))
-                    {
+                    if let Err(error) = CoreIpcClient::connect().and_then(|mut client| {
+                        client.command(CoreCommand::OpenMain { launch_id: None })
+                    }) {
                         trace(&format!("open main failed: {error}"));
                     }
                 });
@@ -370,13 +382,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(error) => {
                         trace(&format!("workbench creation failed: {error}"));
+                        workbench::report_ui_ready(launch_id, "main_failed");
                         report_startup_error(&error.to_string());
                         return;
                     }
                 }
             }
             if let Some(window) = workbench.borrow().as_ref() {
-                if let Err(error) = window.show() {
+                if let Err(error) = window.show_for_launch(launch_id.clone()) {
+                    workbench::report_ui_ready(launch_id, "main_failed");
                     report_startup_error(&error.to_string());
                 }
             }
@@ -397,9 +411,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn({
         let confirm = confirm.as_weak();
         move || {
-            while activation.requests.recv().is_ok() {
+            while let Ok(launch_id) = activation.requests.recv() {
                 if confirm
-                    .upgrade_in_event_loop(|item| item.invoke_open_workbench(true))
+                    .upgrade_in_event_loop(move |item| {
+                        item.invoke_open_workbench(true, launch_id.unwrap_or_default().into())
+                    })
                     .is_err()
                 {
                     break;
@@ -473,7 +489,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     confirm.on_command({
-        let client = Rc::clone(&client);
         let pending = Arc::clone(&pending);
         let active_handoff = Arc::clone(&active_handoff);
         let presenter_settings = Arc::clone(&presenter_settings);
@@ -483,7 +498,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let command = command.to_string();
             trace(&format!("confirm command: {command}"));
             match command.as_str() {
-                "accept" => {
+                "accept" | "rename_copy" | "accept_long_path" | "copy_long_path" => {
+                    let copy = matches!(command.as_str(), "rename_copy" | "copy_long_path");
+                    let allow_long =
+                        matches!(command.as_str(), "accept_long_path" | "copy_long_path");
                     let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned())
                     else {
                         return;
@@ -491,82 +509,185 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let Some(item) = window.upgrade() else {
                         return;
                     };
+                    if item.get_busy() {
+                        return;
+                    }
                     let filename = item.get_filename().trim().to_string();
                     let download_dir = item.get_download_dir().trim().to_string();
                     let category = item.get_category().to_string();
-                    if filename.is_empty() {
-                        item.set_error_text("请输入文件名".into());
-                        return;
-                    }
+                    let remember = item.get_remember_directory() && !download_dir.is_empty();
+                    let taken: Vec<String> = if copy {
+                        known_tasks
+                            .lock()
+                            .map(|tasks| tasks.iter().map(|task| task.filename.clone()).collect())
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    item.set_rejecting(false);
                     item.set_busy(true);
-                    item.set_error_text("".into());
-                    match command_with_reconnect(
-                        &client,
-                        CoreCommand::AcceptHandoff {
-                            handoff_id: offer.handoff_id.clone(),
-                            filename,
-                            download_dir: download_dir.clone(),
-                            trusted_ui: true,
-                        },
-                    ) {
-                        Ok(_) => {
-                            if item.get_remember_directory() && !download_dir.is_empty() {
-                                remember_category_directory(
-                                    &client,
-                                    &presenter_settings,
-                                    &category,
-                                    download_dir.clone(),
-                                );
-                            }
-                            pending.lock().ok().and_then(|mut items| items.pop_front());
+                    clear_confirm_issue(&item);
+                    let pending = Arc::clone(&pending);
+                    let active_handoff = Arc::clone(&active_handoff);
+                    let presenter_settings = Arc::clone(&presenter_settings);
+                    let weak = item.as_weak();
+                    thread::spawn(move || {
+                        let result = (|| {
+                            target_check::check_name(&filename)
+                                .map_err(|issue| issue.presentation_for(copy))?;
+                            let filename = if copy {
+                                target_check::unique_name(&download_dir, &filename, &taken)
+                                    .map_err(|error| {
+                                        (error, [("选择其他位置", "browse"), ("", "")])
+                                    })?
+                            } else {
+                                filename
+                            };
+                            target_check::check_target(&download_dir, &filename, allow_long)
+                                .map_err(|issue| issue.presentation_for(copy))?;
+                            (|| {
+                                let mut client = CoreIpcClient::connect()?;
+                                client.command(CoreCommand::AcceptHandoff {
+                                    handoff_id: offer.handoff_id.clone(),
+                                    filename,
+                                    download_dir: download_dir.clone(),
+                                    allow_duplicate: copy,
+                                    trusted_ui: true,
+                                })?;
+                                if remember {
+                                    remember_category_directory(
+                                        &mut client,
+                                        &presenter_settings,
+                                        &category,
+                                        download_dir,
+                                    );
+                                }
+                                Ok::<(), String>(())
+                            })()
+                            .map_err(|error| {
+                                (
+                                    format!("未能开始下载：{error}"),
+                                    [
+                                        ("重试", if copy { "rename_copy" } else { "accept" }),
+                                        ("选择其他位置", "browse"),
+                                    ],
+                                )
+                            })
+                        })();
+                        // Core 的终态事件按 ID 移除队列项。处理较晚的失败时不能改到下一个确认窗。
+                        if let Err((text, actions)) = result {
+                            let _ = weak.upgrade_in_event_loop(move |item| {
+                                let current = active_handoff.lock().ok().is_some_and(|id| {
+                                    id.as_deref() == Some(offer.handoff_id.as_str())
+                                });
+                                if current
+                                    && pending.lock().ok().is_some_and(|items| {
+                                        items.front().is_some_and(|entry| {
+                                            entry.handoff_id == offer.handoff_id
+                                        })
+                                    })
+                                {
+                                    item.set_busy(false);
+                                    set_confirm_issue(&item, &text, actions);
+                                }
+                            });
                         }
-                        Err(error) => {
-                            item.set_busy(false);
-                            item.set_error_text(error.into());
-                            return;
-                        }
-                    }
+                    });
                 }
                 "reject" => {
-                    // 先释放队列锁；成功后还需要再次获取它移除请求。
-                    let offer = pending.lock().ok().and_then(|items| items.front().cloned());
-                    if let Some(offer) = offer {
-                        let result = command_with_reconnect(
-                            &client,
-                            CoreCommand::RejectHandoff {
-                                handoff_id: offer.handoff_id.clone(),
-                                suppress_site_kind: window
-                                    .upgrade()
-                                    .map(|item| item.get_suppress_site_kind())
-                                    .unwrap_or(false),
-                            },
-                        );
-                        match result {
-                            Ok(_) => {
-                                pending.lock().ok().and_then(|mut items| items.pop_front());
-                            }
-                            Err(error) => {
-                                if let Some(item) = window.upgrade() {
-                                    item.set_error_text(error.into());
-                                }
-                            }
-                        }
+                    let Some(item) = window.upgrade() else { return };
+                    if item.get_busy() {
+                        return;
                     }
+                    let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned())
+                    else {
+                        return;
+                    };
+                    let suppress_site_kind = item.get_suppress_site_kind();
+                    item.set_rejecting(true);
+                    item.set_busy(true);
+                    clear_confirm_issue(&item);
+                    let weak = item.as_weak();
+                    let active_handoff = Arc::clone(&active_handoff);
+                    thread::spawn(move || {
+                        let handoff_id = offer.handoff_id;
+                        let result = CoreIpcClient::connect().and_then(|mut client| {
+                            client.command(CoreCommand::RejectHandoff {
+                                handoff_id: handoff_id.clone(),
+                                suppress_site_kind,
+                            })
+                        });
+                        if let Err(error) = result {
+                            let _ =
+                                weak.upgrade_in_event_loop(move |item| {
+                                    if active_handoff.lock().ok().is_some_and(|id| {
+                                        id.as_deref() == Some(handoff_id.as_str())
+                                    }) {
+                                        item.set_busy(false);
+                                        set_confirm_issue(
+                                            &item,
+                                            &format!("取消未送达主程序：{error}"),
+                                            [("重试取消", "reject"), ("", "")],
+                                        );
+                                    }
+                                });
+                        }
+                    });
                 }
                 "browse" => {
                     let Some(item) = window.upgrade() else {
                         return;
                     };
                     match pick_folder(&item.get_download_dir()) {
-                        Ok(Some(path)) => item.set_download_dir(path.into()),
+                        Ok(Some(path)) => {
+                            item.set_download_dir(path.into());
+                            clear_confirm_issue(&item);
+                        }
                         Ok(None) => {}
-                        Err(error) => item.set_error_text(error.into()),
+                        Err(error) => set_confirm_issue(&item, &error, [("", ""), ("", "")]),
+                    }
+                    return;
+                }
+                "default_dir" | "fix_name" | "shorten" => {
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
+                    let filename = item.get_filename().to_string();
+                    let directory = item.get_download_dir().to_string();
+                    match command.as_str() {
+                        "default_dir" => item.set_download_dir(
+                            hls_client::default_v7_download_dir()
+                                .to_string_lossy()
+                                .into_owned()
+                                .into(),
+                        ),
+                        "fix_name" => item.set_filename(target_check::fix_name(&filename).into()),
+                        "shorten" => {
+                            let Some(short) = target_check::shorten_to_fit(&directory, &filename)
+                            else {
+                                set_confirm_issue(
+                                    &item,
+                                    "目录太长，无法保留文件类型。请选择较短的保存位置。",
+                                    [("选择其他位置", "browse"), ("", "")],
+                                );
+                                return;
+                            };
+                            item.set_filename(short.into());
+                        }
+                        _ => unreachable!(),
+                    }
+                    clear_confirm_issue(&item);
+                    return;
+                }
+                "open_existing" => {
+                    if let Some(item) = window.upgrade() {
+                        item.invoke_open_workbench(false, "".into());
                     }
                     return;
                 }
                 "more" => {
                     if let Some(item) = window.upgrade() {
-                        item.invoke_open_workbench(false);
+                        item.invoke_open_workbench(false, "".into());
                     }
                     return;
                 }
@@ -588,6 +709,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &presenter_settings,
                 &known_tasks,
             );
+        }
+    });
+    confirm.window().on_close_requested({
+        let weak = confirm.as_weak();
+        move || {
+            if let Some(item) = weak.upgrade() {
+                if !item.get_busy() {
+                    item.invoke_command("reject".into());
+                }
+            }
+            slint::CloseRequestResponse::KeepWindowShown
         }
     });
     complete.on_command({
@@ -631,7 +763,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     item.set_action_busy(false);
                     match result {
-                        Ok(_) if cancel_power => item.set_power_hint("".into()),
+                        Ok(_) if cancel_power => {
+                            item.set_power_hint("".into());
+                            item.set_power_seconds(0);
+                        }
                         Ok(_) => {
                             let _ = item.hide();
                         }
@@ -692,7 +827,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             ))
                     {
                         if let Some(confirm) = confirm.upgrade() {
-                            confirm.invoke_open_workbench(true);
+                            confirm.invoke_open_workbench(true, "".into());
                         }
                     }
                     if let Some(window) = workbench.borrow().as_ref() {
@@ -782,7 +917,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     )
                                     .into(),
                                 );
+                                item.set_power_action_label(power_label(&action).into());
+                                item.set_power_seconds(
+                                    i32::try_from(delay_seconds).unwrap_or(i32::MAX),
+                                );
+                                let reopening = !item.window().is_visible();
+                                if reopening {
+                                    item.set_entered(false);
+                                }
                                 if item.show().is_ok() {
+                                    if reopening {
+                                        play_complete_entrance(&item);
+                                    }
                                     round_native_window(item.window());
                                     native_window::prepare_dialog(&item, true, true, None);
                                 }
@@ -836,7 +982,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &known_tasks,
     );
     if args.iter().any(|arg| arg == "--workbench") {
-        confirm.invoke_open_workbench(true);
+        confirm.invoke_open_workbench(
+            true,
+            hls_client::workbench_launch_id().unwrap_or_default().into(),
+        );
     }
     slint::run_event_loop_until_quit()?;
     prewarm_timer.stop();
@@ -886,7 +1035,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
-        "confirm" | "confirm-error" => {
+        "confirm" | "confirm-error" | "confirm-long" | "confirm-details" | "confirm-busy" => {
             let window = ConfirmWindow::new()?;
             window.on_move_window({
                 let weak = window.as_weak();
@@ -898,7 +1047,9 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             });
             window.set_window_title(CONFIRM.into());
             crate::native_window::apply_theme(&window, dark);
-            window.global::<Tokens>().set_reduce_motion(true);
+            window
+                .global::<Tokens>()
+                .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
             window.set_filename("示例视频 · 1080p.mp4".into());
             window.set_download_dir(r"D:\下载\媒体".into());
             window.set_url("media.example.test/library/example-video.mp4".into());
@@ -912,9 +1063,28 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
             window.set_remaining("  ·  后面还有 2 个".into());
             if kind == "confirm-error" {
-                window.set_error_text(
-                    "保存位置不可用，请选择其他目录后重试。\n当前请求仍可保留浏览器下载。".into(),
-                );
+                let (text, actions) = target_check::TargetIssue::NoPermission.presentation();
+                set_confirm_issue(&window, &text, actions);
+            }
+            if kind == "confirm-long" {
+                let directory = r"D:\下载\媒体\课程资料\2026 秋季学期\第十二周 · 网络与分布式系统\课堂录像与讲义（含字幕与补充材料）\2026-11-18 课堂实录与课后答疑汇总\已整理归档\分布式系统课程（2026 秋）完整录像、讲义、作业与参考资料备份——请勿删除或移动此文件夹，否则同步脚本会失败（第二版修订稿）";
+                let filename = "分布式一致性协议实战：从 Paxos 到 Raft 的工程化落地与故障演练全程录像（高清 1080p · 含中英双语字幕、课后答疑、助教板书整理、往年期末真题讲解与实验环境搭建步骤的完整合集，第一部分至第三部分，另附全部课堂讨论记录与小组项目展示录像）.mp4";
+                window.set_download_dir(directory.into());
+                window.set_filename(filename.into());
+                window.set_duplicate_text("".into());
+                let units = target_check::path_units(directory, filename);
+                debug_assert!(units > 259);
+                let (text, actions) = target_check::TargetIssue::TooLong { units }.presentation();
+                set_confirm_issue(&window, &text, actions);
+            }
+            if kind == "confirm-busy" {
+                // 点击「开始下载」后、主程序回执前的状态。
+                window.set_duplicate_text("".into());
+                window.set_busy(true);
+            }
+            if kind == "confirm-details" {
+                window.set_details_expanded(true);
+                window.set_duplicate_text("".into());
             }
             window.on_command(|command| {
                 if command != "drag" {
@@ -941,7 +1111,9 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                 }
             });
             crate::native_window::apply_theme(&window, dark);
-            window.global::<Tokens>().set_reduce_motion(true);
+            window
+                .global::<Tokens>()
+                .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
             window.set_headline(PROGRESS_HEADLINE.into());
             window.set_filename("示例视频 · 1080p.mp4".into());
             window.set_speed("18.6 MB/s".into());
@@ -993,15 +1165,21 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             });
             window.set_window_title(COMPLETE.into());
             crate::native_window::apply_theme(&window, dark);
-            window.global::<Tokens>().set_reduce_motion(true);
+            window
+                .global::<Tokens>()
+                .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
             window.set_filename("示例视频 · 1080p.mp4".into());
             window.set_details("128.0 MB · 已保存到本地".into());
-            window.set_power_hint("将在 5 分钟后关机".into());
+            window.set_power_hint("关机 将在 300 秒后执行".into());
+            window.set_power_action_label("关机".into());
+            window.set_power_seconds(300);
             correct_native_click_position(window.window());
             window.on_command(|_| {
                 let _ = slint::quit_event_loop();
             });
+            window.set_entered(false);
             window.show()?;
+            play_complete_entrance(&window);
             round_native_window(window.window());
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
@@ -1010,6 +1188,16 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     }
     quit_timer.stop();
     Ok(())
+}
+
+/// 完成窗口复用同一个实例：每次显示后下一帧再把 entered 置真，完成标记才会真正播放一次进场。
+fn play_complete_entrance(item: &CompleteWindow) {
+    let weak = item.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(16), move || {
+        if let Some(item) = weak.upgrade() {
+            item.set_entered(true);
+        }
+    });
 }
 
 fn write_ready_marker() {
@@ -1031,27 +1219,13 @@ fn connect_or_start_core() -> Result<CoreIpcClient, String> {
         .map_err(|error| format!("下载引擎启动失败：{error}"))
 }
 
-fn command_with_reconnect(
-    client: &RefCell<CoreIpcClient>,
-    command: CoreCommand,
-) -> Result<Vec<EventEnvelope>, String> {
-    let first_result = client.borrow_mut().command(command.clone());
-    if first_result.is_ok() {
-        return first_result;
-    }
-    let mut replacement = CoreIpcClient::connect()?;
-    let result = replacement.command(command);
-    *client.borrow_mut() = replacement;
-    result
-}
-
 /// Persist a remembered category directory without clobbering concurrent
 /// workbench edits: fetch fresh settings from the Core, merge only the single
 /// category being remembered into the fresh map, then write the whole setting
 /// back. The presenter-local cache always records the user's choice so the
 /// rest of this session offers the same directory.
 fn remember_category_directory(
-    client: &Rc<RefCell<CoreIpcClient>>,
+    client: &mut CoreIpcClient,
     presenter_settings: &Arc<Mutex<PresenterSettings>>,
     category: &str,
     directory: String,
@@ -1059,7 +1233,7 @@ fn remember_category_directory(
     if let Ok(mut settings) = presenter_settings.lock() {
         settings.remember(category, directory.clone());
     }
-    let Ok(response) = client.borrow_mut().load_settings() else {
+    let Ok(response) = client.load_settings() else {
         return;
     };
     // Never write back a derived default: a non-Settings response must not
@@ -1069,7 +1243,7 @@ fn remember_category_directory(
     };
     let mut fresh = PresenterSettings::from_response(Some(&response));
     fresh.remember(category, directory);
-    let _ = client.borrow_mut().command(CoreCommand::SetSetting {
+    let _ = client.command(CoreCommand::SetSetting {
         key: "browser_category_dirs".into(),
         value: serde_json::Value::String(fresh.category_dirs_json()),
     });
@@ -1464,7 +1638,7 @@ fn show_next_offer(
     item.set_remember_directory(true);
     item.set_suppress_site_kind(false);
     item.set_busy(false);
-    item.set_error_text("".into());
+    clear_confirm_issue(&item);
     let remaining = pending
         .lock()
         .map(|items| items.len().saturating_sub(1))
@@ -1518,7 +1692,7 @@ fn show_next_offer(
         if let Ok(mut items) = pending.lock() {
             items.retain(|item| item.handoff_id != offer.handoff_id);
         }
-        item.invoke_open_workbench(false);
+        item.invoke_open_workbench(false, "".into());
     }
 }
 
@@ -1987,7 +2161,10 @@ fn update_task_windows(
                 );
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
+                item.set_power_seconds(0);
+                item.set_entered(false);
                 if item.show().is_ok() {
+                    play_complete_entrance(&item);
                     round_native_window(item.window());
                     native_window::prepare_dialog(&item, true, true, None);
                 }
@@ -2643,4 +2820,16 @@ mod tests {
         assert!(summary.contains("待分配"));
         assert!(!summary.contains("ConnectionPart {"));
     }
+}
+
+fn set_confirm_issue(item: &ConfirmWindow, text: &str, actions: [(&str, &str); 2]) {
+    item.set_error_text(text.into());
+    item.set_error_primary_label(actions[0].0.into());
+    item.set_error_primary_command(actions[0].1.into());
+    item.set_error_secondary_label(actions[1].0.into());
+    item.set_error_secondary_command(actions[1].1.into());
+}
+
+fn clear_confirm_issue(item: &ConfirmWindow) {
+    set_confirm_issue(item, "", [("", ""), ("", "")]);
 }

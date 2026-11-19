@@ -10,6 +10,8 @@ import { waitForDownloadConfirmation } from '../../lib/downloadConfirmation'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
 import { formatBitrate, formatBytes, formatDuration } from '../../lib/format'
 import { mountSubtitlePopup } from '../../lib/subtitlePopup'
+import { SEND_LABELS, SEND_LOCKED, SEND_PENDING, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from '../../lib/downloadSendState'
+import { DESKTOP_RELEASES_URL, launchDesktop, launchView, type LaunchAction, type LaunchState } from '../../lib/desktopLaunch'
 import {
   THEME_BASE_CSS,
   THEME_STORAGE_KEY,
@@ -48,10 +50,7 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
 
 // 按钮状态机使用稳定的状态 token，展示文案单独映射；改文案不能破坏状态判断。
-type SendState = 'sending' | 'confirming' | 'queued' | 'retry'
 type PushState = 'working' | 'awaiting' | 'sent' | 'retry'
-const SEND_LABELS: Record<SendState, string> = { sending: '发送中', confirming: '等待确认', queued: '已加入', retry: '重试' }
-const SEND_BUSY: ReadonlySet<SendState> = new Set(['sending', 'confirming', 'queued'])
 const TVBOX_PUSH_LABELS: Record<PushState, string> = { working: '推送中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const CAST_PUSH_LABELS: Record<PushState, string> = { working: '投屏中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const PUSH_BUSY: ReadonlySet<PushState> = new Set(['working', 'awaiting', 'sent'])
@@ -159,19 +158,75 @@ async function main() {
   openBtn.type = 'button'
   openBtn.append(icon('open'), el('span', '', '主程序'))
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
-  openBtn.addEventListener('click', async () => {
-    openBtn.disabled = true
-    openBtn.setAttribute('aria-busy', 'true')
-    setError('')
-    try {
-      const response = await withDeadline(browser.runtime.sendMessage({ type: 'activate' }), 10_000, '打开主程序超时，请重试')
-      if (!response?.ok) setError(response?.error || '无法打开主程序')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '无法打开主程序')
-    } finally {
-      openBtn.disabled = false
-      openBtn.removeAttribute('aria-busy')
+  // 启动反馈条：每个阶段对应一层真实回执，失败时给出对应的恢复操作。
+  const launchPanel = el('div', 'launch-status')
+  launchPanel.hidden = true
+  launchPanel.setAttribute('role', 'status')
+  launchPanel.setAttribute('aria-live', 'polite')
+  let launchRun = 0
+  let launchHideTimer: ReturnType<typeof setTimeout> | undefined
+  const LAUNCH_ACTION_LABELS: Record<LaunchAction, string> = {
+    retry: '重试', keep_waiting: '继续等待', install: '下载桌面端', repair: '修复安装',
+  }
+  const renderLaunch = (state: LaunchState, run: number) => {
+    if (run !== launchRun) return
+    const view = launchView(state)
+    const busy = view.tone === 'progress'
+    openBtn.disabled = busy
+    openBtn.classList.toggle('busy', busy)
+    openBtn.dataset.state = busy ? 'busy' : view.tone === 'success' ? 'ready' : view.tone === 'error' ? 'failed' : ''
+    openBtn.setAttribute('aria-busy', String(busy))
+    openBtn.replaceChildren(
+      icon(busy ? 'scan' : view.tone === 'success' ? 'check' : 'open'),
+      el('span', '', busy ? '打开中' : view.tone === 'success' ? '已打开' : '主程序'),
+    )
+    launchPanel.dataset.tone = view.tone
+    const badge = el('span', 'launch-icon')
+    badge.append(icon(busy ? 'scan' : view.tone === 'success' ? 'check' : view.tone === 'error' ? 'close' : 'open'))
+    const text = el('div', 'launch-text')
+    text.append(el('strong', '', view.title))
+    if (view.detail) text.append(el('span', '', view.detail))
+    const actionsRow = el('div', 'launch-actions')
+    for (const action of view.actions) {
+      const button = el('button', `hlsd-button${action === view.actions[0] ? ' primary' : ''}`, LAUNCH_ACTION_LABELS[action]) as HTMLButtonElement
+      button.type = 'button'
+      button.dataset.launchAction = action
+      button.addEventListener('click', () => {
+        if (action === 'install' || action === 'repair') {
+          void browser.tabs.create({ url: DESKTOP_RELEASES_URL }).catch(() => undefined)
+          return
+        }
+        void startLaunch(action === 'keep_waiting' ? state.pending : undefined)
+      })
+      actionsRow.append(button)
     }
+    if (actionsRow.childElementCount) text.append(actionsRow)
+    launchPanel.replaceChildren(badge, text)
+    launchPanel.hidden = false
+    if (launchHideTimer) clearTimeout(launchHideTimer)
+    if (view.tone === 'success') {
+      launchHideTimer = setTimeout(() => {
+        if (run !== launchRun) return
+        launchPanel.hidden = true
+        openBtn.dataset.state = ''
+        openBtn.replaceChildren(icon('open'), el('span', '', '主程序'))
+      }, 2_500)
+    }
+    const failedAction = launchPanel.querySelector<HTMLButtonElement>('[data-launch-action]')
+    if (view.tone === 'error' && document.activeElement === document.body) failedAction?.focus({ preventScroll: true })
+  }
+  const startLaunch = async (resumeFrom?: LaunchState['pending']) => {
+    const run = ++launchRun
+    setError('')
+    await launchDesktop({
+      send: message => withDeadline(browser.runtime.sendMessage(message), 15_000, '主程序响应超时'),
+      onState: state => renderLaunch(state, run),
+      resumeFrom,
+    }).catch(reason => renderLaunch({ stage: 'failed', failure: 'unknown', detail: reason instanceof Error ? reason.message : '' }, run))
+  }
+  openBtn.addEventListener('click', () => {
+    if (openBtn.getAttribute('aria-busy') === 'true') return
+    void startLaunch()
   })
   const closeBtn = el('button', 'hlsd-button subtle')
   closeBtn.type = 'button'
@@ -295,7 +350,7 @@ async function main() {
   navigation.append(...tabs)
   views.append(...panels)
   selectPanel(0)
-  mainEl.append(header, navigation, updateNotice, errorBox, views, footer)
+  mainEl.append(header, launchPanel, navigation, updateNotice, errorBox, views, footer)
   updatePopupMaxHeight(mainEl)
   root.append(mainEl)
   window.addEventListener('resize', () => updatePopupMaxHeight(mainEl))
@@ -476,19 +531,19 @@ async function main() {
       const button = el('button', 'hlsd-button primary')
       button.type = 'button'
       button.dataset.state = sendState || ''
-      const sendPending = sendState === 'sending' || sendState === 'confirming'
+      const sendPending = sendState ? SEND_PENDING.has(sendState) : false
       button.dataset.action = 'download'
-      button.append(icon(sendPending ? 'scan' : sendState === 'queued' ? 'check' : 'download'), el('span', '', label))
-      const locked = sendState ? SEND_BUSY.has(sendState) : false
+      button.append(icon(sendPending ? 'scan' : sendState === 'queued' || sendState === 'done' ? 'check' : sendState === 'recoverable' ? 'open' : 'download'), el('span', '', label))
+      const locked = sendState ? SEND_LOCKED.has(sendState) : false
       button.disabled = locked
       button.classList.toggle('busy', sendPending)
       button.setAttribute('aria-busy', String(sendPending))
-      button.title = sendState === 'confirming' ? '请在主程序中确认本次下载'
-        : sendState === 'queued' ? '已加入主程序下载队列，可在主程序查看进度'
-        : sendState === 'sending' ? '正在发送到主程序，请稍候'
-        : sendState === 'retry' ? '上次未能加入队列，点击重试'
-        : '发送到主程序，确认后加入下载队列'
-      button.addEventListener('click', () => void send(selected))
+      button.title = sendState ? SEND_TITLES[sendState] : '发送到主程序，确认后加入下载队列'
+      button.addEventListener('click', () => {
+        const action = sendClickAction(sendState)
+        if (action === 'open_desktop') void startLaunch()
+        else if (action !== 'none') void send(selected)
+      })
       const pushKey = actionKey(selected, 'tvbox')
       const pushState = pushing[pushKey]
       const pushLabel = pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox'
@@ -685,32 +740,53 @@ async function main() {
     const key = actionKey(item)
     sending[key] = 'confirming'
     renderList()
-    if (!await waitForDownloadConfirmation(message => browser.runtime.sendMessage(message), handoffId)) {
-      delete sending[key]
+    let accepted: boolean
+    try {
+      accepted = await waitForDownloadConfirmation(message => browser.runtime.sendMessage(message), handoffId)
+    } catch (reason) {
+      // Core 已持久化该交接：读不到状态时只能“核对中”，不能退回可重发的“重试”。
+      sending[key] = 'checking'
+      setError(reason instanceof Error ? reason.message : '无法读取下载确认状态')
       renderList()
       return
     }
-    sending[key] = 'queued'
+    // 取消后保留浏览器原下载（由后台按交接结果处理），按钮允许重新发送。
+    sending[key] = accepted ? 'queued' : 'canceled'
     renderList()
-    setTimeout(() => { delete sending[key]; renderList() }, 2_500)
   }
 
   const send = async (item: MediaResource) => {
     const key = actionKey(item)
-    if (sending[key] && SEND_BUSY.has(sending[key])) return
+    if (sending[key] && SEND_LOCKED.has(sending[key])) return
     setError('')
     sending[key] = 'sending'
     renderList()
+    let delivered = false
     try {
       const response = await withDeadline(
         browser.runtime.sendMessage({ type: 'download-now', resource: item }),
         10_000,
-        '下载器响应超时，请重试',
+        '下载器响应超时，正在按原请求核对',
       )
+      delivered = true
+      if (!response?.ok && response?.ownership_uncertain) {
+        // 回执丢失：后台已保存原请求编号，再点只按原编号回查，不会重复创建。
+        sending[key] = 'checking'
+        setError(response.error || '暂时无法确认交接状态')
+        renderList()
+        return
+      }
       if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
-      await confirmDownload(item, String(response.handoff?.id || ''))
+      const handoff = response.handoff || {}
+      const state = sendStateFromHandoff({ status: handoff.status, presentation: handoff.presentation, taskStatus: handoff.task_status })
+      if (state === 'confirming') await confirmDownload(item, String(handoff.id || ''))
+      else {
+        sending[key] = state
+        renderList()
+      }
     } catch (reason) {
-      sending[key] = 'retry'
+      // 超时说明后台可能已按原请求编号登记了交接：只能“核对”，再点按原编号回查，不会新建任务。
+      sending[key] = delivered ? 'retry' : 'checking'
       setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
       renderList()
     }
@@ -920,7 +996,7 @@ async function main() {
   void refreshBrowserTransfers()
   const transfersTimer = window.setInterval(() => void refreshBrowserTransfers(), 1000)
   window.addEventListener('pagehide', () => clearInterval(transfersTimer), { once: true })
-  void browser.runtime.sendMessage({ type: 'pending-downloads', tabId: tab?.id }).then(pending => {
+  void browser.runtime.sendMessage({ type: 'download-states', tabId: tab?.id }).then(pending => {
     if (!Array.isArray(pending)) return
     for (const handoff of pending) {
       const item = resources.find(resource => resource.id === handoff.resourceId)
@@ -933,6 +1009,12 @@ async function main() {
       const key = actionKey(selected)
       if (sending[key]) continue
       if (selected !== item && !chosenVariant[item.id]) chosenVariant[item.id] = downloadSelectionKey(selected)
+      const restored = sendStateFromHandoff(handoff)
+      if (restored !== 'confirming') {
+        sending[key] = restored
+        renderList()
+        continue
+      }
       void confirmDownload(selected, String(handoff.id)).catch(reason => {
         sending[key] = 'retry'
         setError(reason instanceof Error ? reason.message : '无法读取下载确认状态')
