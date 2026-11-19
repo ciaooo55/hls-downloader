@@ -53,7 +53,7 @@ pub(crate) fn decode(source: &str, seconds: f64) -> Result<String, String> {
         command.args(["-headers", "X-HLS-Thumbnail: 1\r\n"]);
     }
     if source.ends_with("/preview.m3u8") {
-        command.args(["-allowed_extensions", "ALL", "-extension_picky", "0"]);
+        crate::media::hls_input_options(&mut command);
     }
     command
         .arg("-ss")

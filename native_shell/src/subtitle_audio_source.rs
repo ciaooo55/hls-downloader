@@ -98,14 +98,8 @@ pub(crate) fn decode(
         || path.ends_with(".m3u")
     {
         // 站点可能以 jpeg/bin 命名音视频分片；输入协议仍限定 HTTP(S)，不开放本地文件。
-        command.args([
-            "-f",
-            "hls",
-            "-allowed_extensions",
-            "ALL",
-            "-extension_picky",
-            "0",
-        ]);
+        command.args(["-f", "hls"]);
+        crate::media::hls_input_options(&mut command);
     }
     for (key, option) in [("referer", "-referer"), ("user_agent", "-user_agent")] {
         if let Some(value) = source[key].as_str().filter(|v| !v.is_empty()) {

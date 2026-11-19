@@ -1132,6 +1132,8 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                         ("hwdec", "auto-safe".into()),
                         (
                             "demuxer-lavf-o",
+                            // libavformat ignores unknown dictionary keys; unlike CLI options,
+                            // this is safe with older libmpv builds too.
                             "allowed_extensions=ALL,extension_picky=0".into(),
                         ),
                     ];
