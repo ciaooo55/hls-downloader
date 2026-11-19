@@ -173,14 +173,26 @@ fn parse_magnet_sources(uri: &str) -> Result<(TorrentMeta, Vec<String>), String>
             _ => {}
         }
     }
-    // Older HLS links without an exact topic use xs as a direct HTTP source.
-    // Once a topic is present, xs can only supply metadata for that identity.
+    // Older HLS links without a topic can use xs as a direct HTTP source.
+    // A URL that names a .torrent file can only supply metadata.
     if !has_topic {
-        web_seeds.append(&mut exact_sources);
+        web_seeds.extend(
+            exact_sources
+                .iter()
+                .filter(|url| {
+                    !url.split(['?', '#'])
+                        .next()
+                        .is_some_and(|path| path.to_ascii_lowercase().ends_with(".torrent"))
+                })
+                .cloned(),
+        );
     } else {
         web_seeds.retain(|seed| !exact_sources.contains(seed));
+        if info_hash.is_empty() {
+            exact_sources.clear();
+        }
     }
-    if info_hash.is_empty() && web_seeds.is_empty() {
+    if info_hash.is_empty() && web_seeds.is_empty() && exact_sources.is_empty() {
         return Err("magnet missing info hash and web seed".into());
     }
     Ok((
@@ -319,9 +331,13 @@ pub fn probe_torrent_source(
 ) -> Result<TorrentMeta, String> {
     let source = source.trim();
     if source.starts_with("magnet:") {
-        let (magnet, exact_sources) = parse_magnet_sources(source)?;
-        return fetch_magnet_metadata(&magnet, &exact_sources, headers, proxy, enable_dht)
-            .or(Ok(magnet));
+        let (mut magnet, exact_sources) = parse_magnet_sources(source)?;
+        return match fetch_magnet_metadata(&mut magnet, &exact_sources, headers, proxy, enable_dht)
+        {
+            Ok(meta) => Ok(meta),
+            Err(error) if magnet.info_hash.is_empty() && magnet.web_seeds.is_empty() => Err(error),
+            Err(_) => Ok(magnet),
+        };
     }
     let bytes = read_torrent_bytes(source, headers, proxy)?;
     parse_torrent_file(&bytes)
@@ -594,8 +610,14 @@ fn download_torrent_with_telemetry(
     reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<u64, String> {
     let meta = if spec_url.starts_with("magnet:") {
-        let (magnet, exact_sources) = parse_magnet_sources(spec_url)?;
-        match fetch_magnet_metadata(&magnet, &exact_sources, headers, proxy, options.enable_dht) {
+        let (mut magnet, exact_sources) = parse_magnet_sources(spec_url)?;
+        match fetch_magnet_metadata(
+            &mut magnet,
+            &exact_sources,
+            headers,
+            proxy,
+            options.enable_dht,
+        ) {
             Ok(meta) => meta,
             Err(error) if magnet.web_seeds.is_empty() => return Err(error),
             Err(_) => magnet,
@@ -701,9 +723,9 @@ impl TorrentWatch {
 }
 
 fn fetch_exact_source_metadata(
-    magnet: &TorrentMeta,
+    magnet: &mut TorrentMeta,
     sources: &[String],
-    hash: &str,
+    hash: Option<&str>,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
 ) -> Option<TorrentMeta> {
@@ -719,7 +741,11 @@ fn fetch_exact_source_metadata(
         let Ok(mut parsed) = parse_torrent_file(&body) else {
             continue;
         };
-        if !parsed.info_hash.eq_ignore_ascii_case(hash) || parsed.pieces.is_empty() {
+        magnet.web_seeds.retain(|seed| seed != url);
+        if parsed.info_hash.is_empty()
+            || hash.is_some_and(|hash| !parsed.info_hash.eq_ignore_ascii_case(hash))
+            || parsed.pieces.is_empty()
+        {
             continue;
         }
         merge_magnet_hints(&mut parsed, magnet);
@@ -746,17 +772,27 @@ fn merge_magnet_hints(parsed: &mut TorrentMeta, magnet: &TorrentMeta) {
 }
 
 fn fetch_magnet_metadata(
-    magnet: &TorrentMeta,
+    magnet: &mut TorrentMeta,
     exact_sources: &[String],
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
     enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
-    let hash = canonical_info_hash(&magnet.info_hash)
-        .ok_or_else(|| format!("magnet info_hash 无效: {}", magnet.info_hash))?;
-    if let Some(meta) = fetch_exact_source_metadata(magnet, exact_sources, &hash, headers, proxy) {
-        return Ok(meta);
+    let hash = canonical_info_hash(&magnet.info_hash);
+    if hash.is_some() || magnet.info_hash.is_empty() {
+        if let Some(meta) =
+            fetch_exact_source_metadata(magnet, exact_sources, hash.as_deref(), headers, proxy)
+        {
+            return Ok(meta);
+        }
     }
+    let hash = hash.ok_or_else(|| {
+        if magnet.info_hash.is_empty() && !exact_sources.is_empty() {
+            "无法从磁力链接的 xs 地址读取有效种子元数据".into()
+        } else {
+            format!("magnet info_hash 无效: {}", magnet.info_hash)
+        }
+    })?;
     let swarm_error = match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht) {
         Ok(meta) => return Ok(meta),
         Err(error) => error,
@@ -2487,7 +2523,10 @@ mod tests {
             for (status, body) in [
                 ("200 OK", mismatched),
                 ("404 Not Found", vec![]),
+                ("200 OK", torrent.clone()),
                 ("200 OK", torrent),
+                ("200 OK", b"abc".to_vec()),
+                ("404 Not Found", vec![]),
             ] {
                 let (stream, _) = listener.accept().unwrap();
                 stream
@@ -2514,10 +2553,18 @@ mod tests {
         assert_eq!(meta.info_hash, hash);
         assert_eq!(meta.web_seeds, vec![format!("{base}/file.bin")]);
         assert_eq!(meta.pieces, vec![crate::crypto_lite::sha1(b"abc")]);
-        worker.join().unwrap();
 
-        let legacy = parse_magnet(&format!("magnet:?xs={base}/file.bin")).unwrap();
+        let probe = |query: &str| probe_torrent_source(query, &Default::default(), "", false);
+        let inferred = probe(&format!(
+            "magnet:?xs={base}/seed.torrent&ws={base}/file.bin"
+        ))
+        .unwrap();
+        assert_eq!(inferred.info_hash, hash);
+        assert_eq!(inferred.web_seeds, vec![format!("{base}/file.bin")]);
+        let legacy = probe(&format!("magnet:?xs={base}/file.bin")).unwrap();
         assert_eq!(legacy.web_seeds, vec![format!("{base}/file.bin")]);
+        assert!(probe(&format!("magnet:?xs={base}/missing.TORRENT?token=1")).is_err());
+        worker.join().unwrap();
         let invalid = parse_magnet(&format!("magnet:?xt=urn:btih:bad&xs={base}/valid")).unwrap();
         assert!(invalid.web_seeds.is_empty());
     }
