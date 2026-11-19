@@ -21,6 +21,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check candidate upgrade version
+        shell: pwsh
+        run: .\scripts\release\verify-v7-version-contract.ps1 -RequireUpgrade
+
       - name: Set isolated v7 build cache
         shell: pwsh
         run: |

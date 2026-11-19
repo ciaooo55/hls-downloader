@@ -64,10 +64,12 @@ jobs:
             & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-msi-lifecycle.ps1 -Scenario $scenario -ApplicationLaunchMode Wmi -CandidateManifestPath artifacts/candidate-installer-regression/candidate/ARTIFACT-MANIFEST.json
             if ($LASTEXITCODE -ne 0) { throw "MSI lifecycle failed: $scenario" }
           }
-      - name: Verify EXE install and visible Start Menu startup
+      - name: Verify EXE installation, shortcut and browser startup
         shell: pwsh
         run: |
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts/candidate-installer-regression/candidate/ARTIFACT-MANIFEST.json
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --disable-pip-version-check selenium websocket-client
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts/candidate-installer-regression/candidate/ARTIFACT-MANIFEST.json -CheckBrowserLaunch
           if ($LASTEXITCODE -ne 0) { throw 'EXE installation/startup regression failed.' }
       - name: Upload installer lifecycle evidence
         if: always()
@@ -80,5 +82,6 @@ jobs:
             artifacts/v7-productization/msi-lifecycle/*.log
             artifacts/v7-productization/msi-lifecycle/*-checkpoint/*.json
             artifacts/v7-productization/exe-startup/**
+            !artifacts/v7-productization/exe-startup/fresh-default/*/extension/**
           if-no-files-found: error
           retention-days: 14

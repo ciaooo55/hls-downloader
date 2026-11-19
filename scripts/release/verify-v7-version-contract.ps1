@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$RequireUpgrade)
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -72,6 +72,10 @@ if (-not ([string]$feature.audit_state).StartsWith($expectedAuditPrefix, [String
 $syntheticManifest = [pscustomobject]@{ product_version = $version }
 $resolvedVersion = Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $syntheticManifest -BaselineVersion '7.0.0'
 Assert-Version $version $resolvedVersion 'MSI lifecycle canonical candidate'
+if ($RequireUpgrade) {
+    $published = Read-Utf8 'docs\validation\current-evidence.json' | ConvertFrom-Json
+    [void](Resolve-V7CandidateVersion -RepositoryRoot $repo -CandidateManifest $syntheticManifest -BaselineVersion $published.version)
+}
 if (-not (Assert-V7CandidateMsiVersion -ExpectedVersion $resolvedVersion -MsiProductVersion $version)) {
     throw 'Matching MSI ProductVersion was rejected by the lifecycle version contract.'
 }
