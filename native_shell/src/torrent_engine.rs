@@ -299,7 +299,10 @@ pub fn probe_torrent_source(
 ) -> Result<TorrentMeta, String> {
     let source = source.trim();
     if source.starts_with("magnet:") {
-        let magnet = parse_magnet(source)?;
+        let mut magnet = parse_magnet(source)?;
+        if let Some(meta) = resolve_magnet_exact_source(source, &mut magnet, headers, proxy) {
+            return Ok(meta);
+        }
         return if magnet.pieces.is_empty() {
             fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or(Ok(magnet))
         } else {
@@ -578,6 +581,9 @@ fn download_torrent_with_telemetry(
 ) -> Result<u64, String> {
     let meta = if spec_url.starts_with("magnet:") {
         let mut meta = parse_magnet(spec_url)?;
+        if let Some(resolved) = resolve_magnet_exact_source(spec_url, &mut meta, headers, proxy) {
+            meta = resolved;
+        }
         if meta.pieces.is_empty() || meta.piece_length == 0 {
             match fetch_magnet_metadata(&meta, headers, proxy, options.enable_dht) {
                 Ok(fetched) => meta = fetched,
@@ -687,6 +693,62 @@ impl TorrentWatch {
         let _ = self.scan(dir)?;
         Ok(())
     }
+}
+
+/// 磁力链接的 `xs`（exact source）指向 .torrent 元数据，不是正文。
+/// 能解析成种子的 `xs` 从 web seed 中移除，并用它的元数据继续下载；
+/// 解析不了的 `xs` 保持原有行为，仍按 web seed 处理。
+fn resolve_magnet_exact_source(
+    uri: &str,
+    magnet: &mut TorrentMeta,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+) -> Option<TorrentMeta> {
+    let query = uri.strip_prefix("magnet:?")?;
+    let expected = canonical_info_hash(&magnet.info_hash);
+    let mut resolved: Option<TorrentMeta> = None;
+    for pair in query.split('&') {
+        let Some(("xs", value)) = pair.split_once('=') else {
+            continue;
+        };
+        let url = url_decode(value);
+        if !magnet.web_seeds.contains(&url) {
+            continue;
+        }
+        let Ok((200 | 206, body)) = crate::http_engine::fetch_bytes_limited(
+            &url,
+            headers,
+            proxy,
+            MAX_UT_METADATA_BYTES as u64,
+        ) else {
+            continue;
+        };
+        let Ok(parsed) = parse_torrent_file(&body) else {
+            continue;
+        };
+        magnet.web_seeds.retain(|seed| seed != &url);
+        let hash_matches = expected.is_none()
+            || canonical_info_hash(&parsed.info_hash).as_deref() == expected.as_deref();
+        if resolved.is_none() && hash_matches && !parsed.pieces.is_empty() {
+            resolved = Some(parsed);
+        }
+    }
+    let mut parsed = resolved?;
+    if parsed.name == "torrent" && magnet.name != "torrent" {
+        parsed.name = magnet.name.clone();
+    }
+    for seed in &magnet.web_seeds {
+        if !parsed.web_seeds.contains(seed) {
+            parsed.web_seeds.push(seed.clone());
+        }
+    }
+    for announce in &magnet.announce {
+        if !parsed.announce.contains(announce) {
+            parsed.announce.push(announce.clone());
+        }
+    }
+    parsed.hint_peers.extend(magnet.hint_peers.iter().cloned());
+    Some(parsed)
 }
 
 fn fetch_magnet_metadata(
@@ -2412,6 +2474,139 @@ mod tests {
         assert_eq!(total, 2);
         assert_eq!(fs::read(destination.join("dir/two.bin")).unwrap(), b"de");
         assert!(!destination.join("one.bin").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 回环 HTTP 服务：`/seed.torrent` 返回种子元数据，其余路径返回正文（支持 Range）。
+    fn serve_torrent_and_payload(
+        listener: std::net::TcpListener,
+        torrent: Vec<u8>,
+        payload: Vec<u8>,
+    ) {
+        use std::io::{BufRead, BufReader, Write};
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let (torrent, payload) = (torrent.clone(), payload.clone());
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    loop {
+                        let mut request = String::new();
+                        if reader.read_line(&mut request).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let mut range = None;
+                        loop {
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                                return;
+                            }
+                            let line = line.trim().to_ascii_lowercase();
+                            if line.is_empty() {
+                                break;
+                            }
+                            if let Some(value) = line.strip_prefix("range: bytes=") {
+                                range = value.split_once('-').map(|(start, end)| {
+                                    (
+                                        start.parse::<usize>().unwrap_or(0),
+                                        end.parse::<usize>().ok(),
+                                    )
+                                });
+                            }
+                        }
+                        let mut parts = request.split_whitespace();
+                        let head = parts.next() == Some("HEAD");
+                        let body = if parts.next().unwrap_or("").starts_with("/seed.torrent") {
+                            &torrent
+                        } else {
+                            &payload
+                        };
+                        let (status, extra, slice) = match range {
+                            Some((start, end)) if start < body.len() => {
+                                let end = end.unwrap_or(body.len() - 1).min(body.len() - 1);
+                                (
+                                    "206 Partial Content",
+                                    format!(
+                                        "Content-Range: bytes {start}-{end}/{}\r\n",
+                                        body.len()
+                                    ),
+                                    &body[start..=end],
+                                )
+                            }
+                            _ => ("200 OK", String::new(), &body[..]),
+                        };
+                        let header = format!(
+                            "HTTP/1.1 {status}\r\nAccept-Ranges: bytes\r\n{extra}Content-Length: {}\r\n\r\n",
+                            slice.len()
+                        );
+                        let stream = reader.get_mut();
+                        if stream.write_all(header.as_bytes()).is_err() {
+                            return;
+                        }
+                        if !head && stream.write_all(slice).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn magnet_exact_source_downloads_payload_instead_of_torrent_metadata() {
+        let payload: Vec<u8> = (0..64 * 1024u32).map(|value| (value % 251) as u8).collect();
+        let piece_length = 16 * 1024;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+
+        let mut info = format!(
+            "d6:lengthi{}e4:name11:payload.bin12:piece lengthi{piece_length}e6:pieces{}:",
+            payload.len(),
+            payload.len() / piece_length * 20
+        )
+        .into_bytes();
+        for piece in payload.chunks(piece_length) {
+            info.extend_from_slice(&crate::crypto_lite::sha1(piece));
+        }
+        info.push(b'e');
+        let mut torrent = b"d4:info".to_vec();
+        torrent.extend_from_slice(&info);
+        torrent.extend(benc_str("url-list"));
+        torrent.extend(benc_str(&format!("{base}/payload.bin")));
+        torrent.push(b'e');
+        let info_hash = crate::crypto_lite::sha1_hex(&info);
+        serve_torrent_and_payload(listener, torrent.clone(), payload.clone());
+
+        let root =
+            std::env::temp_dir().join(format!("hls-magnet-exact-source-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let headers = std::collections::HashMap::new();
+
+        let magnet = format!("magnet:?xt=urn:btih:{info_hash}&dn=demo&xs={base}/seed.torrent");
+        let probed = probe_torrent_source(&magnet, &headers, "", false).unwrap();
+        assert_eq!(probed.name, "payload.bin");
+        assert_eq!(probed.length, payload.len() as u64);
+        assert_eq!(probed.web_seeds, vec![format!("{base}/payload.bin")]);
+
+        let output = root.join("from-xs.bin");
+        let written = download_torrent(&magnet, &output, &control, &headers, "").unwrap();
+        assert_eq!(written, payload.len() as u64);
+        let saved = fs::read(&output).unwrap();
+        assert_ne!(saved, torrent, "xs 指向的 .torrent 元数据不能当作正文保存");
+        assert_eq!(saved, payload);
+
+        // 不是种子的 xs 保持原有行为：继续作为 web seed 下载。
+        let legacy = format!("magnet:?dn=legacy&xs={base}/payload.bin");
+        assert_eq!(
+            parse_magnet(&legacy).unwrap().web_seeds,
+            vec![format!("{base}/payload.bin")]
+        );
+        let legacy_output = root.join("legacy.bin");
+        download_torrent(&legacy, &legacy_output, &control, &headers, "").unwrap();
+        assert_eq!(fs::read(&legacy_output).unwrap(), payload);
         let _ = fs::remove_dir_all(root);
     }
 
