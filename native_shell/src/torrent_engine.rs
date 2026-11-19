@@ -727,8 +727,9 @@ fn resolve_magnet_exact_source(
             continue;
         };
         magnet.web_seeds.retain(|seed| seed != &url);
-        let hash_matches = expected.is_none()
-            || canonical_info_hash(&parsed.info_hash).as_deref() == expected.as_deref();
+        let hash_matches = magnet.info_hash.is_empty()
+            || (expected.is_some()
+                && canonical_info_hash(&parsed.info_hash).as_deref() == expected.as_deref());
         if resolved.is_none() && hash_matches && !parsed.pieces.is_empty() {
             resolved = Some(parsed);
         }
