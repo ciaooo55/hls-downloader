@@ -139,13 +139,20 @@ pub struct TorrentMeta {
     pub files: Vec<TorrentFileEntry>,
 }
 
-pub fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
+#[cfg(test)]
+fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
+    parse_magnet_sources(uri).map(|(magnet, _)| magnet)
+}
+
+fn parse_magnet_sources(uri: &str) -> Result<(TorrentMeta, Vec<String>), String> {
     let rest = uri
         .strip_prefix("magnet:?")
         .ok_or_else(|| "not a magnet URI".to_string())?;
     let mut name = "torrent".to_string();
     let mut info_hash = String::new();
     let mut web_seeds = Vec::new();
+    let mut exact_sources = Vec::new();
+    let mut has_topic = false;
     let mut announce = Vec::new();
     let mut hint_peers = Vec::new();
     for pair in rest.split('&') {
@@ -153,31 +160,44 @@ pub fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
         let decoded = url_decode(value);
         match key {
             "dn" => name = decoded,
-            "xt" if decoded.to_ascii_lowercase().starts_with("urn:btih:") => {
-                info_hash = decoded[9..].to_string();
+            "xt" => {
+                has_topic = true;
+                if decoded.to_ascii_lowercase().starts_with("urn:btih:") {
+                    info_hash = decoded[9..].to_string();
+                }
             }
             "ws" | "as" => push_http_seed(&mut web_seeds, &decoded),
-            "xs" => push_http_seed(&mut web_seeds, &decoded),
+            "xs" => push_http_seed(&mut exact_sources, &decoded),
             "tr" => announce.push(decoded),
             "x.pe" => hint_peers.push(decoded),
             _ => {}
         }
     }
+    // Older HLS links without an exact topic use xs as a direct HTTP source.
+    // Once a topic is present, xs can only supply metadata for that identity.
+    if !has_topic {
+        web_seeds.append(&mut exact_sources);
+    } else {
+        web_seeds.retain(|seed| !exact_sources.contains(seed));
+    }
     if info_hash.is_empty() && web_seeds.is_empty() {
         return Err("magnet missing info hash and web seed".into());
     }
-    Ok(TorrentMeta {
-        name,
-        magnet: true,
-        web_seeds,
-        info_hash,
-        announce,
-        hint_peers,
-        piece_length: 0,
-        pieces: Vec::new(),
-        length: 0,
-        files: Vec::new(),
-    })
+    Ok((
+        TorrentMeta {
+            name,
+            magnet: true,
+            web_seeds,
+            info_hash,
+            announce,
+            hint_peers,
+            piece_length: 0,
+            pieces: Vec::new(),
+            length: 0,
+            files: Vec::new(),
+        },
+        exact_sources,
+    ))
 }
 
 fn push_http_seed(seeds: &mut Vec<String>, url: &str) {
@@ -299,12 +319,9 @@ pub fn probe_torrent_source(
 ) -> Result<TorrentMeta, String> {
     let source = source.trim();
     if source.starts_with("magnet:") {
-        let magnet = parse_magnet(source)?;
-        return if magnet.pieces.is_empty() {
-            fetch_magnet_metadata(&magnet, headers, proxy, enable_dht).or(Ok(magnet))
-        } else {
-            Ok(magnet)
-        };
+        let (magnet, exact_sources) = parse_magnet_sources(source)?;
+        return fetch_magnet_metadata(&magnet, &exact_sources, headers, proxy, enable_dht)
+            .or(Ok(magnet));
     }
     let bytes = read_torrent_bytes(source, headers, proxy)?;
     parse_torrent_file(&bytes)
@@ -577,18 +594,12 @@ fn download_torrent_with_telemetry(
     reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<u64, String> {
     let meta = if spec_url.starts_with("magnet:") {
-        let mut meta = parse_magnet(spec_url)?;
-        if meta.pieces.is_empty() || meta.piece_length == 0 {
-            match fetch_magnet_metadata(&meta, headers, proxy, options.enable_dht) {
-                Ok(fetched) => meta = fetched,
-                Err(error) => {
-                    if meta.web_seeds.is_empty() {
-                        return Err(error);
-                    }
-                }
-            }
+        let (magnet, exact_sources) = parse_magnet_sources(spec_url)?;
+        match fetch_magnet_metadata(&magnet, &exact_sources, headers, proxy, options.enable_dht) {
+            Ok(meta) => meta,
+            Err(error) if magnet.web_seeds.is_empty() => return Err(error),
+            Err(_) => magnet,
         }
-        meta
     } else if spec_url.ends_with(".torrent") || spec_url.starts_with("http") {
         let bytes = read_torrent_bytes(spec_url, headers, proxy)?;
         parse_torrent_file(&bytes)?
@@ -689,14 +700,63 @@ impl TorrentWatch {
     }
 }
 
+fn fetch_exact_source_metadata(
+    magnet: &TorrentMeta,
+    sources: &[String],
+    hash: &str,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+) -> Option<TorrentMeta> {
+    for url in sources {
+        let Ok((200, body)) = crate::http_engine::fetch_bytes_limited(
+            url,
+            headers,
+            proxy,
+            MAX_UT_METADATA_BYTES as u64,
+        ) else {
+            continue;
+        };
+        let Ok(mut parsed) = parse_torrent_file(&body) else {
+            continue;
+        };
+        if !parsed.info_hash.eq_ignore_ascii_case(hash) || parsed.pieces.is_empty() {
+            continue;
+        }
+        merge_magnet_hints(&mut parsed, magnet);
+        return Some(parsed);
+    }
+    None
+}
+
+fn merge_magnet_hints(parsed: &mut TorrentMeta, magnet: &TorrentMeta) {
+    if parsed.name == "torrent" && magnet.name != "torrent" {
+        parsed.name = magnet.name.clone();
+    }
+    for seed in &magnet.web_seeds {
+        if !parsed.web_seeds.contains(seed) {
+            parsed.web_seeds.push(seed.clone());
+        }
+    }
+    for announce in &magnet.announce {
+        if !parsed.announce.contains(announce) {
+            parsed.announce.push(announce.clone());
+        }
+    }
+    parsed.hint_peers.extend(magnet.hint_peers.iter().cloned());
+}
+
 fn fetch_magnet_metadata(
     magnet: &TorrentMeta,
+    exact_sources: &[String],
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
     enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
     let hash = canonical_info_hash(&magnet.info_hash)
         .ok_or_else(|| format!("magnet info_hash 无效: {}", magnet.info_hash))?;
+    if let Some(meta) = fetch_exact_source_metadata(magnet, exact_sources, &hash, headers, proxy) {
+        return Ok(meta);
+    }
     let swarm_error = match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht) {
         Ok(meta) => return Ok(meta),
         Err(error) => error,
@@ -724,20 +784,7 @@ fn fetch_magnet_metadata(
                         last = "元数据没有 piece 列表".into();
                         continue;
                     }
-                    if parsed.name == "torrent" && magnet.name != "torrent" {
-                        parsed.name = magnet.name.clone();
-                    }
-                    for seed in &magnet.web_seeds {
-                        if !parsed.web_seeds.contains(seed) {
-                            parsed.web_seeds.push(seed.clone());
-                        }
-                    }
-                    for announce in &magnet.announce {
-                        if !parsed.announce.contains(announce) {
-                            parsed.announce.push(announce.clone());
-                        }
-                    }
-                    parsed.hint_peers.extend(magnet.hint_peers.iter().cloned());
+                    merge_magnet_hints(&mut parsed, magnet);
                     return Ok(parsed);
                 }
             }
@@ -2413,6 +2460,66 @@ mod tests {
         assert_eq!(fs::read(destination.join("dir/two.bin")).unwrap(), b"de");
         assert!(!destination.join("one.bin").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn magnet_exact_source_uses_only_matching_torrent_metadata() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let mut info = b"d6:lengthi3e4:name8:file.bin12:piece lengthi16e6:pieces20:".to_vec();
+        info.extend(crate::crypto_lite::sha1(b"abc"));
+        info.push(b'e');
+        let hash = crate::crypto_lite::sha1_hex(&info);
+        let mut torrent = b"d4:info".to_vec();
+        torrent.extend(info);
+        torrent.push(b'e');
+        let mut mismatched = torrent.clone();
+        let name = mismatched
+            .windows(8)
+            .position(|part| part == b"file.bin")
+            .unwrap();
+        mismatched[name] = b'X';
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for (status, body) in [
+                ("200 OK", mismatched),
+                ("404 Not Found", vec![]),
+                ("200 OK", torrent),
+            ] {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
+                    line.clear();
+                }
+                let mut stream = reader.into_inner();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let url = format!("magnet:?xt=urn:btih:{hash}&xs={base}/wrong&xs={base}/missing&xs={base}/valid&ws={base}/wrong&ws={base}/file.bin");
+        let meta = probe_torrent_source(&url, &Default::default(), "", false).unwrap();
+        assert_eq!(meta.name, "file.bin");
+        assert_eq!(meta.info_hash, hash);
+        assert_eq!(meta.web_seeds, vec![format!("{base}/file.bin")]);
+        assert_eq!(meta.pieces, vec![crate::crypto_lite::sha1(b"abc")]);
+        worker.join().unwrap();
+
+        let legacy = parse_magnet(&format!("magnet:?xs={base}/file.bin")).unwrap();
+        assert_eq!(legacy.web_seeds, vec![format!("{base}/file.bin")]);
+        let invalid = parse_magnet(&format!("magnet:?xt=urn:btih:bad&xs={base}/valid")).unwrap();
+        assert!(invalid.web_seeds.is_empty());
     }
 
     #[test]
