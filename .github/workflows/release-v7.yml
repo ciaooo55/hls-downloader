@@ -106,7 +106,7 @@ jobs:
           if (-not $IsWindows -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') { throw 'Formal v7 release requires Windows x64.' }
           if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Release validation must not use a personal desktop.' }
           Get-Command git.exe, python.exe, gh.exe -ErrorAction Stop | Out-Null
-          python.exe -m pip install --disable-pip-version-check psutil==7.2.2 PyYAML
+          python.exe -m pip install --disable-pip-version-check psutil==7.2.2 PyYAML selenium websocket-client
           python.exe -c "import yaml"
           if ($LASTEXITCODE -ne 0) { throw 'Release runner Python must provide PyYAML for deterministic SBOM generation.' }
 
@@ -195,14 +195,20 @@ jobs:
             if ($formal.extensions.$browser.sha256 -ne $candidate.extensions.$browser.sha256) { throw "Formal extension differs from tested candidate: $browser" }
           }
 
-      - name: Verify formal EXE installation and shortcut startup
+      - name: Verify formal EXE installation, shortcut and browser startup
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          & ./scripts/validation/verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts/v7-productization/package/ARTIFACT-MANIFEST.json
-          if ($LASTEXITCODE -ne 0) { throw 'Formal EXE installation and shortcut startup failed.' }
-          Copy-Item -LiteralPath artifacts/v7-productization/exe-startup -Destination artifacts/v7-productization/release-evidence/formal-exe-startup -Recurse
+          & ./scripts/validation/verify-v7-exe-startup.ps1 -CandidateManifestPath artifacts/v7-productization/package/ARTIFACT-MANIFEST.json -CheckBrowserLaunch
+          if ($LASTEXITCODE -ne 0) { throw 'Formal EXE installation or desktop startup failed.' }
+          $startup = 'artifacts/v7-productization/exe-startup'
+          $evidence = 'artifacts/v7-productization/release-evidence/formal-exe-startup'
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          Copy-Item -LiteralPath "$startup/result.json" -Destination $evidence
+          foreach ($scenario in @('fresh-default', 'legacy-custom-path', 'unsupported-schema')) {
+            Copy-Item -LiteralPath "$startup/$scenario/window.json" -Destination "$evidence/$scenario.json"
+          }
 
       - name: Build Firefox store source bundle
         shell: pwsh
@@ -311,6 +317,8 @@ jobs:
             artifacts/v7-productization/release-evidence.json
             artifacts/v7-productization/release-evidence/**
             artifacts/v7-productization/exe-startup/**
+            !artifacts/v7-productization/exe-startup/fresh-default/*/extension/**
+            !artifacts/v7-productization/exe-startup/fresh-default/*/profile/**
           if-no-files-found: warn
           retention-days: 14
 
