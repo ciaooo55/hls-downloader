@@ -8,8 +8,8 @@ param(
     [string]$CandidateManifestPath,
 
     [string]$OldMsiPath = '',
-    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.8/HLSDownloader-7.0.8-Windows-x64.msi',
-    [string]$OldMsiSha256 = 'd80b1b103f3fba61c0ed3d20fae0b5c655234957fe6dd8f4ae40f0ee76728f13',
+    [string]$OldMsiUrl = 'https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.9/HLSDownloader-7.0.9-Windows-x64.msi',
+    [string]$OldMsiSha256 = 'cb0b2018a1f88ceed01211414c34c6f75f81f80bdcd6f40c71d47f024407a54e',
     [string]$InstallDir = '',
     [ValidateSet('Direct', 'Wmi')]
     [string]$ApplicationLaunchMode = 'Direct',
@@ -242,7 +242,7 @@ try {
     $candidateHash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Add-Step 'candidate-manifest-sha256' ($candidateHash -eq ([string]$manifest.artifacts.msi.sha256).ToLowerInvariant()) $candidateHash
 
-    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.8-Windows-x64.msi' }
+    $old = if ($OldMsiPath) { (Resolve-Path -LiteralPath $OldMsiPath).Path } else { Join-Path $artifacts 'HLSDownloader-7.0.9-Windows-x64.msi' }
     if (-not (Test-Path -LiteralPath $old -PathType Leaf)) { Invoke-WebRequest -Uri $OldMsiUrl -OutFile $old -UseBasicParsing }
     if ($OldMsiSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Old MSI SHA-256 is invalid: $OldMsiSha256" }
     $oldHash = (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant()
