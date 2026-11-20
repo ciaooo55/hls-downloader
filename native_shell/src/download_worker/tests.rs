@@ -3438,7 +3438,7 @@ fn multiline_metalink_paste_still_expands() {
 }
 
 #[test]
-fn site_rules_override_task_speed_and_proxy() {
+fn site_rules_fill_unset_task_speed_and_proxy() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     coordinator
         .set_setting(
@@ -3457,6 +3457,124 @@ fn site_rules_override_task_speed_and_proxy() {
     assert_eq!(spec.speed_limit_kib, 64);
     assert_eq!(spec.concurrency, 2);
     assert_eq!(spec.proxy, "http://127.0.0.1:9");
+}
+
+#[test]
+fn created_tasks_preserve_explicit_limits_over_site_defaults() {
+    for (rules, url, site_speed, site_workers) in [
+        (
+            "127.0.0.1=speed:10000,conn:12",
+            "http://127.0.0.1/a.bin",
+            10000,
+            12,
+        ),
+        (
+            "127.0.0.1=speed:10000,conn:12",
+            "http://other.test/a.bin",
+            0,
+            7,
+        ),
+        ("", "http://127.0.0.1/a.bin", 0, 7),
+        ("127.0.0.1=speed:0,conn:0", "http://127.0.0.1/a.bin", 0, 7),
+    ] {
+        for (speed, workers) in [(0, 0), (64, 0), (0, 3), (64, 3), (10000, 12)] {
+            let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+            coordinator
+                .set_settings(BTreeMap::from([
+                    ("legal_terms_accepted".into(), serde_json::json!(true)),
+                    ("default_concurrency".into(), serde_json::json!(7)),
+                    ("site_rules".into(), serde_json::json!(rules)),
+                ]))
+                .unwrap();
+            coordinator
+                .dispatch(CoreCommand::CreateTask {
+                    spec: TaskSpec {
+                        url: url.into(),
+                        filename: "a.bin".into(),
+                        speed_limit_kib: speed,
+                        concurrency: workers,
+                        start_paused: true,
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+            let expected_speed = if speed == 0 { site_speed } else { speed };
+            let expected_workers = if workers == 0 { site_workers } else { workers };
+            let spec = coordinator
+                .lock()
+                .unwrap()
+                .task_spec("task-1")
+                .cloned()
+                .unwrap();
+            assert_eq!(spec.speed_limit_kib, expected_speed);
+            assert_eq!(spec.concurrency, expected_workers);
+            let snapshot = coordinator.tasks().unwrap().remove(0);
+            assert_eq!(snapshot.speed_limit_kib, expected_speed);
+            assert_eq!(snapshot.max_workers, expected_workers);
+            let reapplied = apply_site_rules_to_spec(&coordinator.core(), spec).unwrap();
+            assert_eq!(reapplied.speed_limit_kib, expected_speed);
+            assert_eq!(reapplied.concurrency, expected_workers);
+        }
+    }
+}
+
+#[test]
+fn restored_task_worker_keeps_speed_changed_in_details() {
+    let root =
+        std::env::temp_dir().join(format!("hls-v7-site-speed-resume-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let db = root.join("tasks.db");
+    {
+        let coordinator = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("legal_terms_accepted".into(), serde_json::json!(true)),
+                (
+                    "download_dir".into(),
+                    serde_json::json!(root.to_string_lossy()),
+                ),
+                (
+                    "site_rules".into(),
+                    serde_json::json!("127.0.0.1=speed:10000,conn:12"),
+                ),
+            ]))
+            .unwrap();
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "http://127.0.0.1/a.bin".into(),
+                    filename: "a.bin".into(),
+                    start_paused: true,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(coordinator.tasks().unwrap()[0].speed_limit_kib, 10000);
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "speed:64".into(),
+            })
+            .unwrap();
+    }
+    {
+        let coordinator = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        assert_eq!(coordinator.tasks().unwrap()[0].speed_limit_kib, 64);
+        let core = coordinator.core();
+        let spec = coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .cloned()
+            .unwrap();
+        let (spec, _) = hydrate_replay_headers(&core, spec).unwrap();
+        let worker_spec = apply_site_rules_to_spec(&core, spec).unwrap();
+        assert_eq!(worker_spec.speed_limit_kib, 64);
+        assert_eq!(worker_spec.concurrency, 12);
+        let throttle = task_throttle_context(&core, "task-1", &worker_spec).unwrap();
+        assert_eq!(throttle.task_limit_kib, 64);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

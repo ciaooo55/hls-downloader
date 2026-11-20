@@ -4113,10 +4113,10 @@ fn apply_site_rules_to_spec(
         .setting_string("site_rules", "")?;
     if let Some(rule) = crate::site_rules::matching_rule(&crate::parse_site_rules(&raw), &spec.url)
     {
-        if rule.speed_limit_kib > 0 {
+        if spec.speed_limit_kib == 0 && rule.speed_limit_kib > 0 {
             spec.speed_limit_kib = rule.speed_limit_kib;
         }
-        if rule.concurrency > 0 {
+        if spec.concurrency == 0 && rule.concurrency > 0 {
             spec.concurrency = rule.concurrency;
         }
         if spec.proxy.trim().is_empty() {
