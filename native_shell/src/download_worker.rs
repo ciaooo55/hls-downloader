@@ -213,7 +213,16 @@ pub(crate) fn hydrate_replay_headers(
     Ok((spec, replay))
 }
 
-fn safe_filename(filename: &str, url: &str) -> String {
+pub(crate) fn provisional_task_name(spec: &TaskSpec) -> String {
+    if spec.filename.trim().is_empty() && spec.url.starts_with("magnet:?") {
+        return crate::torrent_engine::parse_magnet(&spec.url)
+            .map(|meta| safe_filename(&meta.name, ""))
+            .unwrap_or_else(|_| "torrent".into());
+    }
+    safe_filename(&spec.filename, &spec.url)
+}
+
+pub(crate) fn safe_filename(filename: &str, url: &str) -> String {
     let candidate = if filename.trim().is_empty() {
         url.split(['?', '#'])
             .next()
@@ -973,9 +982,9 @@ impl CoreCoordinator {
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
             let spec = self.apply_defaults_to_spec(spec)?;
-            let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
+                let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
                 events.extend(self.dispatch_created(spec)?);
             }
             self.start_next_queued(false)?;
@@ -2473,7 +2482,9 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
     let meta =
         crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy, enable_dht)?;
     let mut checked = spec;
-    if checked.filename.trim().is_empty() {
+    if checked.filename.trim().is_empty()
+        || checked.filename == safe_filename("", &checked.url)
+    {
         checked.filename = safe_filename(&meta.name, &checked.url);
     }
     if checked.title.trim().is_empty() {
@@ -2684,7 +2695,7 @@ fn run_task_with_throttle(
             complete_payload(&core, task_id, &paths, &paths.output, &spec)
         }
         crate::ResourceKind::Torrent => {
-            let paths = TaskPaths::for_task(task_id, &spec)?;
+            let mut paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
             initialize_torrent_selection(&paths.torrent_selection, &spec.torrent_selection)?;
             let torrent_options = {
@@ -2733,6 +2744,10 @@ fn run_task_with_throttle(
                     &mut telemetry_reporter,
                 )
             })?;
+            paths.final_output = paths.final_output.with_file_name(safe_filename(&meta.name, &spec.url));
+            core.lock()
+                .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                .set_task_filename(task_id, safe_filename(&meta.name, &spec.url))?;
             let (downloaded, total) = current_progress(&core, task_id);
             mark_progress(&core, task_id, downloaded, total, "checking", "checking")?;
             let latest_spec = {
@@ -2744,8 +2759,8 @@ fn run_task_with_throttle(
                     .cloned()
                     .unwrap_or_else(|| spec.clone())
             };
-            if meta.multi_file || !latest_spec.torrent_selection.is_empty() {
-                let destination = paths.torrent_directory(&spec);
+            if meta.multi_file {
+                let destination = paths.final_output.clone();
                 ensure_publish_allowed(&paths.control)?;
                 // Validate the final selection against the metadata actually used by BT.
                 // A late selection update must not publish a hole in the sparse payload.
@@ -2866,7 +2881,7 @@ fn run_http_file(
     spec: TaskSpec,
     replay_json: String,
 ) -> Result<(), String> {
-    let (mut job, paths) = build_job(task_id, &spec)?;
+    let (mut job, mut paths) = build_job(task_id, &spec)?;
     job.replay_json = replay_json;
     let temporary_body = materialize_replay_request_body(&job.replay_json, &paths)?;
     if let Some(path) = &temporary_body.0 {
@@ -2891,7 +2906,16 @@ fn run_http_file(
         let _ = sender.send(result);
     });
     loop {
-        match receiver.recv_timeout(Duration::from_millis(200)) {
+        let result = receiver.recv_timeout(Duration::from_millis(200));
+        if spec.filename.trim().is_empty() {
+            if let Some(filename) = http_response_filename(&paths) {
+                paths.final_output = paths.final_output.with_file_name(&filename);
+                core.lock()
+                    .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                    .set_task_filename(task_id, filename)?;
+            }
+        }
+        match result {
             Ok(result) => {
                 let report = result.map_err(|error| match error {
                     crate::http_engine::EngineError::RangeUnsupported(message)
@@ -2939,6 +2963,16 @@ fn run_http_file(
             }
         }
     }
+}
+
+fn http_response_filename(paths: &TaskPaths) -> Option<String> {
+    let metadata: Value = serde_json::from_slice(
+        &fs::read(paths.progress.with_extension("response.json")).ok()?,
+    ).ok()?;
+    let filename = crate::output_path::disposition_filename(
+        metadata.get("content_disposition")?.as_str()?,
+    );
+    (!filename.is_empty()).then_some(filename)
 }
 
 fn materialize_replay_request_body(

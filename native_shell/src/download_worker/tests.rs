@@ -1469,6 +1469,107 @@ fn direct_task_pause_reaches_a_stalled_worker_through_the_control_token() {
 }
 
 #[test]
+fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
+    let root = std::env::temp_dir().join(format!("hls-http-task-name-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let release = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let server_release = Arc::clone(&release);
+    let server_stop = Arc::clone(&stop);
+    let server = thread::spawn(move || {
+        while !server_stop.load(Ordering::SeqCst) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(error) => panic!("{error}"),
+            };
+            stream.set_nonblocking(false).unwrap();
+            let release = Arc::clone(&server_release);
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename*=UTF-8''resolved%20payload.bin\r\nConnection: close\r\n\r\n");
+                if !request.starts_with("HEAD ") {
+                    while !release.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    let _ = stream.write_all(b"abcde");
+                }
+            });
+        }
+    });
+    let coordinator = CoreCoordinator::new(PersistentCore::open(root.join("tasks.db")).unwrap());
+    for (key, value) in [
+        ("legal_terms_accepted", serde_json::json!(true)),
+        ("download_dir", serde_json::json!(root.to_string_lossy())),
+        ("proxy_mode", serde_json::json!("direct")),
+    ] {
+        coordinator.set_setting(key, value).unwrap();
+    }
+    coordinator.dispatch(CoreCommand::CreateTask { spec: TaskSpec {
+        url: format!("http://{address}/slow.bin"),
+        start_paused: true,
+        concurrency: 1,
+        ..Default::default()
+    }}).unwrap();
+    let provisional = coordinator.tasks().unwrap().remove(0);
+    assert_eq!(provisional.title, "slow.bin");
+    assert!(provisional.filename.is_empty());
+    coordinator.dispatch(CoreCommand::TaskAction { task_id: "task-1".into(), action: "resume".into() }).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let task = coordinator.tasks().unwrap().remove(0);
+        if task.filename == "resolved payload.bin" {
+            assert_ne!(task.status, "completed");
+            assert_eq!(task.title, "resolved payload.bin");
+            assert_ne!(Path::new(&task.output_path), root.join("resolved payload.bin"));
+            break;
+        }
+        assert!(Instant::now() < deadline, "{task:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let restored = PersistentCore::open(root.join("tasks.db")).unwrap();
+    assert_eq!(restored.snapshot("task-1").unwrap().filename, "resolved payload.bin");
+    drop(restored);
+    release.store(true, Ordering::SeqCst);
+    let completed = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(Path::new(&completed.output_path), root.join("resolved payload.bin"));
+    assert_eq!(fs::read(&completed.output_path).unwrap(), b"abcde");
+    stop.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn response_filename_ignores_missing_and_corrupt_metadata() {
+    let root = std::env::temp_dir().join(format!("hls-response-name-{}", std::process::id()));
+    let spec = TaskSpec { download_dir: root.to_string_lossy().into_owned(), ..Default::default() };
+    let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+    paths.prepare().unwrap();
+    let metadata = paths.progress.with_extension("response.json");
+    assert_eq!(http_response_filename(&paths), None);
+    for bytes in [b"not json".as_slice(), br#"{}"#, br#"{"content_disposition":"attachment; filename=\"\""}"#, br#"{"content_disposition":"attachment; filename=\"bad\nname.bin\""}"#] {
+        fs::write(&metadata, bytes).unwrap();
+        assert_eq!(http_response_filename(&paths), None);
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn coordinator_runs_http_task_and_atomically_publishes_output() {
     let body: &'static [u8] = b"v6-core-http-fixture";
     let address = serve_http_fixture(body);
@@ -1966,7 +2067,10 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
     for (case, info) in [
         ("multi", "d5:filesld6:lengthi3e4:pathl7:one.bineed6:lengthi2e4:pathl3:dir7:two.bineee4:name4:demo"),
         ("single", "d6:lengthi5e4:name4:demo"),
+        ("single-selected", "d6:lengthi5e4:name4:demo"),
         ("one-entry-directory", "d5:filesld6:lengthi5e4:pathl7:one.bineee4:name4:demo"),
+        ("single-http-url", "d6:lengthi5e4:name14:bt-payload.bin"),
+        ("multi-http-url", "d5:filesld6:lengthi3e4:pathl7:one.bineed6:lengthi2e4:pathl3:dir7:two.bineee4:name4:demo"),
     ] {
         let root = std::env::temp_dir().join(format!("hls-default-bt-{case}-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
@@ -2031,19 +2135,30 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
             .set_setting("download_dir", serde_json::json!(root.to_string_lossy()))
             .unwrap();
         // Existing output must survive default policy, including its nested data.
-        fs::create_dir_all(root.join("demo.files")).unwrap();
-        fs::write(root.join("demo.files/one.bin"), b"existing").unwrap();
+        let url_classified = case.ends_with("http-url");
+        let single = case.starts_with("single");
+        if !url_classified {
+            fs::create_dir_all(root.join("demo")).unwrap();
+            fs::write(root.join("demo/one.bin"), b"existing").unwrap();
+        }
         coordinator
             .dispatch(CoreCommand::CreateTask {
                 spec: TaskSpec {
                     url: format!("http://{address}/source.torrent"),
-                    resource_kind: ResourceKind::Torrent,
-                    filename: "demo".into(),
+                    resource_kind: if url_classified { ResourceKind::File } else { ResourceKind::Torrent },
+                    filename: if case == "single-http-url" { "source.torrent".into() } else if url_classified { String::new() } else { "demo".into() },
+                    torrent_selection: if case == "single-selected" {
+                        vec![crate::TorrentFileSelection { index: 0, path: "demo".into(), selected: true }]
+                    } else {
+                        Vec::new()
+                    },
                     download_dir: root.to_string_lossy().into_owned(),
                     ..Default::default()
                 },
             })
             .unwrap();
+        let created = coordinator.tasks().unwrap().remove(0);
+        assert_eq!(created.filename, if case == "single-http-url" { "bt-payload.bin" } else { "demo" });
         coordinator
             .dispatch(CoreCommand::TaskAction {
                 task_id: "task-1".into(),
@@ -2063,21 +2178,24 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
         server.join().unwrap();
         assert_eq!(completed.status, "completed", "{completed:?}");
         assert!(!completed.output_missing);
-        assert_eq!(completed.playback_ready, case == "single");
+        assert_eq!(completed.playback_ready, single);
         let published = PathBuf::from(&completed.output_path);
-        assert_ne!(published, root.join("demo.files"));
-        if case == "single" {
+        if url_classified {
+            assert_eq!(published, root.join(if single { "bt-payload.bin" } else { "demo" }));
+        } else {
+            assert_ne!(published, root.join("demo"));
+        }
+        if single {
             assert_eq!(fs::read(&published).unwrap(), payload);
         } else {
-            assert_eq!(fs::read(published.join("one.bin")).unwrap(), if case == "multi" { &payload[..3] } else { payload });
-            if case == "multi" {
+            assert_eq!(fs::read(published.join("one.bin")).unwrap(), if case.starts_with("multi") { &payload[..3] } else { payload });
+            if case.starts_with("multi") {
                 assert_eq!(fs::read(published.join("dir/two.bin")).unwrap(), b"de");
             }
         }
-        assert_eq!(
-            fs::read(root.join("demo.files/one.bin")).unwrap(),
-            b"existing"
-        );
+        if !url_classified {
+            assert_eq!(fs::read(root.join("demo/one.bin")).unwrap(), b"existing");
+        }
         // Admission + transfer; publication must reuse the transfer's metadata.
         assert_eq!(metadata_requests.load(Ordering::SeqCst), 2);
         let mut reopened = PersistentCore::open(root.join("tasks.db")).unwrap();
@@ -2091,7 +2209,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
                 .unwrap()
                 .torrent_selection
                 .len(),
-            0
+            usize::from(case == "single-selected")
         );
         // Finalization has closed the selection update boundary.
         assert!(coordinator
