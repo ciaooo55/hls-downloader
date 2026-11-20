@@ -958,6 +958,32 @@ fn continuing_live_track<'a>(
     Ok(part)
 }
 
+fn live_recording_cursor(
+    track: &Representation,
+    secondary: Option<&Representation>,
+    previous: Option<f64>,
+) -> Option<f64> {
+    let shared_end = match secondary {
+        Some(audio) => track
+            .live_end
+            .zip(audio.live_end)
+            .map(|(video, audio)| video.min(audio)),
+        None => track.live_end,
+    };
+    if let Some(end) = shared_end {
+        return Some(previous.map_or(end, |cursor| cursor.max(end)));
+    }
+    previous.or_else(|| {
+        std::iter::once(track)
+            .chain(secondary)
+            .filter_map(|item| {
+                item.live_end
+                    .map(|end| end - item.media_durations.iter().sum::<f64>())
+            })
+            .min_by(f64::total_cmp)
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn download_live_dash(
     mut manifest: DashManifest,
@@ -1072,13 +1098,7 @@ fn download_live_dash(
                     &primary,
                 )?;
             }
-            if let Some(end) = track.live_end {
-                let end = secondary
-                    .as_ref()
-                    .and_then(|item| item.live_end)
-                    .map_or(end, |audio_end| end.min(audio_end));
-                recorded_until = Some(recorded_until.map_or(end, |cursor: f64| cursor.max(end)));
-            }
+            recorded_until = live_recording_cursor(&track, secondary.as_ref(), recorded_until);
             if !same_period {
                 // Keep only the selected representation metadata across refreshes.
                 for item in std::iter::once(&mut track).chain(secondary.iter_mut()) {
@@ -5105,6 +5125,57 @@ mod tests {
             server.join().unwrap();
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn dash_live_unknown_audio_end_does_not_finish_the_period() {
+        let initial = r#"<MPD type="dynamic" minimumUpdatePeriod="PT0.4S" availabilityStartTime="1970-01-01T00:00:00Z"><Period start="PT0S" duration="PT1S"><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="1" media="v$Number$.m4s"/></Representation><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><SegmentURL media="a1.m4s"/></SegmentList></Representation></Period></MPD>"#;
+        let next = initial.replace(
+            "<SegmentURL media=\"a1.m4s\"/>",
+            "<SegmentURL media=\"a1.m4s\"/><SegmentURL media=\"a2.m4s\"/>",
+        );
+        let (url, server) = dash_response_server(vec![
+            (200, b"video".to_vec()),
+            (200, b"audio".to_vec()),
+            (200, next.into_bytes()),
+            (200, b"tail".to_vec()),
+            (403, vec![]),
+        ]);
+        let manifest = parse_mpd_at(initial, &url, 1.0).unwrap();
+        let video = &manifest.representations[0];
+        let audio = &manifest.representations[1];
+        assert_eq!(video.live_end, Some(1.0));
+        assert_eq!(audio.live_end, None);
+        assert_eq!(live_recording_cursor(video, Some(audio), None), Some(0.0));
+        assert_eq!(
+            live_recording_cursor(video, Some(audio), Some(0.5)),
+            Some(0.5)
+        );
+        assert_eq!(live_recording_cursor(audio, None, None), None);
+        let root =
+            std::env::temp_dir().join(format!("dash-unknown-audio-end-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let result = download_live_dash(
+            manifest,
+            initial.into(),
+            &url,
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            0,
+            0,
+            false,
+            "",
+            &mut DashCheckpoint::load(&root),
+        );
+        assert!(result.unwrap_err().contains("HTTP 403"));
+        assert_eq!(fs::read(root.join("audio/seg-0001.m4s")).unwrap(), b"tail");
+        assert!(!root.join("seg-0001.m4s").exists());
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
