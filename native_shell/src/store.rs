@@ -535,6 +535,20 @@ impl CoreStore {
         })
     }
 
+    pub fn theme_mode(&self) -> Result<String, String> {
+        let mode = self.setting_string("theme_mode", "")?;
+        if matches!(mode.as_str(), "system" | "light" | "dark") {
+            return Ok(mode);
+        }
+        let legacy: Option<bool> = self.setting_or("dark_mode", None)?;
+        Ok(match legacy {
+            Some(true) => "dark",
+            Some(false) => "light",
+            None => "system",
+        }
+        .into())
+    }
+
     pub fn setting_bool(&self, key: &str, fallback: bool) -> Result<bool, String> {
         self.setting_or(key, fallback)
     }
@@ -1333,6 +1347,28 @@ mod tests {
             .query_handoffs_page(Some("too-large"), None, true, None)
             .unwrap_err()
             .contains("单帧"));
+    }
+
+    #[test]
+    fn theme_mode_migrates_only_explicit_legacy_preferences() {
+        let mut store = CoreStore::in_memory().unwrap();
+        assert_eq!(store.theme_mode().unwrap(), "system");
+        store
+            .set_setting("dark_mode", serde_json::json!(false))
+            .unwrap();
+        assert_eq!(store.theme_mode().unwrap(), "light");
+        store
+            .set_setting("dark_mode", serde_json::json!(true))
+            .unwrap();
+        assert_eq!(store.theme_mode().unwrap(), "dark");
+        store
+            .set_setting("theme_mode", serde_json::json!("system"))
+            .unwrap();
+        assert_eq!(store.theme_mode().unwrap(), "system");
+        store
+            .set_setting("theme_mode", serde_json::json!("invalid"))
+            .unwrap();
+        assert_eq!(store.theme_mode().unwrap(), "dark");
     }
 
     #[test]

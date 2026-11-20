@@ -725,6 +725,7 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             default_user_agent: settings.default_user_agent,
             tvbox_endpoint: settings.tvbox_endpoint,
             dark_mode: settings.dark_mode,
+            theme_mode: settings.theme_mode,
             allow_duplicate: settings.allow_duplicate,
             queue_auto_start_enabled: settings.queue_auto_start_enabled,
             queue_auto_start_time: settings.queue_auto_start_time,
@@ -1069,6 +1070,58 @@ mod tests {
                 ..
             }
         ));
+        server.shutdown();
+    }
+
+    #[test]
+    fn theme_settings_migrate_validate_and_preserve_explicit_system() {
+        let server = CoreServer::in_memory().unwrap();
+        let handler = server.handler();
+        let mode = |response| match response {
+            CorePipeResponse::Settings { theme_mode, .. } => theme_mode,
+            other => panic!("unexpected settings response: {other:?}"),
+        };
+        assert_eq!(
+            mode(handler(CorePipeRequest::LoadSettings { request_id: 1 })),
+            "system"
+        );
+        for (index, (key, value, expected)) in [
+            ("dark_mode", Value::Bool(false), "light"),
+            ("dark_mode", Value::Bool(true), "dark"),
+            ("theme_mode", Value::String("light".into()), "light"),
+            ("theme_mode", Value::String("dark".into()), "dark"),
+            ("theme_mode", Value::String("system".into()), "system"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                mode(handler(CorePipeRequest::StoreSetting {
+                    request_id: index as u64 + 2,
+                    key: key.into(),
+                    value,
+                })),
+                expected
+            );
+        }
+        for value in [
+            Value::String("invalid".into()),
+            Value::Bool(false),
+            Value::Null,
+        ] {
+            assert!(matches!(
+                handler(CorePipeRequest::StoreSetting {
+                    request_id: 20,
+                    key: "theme_mode".into(),
+                    value,
+                }),
+                CorePipeResponse::Error { .. }
+            ));
+        }
+        assert_eq!(
+            mode(handler(CorePipeRequest::LoadSettings { request_id: 21 })),
+            "system"
+        );
         server.shutdown();
     }
 

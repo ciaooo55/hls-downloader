@@ -50,6 +50,7 @@ pub struct CoreSettings {
     pub default_user_agent: String,
     pub tvbox_endpoint: String,
     pub dark_mode: bool,
+    pub theme_mode: String,
     pub allow_duplicate: bool,
     pub queue_auto_start_enabled: bool,
     pub queue_auto_start_time: String,
@@ -151,6 +152,7 @@ impl CoreCoordinator {
             default_user_agent: core.store().setting_string("default_user_agent", "")?,
             tvbox_endpoint: core.store().setting_string("tvbox_endpoint", "")?,
             dark_mode: core.store().setting_bool("dark_mode", false)?,
+            theme_mode: core.store().theme_mode()?,
             allow_duplicate: core.store().setting_bool("allow_duplicate", false)?,
             queue_auto_start_enabled: core
                 .store()
@@ -290,6 +292,9 @@ impl CoreCoordinator {
         ) && !value.as_str().is_some_and(valid_clock)
         {
             return Err("限速计划时间必须使用有效的 HH:mm（00:00 到 23:59）".into());
+        }
+        if key == "theme_mode" && !matches!(value.as_str(), Some("system" | "light" | "dark")) {
+            return Err("主题必须为 System / Light / Dark".into());
         }
         if key == "ffmpeg_path" {
             if let Some(path) = value.as_str() {
@@ -625,6 +630,7 @@ pub const PUBLIC_SETTING_KEYS: &[&str] = &[
     "default_user_agent",
     "tvbox_endpoint",
     "dark_mode",
+    "theme_mode",
     "allow_duplicate",
     "queue_auto_start_enabled",
     "queue_auto_start_time",
