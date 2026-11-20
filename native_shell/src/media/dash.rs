@@ -803,7 +803,7 @@ pub fn download_dash_selected(
     write_dash_playlist(task_dir, &files)?;
     finish_dash(
         task_dir,
-        merged_audio,
+        merged_audio.map(|path| (path, 0.0)),
         subtitles,
         headers,
         proxy,
@@ -819,6 +819,7 @@ struct LiveDashTrack {
     seen: HashSet<(String, Option<ByteRange>)>,
     init: Option<(String, Option<ByteRange>)>,
     bytes: u64,
+    first_presentation_start: Option<f64>,
 }
 
 impl LiveDashTrack {
@@ -867,6 +868,7 @@ impl LiveDashTrack {
             self.seen.clear();
         }
         let first_media = self.new_media_start(track, next_period);
+        let mut recording_started = !self.durations.is_empty();
         let checkpoint_id = checkpoint_scope.map(|scope| format!("{scope}:{}", track.id));
         let mut index = self.files.len();
         let mut push =
@@ -935,6 +937,13 @@ impl LiveDashTrack {
                 .copied()
                 .unwrap_or(0.0);
             push(url, range, name, Some(duration))?;
+            if !recording_started {
+                self.first_presentation_start = track
+                    .live_end
+                    .zip(track.media_durations.get(media_index..))
+                    .map(|(end, durations)| end - durations.iter().sum::<f64>());
+                recording_started = true;
+            }
             index += 1;
             boundary = false;
         }
@@ -947,6 +956,13 @@ impl LiveDashTrack {
         }
         Ok(())
     }
+}
+
+fn live_av_offset(video: &LiveDashTrack, audio: &LiveDashTrack) -> f64 {
+    video
+        .first_presentation_start
+        .zip(audio.first_presentation_start)
+        .map_or(0.0, |(video, audio)| audio - video)
 }
 
 fn live_period_begin(periods: &[DashPeriod], active: Option<&DashPeriod>) -> Result<usize, String> {
@@ -1243,7 +1259,7 @@ fn download_live_dash(
     };
     finish_dash(
         task_dir,
-        merged_audio,
+        merged_audio.map(|path| (path, live_av_offset(&primary, &audio))),
         subtitles,
         headers,
         proxy,
@@ -1650,7 +1666,7 @@ fn download_dash_primary(
 #[allow(clippy::too_many_arguments)]
 fn finish_dash(
     task_dir: &Path,
-    audio_merged: Option<PathBuf>,
+    audio_merged: Option<(PathBuf, f64)>,
     subtitles: Vec<Representation>,
     headers: &HashMap<String, String>,
     proxy: &str,
@@ -1660,9 +1676,16 @@ fn finish_dash(
     crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
     let output = task_dir.join("merged.mp4");
     merge_with_ffmpeg(task_dir, &output, control)?;
-    let published = if let Some(audio) = audio_merged {
+    let published = if let Some((audio, offset)) = audio_merged {
         let muxed = task_dir.join("muxed.mp4");
-        crate::media::merge::mux_av(&output, Some(&audio), &[], &muxed, control)?;
+        crate::media::merge::mux_av_with_offset(
+            &output,
+            Some(&audio),
+            &[],
+            &muxed,
+            control,
+            offset,
+        )?;
         muxed
     } else {
         output
@@ -5023,6 +5046,85 @@ mod tests {
                 .contains("contiguous segment limit")
         );
         assert_eq!(server.join().unwrap().len(), 16);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_av_offset_uses_known_first_presentation_times() {
+        let mut video = LiveDashTrack::default();
+        let mut audio = LiveDashTrack::default();
+        assert_eq!(live_av_offset(&video, &audio), 0.0);
+        video.first_presentation_start = Some(138.0);
+        assert_eq!(live_av_offset(&video, &audio), 0.0);
+        for (start, expected) in [(140.0, 2.0), (136.0, -2.0), (138.0, 0.0)] {
+            audio.first_presentation_start = Some(start);
+            assert_eq!(live_av_offset(&video, &audio), expected);
+        }
+    }
+
+    #[test]
+    fn dash_live_clipped_av_boundaries_remain_aligned_across_periods() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period start="PT0S" duration="PT200S"><BaseURL>p0/</BaseURL><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="6" media="v-$Number$.m4s"/></Representation><Representation id="a" mimeType="audio/mp4"><SegmentTemplate duration="4" media="a-$Number$.m4s"/></Representation></Period><Period start="PT200S"><BaseURL>p1/</BaseURL><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="6" media="v-$Number$.m4s"/></Representation><Representation id="a" mimeType="audio/mp4"><SegmentTemplate duration="4" media="a-$Number$.m4s"/></Representation></Period></MPD>"#;
+        let initial = parse_mpd_at(xml, "https://cdn.test/live.mpd", 200.0).unwrap();
+        let later = parse_mpd_at(xml, "https://cdn.test/live.mpd", 212.0).unwrap();
+        let tracks = initial.representations[..2]
+            .iter()
+            .chain(&later.representations[2..]);
+        let files = tracks
+            .clone()
+            .flat_map(|track| track.media.iter())
+            .map(|url| {
+                (
+                    url.strip_prefix("https://cdn.test").unwrap().to_string(),
+                    b"data".to_vec(),
+                )
+            })
+            .collect();
+        let requests = tracks.map(|track| track.media.len()).sum();
+        let (base, server) = serve_dash_files(files, requests);
+        let root = std::env::temp_dir().join(format!("dash-av-boundaries-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut checkpoint = DashCheckpoint::load(&root);
+        let mut video = LiveDashTrack::default();
+        let mut audio = LiveDashTrack::default();
+        for (manifest, period) in [(&initial, 0), (&later, 1)] {
+            for source in manifest
+                .representations
+                .iter()
+                .filter(|track| track.period == period)
+            {
+                let mut track = source.clone();
+                for url in &mut track.media {
+                    *url = url.replace("https://cdn.test", &base);
+                }
+                let (current, other, dir, kind) = if is_video(&track) {
+                    (&mut video, &audio, root.clone(), "video")
+                } else {
+                    (&mut audio, &video, root.join("audio"), "audio")
+                };
+                current
+                    .append(
+                        &track,
+                        period > 0,
+                        kind,
+                        &dir,
+                        &root,
+                        &HashMap::new(),
+                        "",
+                        &control,
+                        &mut checkpoint,
+                        None,
+                        other,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(video.first_presentation_start, Some(138.0));
+            assert_eq!(audio.first_presentation_start, Some(140.0));
+            assert_eq!(live_av_offset(&video, &audio), 2.0);
+        }
+        assert_eq!(server.join().unwrap().len(), requests);
         fs::remove_dir_all(root).unwrap();
     }
 
