@@ -239,6 +239,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
         .collect();
     let period_durations = period_durations(&periods, root);
     let mut representations = Vec::new();
+    let mut live_segment_budget = 1200;
     for node in root
         .descendants()
         .filter(|node| mpd_element(*node, "Representation", root))
@@ -400,6 +401,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
                     period_duration,
                     now,
                     &mut media_durations,
+                    &mut live_segment_budget,
                 )?);
             } else {
                 media.extend(expand_timeline(
@@ -2254,6 +2256,7 @@ fn expand_live_duration(
     period_duration: Option<f64>,
     now: f64,
     durations: &mut Vec<f64>,
+    segment_budget: &mut u64,
 ) -> Result<Vec<String>, String> {
     const MAX_LIVE_SEGMENTS: u64 = 1200;
     let attr = |key: &str| templates.iter().find_map(|node| node.attribute(key));
@@ -2346,6 +2349,9 @@ fn expand_live_duration(
     let first = (((elapsed - depth).max(0.0) * timescale as f64 + offset as f64) / duration as f64)
         .floor() as u64;
     let first = first.max(count.saturating_sub(MAX_LIVE_SEGMENTS));
+    *segment_budget = segment_budget
+        .checked_sub(count.saturating_sub(first))
+        .ok_or("dynamic DASH manifest exceeds live segment budget")?;
     let mut media = Vec::new();
     for index in first..count {
         let number = start_number
@@ -4599,6 +4605,16 @@ mod tests {
         ] {
             assert!(parse_mpd_at(&invalid, "https://cdn.test/live.mpd", 100.0).is_err());
         }
+    }
+
+    #[test]
+    fn dash_live_duration_budget_is_shared_across_representations() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="1" timescale="1000" media="$RepresentationID$-$Number$.m4s"/><Representation id="v"/><Representation id="a"/></Period></MPD>"#;
+        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 100.0)
+            .unwrap_err()
+            .contains("live segment budget"));
+        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 0.5).is_ok());
+        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 0.0).is_ok());
     }
 
     #[test]
