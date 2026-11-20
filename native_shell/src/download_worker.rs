@@ -274,29 +274,30 @@ pub(crate) fn safe_filename(filename: &str, url: &str) -> String {
     } else {
         cleaned
     };
-    let cleaned = if reserved_dos_device_name(&cleaned) {
-        format!("_{cleaned}")
+    let cleaned = if cleaned.encode_utf16().count() <= 255 && cleaned.chars().count() <= 200 {
+        cleaned
+    } else {
+        let (stem, extension) = cleaned
+            .rsplit_once('.')
+            .filter(|(stem, extension)| !stem.is_empty() && extension.encode_utf16().count() < 254)
+            .map(|(stem, extension)| (stem, format!(".{extension}")))
+            .unwrap_or((&cleaned, String::new()));
+        let mut units = extension.encode_utf16().count();
+        let stem: String = stem
+            .chars()
+            .take(200usize.saturating_sub(extension.chars().count()).max(1))
+            .take_while(|ch| {
+                units += ch.len_utf16();
+                units <= 255
+            })
+            .collect();
+        format!("{stem}{extension}")
+    };
+    if reserved_dos_device_name(&cleaned) {
+        safe_filename(&format!("_{cleaned}"), "")
     } else {
         cleaned
-    };
-    if cleaned.encode_utf16().count() <= 255 && cleaned.chars().count() <= 200 {
-        return cleaned;
     }
-    let (stem, extension) = cleaned
-        .rsplit_once('.')
-        .filter(|(stem, extension)| !stem.is_empty() && extension.encode_utf16().count() < 254)
-        .map(|(stem, extension)| (stem, format!(".{extension}")))
-        .unwrap_or((&cleaned, String::new()));
-    let mut units = extension.encode_utf16().count();
-    let stem: String = stem
-        .chars()
-        .take(200usize.saturating_sub(extension.chars().count()).max(1))
-        .take_while(|ch| {
-            units += ch.len_utf16();
-            units <= 255
-        })
-        .collect();
-    format!("{stem}{extension}")
 }
 
 #[derive(Clone)]

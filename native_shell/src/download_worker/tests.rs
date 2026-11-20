@@ -795,6 +795,26 @@ fn task_paths_prepare_preserves_an_active_pause_or_cancel_request() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn truncated_filenames_cannot_become_reserved_device_names() {
+    for device in ["CON", "NUL", "AUX", "PRN", "COM1", "LPT9"] {
+        for extension in [
+            "x".repeat(199 - device.len()),
+            format!("{}{}", "😀".repeat(125), "x".repeat(4 - device.len())),
+        ] {
+            let filename = format!("{device}suffix.{extension}");
+            let sanitized = safe_filename(&filename, "");
+            assert!(!reserved_dos_device_name(&sanitized), "{sanitized}");
+            assert!(sanitized.starts_with('_'), "{sanitized}");
+            assert!(sanitized.encode_utf16().count() <= 255);
+            assert_eq!(
+                Path::new(&sanitized).extension().unwrap(),
+                extension.as_str()
+            );
+        }
+    }
+}
+
 fn local_source_fixture(label: &str, contents: &[u8]) -> (PathBuf, PathBuf, TaskSpec) {
     let root = std::env::temp_dir().join(format!(
         "hls-local-source-{label}-{}-{}",
@@ -1696,7 +1716,7 @@ fn check_unnamed_http_response_filename(server_name: &str) {
         .bytes()
         .map(|byte| format!("%{byte:02X}"))
         .collect();
-    let root = std::env::temp_dir().join(format!("hls-http-task-name-{}", std::process::id()));
+    let root = lifecycle_test_root("http-task-name");
     fs::create_dir_all(&root).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
