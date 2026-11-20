@@ -803,6 +803,25 @@ struct LiveDashTrack {
 }
 
 impl LiveDashTrack {
+    fn new_media_start(&self, track: &Representation, next_period: bool) -> usize {
+        if next_period {
+            return 0;
+        }
+        track
+            .media
+            .iter()
+            .enumerate()
+            .rfind(|(index, url)| {
+                self.seen
+                    .contains(&((*url).clone(), track.media_ranges[*index]))
+            })
+            .map_or(0, |(index, _)| index + 1)
+    }
+
+    fn has_new_media(&self, track: &Representation, next_period: bool) -> bool {
+        self.new_media_start(track, next_period) < track.media.len()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn append(
         &mut self,
@@ -828,15 +847,7 @@ impl LiveDashTrack {
         if next_period {
             self.seen.clear();
         }
-        let first_media = track
-            .media
-            .iter()
-            .enumerate()
-            .rfind(|(index, url)| {
-                self.seen
-                    .contains(&((*url).clone(), track.media_ranges[*index]))
-            })
-            .map_or(0, |(index, _)| index + 1);
+        let first_media = self.new_media_start(track, next_period);
         let checkpoint_id = checkpoint_scope.map(|scope| format!("{scope}:{}", track.id));
         let mut index = self.files.len();
         let mut push =
@@ -1102,41 +1113,43 @@ fn download_live_dash(
             }
             let next_period = active.is_some() && !same_period;
             let kind = if is_video(&track) { "video" } else { "audio" };
-            primary.append(
-                &track,
-                next_period,
-                kind,
-                task_dir,
-                task_dir,
-                headers,
-                proxy,
-                control,
-                vod,
-                None,
-                &audio,
-            )?;
-            if let Some(item) = &secondary {
-                let scope = period
-                    .id
-                    .clone()
-                    .or_else(|| period.start.map(|time| time.to_string()));
-                audio.append(
-                    item,
+            if primary.has_new_media(&track, next_period) {
+                primary.append(
+                    &track,
                     next_period,
-                    "audio",
-                    &audio_dir,
+                    kind,
+                    task_dir,
                     task_dir,
                     headers,
                     proxy,
                     control,
                     vod,
-                    Some(scope.as_deref().unwrap_or("implicit")),
-                    &primary,
+                    None,
+                    &audio,
                 )?;
+                remember_live_cursor(&mut cursors, period, &track);
             }
-            remember_live_cursor(&mut cursors, period, &track);
             if let Some(item) = &secondary {
-                remember_live_cursor(&mut cursors, period, item);
+                if audio.has_new_media(item, next_period) {
+                    let scope = period
+                        .id
+                        .clone()
+                        .or_else(|| period.start.map(|time| time.to_string()));
+                    audio.append(
+                        item,
+                        next_period,
+                        "audio",
+                        &audio_dir,
+                        task_dir,
+                        headers,
+                        proxy,
+                        control,
+                        vod,
+                        Some(scope.as_deref().unwrap_or("implicit")),
+                        &primary,
+                    )?;
+                    remember_live_cursor(&mut cursors, period, item);
+                }
             }
             if !same_period {
                 // Keep only the selected representation metadata across refreshes.
@@ -5216,6 +5229,55 @@ mod tests {
         assert!(!root.join("seg-0001.m4s").exists());
         server.join().unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_unchanged_track_without_init_is_not_appended() {
+        for empty in [true, false] {
+            let initial = r#"<MPD type="dynamic" minimumUpdatePeriod="PT0.4S"><Period><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><Initialization sourceURL="vi.mp4"/><SegmentURL media="v1.m4s"/></SegmentList></Representation><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><Initialization sourceURL="ai.mp4"/><SegmentURL media="a1.m4s"/></SegmentList></Representation></Period></MPD>"#;
+            let mut next = initial
+                .replace("v1.m4s", "v2.m4s")
+                .replace("<Initialization sourceURL=\"ai.mp4\"/>", "");
+            if empty {
+                next = next.replace("<SegmentURL media=\"a1.m4s\"/>", "");
+            }
+            let (url, server) = dash_response_server(vec![
+                (200, b"vi".to_vec()),
+                (200, b"video".to_vec()),
+                (200, b"ai".to_vec()),
+                (200, b"audio".to_vec()),
+                (200, next.into_bytes()),
+                (200, b"new".to_vec()),
+                (403, vec![]),
+            ]);
+            let root = std::env::temp_dir().join(format!(
+                "dash-no-media-no-init-{}-{empty}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let result = download_live_dash(
+                parse_mpd(initial, &url).unwrap(),
+                initial.into(),
+                &url,
+                &HashMap::new(),
+                "",
+                &root,
+                &control,
+                0,
+                0,
+                false,
+                "",
+                &mut DashCheckpoint::load(&root),
+            );
+            assert!(result.unwrap_err().contains("HTTP 403"));
+            assert_eq!(fs::read(root.join("seg-0002.m4s")).unwrap(), b"new");
+            assert_eq!(fs::read(root.join("audio/init.mp4")).unwrap(), b"ai");
+            assert!(!root.join("audio/seg-0002.m4s").exists());
+            server.join().unwrap();
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
