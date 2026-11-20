@@ -27,7 +27,11 @@ function File-Id([string]$Relative) {
 }
 try {
     $preflight = Join-Path $work 'installer-preflight.exe'
-    & rustc.exe --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflight
+    $rustcCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
+    $rustc = if ($rustcCommand) { $rustcCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
+    if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw "Rust compiler not found: $rustc" }
+    Write-Verbose "Using Rust compiler: $rustc"
+    & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflight
     if ($LASTEXITCODE -ne 0) { throw 'Installer preflight build failed.' }
     $directories = [ordered]@{ '' = 'INSTALLDIR' }
     $components = New-Object 'System.Collections.Generic.List[string]'
@@ -44,7 +48,17 @@ try {
         $id = File-Id $relative
         $componentGuid = ([guid]::ParseExact($id.Substring(1), 'N')).ToString('B')
         $components.Add($id)
-        [void]$payload.AppendLine('<DirectoryRef Id="' + $directories[$dir] + '"><Component Id="C' + $id + '" Guid="' + $componentGuid + '" Win64="yes"><File Id="' + $id + '" Name="' + (Escape-Xml $file.Name) + '" Source="' + (Escape-Xml $file.FullName) + '" /><RegistryValue Root="HKCU" Key="Software\HLS Downloader\Native\Components" Name="' + $id + '" Type="string" Value="[ProductCode]" KeyPath="yes" /></Component></DirectoryRef>')
+        $cleanup = ''
+        if ($file.Name -eq 'HLSDownloaderNativeHost.exe') {
+            $cleanup = '<RemoveFile Id="RemoveChromiumHostManifest" Name="HLSDownloaderNativeHost.chrome.json" On="uninstall" /><RemoveFile Id="RemoveFirefoxHostManifest" Name="HLSDownloaderNativeHost.firefox.json" On="uninstall" />'
+            $ancestor = $dir
+            do {
+                $cleanup += '<RemoveFolder Id="RemoveHostFolder' + $directories[$ancestor] + '" Directory="' + $directories[$ancestor] + '" On="uninstall" />'
+                if (-not $ancestor) { break }
+                $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+            } while ($true)
+        }
+        [void]$payload.AppendLine('<DirectoryRef Id="' + $directories[$dir] + '"><Component Id="C' + $id + '" Guid="' + $componentGuid + '" Win64="yes"><File Id="' + $id + '" Name="' + (Escape-Xml $file.Name) + '" Source="' + (Escape-Xml $file.FullName) + '" />' + $cleanup + '<RegistryValue Root="HKCU" Key="Software\HLS Downloader\Native\Components" Name="' + $id + '" Type="string" Value="[ProductCode]" KeyPath="yes" /></Component></DirectoryRef>')
     }
     # Author parent folders before children; no harvest dependency and no JRE.
     $tree = New-Object Text.StringBuilder
