@@ -188,6 +188,10 @@ impl SettingsEditor {
 
     pub fn edit(&mut self, key: &str, text: &str) -> Result<(), String> {
         let original = self.values.get(key).ok_or("未知设置项")?;
+        if let Err(error) = validate_schedule_time(key, text) {
+            self.invalid.insert(key.into(), text.into());
+            return Err(error);
+        }
         // 下拉框显示中文选项，保存时换回 Core 使用的取值。
         let text = choice_options(key)
             .iter()
@@ -392,7 +396,10 @@ impl SettingsEditor {
                 .find(|(_, field, _)| *field == key)
                 .map(|(_, _, label)| *label)
                 .unwrap_or(key);
-            return Err(format!("{label}：请输入有效的非负整数"));
+            let error = validate_schedule_time(key, &self.invalid[key])
+                .err()
+                .unwrap_or_else(|| "请输入有效的非负整数".into());
+            return Err(format!("{label}：{error}"));
         }
         let mut changes = storage_changes(&self.values, &self.dirty);
         if self.rules_changed {
@@ -410,6 +417,21 @@ impl SettingsEditor {
         }
         Ok(changes)
     }
+}
+
+fn validate_schedule_time(key: &str, text: &str) -> Result<(), String> {
+    if matches!(key, "schedule_start" | "schedule_end") {
+        let bytes = text.as_bytes();
+        if bytes.len() != 5
+            || bytes[2] != b':'
+            || !bytes[..2].iter().chain(&bytes[3..]).all(u8::is_ascii_digit)
+            || text[..2].parse::<u8>().map_or(true, |hour| hour > 23)
+            || text[3..].parse::<u8>().map_or(true, |minute| minute > 59)
+        {
+            return Err("限速计划时间必须使用有效的 HH:mm（00:00 到 23:59）".into());
+        }
+    }
+    Ok(())
 }
 
 fn storage_changes(
@@ -468,6 +490,24 @@ fn storage_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn schedule_times_require_a_valid_hhmm() {
+        for key in ["schedule_start", "schedule_end"] {
+            for valid in ["00:00", "23:59", "08:30", "22:00"] {
+                assert!(validate_schedule_time(key, valid).is_ok());
+            }
+            for invalid in [
+                "", "26:99", "25:99", "24:00", "12:60", "1:00", "01:0", "+1:00", " 01:00",
+                "01:00 ", "ab:cd", "中文a",
+            ] {
+                assert!(
+                    validate_schedule_time(key, invalid).is_err(),
+                    "{key}: {invalid}"
+                );
+            }
+        }
+        assert!(validate_schedule_time("download_dir", "").is_ok());
+    }
     #[test]
     fn editing_one_category_keeps_the_other_directories_and_uses_core_storage_keys() {
         let values = BTreeMap::from([

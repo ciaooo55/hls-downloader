@@ -4,6 +4,80 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 #[test]
+fn speed_schedule_times_are_validated_before_persistence() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    for key in [
+        "download_speed_schedule_start",
+        "download_speed_schedule_end",
+    ] {
+        for valid in ["00:00", "23:59", "08:30"] {
+            coordinator
+                .dispatch(CoreCommand::SetSetting {
+                    key: key.into(),
+                    value: serde_json::json!(valid),
+                })
+                .unwrap();
+            assert_eq!(
+                coordinator
+                    .lock()
+                    .unwrap()
+                    .store()
+                    .setting_string(key, "")
+                    .unwrap(),
+                valid
+            );
+        }
+        for invalid in [
+            "", "26:99", "25:99", "24:00", "12:60", "1:00", "01:0", "+1:00", " 01:00", "01:00 ",
+            "ab:cd", "中文a",
+        ] {
+            assert!(
+                coordinator
+                    .dispatch(CoreCommand::SetSetting {
+                        key: key.into(),
+                        value: serde_json::json!(invalid),
+                    })
+                    .is_err(),
+                "{key}: {invalid}"
+            );
+            assert_eq!(
+                coordinator
+                    .lock()
+                    .unwrap()
+                    .store()
+                    .setting_string(key, "")
+                    .unwrap(),
+                "08:30"
+            );
+        }
+        for invalid in [Value::Null, Value::Bool(true), serde_json::json!(1200)] {
+            assert!(coordinator.set_setting(key, invalid).is_err());
+        }
+    }
+    assert!(coordinator
+        .set_settings(BTreeMap::from([
+            (
+                "download_speed_schedule_start".into(),
+                serde_json::json!("12:00")
+            ),
+            (
+                "download_speed_schedule_end".into(),
+                serde_json::json!("25:99")
+            ),
+        ]))
+        .is_err());
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .store()
+            .setting_string("download_speed_schedule_start", "")
+            .unwrap(),
+        "08:30"
+    );
+}
+
+#[test]
 fn stale_cast_control_cannot_stop_a_replacement_session() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     let previous = {

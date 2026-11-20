@@ -284,6 +284,13 @@ impl CoreCoordinator {
         if !PUBLIC_SETTING_KEYS.contains(&key) && key != "legal_terms_version" {
             return Err(format!("未知设置项: {key}"));
         }
+        if matches!(
+            key,
+            "download_speed_schedule_start" | "download_speed_schedule_end"
+        ) && !value.as_str().is_some_and(valid_clock)
+        {
+            return Err("限速计划时间必须使用有效的 HH:mm（00:00 到 23:59）".into());
+        }
         if key == "ffmpeg_path" {
             if let Some(path) = value.as_str() {
                 validate_helper_executable(path, &["ffmpeg", "ffmpeg.exe"])?;
@@ -573,6 +580,8 @@ fn valid_clock(value: &str) -> bool {
     };
     hour.len() == 2
         && minute.len() == 2
+        && hour.bytes().all(|byte| byte.is_ascii_digit())
+        && minute.bytes().all(|byte| byte.is_ascii_digit())
         && hour.parse::<u8>().is_ok_and(|value| value < 24)
         && minute.parse::<u8>().is_ok_and(|value| value < 60)
 }
