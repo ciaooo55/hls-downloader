@@ -136,6 +136,14 @@ mod windows {
             collection_count: *const u32,
             collection_timeout: *const u32,
         ) -> i32;
+        fn PeekNamedPipe(
+            pipe: Handle,
+            buffer: *mut c_void,
+            buffer_size: u32,
+            bytes_read: *mut u32,
+            bytes_available: *mut u32,
+            bytes_left: *mut u32,
+        ) -> i32;
         fn CloseHandle(handle: Handle) -> i32;
     }
     #[link(name = "user32")]
@@ -330,7 +338,31 @@ mod windows {
             if Instant::now() >= deadline {
                 return Err("Core 检查点超时，旧安装和用户数据已保留".into());
             }
-            match pipe.read(buffer) {
+            // std::fs::File can translate an empty nonblocking Windows pipe
+            // into a zero-byte read. Wait for actual bytes before reading.
+            let mut available = 0u32;
+            if unsafe {
+                PeekNamedPipe(
+                    pipe.as_raw_handle(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(format!(
+                    "Core 检查点回执连接结束: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if available == 0 {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            let amount = buffer.len().min(available as usize);
+            match pipe.read(&mut buffer[..amount]) {
                 Ok(0) => return Err("Core 未确认检查点，旧安装和用户数据已保留".into()),
                 Ok(count) => buffer = &mut buffer[count..],
                 Err(error) if error.raw_os_error() == Some(232) => {

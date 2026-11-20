@@ -1957,7 +1957,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
                 }
             }
         });
-        let coordinator = CoreCoordinator::new(PersistentCore::open(&root.join("tasks.db")).unwrap());
+        let coordinator = CoreCoordinator::new(PersistentCore::open(root.join("tasks.db")).unwrap());
         coordinator
             .set_setting("legal_terms_accepted", serde_json::json!(true))
             .unwrap();
@@ -2014,7 +2014,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
         );
         // Admission + transfer; publication must reuse the transfer's metadata.
         assert_eq!(metadata_requests.load(Ordering::SeqCst), 2);
-        let mut reopened = PersistentCore::open(&root.join("tasks.db")).unwrap();
+        let mut reopened = PersistentCore::open(root.join("tasks.db")).unwrap();
         assert_eq!(
             reopened.snapshot("task-1").unwrap().output_path,
             completed.output_path

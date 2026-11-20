@@ -26,8 +26,8 @@ def main() -> int:
     processes = []
     result = {"passed": False, "steps": []}
 
-    def start(label: str):
-        install = root / label
+    def start(label: str, installation: str | None = None):
+        install = root / (installation or label)
         resources = install / "app" / "resources"
         resources.mkdir(parents=True, exist_ok=True)
         executable = resources / "HLSDownloaderEngine.exe"
@@ -39,8 +39,8 @@ def main() -> int:
         env.update({
             "HLS_V7_PIPE": rf"\\.\pipe\HLSShutdownFixture-{os.getpid()}-{label}",
             "HLS_V7_CORE_TCP": "1", "HLS_V7_CORE_BIND": f"127.0.0.1:{port}",
-            "HLS_V7_DATA_DIR": str(install / "data"),
-            "HLS_V7_DOWNLOAD_DIR": str(install / "downloads"),
+            "HLS_V7_DATA_DIR": str(root / label / "data"),
+            "HLS_V7_DOWNLOAD_DIR": str(root / label / "downloads"),
             "TEMP": str(root), "TMP": str(root),
         })
         with (root / f"{label}-{len(processes)}.log").open("wb") as log:
@@ -65,6 +65,7 @@ def main() -> int:
 
     try:
         target, target_port, install, target_env = start("target")
+        second, _, _, _ = start("target-second", "target")
         other, other_port, _, other_env = start("other")
         with connect(target_port) as ipc:
             created = send_frame(ipc, {
@@ -84,9 +85,11 @@ def main() -> int:
                                     timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
         assert helper.returncode == 0, helper.returncode
         target.wait(timeout=5)
+        second.wait(timeout=5)
         assert target.returncode == 0, target.returncode
+        assert second.returncode == 0, second.returncode
         assert other.poll() is None, "Preflight stopped a sibling installation"
-        result["steps"].append("private Core stopped; sibling's configured pipe untouched")
+        result["steps"].append("both private Cores in target installation stopped; sibling untouched")
         with connect(other_port) as ipc:
             assert send_frame(ipc, {"type": "snapshot", "request_id": 3})["type"] == "snapshot"
         restarted, restarted_port, _, _ = start("target")
