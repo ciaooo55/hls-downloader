@@ -227,6 +227,15 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
 }
 
 fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String> {
+    parse_mpd_with_url_budget(xml, base, now, 32 * 1024 * 1024)
+}
+
+fn parse_mpd_with_url_budget(
+    xml: &str,
+    base: &str,
+    now: f64,
+    mut url_budget: usize,
+) -> Result<DashManifest, String> {
     let document =
         roxmltree::Document::parse(xml).map_err(|error| format!("invalid DASH XML: {error}"))?;
     let root = document.root_element();
@@ -406,6 +415,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
                     &mut media_durations,
                     &mut live_segment_budget,
                     &mut expired,
+                    &mut url_budget,
                 )?);
                 if expired {
                     expired_periods.insert(period_index);
@@ -488,6 +498,17 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
                 .filter(|value| value.is_finite() && *value > 0.0)
             {
                 media_durations = vec![seconds; media.len()];
+            }
+        }
+        if dynamic {
+            if media_template.is_none() || has_timeline {
+                for url in &media {
+                    consume_live_url_budget(url, &mut url_budget)?;
+                }
+            }
+            consume_live_url_budget(&base_url, &mut url_budget)?;
+            if let Some(url) = &init {
+                consume_live_url_budget(url, &mut url_budget)?;
             }
         }
         representations.push(Representation {
@@ -2265,6 +2286,13 @@ fn ceil_segment_units(value: f64) -> f64 {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn consume_live_url_budget(url: &str, remaining: &mut usize) -> Result<(), String> {
+    *remaining = remaining
+        .checked_sub(url.len())
+        .ok_or("dynamic DASH manifest exceeds live URL byte budget")?;
+    Ok(())
+}
+
 fn expand_live_duration(
     root: roxmltree::Node<'_, '_>,
     templates: &[roxmltree::Node<'_, '_>],
@@ -2278,6 +2306,7 @@ fn expand_live_duration(
     durations: &mut Vec<f64>,
     segment_budget: &mut u64,
     expired: &mut bool,
+    url_budget: &mut usize,
 ) -> Result<Vec<String>, String> {
     const MAX_LIVE_SEGMENTS: u64 = 1200;
     let attr = |key: &str| templates.iter().find_map(|node| node.attribute(key));
@@ -2392,10 +2421,12 @@ fn expand_live_duration(
             .checked_mul(duration)
             .and_then(|time| time.checked_add(offset))
             .ok_or("DASH timeline overflow")?;
-        media.push(resolve(
+        let url = resolve(
             base_url,
             &apply_template(template, id, number, time, bandwidth)?,
-        ));
+        );
+        consume_live_url_budget(&url, url_budget)?;
+        media.push(url);
         let end = (index + 1) as f64 * duration as f64 / timescale as f64;
         let begin = index as f64 * duration as f64 / timescale as f64;
         durations.push((end.min(edge) - begin.max(0.0)).max(0.0));
@@ -4674,6 +4705,21 @@ mod tests {
             .representations
             .iter()
             .all(|track| track.media.len() == 300));
+    }
+
+    #[test]
+    fn dash_live_resolved_url_byte_budget_is_shared() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="1" media="$RepresentationID$-$Number$.m4s"/><Representation id="v"/><Representation id="a"/></Period></MPD>"#;
+        let base = format!("https://cdn.test/{}/live.mpd", "x".repeat(1000));
+        assert!(parse_mpd_with_url_budget(xml, &base, 3.0, 9000).is_ok());
+        assert!(parse_mpd_with_url_budget(xml, &base, 3.0, 6000)
+            .unwrap_err()
+            .contains("live URL byte budget"));
+        assert!(parse_mpd_with_url_budget(xml, &base, 0.0, 3000).is_ok());
+        let list = r#"<MPD type="dynamic"><Period><Representation id="v"><SegmentList><SegmentURL media="a.m4s"/><SegmentURL media="b.m4s"/></SegmentList></Representation></Period></MPD>"#;
+        assert!(parse_mpd_with_url_budget(list, &base, 3.0, 3000)
+            .unwrap_err()
+            .contains("live URL byte budget"));
     }
 
     #[test]
