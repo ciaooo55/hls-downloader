@@ -240,7 +240,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
         .collect();
     let period_durations = period_durations(&periods, root);
     let mut representations = Vec::new();
-    let mut live_segment_budget = 1200;
+    let mut live_segment_budget = 20_000;
     let mut expired_periods = HashSet::new();
     for node in root
         .descendants()
@@ -4644,12 +4644,29 @@ mod tests {
 
     #[test]
     fn dash_live_duration_budget_is_shared_across_representations() {
-        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="1" timescale="1000" media="$RepresentationID$-$Number$.m4s"/><Representation id="v"/><Representation id="a"/></Period></MPD>"#;
-        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 100.0)
+        let representations = (0..17)
+            .map(|id| format!("<Representation id=\"{id}\"/>"))
+            .collect::<String>();
+        let xml = format!(
+            r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="1" timescale="1000" media="$RepresentationID$-$Number$.m4s"/>{representations}</Period></MPD>"#
+        );
+        assert!(parse_mpd_at(&xml, "https://cdn.test/live.mpd", 100.0)
             .unwrap_err()
             .contains("live segment budget"));
-        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 0.5).is_ok());
-        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 0.0).is_ok());
+        assert!(parse_mpd_at(&xml, "https://cdn.test/live.mpd", 0.5).is_ok());
+        assert!(parse_mpd_at(&xml, "https://cdn.test/live.mpd", 0.0).is_ok());
+        let ladder = (0..5)
+            .map(|id| format!("<Representation id=\"{id}\"/>"))
+            .collect::<String>();
+        let ladder = format!(
+            r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" timeShiftBufferDepth="PT600S"><Period><SegmentTemplate duration="2" media="$RepresentationID$-$Number$.m4s"/>{ladder}</Period></MPD>"#
+        );
+        let parsed = parse_mpd_at(&ladder, "https://cdn.test/live.mpd", 1000.0).unwrap();
+        assert_eq!(parsed.representations.len(), 5);
+        assert!(parsed
+            .representations
+            .iter()
+            .all(|track| track.media.len() == 300));
     }
 
     #[test]
