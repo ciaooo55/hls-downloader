@@ -2356,7 +2356,7 @@ fn expand_live_duration(
             .ok_or("DASH timeline overflow")?;
         media.push(resolve(
             base_url,
-            &apply_template(template, id, number, time, bandwidth),
+            &apply_template(template, id, number, time, bandwidth)?,
         ));
         let end = ((index + 1) as f64 * duration as f64 - offset as f64) / timescale as f64;
         let begin = (time as f64 - offset as f64) / timescale as f64;
