@@ -5,6 +5,11 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+try:
+    import psutil  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["psutil"] = MagicMock()
+
 import smoke_v7_portable_app as portable
 
 
