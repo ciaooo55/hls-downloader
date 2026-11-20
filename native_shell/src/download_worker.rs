@@ -2482,11 +2482,7 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
     let meta =
         crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy, enable_dht)?;
     let mut checked = spec;
-    if checked.filename.trim().is_empty()
-        || checked.filename == safe_filename("", &checked.url)
-    {
-        checked.filename = safe_filename(&meta.name, &checked.url);
-    }
+    checked.filename = resolved_torrent_filename(&checked, &meta.name);
     if checked.title.trim().is_empty() {
         checked.title = checked.filename.clone();
     }
@@ -2502,6 +2498,17 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
         checked.expected_size = Some(meta.length);
     }
     Ok(checked)
+}
+
+fn resolved_torrent_filename(spec: &TaskSpec, metadata_name: &str) -> String {
+    let provisional = spec.filename.trim().is_empty()
+        || spec.filename == safe_filename("", &spec.url)
+        || (spec.url.starts_with("magnet:?")
+            && spec.filename == provisional_task_name(&TaskSpec {
+                filename: String::new(),
+                ..spec.clone()
+            }));
+    safe_filename(if provisional { metadata_name } else { &spec.filename }, &spec.url)
 }
 
 fn current_progress(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> (u64, Option<u64>) {
@@ -2744,10 +2751,11 @@ fn run_task_with_throttle(
                     &mut telemetry_reporter,
                 )
             })?;
-            paths.final_output = paths.final_output.with_file_name(safe_filename(&meta.name, &spec.url));
+            let filename = resolved_torrent_filename(&spec, &meta.name);
+            paths.final_output = paths.final_output.with_file_name(&filename);
             core.lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?
-                .set_task_filename(task_id, safe_filename(&meta.name, &spec.url))?;
+                .set_task_filename(task_id, filename)?;
             let (downloaded, total) = current_progress(&core, task_id);
             mark_progress(&core, task_id, downloaded, total, "checking", "checking")?;
             let latest_spec = {

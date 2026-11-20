@@ -2065,6 +2065,8 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     for (case, info) in [
+        ("single-custom", "d6:lengthi5e4:name4:demo"),
+        ("multi-custom", "d5:filesld6:lengthi3e4:pathl7:one.bineed6:lengthi2e4:pathl3:dir7:two.bineee4:name4:demo"),
         ("multi", "d5:filesld6:lengthi3e4:pathl7:one.bineed6:lengthi2e4:pathl3:dir7:two.bineee4:name4:demo"),
         ("single", "d6:lengthi5e4:name4:demo"),
         ("single-selected", "d6:lengthi5e4:name4:demo"),
@@ -2137,7 +2139,12 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
         // Existing output must survive default policy, including its nested data.
         let url_classified = case.ends_with("http-url");
         let single = case.starts_with("single");
-        if !url_classified {
+        let custom = case.ends_with("custom");
+        if case == "single-custom" {
+            fs::write(root.join("demo"), b"unrelated metadata-named file").unwrap();
+            fs::write(root.join("chosen.bin"), b"old requested file").unwrap();
+            coordinator.set_setting("existing_file_policy", serde_json::json!("overwrite")).unwrap();
+        } else if !url_classified {
             fs::create_dir_all(root.join("demo")).unwrap();
             fs::write(root.join("demo/one.bin"), b"existing").unwrap();
         }
@@ -2146,7 +2153,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
                 spec: TaskSpec {
                     url: format!("http://{address}/source.torrent"),
                     resource_kind: if url_classified { ResourceKind::File } else { ResourceKind::Torrent },
-                    filename: if case == "single-http-url" { "source.torrent".into() } else if url_classified { String::new() } else { "demo".into() },
+                    filename: if custom { if single { "chosen.bin".into() } else { "chosen-dir".into() } } else if case == "single-http-url" { "source.torrent".into() } else if url_classified { String::new() } else { "demo".into() },
                     torrent_selection: if case == "single-selected" {
                         vec![crate::TorrentFileSelection { index: 0, path: "demo".into(), selected: true }]
                     } else {
@@ -2158,7 +2165,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
             })
             .unwrap();
         let created = coordinator.tasks().unwrap().remove(0);
-        assert_eq!(created.filename, if case == "single-http-url" { "bt-payload.bin" } else { "demo" });
+        assert_eq!(created.filename, if custom { if single { "chosen.bin" } else { "chosen-dir" } } else if case == "single-http-url" { "bt-payload.bin" } else { "demo" });
         coordinator
             .dispatch(CoreCommand::TaskAction {
                 task_id: "task-1".into(),
@@ -2180,7 +2187,13 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
         assert!(!completed.output_missing);
         assert_eq!(completed.playback_ready, single);
         let published = PathBuf::from(&completed.output_path);
-        if url_classified {
+        if custom {
+            if single {
+                assert_eq!(fs::read(root.join("demo")).unwrap(), b"unrelated metadata-named file");
+            }
+            assert_eq!(published, root.join(if single { "chosen.bin" } else { "chosen-dir" }));
+            assert_eq!(completed.filename, if single { "chosen.bin" } else { "chosen-dir" });
+        } else if url_classified {
             assert_eq!(published, root.join(if single { "bt-payload.bin" } else { "demo" }));
         } else {
             assert_ne!(published, root.join("demo"));
@@ -2193,7 +2206,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
                 assert_eq!(fs::read(published.join("dir/two.bin")).unwrap(), b"de");
             }
         }
-        if !url_classified {
+        if !url_classified && case != "single-custom" {
             assert_eq!(fs::read(root.join("demo/one.bin")).unwrap(), b"existing");
         }
         // Admission + transfer; publication must reuse the transfer's metadata.
