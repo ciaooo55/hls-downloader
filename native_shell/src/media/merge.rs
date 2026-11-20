@@ -152,6 +152,20 @@ pub fn mux_av(
     output: &Path,
     control: &Path,
 ) -> Result<(), String> {
+    mux_av_with_offset(video, audio, subtitles, output, control, 0.0)
+}
+
+pub(crate) fn mux_av_with_offset(
+    video: &Path,
+    audio: Option<&Path>,
+    subtitles: &[PathBuf],
+    output: &Path,
+    control: &Path,
+    audio_offset: f64,
+) -> Result<(), String> {
+    if !audio_offset.is_finite() {
+        return Err("invalid audio/video presentation offset".into());
+    }
     if audio.is_none() && subtitles.is_empty() {
         if video != output {
             concat_files(&[video.to_path_buf()], output)?;
@@ -160,23 +174,15 @@ pub fn mux_av(
     }
     let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
     let mut command = Command::new(ffmpeg);
-    command
-        .args([
-            "-y",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-protocol_whitelist",
-            "file,crypto",
-            "-i",
-        ])
-        .arg(video);
-    if let Some(audio) = audio {
-        command.args(["-i"]).arg(audio);
-    }
-    for subtitle in subtitles {
-        command.args(["-i"]).arg(subtitle);
-    }
+    command.args([
+        "-y",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        "file,crypto",
+    ]);
+    mux_input_args(&mut command, video, audio, subtitles, audio_offset);
     for arg in mux_map_args(audio.is_some(), subtitles.len()) {
         command.arg(arg);
     }
@@ -191,6 +197,28 @@ pub fn mux_av(
         &output.with_extension("ffmpeg.log"),
         control,
     )
+}
+
+fn mux_input_args(
+    command: &mut Command,
+    video: &Path,
+    audio: Option<&Path>,
+    subtitles: &[PathBuf],
+    audio_offset: f64,
+) {
+    if audio.is_some() && audio_offset < 0.0 {
+        command.args(["-itsoffset", &format!("{:.9}", -audio_offset)]);
+    }
+    command.arg("-i").arg(video);
+    if let Some(audio) = audio {
+        if audio_offset > 0.0 {
+            command.args(["-itsoffset", &format!("{audio_offset:.9}")]);
+        }
+        command.args(["-i"]).arg(audio);
+    }
+    for subtitle in subtitles {
+        command.args(["-i"]).arg(subtitle);
+    }
 }
 
 fn run_ffmpeg_to_output(
@@ -378,6 +406,144 @@ fn which(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mux_offsets_delay_only_the_later_input() {
+        for (offset, expected) in [
+            (
+                0.0,
+                vec!["-i", "video.mp4", "-i", "audio.m4a", "-i", "sub.srt"],
+            ),
+            (
+                2.0,
+                vec![
+                    "-i",
+                    "video.mp4",
+                    "-itsoffset",
+                    "2.000000000",
+                    "-i",
+                    "audio.m4a",
+                    "-i",
+                    "sub.srt",
+                ],
+            ),
+            (
+                -1.5,
+                vec![
+                    "-itsoffset",
+                    "1.500000000",
+                    "-i",
+                    "video.mp4",
+                    "-i",
+                    "audio.m4a",
+                    "-i",
+                    "sub.srt",
+                ],
+            ),
+        ] {
+            let mut command = Command::new("ffmpeg");
+            mux_input_args(
+                &mut command,
+                Path::new("video.mp4"),
+                Some(Path::new("audio.m4a")),
+                &[PathBuf::from("sub.srt")],
+                offset,
+            );
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        for offset in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                mux_av_with_offset(
+                    Path::new("video"),
+                    None,
+                    &[],
+                    Path::new("out"),
+                    Path::new("control"),
+                    offset
+                )
+                .unwrap_err(),
+                "invalid audio/video presentation offset"
+            );
+        }
+    }
+
+    #[test]
+    fn mux_offset_preserves_relative_stream_start_times_when_ffmpeg_is_available() {
+        let Some(ffmpeg) = locate_ffmpeg() else {
+            eprintln!("skipped: no FFmpeg on PATH/HLS_FFMPEG");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!("hls-mux-offset-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let video = root.join("video.mp4");
+        let audio = root.join("audio.m4a");
+        for (source, codec, path) in [
+            ("color=size=64x48:rate=10:duration=1", "mpeg4", &video),
+            ("sine=frequency=440:duration=1", "aac", &audio),
+        ] {
+            let generated = Command::new(&ffmpeg)
+                .args([
+                    "-y", "-nostdin", "-v", "error", "-f", "lavfi", "-i", source, "-c", codec,
+                ])
+                .arg(path)
+                .output()
+                .unwrap();
+            assert!(
+                generated.status.success(),
+                "{}",
+                String::from_utf8_lossy(&generated.stderr)
+            );
+        }
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        for offset in [-0.5, 0.0, 0.5] {
+            let output = root.join(format!("mux-{offset}.mp4"));
+            mux_av_with_offset(&video, Some(&audio), &[], &output, &control, offset).unwrap();
+            let mut starts = Vec::new();
+            for stream in ["0:v:0", "0:a:0"] {
+                let decoded = Command::new(&ffmpeg)
+                    .args(["-nostdin", "-v", "error", "-copyts", "-i"])
+                    .arg(&output)
+                    .args(["-map", stream, "-c", "copy", "-f", "framecrc", "-"])
+                    .output()
+                    .unwrap();
+                assert!(
+                    decoded.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&decoded.stderr)
+                );
+                let text = String::from_utf8(decoded.stdout).unwrap();
+                let timebase = text
+                    .lines()
+                    .find_map(|line| line.strip_prefix("#tb 0: "))
+                    .unwrap();
+                let (num, den) = timebase.split_once('/').unwrap();
+                let packet = text
+                    .lines()
+                    .find(|line| !line.starts_with('#') && !line.is_empty())
+                    .unwrap();
+                let pts = packet
+                    .split(',')
+                    .nth(2)
+                    .unwrap()
+                    .trim()
+                    .parse::<f64>()
+                    .unwrap();
+                starts.push(pts * num.parse::<f64>().unwrap() / den.parse::<f64>().unwrap());
+            }
+            assert!(
+                (starts[1] - starts[0] - offset).abs() < 0.05,
+                "{offset}: {starts:?}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn hls_options_match_demuxer_support() {
