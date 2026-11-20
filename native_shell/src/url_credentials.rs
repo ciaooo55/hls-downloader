@@ -72,7 +72,7 @@ impl CoreStore {
         ) {
             return Ok(url.into());
         }
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+        let authority = rest.split('/').next().unwrap_or(rest);
         let Some(at) = authority.rfind('@') else {
             return Ok(url.into());
         };
@@ -237,6 +237,32 @@ mod tests {
         );
         store.migrate_url_passwords().unwrap();
         assert_eq!(store.hydrate_url(&clean).unwrap(), url);
+    }
+
+    #[test]
+    fn url_password_engine_accepted_userinfo_roundtrips() {
+        let store = CoreStore::in_memory().unwrap();
+        for scheme in ["ftp", "ftps", "sftp"] {
+            for secret in [
+                "pa'ss", "pa\"ss", "pa ss", "pa?ss", "pa#ss", "密碼", "pa@ss",
+            ] {
+                let url = format!("{scheme}://alice:{secret}@host/file.bin");
+                if scheme == "sftp" {
+                    assert_eq!(
+                        crate::sftp_engine::parse_sftp_url(&url).unwrap().password,
+                        secret
+                    );
+                } else {
+                    assert_eq!(
+                        crate::ftp_engine::parse_ftp_url(&url).unwrap().password,
+                        secret
+                    );
+                }
+                let clean = store.sanitize_urls(url.clone()).unwrap();
+                assert_eq!(clean, format!("{scheme}://alice@host/file.bin"));
+                assert_eq!(store.hydrate_url(&clean).unwrap(), url);
+            }
+        }
     }
 
     #[test]

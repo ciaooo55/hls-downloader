@@ -19,7 +19,7 @@ pub fn map_ftp_passwords(
         }
         let authority_start = separator + 3;
         let end = text[authority_start..]
-            .find(['/', '?', '#', ' ', '\n', '\r', '\t', '"', '\''])
+            .find('/')
             .map_or(text.len(), |offset| authority_start + offset);
         let authority = &text[authority_start..end];
         if let Some(at) = authority.rfind('@') {
@@ -67,6 +67,23 @@ mod tests {
         );
         for plain in ["", "ftp://host/a", "sftp://user@host/a", "https://host/a"] {
             assert_eq!(redact_ftp_passwords(plain), plain);
+        }
+    }
+
+    #[test]
+    fn redacts_engine_accepted_userinfo_characters() {
+        for secret in [
+            "pa'ss", "pa\"ss", "pa ss", "pa?ss", "pa#ss", "密碼", "pa@ss",
+        ] {
+            let url = format!("ftp://alice:{secret}@host/file.bin");
+            let mut captured = None;
+            let clean = map_ftp_passwords(&url, |authority, password| {
+                captured = Some((authority.to_string(), password.to_string()));
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(clean, "ftp://alice@host/file.bin");
+            assert_eq!(captured, Some(("ftp://alice@host".into(), secret.into())));
         }
     }
 
