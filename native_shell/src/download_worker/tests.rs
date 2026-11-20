@@ -2339,6 +2339,87 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
 }
 
 #[test]
+fn torrent_transfer_reports_bytes_total_and_rate_before_completion() {
+    let root = lifecycle_test_root("bt-live-progress");
+    fs::create_dir_all(&root).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let seed = format!("http://{address}/payload");
+    let payload = vec![b'a'; 512 * 1024];
+    let piece_length = payload.len() / 2;
+    let mut torrent = format!(
+        "d8:url-list{}:{}4:infod6:lengthi{}e4:name8:demo.bin12:piece lengthi{piece_length}e6:pieces40:",
+        seed.len(), seed, payload.len()
+    ).into_bytes();
+    for piece in payload.chunks(piece_length) {
+        torrent.extend_from_slice(&crate::crypto_lite::sha1(piece));
+    }
+    torrent.extend_from_slice(b"ee");
+    let source = root.join("source.torrent");
+    fs::write(&source, &torrent).unwrap();
+    let (release_tx, release_rx) = mpsc::channel();
+    let server_payload = payload.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            server_payload.len()
+        )
+        .unwrap();
+        for chunk in server_payload[..piece_length].chunks(64 * 1024) {
+            stream.write_all(chunk).unwrap();
+            stream.flush().unwrap();
+            thread::sleep(Duration::from_millis(250));
+        }
+        release_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+        stream.write_all(&server_payload[piece_length..]).unwrap();
+    });
+    let coordinator = direct_http_coordinator(&root);
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: source.to_string_lossy().into_owned(),
+                resource_kind: ResourceKind::Torrent,
+                download_dir: root.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "start".into(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let task = coordinator.tasks().unwrap().remove(0);
+        if task.downloaded_bytes > 0 && task.speed_bytes_per_sec > 0 {
+            assert_eq!(task.status, "downloading");
+            assert_eq!(task.total_bytes, Some(payload.len() as u64));
+            assert!(task.downloaded_bytes < payload.len() as u64);
+            break;
+        }
+        assert!(Instant::now() < deadline, "no live BT progress: {task:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+    release_tx.send(()).unwrap();
+    let completed = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(fs::read(completed.output_path).unwrap(), payload);
+    server.join().unwrap();
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn imported_torrent_preserves_saved_category_directory() {
     let root = std::env::temp_dir().join(format!(
         "hls-import-torrent-category-{}",

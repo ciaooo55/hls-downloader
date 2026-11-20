@@ -11,6 +11,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+pub(crate) fn progress_path(output: &Path) -> PathBuf {
+    output.with_extension("progress.json")
+}
+
 /// Stable BT entry used by Core. Do not call swarm helpers from UI or NM.
 pub trait TorrentSession: Send + Sync {
     fn download(
@@ -755,7 +759,7 @@ fn transfer_torrent(
                 etag: String::new(),
                 last_modified: String::new(),
                 control: control.to_path_buf(),
-                progress: output.with_extension("progress.json"),
+                progress: progress_path(output),
                 method: "GET".into(),
                 body_path: PathBuf::new(),
                 mirrors: Vec::new(),
@@ -1619,7 +1623,7 @@ fn download_from_peer_ex_with_telemetry(
         })
         .map(|(index, _)| index)
         .collect();
-    let progress = output.with_extension("progress.json");
+    let progress = progress_path(output);
     let mut downloaded = meta.length.saturating_sub(
         initial_pending
             .iter()
@@ -2865,6 +2869,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fs::read(&output).unwrap(), payload);
+        let progress: serde_json::Value =
+            serde_json::from_slice(&fs::read(progress_path(&output)).unwrap()).unwrap();
+        assert_eq!(progress["downloaded"], payload.len() as u64);
+        assert_eq!(progress["total"], payload.len() as u64);
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -2773,7 +2773,7 @@ fn run_task_with_throttle(
             let torrent_control = paths.control.clone();
             let torrent_headers = headers.clone();
             let torrent_proxy = spec.proxy.clone();
-            let torrent_progress = paths.progress.clone();
+            let torrent_progress = crate::torrent_engine::progress_path(&torrent_output);
             let meta = poll_media_progress(&core, task_id, &torrent_progress, false, move || {
                 crate::torrent_engine::torrent_session().download_for_publication(
                     &torrent_url,
