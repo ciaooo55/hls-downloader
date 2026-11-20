@@ -238,7 +238,7 @@ fn parse_mpd_with_url_budget(
     now: f64,
     url_budget: usize,
 ) -> Result<DashManifest, String> {
-    parse_mpd_for_recording(xml, base, now, url_budget, None)
+    parse_mpd_for_recording(xml, base, now, url_budget, &[])
 }
 
 fn parse_mpd_for_recording(
@@ -246,7 +246,7 @@ fn parse_mpd_for_recording(
     base: &str,
     now: f64,
     mut url_budget: usize,
-    recorded_until: Option<f64>,
+    cursors: &[LiveTrackCursor],
 ) -> Result<DashManifest, String> {
     let document =
         roxmltree::Document::parse(xml).map_err(|error| format!("invalid DASH XML: {error}"))?;
@@ -420,12 +420,26 @@ fn parse_mpd_for_recording(
                 let window = match presentation_window {
                     Some(window) => window,
                     None => {
-                        let window = live_presentation_window(root, now, recorded_until)?;
+                        let window = live_presentation_window(root, now, None)?;
                         presentation_window = Some(window);
                         window
                     }
                 };
-                if period_duration.is_some_and(|duration| start + duration <= window.start) {
+                let current_period = DashPeriod {
+                    id: period
+                        .and_then(|node| node.attribute("id"))
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned),
+                    start: period
+                        .and_then(|node| node.attribute("start"))
+                        .and_then(parse_duration_seconds),
+                };
+                let recording_period = cursors
+                    .iter()
+                    .any(|cursor| cursor.period.same_as(&current_period));
+                if period_duration.is_some_and(|duration| start + duration <= window.start)
+                    && (window.expired_before.is_some() || !recording_period)
+                {
                     before_start_window_periods.insert(period_index);
                     if window.expired_before.is_some_and(|cutoff| {
                         period_duration.is_some_and(|duration| start + duration <= cutoff)
@@ -433,6 +447,17 @@ fn parse_mpd_for_recording(
                         expired_periods.insert(period_index);
                     }
                 }
+                let cursor = cursors
+                    .iter()
+                    .find(|cursor| cursor.matches(&current_period, &id, &mime))
+                    .and_then(|cursor| cursor.end);
+                let window = LivePresentationWindow {
+                    start: cursor.map_or(window.start, |end| {
+                        window.expired_before.map_or(end, |cutoff| end.max(cutoff))
+                    }),
+                    continuing: cursor.is_some(),
+                    ..window
+                };
                 let (expanded, end) = expand_live_duration(
                     window,
                     &templates,
@@ -958,30 +983,41 @@ fn continuing_live_track<'a>(
     Ok(part)
 }
 
-fn live_recording_cursor(
-    track: &Representation,
-    secondary: Option<&Representation>,
-    previous: Option<f64>,
-) -> Option<f64> {
-    let shared_end = match secondary {
-        Some(audio) => track
-            .live_end
-            .zip(audio.live_end)
-            .map(|(video, audio)| video.min(audio)),
-        None => track.live_end,
-    };
-    if let Some(end) = shared_end {
-        return Some(previous.map_or(end, |cursor| cursor.max(end)));
+#[derive(Clone)]
+struct LiveTrackCursor {
+    period: DashPeriod,
+    id: String,
+    mime: String,
+    end: Option<f64>,
+}
+
+impl LiveTrackCursor {
+    fn matches(&self, period: &DashPeriod, id: &str, mime: &str) -> bool {
+        self.period.same_as(period) && self.id == id && self.mime.eq_ignore_ascii_case(mime)
     }
-    previous.or_else(|| {
-        std::iter::once(track)
-            .chain(secondary)
-            .filter_map(|item| {
-                item.live_end
-                    .map(|end| end - item.media_durations.iter().sum::<f64>())
-            })
-            .min_by(f64::total_cmp)
-    })
+}
+
+fn remember_live_cursor(
+    cursors: &mut Vec<LiveTrackCursor>,
+    period: &DashPeriod,
+    track: &Representation,
+) {
+    cursors.retain(|cursor| cursor.period.same_as(period));
+    if let Some(cursor) = cursors
+        .iter_mut()
+        .find(|cursor| cursor.matches(period, &track.id, &track.mime))
+    {
+        if let Some(end) = track.live_end {
+            cursor.end = Some(cursor.end.map_or(end, |old| old.max(end)));
+        }
+    } else {
+        cursors.push(LiveTrackCursor {
+            period: period.clone(),
+            id: track.id.clone(),
+            mime: track.mime.clone(),
+            end: track.live_end,
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1000,7 +1036,7 @@ fn download_live_dash(
     vod: &mut DashCheckpoint,
 ) -> Result<PathBuf, String> {
     let mut active = None;
-    let mut recorded_until = None;
+    let mut cursors = Vec::new();
     let mut primary = LiveDashTrack::default();
     let mut audio = LiveDashTrack::default();
     let mut choices: Option<(Representation, Option<Representation>)> = None;
@@ -1098,7 +1134,10 @@ fn download_live_dash(
                     &primary,
                 )?;
             }
-            recorded_until = live_recording_cursor(&track, secondary.as_ref(), recorded_until);
+            remember_live_cursor(&mut cursors, period, &track);
+            if let Some(item) = &secondary {
+                remember_live_cursor(&mut cursors, period, item);
+            }
             if !same_period {
                 // Keep only the selected representation metadata across refreshes.
                 for item in std::iter::once(&mut track).chain(secondary.iter_mut()) {
@@ -1155,7 +1194,7 @@ fn download_live_dash(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_secs_f64();
-        manifest = parse_mpd_for_recording(&xml, url, now, 32 * 1024 * 1024, recorded_until)?;
+        manifest = parse_mpd_for_recording(&xml, url, now, 32 * 1024 * 1024, &cursors)?;
     }
     if primary.durations.is_empty() {
         return Err("DASH representation produced no segments".into());
@@ -4901,14 +4940,14 @@ mod tests {
         let mut checkpoint = DashCheckpoint::load(&root);
         let mut live = LiveDashTrack::default();
         let other = LiveDashTrack::default();
-        let mut cursor = None;
+        let mut cursors = Vec::new();
         for now in [100.0, 200.0] {
             let manifest = parse_mpd_for_recording(
                 xml,
                 &format!("{base}/live.mpd"),
                 now,
                 32 * 1024 * 1024,
-                cursor,
+                &cursors,
             )
             .unwrap();
             let track = &manifest.representations[0];
@@ -4926,7 +4965,7 @@ mod tests {
                 &other,
             )
             .unwrap();
-            cursor = track.live_end;
+            remember_live_cursor(&mut cursors, &manifest.periods[0], track);
         }
         let bytes: Vec<_> = live
             .files
@@ -4934,18 +4973,20 @@ mod tests {
             .map(|path| fs::read(path).unwrap()[0])
             .collect();
         assert_eq!(bytes, (5..=20).collect::<Vec<_>>());
-        assert_eq!(cursor, Some(200.0));
+        assert_eq!(cursors[0].end, Some(200.0));
         let bounded = xml.replace(
             "type=\"dynamic\"",
             "type=\"dynamic\" timeShiftBufferDepth=\"PT60S\"",
         );
+        let mut behind = cursors.clone();
+        behind[0].end = Some(100.0);
         let bounded =
-            parse_mpd_for_recording(&bounded, &base, 200.0, 32 * 1024 * 1024, Some(100.0)).unwrap();
+            parse_mpd_for_recording(&bounded, &base, 200.0, 32 * 1024 * 1024, &behind).unwrap();
         assert_eq!(bounded.representations[0].media.len(), 6);
-        let empty = parse_mpd_for_recording(xml, &base, 200.0, 32 * 1024 * 1024, cursor).unwrap();
+        let empty = parse_mpd_for_recording(xml, &base, 200.0, 32 * 1024 * 1024, &cursors).unwrap();
         assert!(empty.representations[0].media.is_empty());
         assert!(
-            parse_mpd_for_recording(xml, &base, 20_000.0, 32 * 1024 * 1024, cursor)
+            parse_mpd_for_recording(xml, &base, 20_000.0, 32 * 1024 * 1024, &cursors)
                 .unwrap_err()
                 .contains("contiguous segment limit")
         );
@@ -5146,12 +5187,11 @@ mod tests {
         let audio = &manifest.representations[1];
         assert_eq!(video.live_end, Some(1.0));
         assert_eq!(audio.live_end, None);
-        assert_eq!(live_recording_cursor(video, Some(audio), None), Some(0.0));
-        assert_eq!(
-            live_recording_cursor(video, Some(audio), Some(0.5)),
-            Some(0.5)
-        );
-        assert_eq!(live_recording_cursor(audio, None, None), None);
+        let mut cursors = Vec::new();
+        remember_live_cursor(&mut cursors, &manifest.periods[0], video);
+        remember_live_cursor(&mut cursors, &manifest.periods[0], audio);
+        assert_eq!(cursors[0].end, Some(1.0));
+        assert_eq!(cursors[1].end, None);
         let root =
             std::env::temp_dir().join(format!("dash-unknown-audio-end-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
@@ -5176,6 +5216,55 @@ mod tests {
         assert!(!root.join("seg-0001.m4s").exists());
         server.join().unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_track_cursors_do_not_hold_video_behind_unknown_audio() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" timeShiftBufferDepth="PT10000S"><Period><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="1" media="v$Number$.m4s"/></Representation><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><SegmentURL media="a1.m4s"/></SegmentList></Representation></Period></MPD>"#;
+        let initial = parse_mpd_at(xml, "https://cdn.test/live.mpd", 1200.0).unwrap();
+        let mut cursors = Vec::new();
+        for track in &initial.representations {
+            remember_live_cursor(&mut cursors, &initial.periods[0], track);
+        }
+        let next = parse_mpd_for_recording(
+            xml,
+            "https://cdn.test/live.mpd",
+            1201.0,
+            32 * 1024 * 1024,
+            &cursors,
+        )
+        .unwrap();
+        assert_eq!(
+            next.representations[0].media,
+            ["https://cdn.test/v1201.m4s"]
+        );
+        assert_eq!(next.representations[1].media, ["https://cdn.test/a1.m4s"]);
+        remember_live_cursor(&mut cursors, &next.periods[0], &next.representations[0]);
+        let empty = parse_mpd_for_recording(
+            xml,
+            "https://cdn.test/live.mpd",
+            1201.0,
+            32 * 1024 * 1024,
+            &cursors,
+        )
+        .unwrap();
+        assert!(empty.representations[0].media.is_empty());
+        assert_eq!(cursors[0].end, Some(1201.0));
+        assert_eq!(cursors[1].end, None);
+        let mut audio = LiveDashTrack::default();
+        audio.seen.insert(("https://cdn.test/a1.m4s".into(), None));
+        assert!(audio
+            .seen
+            .contains(&(next.representations[1].media[0].clone(), None)));
+        assert!(parse_mpd_for_recording(
+            xml,
+            "https://cdn.test/live.mpd",
+            2500.0,
+            32 * 1024 * 1024,
+            &cursors
+        )
+        .unwrap_err()
+        .contains("contiguous segment limit"));
     }
 
     #[test]
