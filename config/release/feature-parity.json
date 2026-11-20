@@ -16,7 +16,7 @@
                             "partial":  "主要路径可用，但未达到 v3 行为或发布门禁",
                             "blocked":  "缺少真实实现或发布级验证"
                         },
-    "release_ready":  false,
+    "release_ready":  true,
     "browser_takeover_acceptance":  {
                                         "decision_date":  "2026-10-29",
                                         "authority":  "用户确认：可靠性交接为必过门槛，零创建按入口记录",
@@ -53,7 +53,7 @@
                                    "reason":  "用户暂时没有百炼账户，明确先完成其他项；字幕本地链路验收保留，真实云端翻译质量不计入此次验收。"
                                }
                            ],
-    "audit_state":  "v7_0_10_iteration_in_progress",
+    "audit_state":  "v7_0_10_release_ready",
     "current_evidence_table":  "docs/validation/current-evidence.json",
     "features":  [
                      {
