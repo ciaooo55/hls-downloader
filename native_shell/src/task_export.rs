@@ -133,6 +133,7 @@ pub fn import_tasks(text: &str) -> Result<Vec<TaskSpec>, String> {
         .tasks
         .into_iter()
         .map(|task| {
+            crate::download_worker::validate_filename(&task.filename)?;
             if task.request_method.trim().eq_ignore_ascii_case("POST") {
                 return Err(
                     "任务列表不包含 POST 请求正文，无法安全重建；请从浏览器或 cURL 重新导入该请求"
@@ -378,6 +379,24 @@ mod tests {
         assert_eq!(imported[0].scheduled_start_at, "22:30");
         assert!(imported[0].credential_ref.is_none());
         assert!(imported[0].replay_context_ref.is_none());
+    }
+
+    #[test]
+    fn imports_reject_oversized_filenames_before_returning_any_tasks() {
+        for filename in ["测".repeat(256), "😀".repeat(128)] {
+            let (_, data, _) = export_tasks(
+                &[
+                    task("one", 0, "valid.bin", "https://example.test/one"),
+                    task("two", 1, &filename, "https://example.test/two"),
+                ],
+                &[],
+                "json",
+            )
+            .unwrap();
+            assert!(import_tasks(&data)
+                .unwrap_err()
+                .contains("255 个 UTF-16 单位"));
+        }
     }
 
     #[test]

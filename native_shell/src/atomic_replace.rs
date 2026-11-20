@@ -15,9 +15,11 @@ pub(crate) fn replace_file(
         use windows_sys::Win32::Storage::FileSystem::{
             MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
         };
-        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-        let destination: Vec<u16> = destination
-            .as_os_str()
+        let source: Vec<u16> = extended_path(source)?
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let destination: Vec<u16> = extended_path(destination)?
             .encode_wide()
             .chain(Some(0))
             .collect();
@@ -38,6 +40,40 @@ pub(crate) fn replace_file(
     }
     #[cfg(not(windows))]
     std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn extended_path(path: &std::path::Path) -> io::Result<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Component, Prefix};
+    let absolute = std::path::absolute(path)?;
+    let mut components = absolute.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path must be absolute",
+        ));
+    };
+    match prefix.kind() {
+        Prefix::Verbatim(_) | Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) => {
+            Ok(absolute.into_os_string())
+        }
+        Prefix::Disk(_) => {
+            let mut result = std::ffi::OsString::from(r"\\?\");
+            result.push(absolute);
+            Ok(result)
+        }
+        Prefix::UNC(_, _) => {
+            let mut result = std::ffi::OsString::from(r"\\?\UNC\");
+            let tail: Vec<u16> = absolute.as_os_str().encode_wide().skip(2).collect();
+            result.push(std::ffi::OsString::from_wide(&tail));
+            Ok(result)
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported filesystem path",
+        )),
+    }
 }
 
 /// 退避重试的总次数。20 次 × 10ms 约 200ms，足够杀软的一次扫描让出句柄。
@@ -74,6 +110,45 @@ pub(crate) fn replace_with_retry(mut move_once: impl FnMut() -> io::Result<()>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn extended_paths_preserve_unc_and_verbatim_names() {
+        for (path, expected) in [
+            (r"C:\folder\file", r"\\?\C:\folder\file"),
+            (
+                r"\\server\share\folder\file",
+                r"\\?\UNC\server\share\folder\file",
+            ),
+            (r"\\?\C:\folder\file", r"\\?\C:\folder\file"),
+        ] {
+            assert_eq!(extended_path(std::path::Path::new(path)).unwrap(), expected);
+        }
+        let relative = extended_path(std::path::Path::new("relative-file")).unwrap();
+        assert!(relative.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shared_atomic_writers_replace_files_beyond_max_path() {
+        let root = std::env::temp_dir().join(format!("hls-long-atomic-{}", std::process::id()));
+        let mut directory = root.clone();
+        for _ in 0..6 {
+            directory.push(format!("deep-{}", "测".repeat(35)));
+        }
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("checkpoint.tmp");
+        let destination = directory.join("checkpoint.json");
+        std::fs::write(&source, "first").unwrap();
+        replace_file(&source, &destination).unwrap();
+        std::fs::write(&source, "second").unwrap();
+        replace_file(&source, &destination).unwrap();
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "second");
+        let error = replace_file(&source, &destination).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "second");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn succeeds_on_the_first_attempt_without_sleeping() {

@@ -93,6 +93,15 @@ impl PersistentCore {
     }
 
     pub fn handle(&mut self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
+        match &command {
+            CoreCommand::CreateTask { spec } => {
+                crate::download_worker::validate_filename(&spec.filename)?;
+            }
+            CoreCommand::AcceptHandoff { filename, .. } => {
+                crate::download_worker::validate_filename(filename)?;
+            }
+            _ => {}
+        }
         let command = self.store.sanitize_urls(command)?;
         if let CoreCommand::GetTaskLog { task_id } = &command {
             let mut lines = self.store.load_task_log(task_id, 500)?;
@@ -240,6 +249,12 @@ impl PersistentCore {
                 _ => None,
             })
         });
+        if let Some(spec) = spec.as_ref() {
+            if let Err(error) = crate::download_worker::validate_filename(&spec.filename) {
+                self.runtime = before;
+                return Err(error);
+            }
+        }
         if let Err(error) = self.store.apply_events_and_spec(&events, spec.as_ref()) {
             self.runtime = before;
             return Err(error);
@@ -350,6 +365,7 @@ impl PersistentCore {
         task_id: &str,
         filename: String,
     ) -> Result<Vec<EventEnvelope>, String> {
+        crate::download_worker::validate_filename(&filename)?;
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();
         self.runtime.set_task_filename(task_id, filename);
@@ -437,6 +453,7 @@ impl PersistentCore {
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
+        crate::download_worker::validate_filename(&spec.filename)?;
         let spec = self.store.sanitize_urls(spec)?;
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();

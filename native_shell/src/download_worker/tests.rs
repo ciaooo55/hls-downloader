@@ -4,6 +4,142 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 #[test]
+fn oversized_filename_component_has_an_actionable_error() {
+    for filename in [
+        format!("{}.bin", "测".repeat(256)),
+        format!("{}.bin", "😀".repeat(128)),
+    ] {
+        let error = TaskPaths::for_task(
+            "task-1",
+            &TaskSpec {
+                filename,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("255 个 UTF-16 单位"), "{error}");
+    }
+}
+
+#[test]
+fn oversized_filenames_are_rejected_before_creation_and_rename() {
+    let mut core = PersistentCore::in_memory().unwrap();
+    for filename in ["测".repeat(256), "😀".repeat(128)] {
+        let error = core
+            .handle(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    filename,
+                    ..Default::default()
+                },
+            })
+            .unwrap_err();
+        assert!(error.contains("255 个 UTF-16 单位"), "{error}");
+        assert!(core.tasks().is_empty());
+    }
+    for filename in [String::new(), "valid.bin".into(), "测".repeat(255)] {
+        core.handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                filename: filename.clone(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        core.set_task_filename("task-1", filename).unwrap();
+    }
+    let original = core.task_spec("task-1").unwrap().clone();
+    let mut invalid = original.clone();
+    invalid.filename = "😀".repeat(128);
+    assert!(core
+        .replace_spec("task-1", invalid.clone())
+        .unwrap_err()
+        .contains("255 个 UTF-16 单位"));
+    assert!(core
+        .set_task_filename("task-1", invalid.filename)
+        .unwrap_err()
+        .contains("255 个 UTF-16 单位"));
+    assert_eq!(
+        core.task_spec("task-1").unwrap().filename,
+        original.filename
+    );
+    assert_eq!(core.snapshot("task-1").unwrap().filename, "测".repeat(255));
+}
+
+#[test]
+fn legacy_oversized_queued_filename_does_not_block_next_download() {
+    let root = lifecycle_test_root("legacy-oversized-name");
+    let address = serve_http_fixture(b"next task payload");
+    let mut runtime = crate::CoreRuntime::default();
+    let mut store = crate::CoreStore::in_memory().unwrap();
+    for filename in ["😀".repeat(128), "valid.bin".into()] {
+        let spec = TaskSpec {
+            url: format!("http://{address}/{filename}"),
+            filename,
+            download_dir: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let events = runtime.handle(CoreCommand::CreateTask { spec: spec.clone() });
+        store.apply_events_and_spec(&events, Some(&spec)).unwrap();
+    }
+    let coordinator = CoreCoordinator::new(PersistentCore::from_store(store).unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+    coordinator.start_next_queued(false).unwrap();
+    let failed = wait_for_task_status(&coordinator, "failed");
+    assert!(format!("{failed:?}").contains("255 个 UTF-16 单位"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let tasks = coordinator.tasks().unwrap();
+        if tasks
+            .iter()
+            .any(|task| task.task_id == "task-2" && task.status == "completed")
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{tasks:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        fs::read(root.join("valid.bin")).unwrap(),
+        b"next task payload"
+    );
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn http_download_publishes_in_a_deep_unicode_directory() {
+    let root = std::env::temp_dir().join(format!("hls-long-http-{}", std::process::id()));
+    let mut directory = root.clone();
+    for _ in 0..6 {
+        directory.push(format!("deep-{}", "测".repeat(35)));
+    }
+    assert!(directory.to_string_lossy().encode_utf16().count() > 295);
+    fs::create_dir_all(&directory).unwrap();
+    let address = serve_http_fixture(b"deep unicode payload");
+    let coordinator = direct_http_coordinator(&directory);
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{address}/file.bin"),
+                filename: "深目录验证.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task = wait_for_task_status(&coordinator, "completed");
+    let output = PathBuf::from(&task.output_path);
+    assert_eq!(output.file_name().unwrap(), "深目录验证.bin");
+    assert_eq!(fs::read(&output).unwrap(), b"deep unicode payload");
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn speed_schedule_times_are_validated_before_persistence() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     for key in [
@@ -657,6 +793,26 @@ fn task_paths_prepare_preserves_an_active_pause_or_cancel_request() {
         assert_eq!(fs::read_to_string(&paths.control).unwrap(), control);
     }
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn truncated_filenames_cannot_become_reserved_device_names() {
+    for device in ["CON", "NUL", "AUX", "PRN", "COM1", "LPT9"] {
+        for extension in [
+            "x".repeat(199 - device.len()),
+            format!("{}{}", "😀".repeat(125), "x".repeat(4 - device.len())),
+        ] {
+            let filename = format!("{device}suffix.{extension}");
+            let sanitized = safe_filename(&filename, "");
+            assert!(!reserved_dos_device_name(&sanitized), "{sanitized}");
+            assert!(sanitized.starts_with('_'), "{sanitized}");
+            assert!(sanitized.encode_utf16().count() <= 255);
+            assert_eq!(
+                Path::new(&sanitized).extension().unwrap(),
+                extension.as_str()
+            );
+        }
+    }
 }
 
 fn local_source_fixture(label: &str, contents: &[u8]) -> (PathBuf, PathBuf, TaskSpec) {
@@ -1544,7 +1700,23 @@ fn direct_task_pause_reaches_a_stalled_worker_through_the_control_token() {
 
 #[test]
 fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
-    let root = std::env::temp_dir().join(format!("hls-http-task-name-{}", std::process::id()));
+    check_unnamed_http_response_filename("resolved payload.bin");
+}
+
+#[test]
+fn unnamed_http_task_shortens_oversized_server_filename_and_keeps_extension() {
+    check_unnamed_http_response_filename(&format!("{}.bin", "😀".repeat(180)));
+}
+
+fn check_unnamed_http_response_filename(server_name: &str) {
+    let expected_name = safe_filename(server_name, "");
+    assert!(expected_name.encode_utf16().count() <= 255);
+    assert!(expected_name.ends_with(".bin"));
+    let encoded_name: String = server_name
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect();
+    let root = lifecycle_test_root("http-task-name");
     fs::create_dir_all(&root).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -1565,6 +1737,7 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
             };
             stream.set_nonblocking(false).unwrap();
             let release = Arc::clone(&server_release);
+            let encoded_name = encoded_name.clone();
             thread::spawn(move || {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut request = String::new();
@@ -1575,7 +1748,7 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
                         break;
                     }
                 }
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename*=UTF-8''resolved%20payload.bin\r\nConnection: close\r\n\r\n");
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename*=UTF-8''{encoded_name}\r\nConnection: close\r\n\r\n");
                 if !request.starts_with("HEAD ") {
                     while !release.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(5));
@@ -1615,30 +1788,21 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let task = coordinator.tasks().unwrap().remove(0);
-        if task.filename == "resolved payload.bin" {
+        if task.filename == expected_name {
             assert_ne!(task.status, "completed");
-            assert_eq!(task.title, "resolved payload.bin");
-            assert_ne!(
-                Path::new(&task.output_path),
-                root.join("resolved payload.bin")
-            );
+            assert_eq!(task.title, expected_name);
+            assert_ne!(Path::new(&task.output_path), root.join(&expected_name));
             break;
         }
         assert!(Instant::now() < deadline, "{task:?}");
         thread::sleep(Duration::from_millis(20));
     }
     let restored = PersistentCore::open(root.join("tasks.db")).unwrap();
-    assert_eq!(
-        restored.snapshot("task-1").unwrap().filename,
-        "resolved payload.bin"
-    );
+    assert_eq!(restored.snapshot("task-1").unwrap().filename, expected_name);
     drop(restored);
     release.store(true, Ordering::SeqCst);
     let completed = wait_for_task_status(&coordinator, "completed");
-    assert_eq!(
-        Path::new(&completed.output_path),
-        root.join("resolved payload.bin")
-    );
+    assert_eq!(Path::new(&completed.output_path), root.join(&expected_name));
     assert_eq!(fs::read(&completed.output_path).unwrap(), b"abcde");
     stop.store(true, Ordering::SeqCst);
     server.join().unwrap();
@@ -1667,6 +1831,86 @@ fn response_filename_ignores_missing_and_corrupt_metadata() {
         assert_eq!(http_response_filename(&paths), None);
     }
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn derived_filenames_fit_utf16_components_and_preserve_extensions() {
+    for filename in [
+        format!("{}.bin", "😀".repeat(180)),
+        format!("{}.mp4", "测".repeat(300)),
+    ] {
+        let expected_extension = Path::new(&filename).extension().unwrap();
+        for derived in [
+            safe_filename(&filename, ""),
+            safe_filename("", &format!("https://cdn.test/{filename}")),
+        ] {
+            assert!(derived.encode_utf16().count() <= 255, "{derived}");
+            assert_eq!(Path::new(&derived).extension().unwrap(), expected_extension);
+        }
+    }
+    assert_eq!(safe_filename("", ""), "download");
+}
+
+#[test]
+fn http_name_update_failure_cancels_and_joins_the_running_transfer() {
+    let root = lifecycle_test_root("http-name-update-error");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let coordinator = direct_http_coordinator(&root);
+    let spec = TaskSpec {
+        url: format!("http://{address}/slow.bin"),
+        download_dir: root.to_string_lossy().into_owned(),
+        concurrency: 1,
+        ..Default::default()
+    };
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+    paths.prepare().unwrap();
+    paths.set_control("run").unwrap();
+    let control = paths.control.clone();
+    let server_core = coordinator.core();
+    let server = thread::spawn(move || {
+        for _ in 0..1 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = server_core.lock().unwrap();
+                panic!("inject Core failure after HTTP worker starts");
+            }));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename=resolved.bin\r\nConnection: close\r\n\r\n");
+            if !request.starts_with("HEAD ") {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while fs::read_to_string(&control).unwrap_or_default() != "cancel"
+                    && Instant::now() < deadline
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let _ = stream.write_all(b"abcde");
+            }
+        }
+    });
+    let error = run_http_file(coordinator.core(), "task-1", spec, String::new()).unwrap_err();
+    assert_eq!(error, "v7 Core mutex poisoned");
+    assert_eq!(fs::read_to_string(&paths.control).unwrap(), "cancel");
+    assert!(
+        crate::task_control::current(&paths.control).is_none(),
+        "HTTP worker still registered after failure"
+    );
+    server.join().unwrap();
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
