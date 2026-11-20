@@ -55,7 +55,7 @@ if ($portableSha256 -ne ([string]$portableEntry.sha256).ToLowerInvariant()) {
 }
 
 $tempRoot = Join-Path $env:RUNNER_TEMP ('hls-v7-native-host-provenance-' + [guid]::NewGuid().ToString('n'))
-$packageResources = Join-Path $repo 'desktop_ui\resources\common'
+$packageResources = Join-Path $repo 'artifacts\v7-productization\media-push-input'
 $tempRootOwned = $false
 $packageResourcesOwned = $false
 try {

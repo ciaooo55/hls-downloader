@@ -46,7 +46,7 @@ function Assert-AppImage([string]$Root) {
     }
     $provenance = Get-Content -LiteralPath $provenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$provenance.ui_runtime -ne 'native' -and -not (Test-Path -LiteralPath (Join-Path $Root 'runtime'))) {
-        throw "v7 Compose portable image is missing runtime: $Root"
+        throw "Legacy portable image is missing runtime: $Root"
     }
     if ([string]$provenance.ui_runtime -eq 'native' -and -not (Test-Path -LiteralPath (Join-Path $Root 'app\resources\HLSDownloaderPresenter.exe') -PathType Leaf)) {
         throw "v7 native portable image is missing its UI: $Root"

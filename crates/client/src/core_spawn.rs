@@ -1,4 +1,4 @@
-//! Locate and start the v7 Rust Core or Compose workbench.
+//! Locate and start the v7 Rust Core or native workbench.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

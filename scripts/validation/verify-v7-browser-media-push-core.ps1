@@ -185,7 +185,7 @@ $result = $null
 $primaryFailure = $null
 $cleanupFailures = New-Object 'System.Collections.Generic.List[string]'
 $expectedNativeHost = [IO.Path]::GetFullPath((Join-Path $InstallDir 'app\resources\HLSDownloaderNativeHost.exe'))
-$packagedNativeHostInput = Join-Path $repo 'desktop_ui\resources\common\HLSDownloaderNativeHost.exe'
+$packagedNativeHostInput = Join-Path $repo 'artifacts\v7-productization\media-push-input\HLSDownloaderNativeHost.exe'
 if (-not (Test-Path -LiteralPath $packagedNativeHostInput -PathType Leaf)) {
     throw "Candidate build input Native Messaging host is missing: $packagedNativeHostInput"
 }
@@ -261,9 +261,6 @@ try {
     } while (-not $engine -and (Get-Date) -lt $deadline)
     if (-not $engine) { throw 'Installed candidate did not start its Engine.' }
 
-    $accessBridge = Get-ChildItem -LiteralPath $InstallDir -Filter 'WindowsAccessBridge-64.dll' -File -Recurse | Select-Object -First 1
-    if (-not $accessBridge) { throw 'Installed candidate runtime is missing WindowsAccessBridge-64.dll.' }
-
     $reports = [ordered]@{}
     foreach ($browser in @('edge', 'firefox')) {
         $extensionDir = if ($browser -eq 'edge') { $chromiumDir } else { $firefoxDir }
@@ -278,8 +275,6 @@ try {
             '--core-port', [string]$corePort,
             '--expected-host', $ExpectedTvboxHost,
             '--ffmpeg', $ffmpegExe,
-            '--access-bridge-python', $pythonExe,
-            '--access-bridge-dll', $accessBridge.FullName,
             '--output', $reportPath
         )
         $binary = if ($browser -eq 'edge') { $edgeExe } else { $firefoxExe }
@@ -315,7 +310,7 @@ try {
         native_host_executable = [ordered]@{
             path = $expectedNativeHost
             sha256 = $expectedNativeHostSha256
-            packaged_input_path = 'desktop_ui/resources/common/HLSDownloaderNativeHost.exe'
+            packaged_input_path = 'artifacts/v7-productization/media-push-input/HLSDownloaderNativeHost.exe'
             packaged_input_sha256 = $packagedNativeHostSha256
         }
         edge_registration = $edgeRegistration

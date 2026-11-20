@@ -7,11 +7,9 @@ param(
     [string]$NativeHostReplacement = '',
     [string]$PresenterReplacement = '',
     [string]$UpdaterReplacement = '',
-    [string]$DesktopJarReplacement = '',
     [string]$ProvenanceReplacement = '',
     [string]$ExtensionArchivesDirectory = '',
-    [string]$NativeDependenciesDirectory = '',
-    [switch]$OmitTestAndUnusedIcons
+    [string]$NativeDependenciesDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,13 +84,13 @@ try {
     $nativeDirectory = $engineFile[0].ParentNode.ParentNode
     if ($nativeDirectory.LocalName -notin @('Directory', 'DirectoryRef')) { throw 'Unexpected native installer directory.' }
     if ($nativeDirectory.SelectNodes("./*[local-name()='Component']/*[local-name()='File' and @Name='vcruntime140.dll']").Count -eq 0) {
-        $jreRuntime = $model.SelectNodes("//*[local-name()='File' and @Name='vcruntime140.dll']")
-        if ($jreRuntime.Count -ne 1) { throw 'The bundled JRE MSVC runtime file is not unique.' }
+        $vcRuntime = $model.SelectNodes("//*[local-name()='File' and @Name='vcruntime140.dll']")
+        if ($vcRuntime.Count -ne 1) { throw 'The packaged MSVC runtime file is not unique.' }
         $namespace = $model.DocumentElement.NamespaceURI
         $file = $model.CreateElement('File', $namespace)
         $file.SetAttribute('Id', 'V7NativeVCRuntime140File')
         $file.SetAttribute('Name', 'vcruntime140.dll')
-        $file.SetAttribute('Source', $jreRuntime[0].GetAttribute('Source'))
+        $file.SetAttribute('Source', $vcRuntime[0].GetAttribute('Source'))
         $file.SetAttribute('KeyPath', 'no')
         $file.SetAttribute('Compressed', 'yes')
         # 依赖跟随 Core 安装，沿用它现有的 per-user HKCU KeyPath。
@@ -122,48 +120,14 @@ try {
         @('HLSDownloaderNativeHost.exe', $NativeHostReplacement),
         @('HLSDownloaderPresenter.exe', $PresenterReplacement),
         @('HLSDownloaderUpdater.exe', $UpdaterReplacement),
-        @('HLSDownloaderDesktop.jar', $DesktopJarReplacement),
         @('BUILD-PROVENANCE.json', $ProvenanceReplacement)
     )) {
         if ([string]::IsNullOrWhiteSpace($replacement[1])) { continue }
-        $files = @(if ($replacement[0] -eq 'HLSDownloaderDesktop.jar') {
-            # jpackage 可能为桌面 JAR 添加内容哈希；仍须唯一匹配当前启动器的桌面模块。
-            $model.SelectNodes("//*[local-name()='File' and starts-with(@Name, 'HLSDownloaderDesktop-') and substring(@Name, string-length(@Name) - 3)='.jar']")
-        } else {
-            $model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']")
-        })
+        $files = @($model.SelectNodes("//*[local-name()='File' and @Name='$($replacement[0])']"))
         if ($files.Count -ne 1) { throw "Installer replacement file is not unique: $($replacement[0])" }
         $destination = [IO.Path]::GetFullPath((Join-Path $work $files[0].GetAttribute('Source')))
         if (-not $destination.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Replacement target escaped the extracted installer.' }
         Copy-Item -LiteralPath (Resolve-Path -LiteralPath $replacement[1]).Path -Destination $destination -Force
-    }
-    if ($OmitTestAndUnusedIcons) {
-        if ([string]::IsNullOrWhiteSpace($DesktopJarReplacement)) { throw 'Slim repacking requires the rebuilt desktop JAR.' }
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $jar = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $DesktopJarReplacement).Path)
-        try {
-            foreach ($name in @('OutlinedIconsKt', 'AutoMirroredIconsKt')) {
-                if (-not $jar.GetEntry("com/hlsdownloader/desktop/icons/$name.class")) { throw "Rebuilt desktop JAR lacks $name." }
-            }
-        } finally { $jar.Dispose() }
-        foreach ($file in @($model.SelectNodes("//*[local-name()='File' and (@Name='ffprobe.exe' or starts-with(@Name, 'material-icons-extended-desktop-'))]"))) {
-            $component = $file.ParentNode
-            $component.RemoveChild($file) | Out-Null
-            if ($component.SelectNodes("./*[local-name()='File']").Count -eq 0) {
-                $id = $component.GetAttribute('Id')
-                foreach ($reference in @($model.SelectNodes("//*[local-name()='ComponentRef' and @Id='$id']"))) {
-                    $reference.ParentNode.RemoveChild($reference) | Out-Null
-                }
-                $component.ParentNode.RemoveChild($component) | Out-Null
-            }
-        }
-        $configs = $model.SelectNodes("//*[local-name()='File' and @Name='HLSDownloader.cfg']")
-        if ($configs.Count -ne 1) { throw 'Desktop launcher configuration is not unique.' }
-        $config = [IO.Path]::GetFullPath((Join-Path $work $configs[0].GetAttribute('Source')))
-        if (-not $config.StartsWith($work + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Launcher configuration escaped extracted installer.' }
-        $lines = [IO.File]::ReadAllLines($config) | Where-Object { $_ -notmatch '^app\.classpath=.*material-icons-extended-desktop-' }
-        [IO.File]::WriteAllLines($config, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
-        $model.Save($wxs)
     }
     if (-not [string]::IsNullOrWhiteSpace($ExtensionArchivesDirectory)) {
         $archives = (Resolve-Path -LiteralPath $ExtensionArchivesDirectory).Path

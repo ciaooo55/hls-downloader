@@ -99,8 +99,6 @@ def run(args):
                 save()
 
     env = os.environ
-    if args.java:
-        env['HLS_JAVA_EXE'] = str(args.java)
     env['HLS_V7_DATA_DIR'] = str(work / 'default-data')
     env['HLS_V7_DOWNLOAD_DIR'] = str(work / 'default-downloads')
     # The takeover suite exercises the default pipe and lets the real Host start Core.
@@ -144,34 +142,12 @@ def run(args):
     if fixture.returncode:
         result['fixture_error'] = fixture.stderr.decode(errors='replace')
     else:
-        case('player-overlay', 'smoke_v7_player_overlay.py', ['--runtime', args.runtime, '--media', media,
-             '--ui-scale', '1.5' if args.round % 2 == 0 else '1.0'], 240)
         case('player-fault-resource', 'smoke_v7_resource_boundaries.py', [
             '--baseline', engine, '--candidate', engine, '--media', media], 300)
-    if args.round == 5:
-        from smoke_v7_portable_app import Pipe
-        # 其他套件自行启动 Core；工作台套件要求连接到已运行的 Core。
-        with (args.report / 'workbench-core.log').open('wb') as core_log:
-            subprocess.Popen([str(engine)], stdout=core_log, stderr=core_log,
-                             creationflags=subprocess.CREATE_NO_WINDOW)
-            deadline = time.monotonic() + 30
-            while True:
-                try:
-                    client = Pipe()
-                    try:
-                        assert client.request({'type': 'snapshot', 'request_id': 1})['type'] == 'snapshot'
-                    finally:
-                        client.close()
-                    break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(.05)
-            case('workbench', 'smoke_v7_workbench_interactions.py', ['--runtime', args.runtime], 1200)
     # LAN sharing intentionally opens an external listener and may prompt Windows.
     # Run it after UI acceptance; each round uses a fresh Sandbox.
     case('protocols', 'smoke_v7_protocol_features.py', ['--engine', engine, '--no-firewall-rule'], 600)
-    expected_checks = 15 if args.round == 5 else 14
+    expected_checks = 13
     result['passed'] = not result.get('fixture_error') and len(result['checks']) == expected_checks and all(c['passed'] for c in result['checks'])
     save()
     return 0 if result['passed'] else 1
@@ -180,7 +156,6 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--round', type=int, choices=range(1, 6), required=True)
-    parser.add_argument('--java', type=Path, help='Full JDK java.exe for the native file-drag fixture')
     for name in ('runtime', 'extension', 'firefox', 'driver', 'report'):
         parser.add_argument('--' + name, type=Path, required=True)
     raise SystemExit(run(parser.parse_args()))

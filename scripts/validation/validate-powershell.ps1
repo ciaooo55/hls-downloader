@@ -113,7 +113,7 @@ if ($usingDefaultPath) {
     Write-Output "Release-evidence gate-id contract passed across invoke, recorder, and verify."
 
     # The default validation path also acts as an early product-version drift
-    # gate before expensive Rust/Compose/Candidate work starts. Keep this last:
+    # gate before expensive Rust/native UI/Candidate work starts. Keep this last:
     # verify-v7-version-contract.ps1 exits the current PowerShell process.
     & (Join-Path $PSScriptRoot '..\release\verify-v7-version-contract.ps1')
 }

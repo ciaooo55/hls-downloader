@@ -28,7 +28,7 @@ from PIL import Image
 from v7_core_ipc import connect, send_frame as send, wait_task
 from smoke_v7_download_playback import wait
 from smoke_v7_native_host import responses
-from smoke_v7_portable_app import Pipe
+from smoke_v7_portable_app import Pipe, workbench_state, workbench_capture
 
 
 def downloads_folder():
@@ -350,13 +350,11 @@ def run(args):
             report['native_host_startup'] = {}
             verify_native_host_startup(resources, report['native_host_startup'], save)
             record('installed Native Host cold/concurrent/resident/restart paths use one Core over the default pipe')
-        port, ui_port = free_port(), free_port()
-        token = uuid.uuid4().hex
+        port = free_port()
         # 安装验收必须加载真实任务库，不能继承前一轮离线界面夹具。
         env = {**{key: value for key, value in os.environ.items() if not key.startswith('HLS_UI_AUDIT_')},
                'HLS_V7_CORE_TCP': '1', 'HLS_V7_CORE_BIND': f'127.0.0.1:{port}',
-               'HLS_V7_STARTUP_PROFILE': '1',
-               'HLS_UI_TEST_API': '1', 'HLS_UI_TEST_PORT': str(ui_port), 'HLS_UI_TEST_TOKEN': token}
+               'HLS_V7_STARTUP_PROFILE': '1'}
         for key in ('HLS_V7_DATA_DIR', 'HLS_V7_DOWNLOAD_DIR', 'HLS_V7_PIPE', 'HLS_ENGINE_PATH'):
             env.pop(key, None)
         log = args.report.with_suffix('.runtime.log').open('wb')
@@ -404,19 +402,11 @@ def run(args):
             processes.append(subprocess.Popen([str(install/'HLSDownloader.exe')], cwd=install,
                                               env=env, stdout=log, stderr=log))
 
-            def ui(path, raw=False):
-                with urlopen(Request(f'http://127.0.0.1:{ui_port}/{path}',
-                            headers={'X-HLS-Test-Token': token}), timeout=5) as response:
-                    body = response.read()
-                    return body if raw else json.loads(body)
-
             def ready():
-                try:
-                    window, state = ui('window'), ui('state')
-                    return window if window.get('showing') and '已连接' in state.get('engineText', '') else None
-                except OSError:
-                    return None
-            window = wait(ready, 'Installed UI not visibly connected', 120)
+                state = workbench_state(install)
+                return state if state["showing"] and state["connected"] else None
+
+            window = wait(ready, 'Installed native UI not visibly connected', 120)
             report['ui_visible_connected_seconds'] = time.monotonic()-started
             def nonblank(data):
                 with Image.open(io.BytesIO(data)) as image:
@@ -428,51 +418,34 @@ def run(args):
                     counts = sorted((count for count, _ in colors), reverse=True)
                     return pixels - sum(counts[:2]) > max(500, pixels * .005)
             def rendered():
-                screen = ui('screenshot', True)
-                paint = ui('screenshot?mode=paint', True)
+                screen = workbench_capture(install)
                 args.report.with_suffix('.png').write_bytes(screen)
-                args.report.with_suffix('.paint.png').write_bytes(paint)
-                report['ui_capture'] = {'screen_nonblank': nonblank(screen),
-                                        'paint_nonblank': nonblank(paint)}
+                report['ui_capture'] = {'screen_nonblank': nonblank(screen)}
                 report.setdefault('ui_first_capture', dict(report['ui_capture']))
-                return any(report['ui_capture'].values())
+                return report['ui_capture']['screen_nonblank']
 
             # Showing/connected is not a first-frame acknowledgement. Keep the
             # content requirement and fail if rendering never catches up.
             render_started = time.monotonic()
             try:
-                wait(rendered, 'UI reports showing but both screen and paint captures remain blank', 15)
+                wait(rendered, 'Native UI reports showing but screen capture remains blank', 15)
             finally:
                 report['ui_render_wait_seconds'] = time.monotonic()-render_started
             record('installed UI reports showing, connects to Core and produces a nonblank render',
                    {'window': window, 'capture': report['ui_capture']})
             if args.verify_browser_color:
-                # 比较同一页脚在握手前后的像素；引擎已有的绿色不计入变化。
-                endpoint = 'screenshot' if report['ui_capture']['screen_nonblank'] else 'screenshot?mode=paint'
-
-                def footer_green(data):
-                    with Image.open(io.BytesIO(data)) as image:
-                        rgb = image.convert('RGB')
-                        footer = rgb.crop((rgb.width * 2 // 3, max(0, rgb.height - 50), rgb.width, rgb.height))
-                        return sum(count for count, (r, g, b) in footer.getcolors(footer.width * footer.height)
-                                   if g > r * 1.25 and g > b * 1.15)
-
-                before = ui(endpoint, True)
-                before_green = footer_green(before)
+                before = workbench_capture(install)
+                assert '浏览器未连接' in workbench_state(install)['names'], 'Browser was already connected'
                 with connect(port) as ipc:
                     reply = send(ipc, {'type': 'command', 'request_id': 20, 'command': {
                         'kind': 'browser_hello', 'version': version, 'browser': 'sandbox-verification'}})
                     assert 'events' in reply, reply
-
-                def connected_footer():
-                    data = ui(endpoint, True)
-                    return data if footer_green(data) - before_green > 30 else None
-
-                connected = wait(connected_footer, 'Browser handshake did not turn the footer green', 15)
+                connected = wait(lambda: '浏览器已连接' in workbench_state(install)['names'],
+                                 'Browser handshake did not update the native footer', 15)
                 args.report.with_suffix('.disconnected.png').write_bytes(before)
-                args.report.with_suffix('.connected.png').write_bytes(connected)
-                record('simulated browser handshake changes the rendered connection label to green',
-                       {'before_green_pixels': before_green, 'after_green_pixels': footer_green(connected),
+                args.report.with_suffix('.connected.png').write_bytes(workbench_capture(install))
+                record('simulated browser handshake updates the native connection label',
+                       {'connected': connected,
                         'transport': 'Core IPC browser_hello; no real browser extension used'})
             time.sleep(3)
 
@@ -533,7 +506,7 @@ if __name__ == '__main__':
     parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
     parser.add_argument('--idle-seconds', type=float, default=5,
                         help='Duration of the installed product resource sample (default: 5 seconds)')
-    parser.add_argument('--verify-browser-color', action='store_true', help='Verify footer pixels before/after a simulated browser handshake')
+    parser.add_argument('--verify-browser-color', action='store_true', help='Verify native footer status before/after a simulated browser handshake (legacy flag name)')
     parser.add_argument('--verify-http-retry', action='store_true', help='Verify permanent/transient HTTP failures and queue continuation with the installed Engine')
     parser.add_argument('--verify-hls-retry', action='store_true', help='Verify full/range HLS segment errors, recovery and cache cleanup with the installed Engine')
     parser.add_argument('--verify-native-host-startup', action='store_true', help='Verify installed default-pipe cold/concurrent/resident/restart Native Host startup')

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Drive the production browser -> Native Host -> Compose -> TVBox path.
+"""Drive the production browser -> Native Host -> Slint -> TVBox path.
 
 This smoke intentionally does not issue Core share_media/cast commands. Core TCP is
 used only to discover the expected receiver. The actual media-push request originates
 from the production extension; the target device is selected through the packaged
-Compose accessibility surface and the final confirmation is invoked there as well.
+Slint accessibility surface and the final send action is invoked there as well.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import functools
 import hashlib
 import http.server
 import json
-import subprocess
 import tempfile
 from validation_workspace import test_tmp
 import threading
@@ -38,7 +37,7 @@ from smoke_extension_media import (
     _open_first_media_actions,
     _overlay_state,
 )
-from smoke_v7_accessibility import JabClient
+from native_tvbox_ui import select_expected_device
 from smoke_v7_tvbox_real import local_lan_ip, send_frame, wait_core
 
 
@@ -71,7 +70,7 @@ def file_sha256(path: Path) -> str:
 
 
 def discover_expected_device(core_port: int, expected_host: str) -> dict[str, object]:
-    """Discover the exact receiver without mutating Compose-visible settings."""
+    """Discover the exact receiver without mutating Slint-visible settings."""
     stream = wait_core(core_port, timeout=30.0)
     try:
         discovery = send_frame(
@@ -186,138 +185,6 @@ def launch_browser(
     return driver
 
 
-def run_access_bridge(
-    *,
-    python: Path,
-    dll: Path,
-    output: Path,
-    require_name: list[str],
-    invoke_name: str | None = None,
-    require_after_name: list[str] | None = None,
-) -> dict[str, object]:
-    command = [
-        str(python),
-        str(Path(__file__).resolve().parent / "smoke_v7_accessibility.py"),
-        "--dll",
-        str(dll),
-        "--title",
-        "HLS Downloader",
-        "--timeout",
-        "60",
-        "--min-nodes",
-        "10",
-    ]
-    for name in require_name:
-        command.extend(["--require-name", name])
-    if invoke_name:
-        command.extend(["--invoke-name", invoke_name])
-    for name in require_after_name or []:
-        command.extend(["--require-after-name", name])
-    command.extend(["--output", str(output)])
-    access = subprocess.run(command, text=True, capture_output=True, timeout=90)
-    if access.returncode != 0:
-        raise RuntimeError(
-            f"Compose accessibility operation failed: stdout={access.stdout} stderr={access.stderr}"
-        )
-    return json.loads(output.read_text(encoding="utf-8"))
-
-
-def _is_path_prefix(prefix: list[int], value: list[int]) -> bool:
-    return len(prefix) <= len(value) and value[: len(prefix)] == prefix
-
-
-def _actionable_ancestor(nodes: list[dict], target: dict) -> dict | None:
-    target_path = [int(value) for value in target.get("path", [])]
-    actionable = [
-        item
-        for item in nodes
-        if item.get("actions")
-        and _is_path_prefix([int(value) for value in item.get("path", [])], target_path)
-    ]
-    return max(actionable, key=lambda item: len(item.get("path", []))) if actionable else None
-
-
-def select_expected_device(
-    *,
-    access_bridge_dll: Path,
-    expected_device: dict[str, object],
-    expected_host: str,
-) -> dict[str, object]:
-    """Select the expected receiver using the real Java Access Bridge action."""
-    label = str(expected_device.get("label", "")).strip()
-    if not label:
-        raise RuntimeError(f"Discovered receiver has no label: {expected_device}")
-    client = JabClient(access_bridge_dll)
-    client.start()
-    hwnd, title = client.find_window("HLS Downloader", 60.0)
-    vm_id, root = client.context_from_window(hwnd)
-    try:
-        deadline = time.monotonic() + 60.0
-        chosen_target: dict | None = None
-        chosen_action: dict | None = None
-        while time.monotonic() < deadline:
-            nodes = client.walk(vm_id, root, 5000)
-            host_nodes = [
-                item
-                for item in nodes
-                if expected_host in str(item.get("name", ""))
-                and int((item.get("bounds") or [0, 0, 0, 0])[2]) > 0
-                and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
-            ]
-            label_nodes = [
-                item
-                for item in nodes
-                if str(item.get("name", "")).strip() == label
-                and int((item.get("bounds") or [0, 0, 0, 0])[2]) > 0
-                and int((item.get("bounds") or [0, 0, 0, 0])[3]) > 0
-            ]
-            candidates = host_nodes or label_nodes
-            resolved: list[tuple[dict, dict, tuple[int, ...]]] = []
-            for target in candidates:
-                action_node = _actionable_ancestor(nodes, target)
-                if action_node is None:
-                    continue
-                action_path = tuple(int(value) for value in action_node.get("path", []))
-                resolved.append((target, action_node, action_path))
-            action_paths = {item[2] for item in resolved}
-            if len(action_paths) == 1 and resolved:
-                chosen_target, chosen_action, _ = max(
-                    resolved,
-                    key=lambda item: len(item[0].get("path", [])),
-                )
-                break
-            if len(action_paths) > 1:
-                raise RuntimeError(
-                    f"Receiver accessibility identity is ambiguous for {expected_host}/{label}: paths={sorted(action_paths)}"
-                )
-            client.dll.releaseJavaObject(vm_id, root)
-            client.pump_messages()
-            time.sleep(0.1)
-            vm_id, root = client.context_from_window(hwnd)
-        if chosen_target is None or chosen_action is None:
-            raise RuntimeError(
-                f"No actionable accessibility identity appeared for receiver {expected_host}/{label}"
-            )
-        action_path = [int(value) for value in chosen_action.get("path", [])]
-        context, owned = client.resolve_path(vm_id, root, action_path)
-        try:
-            invoked = client.invoke(vm_id, context, None)
-        finally:
-            for item in reversed(owned):
-                client.dll.releaseJavaObject(vm_id, item)
-        time.sleep(0.5)
-        return {
-            "window": {"hwnd": hwnd, "title": title, "vm_id": vm_id},
-            "receiver_label": label,
-            "receiver_host": expected_host,
-            "matched_node": chosen_target,
-            "action_node": chosen_action,
-            "action": invoked,
-        }
-    finally:
-        client.dll.releaseJavaObject(vm_id, root)
-
-
 def run_browser(
     *,
     browser: str,
@@ -325,8 +192,6 @@ def run_browser(
     core_port: int,
     expected_host: str,
     ffmpeg: str,
-    access_bridge_python: Path,
-    access_bridge_dll: Path,
     browser_binary: Path | None,
     driver_path: Path | None,
     output: Path,
@@ -353,7 +218,6 @@ def run_browser(
         thread.start()
         addon = unpack_firefox_addon(extension, root) if browser == "firefox" else None
         driver = None
-        confirm_report = root / "access-bridge-confirm.json"
         try:
             driver = launch_browser(
                 browser=browser,
@@ -403,16 +267,8 @@ def run_browser(
                 raise RuntimeError(f"{browser}: TVBox production action could not be clicked")
 
             selection = select_expected_device(
-                access_bridge_dll=access_bridge_dll,
                 expected_device=expected_device,
                 expected_host=expected_host,
-            )
-            confirmation = run_access_bridge(
-                python=access_bridge_python,
-                dll=access_bridge_dll,
-                output=confirm_report,
-                require_name=["确认推送"],
-                invoke_name="确认推送",
             )
 
             ui_deadline = time.monotonic() + 135.0
@@ -448,7 +304,7 @@ def run_browser(
                 "browser_ui": ui_state,
                 "receiver_requests": matching,
                 "all_requests": ReceiverAwareHandler.requests,
-                "access_bridge": confirmation,
+                "native_ui": selection,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
             }
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -471,24 +327,18 @@ def main() -> int:
     parser.add_argument("--core-port", required=True, type=int)
     parser.add_argument("--expected-host", required=True)
     parser.add_argument("--ffmpeg", required=True)
-    parser.add_argument("--access-bridge-python", required=True, type=Path)
-    parser.add_argument("--access-bridge-dll", required=True, type=Path)
     parser.add_argument("--browser-binary", type=Path)
     parser.add_argument("--driver", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     if not args.extension.is_dir():
         raise FileNotFoundError(f"candidate extension directory is missing: {args.extension}")
-    if not args.access_bridge_dll.is_file():
-        raise FileNotFoundError(f"packaged Windows Access Bridge DLL is missing: {args.access_bridge_dll}")
     run_browser(
         browser=args.browser,
         extension=args.extension.resolve(),
         core_port=args.core_port,
         expected_host=args.expected_host,
         ffmpeg=args.ffmpeg,
-        access_bridge_python=args.access_bridge_python.resolve(),
-        access_bridge_dll=args.access_bridge_dll.resolve(),
         browser_binary=args.browser_binary.resolve() if args.browser_binary else None,
         driver_path=args.driver.resolve() if args.driver else None,
         output=args.output.resolve(),

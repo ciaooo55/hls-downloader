@@ -1,7 +1,7 @@
 /**
  * Shared design tokens for every extension surface (popup and in-page
  * shadow-DOM panels), aligned with the desktop app's Graphite + Cobalt palette
- * so the browser surface and Compose workbench read as one product family.
+ * so the browser surface and native workbench read as one product family.
  *
  * Theme resolution: the stored preference is 'auto' | 'dark' | 'light'.
  * 'auto' is resolved against prefers-color-scheme in JS and a concrete

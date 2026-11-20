@@ -1,32 +1,22 @@
 ﻿[CmdletBinding()]
 param(
     [ValidateSet('run','test','candidate','package','adversarial')][string]$Task='run',
-    [ValidateSet('native','compose')][string]$UiRuntime='native',
     [string]$CandidateManifestPath=''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 . (Join-Path $PSScriptRoot 'V7ExtensionArchive.ps1')
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
-$protocolSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt') -Raw -Encoding UTF8
-if ($protocolSource -notmatch 'CORE_PROTOCOL\s*=\s*"hls-downloader-v7-core"' -or
-    $protocolSource -notmatch 'CORE_PIPE\s*=\s*"\\\\\\\\\.\\\\pipe\\\\HLSDownloader\.v7"') {
-    throw 'v7 build refused: Compose IPC defaults are not v7.'
-}
 $contractSource = Get-Content -LiteralPath (Join-Path $repo 'crates\protocol\src\contract.rs') -Raw -Encoding UTF8
 if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader-v7-core"') {
     throw 'v7 build refused: Rust v7 protocol contract is missing.'
 }
 $featureParity = Join-Path $repo 'config\release\feature-parity.json'
 $productVersion = [string](Get-Content -LiteralPath $featureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
-$composeBuildSource = Get-Content -LiteralPath (Join-Path $repo 'desktop_ui\build.gradle.kts') -Raw -Encoding UTF8
 $moduleVersions = @(
     ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
     ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_ui\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    [string](Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version,
-    ([regex]::Match($protocolSource, 'const val version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    ([regex]::Match($composeBuildSource, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    ([regex]::Match($composeBuildSource, 'packageVersion\s*=\s*"([^"]+)"')).Groups[1].Value
+    [string](Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
 )
 if ([String]::IsNullOrWhiteSpace($productVersion) -or @($moduleVersions | Where-Object { $_ -ne $productVersion }).Count -ne 0) {
     throw "Product version mismatch: feature parity=$productVersion; modules=$($moduleVersions -join ', ')"
@@ -51,23 +41,6 @@ $packageSwapBackupRoot = $null
 $packageResources = $null
 $candidateRuntime = $null
 $candidateManifest = $null
-$composeSubstDrive = $null
-$previousComposeBuildDir = $env:HLS_COMPOSE_BUILD_DIR
-
-function Mount-ComposeBuildCache([string]$Path) {
-    New-Item -ItemType Directory -Force -Path $Path | Out-Null
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
-    foreach ($letter in @('Z','Y','X','W','V','U','T','S','R','Q','P')) {
-        $drive = "${letter}:"
-        if (Test-Path -LiteralPath "$drive\") { continue }
-        & subst.exe $drive $resolved | Out-Null
-        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath "$drive\")) {
-            return $drive
-        }
-    }
-    throw 'No free drive letter is available for the ASCII Compose build path.'
-}
-
 if ($Task -eq 'candidate') {
     # Candidate packages are for external machine validation. They require the
     # canonical matrix, no blocked features and a clean tree, but not
@@ -82,7 +55,7 @@ if ($Task -eq 'candidate') {
     }
 }
 if ($Task -eq 'package') {
-    if ($UiRuntime -eq 'native' -and -not $CandidateManifestPath) {
+    if (-not $CandidateManifestPath) {
         throw 'Formal native packaging requires the authenticated tested candidate manifest.'
     }
     # Formal packages add the release_ready decision after candidate validation.
@@ -110,27 +83,11 @@ $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_B
 # offline toolchain instead of downloading and compiling the same inputs twice.
 if (-not $env:CARGO_HOME) { $env:CARGO_HOME=Join-Path $cacheRoot 'cargo' }
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target' }
-$env:GRADLE_USER_HOME=Join-Path $cacheRoot 'gradle'
-# jlink reads its @args file in the system codepage. A temporary drive alias
-# gives it an ASCII path while generated files remain under the selected cache.
-if ($UiRuntime -eq 'compose') {
-    $composeSubstDrive = Mount-ComposeBuildCache $cacheRoot
-    $env:HLS_COMPOSE_BUILD_DIR = "$composeSubstDrive\compose-build"
-} else {
-    $env:HLS_COMPOSE_BUILD_DIR = Join-Path $cacheRoot 'compose-build'
-    if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = '1' }
-}
+if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = '1' }
 # Keep Corepack state under the same selected cache so relocation/cleanup do
 # not leave a second hidden tool state behind in the repository.
 $env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
-$jdkRoot = $env:HLS_V7_JAVA_HOME
-if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
-if ($UiRuntime -eq 'compose') {
-    if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
-    $env:JAVA_HOME=$jdkRoot
-    if(!(Test-Path "$env:JAVA_HOME\bin\java.exe")){ throw "JDK 21 is missing at $env:JAVA_HOME. Run scripts\bootstrap-v7-toolchain.ps1." }
-}
 $libMpvCache = Join-Path $cacheRoot 'libmpv-20261110'
 $sevenZipExe = Join-Path $libMpvCache '7zr.exe'
 $libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
@@ -339,7 +296,7 @@ function Build-Extension([string]$Resources, [switch]$TestOnly) {
 
 if ($isPackage) {
     if ($CandidateManifestPath) {
-        if ($Task -ne 'package' -or $UiRuntime -ne 'native') { throw 'Candidate reuse is only valid for formal native packaging.' }
+        if ($Task -ne 'package') { throw 'Candidate reuse is only valid for formal native packaging.' }
         $candidatePath = (Resolve-Path -LiteralPath $CandidateManifestPath).Path
         $candidateManifest = Get-Content -LiteralPath $candidatePath -Raw -Encoding UTF8 | ConvertFrom-Json
         $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
@@ -367,15 +324,11 @@ if ($isPackage) {
             if (-not $candidateManifest.components.$name) { throw "Tested component identity is missing: $name" }
         }
     }
-    if ($UiRuntime -eq 'native') {
-        $wixRoot = Join-Path $cacheRoot 'wix-3.14.1'
-        $wixArchive = Join-Path $wixRoot 'wix314-binaries.zip'
-        Get-VerifiedFile 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip' $wixArchive '6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31' 'WiX 3.14.1'
-        Expand-Archive -LiteralPath $wixArchive -DestinationPath $wixRoot -Force
-    }
-    $packageResources = if ($UiRuntime -eq 'native') {
-        Join-Path $artifactRoot '.native-image\HLSDownloader\app\resources'
-    } else { Join-Path $repo 'desktop_ui\resources\common' }
+    $wixRoot = Join-Path $cacheRoot 'wix-3.14.1'
+    $wixArchive = Join-Path $wixRoot 'wix314-binaries.zip'
+    Get-VerifiedFile 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip' $wixArchive '6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31' 'WiX 3.14.1'
+    Expand-Archive -LiteralPath $wixArchive -DestinationPath $wixRoot -Force
+    $packageResources = Join-Path $artifactRoot '.native-image\HLSDownloader\app\resources'
     if (Test-Path -LiteralPath $packageResources) {
         Remove-Item -LiteralPath $packageResources -Recurse -Force
     }
@@ -425,7 +378,7 @@ $launcher = Join-Path $env:CARGO_TARGET_DIR "$engineTarget\HLSDownloader.exe"
     $presenter = Join-Path $candidateRuntime 'app/resources/HLSDownloaderPresenter.exe'
     $launcher = Join-Path $candidateRuntime 'HLSDownloader.exe'
 }
-Push-Location "$repo\desktop_ui"
+Push-Location $repo
 try {
 if ($isPackage) {
     $resources = $packageResources
@@ -434,7 +387,7 @@ if ($isPackage) {
     }
     Copy-Item -LiteralPath (Join-Path $repo 'assets\app-icon.ico') -Destination (Join-Path $resources 'app-icon.ico') -Force
     Copy-Item -LiteralPath $engine -Destination (Join-Path $resources 'HLSDownloaderEngine.exe') -Force
-    # The dedicated bridge has no Compose/Slint dependency and never opens SQLite.
+    # The dedicated bridge has no UI dependency and never opens SQLite.
     Copy-Item -LiteralPath $nativeHost -Destination (Join-Path $resources 'HLSDownloaderNativeHost.exe') -Force
     Copy-Item -LiteralPath $updater -Destination (Join-Path $resources 'HLSDownloaderUpdater.exe') -Force
     Copy-Item -LiteralPath $cli -Destination (Join-Path $resources 'HLSDownloaderCli.exe') -Force
@@ -442,7 +395,6 @@ if ($isPackage) {
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
     Copy-Item -LiteralPath (Join-Path $repo 'native_ui\fonts\OFL.txt') -Destination (Join-Path $resources 'NotoSansCJK-OFL.txt') -Force
     Copy-Item -LiteralPath (Join-Path $repo 'assets\licenses\material-icons-Apache-2.0.txt') -Destination (Join-Path $resources 'MaterialIcons-Apache-2.0.txt') -Force
-    # 原生 EXE 与 JRE 不在同一目录；干净 Windows 不会从 runtime/bin 查找 MSVC 运行库。
     $vcRuntime = if ($env:HLS_V7_VC_RUNTIME_DIR) { Join-Path $env:HLS_V7_VC_RUNTIME_DIR 'vcruntime140.dll' } else { $null }
     if (-not $vcRuntime) {
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -450,7 +402,6 @@ if ($isPackage) {
             $vcRuntime = & $vswhere -latest -products '*' -find 'VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT\vcruntime140.dll' | Select-Object -First 1
         }
     }
-    if (-not $vcRuntime -and $jdkRoot) { $vcRuntime = Join-Path $jdkRoot 'bin\vcruntime140.dll' }
     if (-not $vcRuntime -or -not (Test-Path -LiteralPath $vcRuntime -PathType Leaf)) { throw 'The x64 MSVC runtime is missing. Set HLS_V7_VC_RUNTIME_DIR to the toolchain redistributable directory.' }
     Copy-Item -LiteralPath $vcRuntime -Destination (Join-Path $resources 'vcruntime140.dll') -Force
     Copy-Item -LiteralPath $featureParity -Destination (Join-Path $resources 'FEATURE-PARITY.json') -Force
@@ -514,75 +465,32 @@ if ($isPackage) {
         $env:PATH = $originalPath
         Remove-Item -LiteralPath $mediaToolCheckRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    if ($UiRuntime -eq 'native') {
-        $nativeAppImage = Join-Path $artifactRoot '.native-image\HLSDownloader'
-        Copy-Item -LiteralPath $launcher -Destination (Join-Path $nativeAppImage 'HLSDownloader.exe')
-        Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $nativeAppImage 'LICENSE')
-        Copy-Item -LiteralPath (Join-Path $repo 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $nativeAppImage 'THIRD_PARTY_NOTICES.md')
-        $nativeProvenance = Get-Content -LiteralPath $provenanceForBuild -Raw -Encoding UTF8 | ConvertFrom-Json
-        $nativeProvenance | Add-Member -NotePropertyName ui_runtime -NotePropertyValue 'native' -Force
-        [IO.File]::WriteAllText($provenanceForBuild, ($nativeProvenance | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
-        Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
-    }
-    # Compose's jlink task rejects a leftover output directory after an interrupted package run.
-    $runtimeImage = Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\tmp\main\runtime'
-    if ($UiRuntime -eq 'compose' -and (Test-Path -LiteralPath $runtimeImage)) {
-        Remove-Item -LiteralPath $runtimeImage -Recurse -Force
-    }
+    $nativeAppImage = Join-Path $artifactRoot '.native-image\HLSDownloader'
+    Copy-Item -LiteralPath $launcher -Destination (Join-Path $nativeAppImage 'HLSDownloader.exe')
+    Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $nativeAppImage 'LICENSE')
+    Copy-Item -LiteralPath (Join-Path $repo 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $nativeAppImage 'THIRD_PARTY_NOTICES.md')
+    $nativeProvenance = Get-Content -LiteralPath $provenanceForBuild -Raw -Encoding UTF8 | ConvertFrom-Json
+    $nativeProvenance | Add-Member -NotePropertyName ui_runtime -NotePropertyValue 'native' -Force
+    [IO.File]::WriteAllText($provenanceForBuild, ($nativeProvenance | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    Copy-Item -LiteralPath $provenanceForBuild -Destination (Join-Path $resources 'BUILD-PROVENANCE.json') -Force
 }
 $env:HLS_ENGINE_PATH = $engine
     switch ($Task) {
-        'run' {
-            if ($UiRuntime -eq 'native') {
-                & $presenter --workbench
-                break
-            }
-            $engineProcess = Start-Process -FilePath $engine -WorkingDirectory (Split-Path $engine -Parent) -PassThru
-            Start-Sleep -Milliseconds 250
-            $presenterProcess = Start-Process -FilePath $presenter -WorkingDirectory (Split-Path $presenter -Parent) -PassThru
-            try { & .\gradlew.bat run } finally {
-                if ($presenterProcess -and -not $presenterProcess.HasExited) { $presenterProcess.CloseMainWindow() | Out-Null }
-            }
-        }
-        'test' { if ($UiRuntime -eq 'compose') { & .\gradlew.bat test --no-daemon } }
-        # 上面的显式删除会让 createRuntimeImage 变成 UP-TO-DATE（它不把被删掉的输出目录当作需要重建的依据），
-        # 于是 packageDistributionForCurrentOS 的 runtimeImage 输入缺失、jpackage 直接失败。
-        # 把 createRuntimeImage 显式拉进同一次任务图并强制重跑，只重跑本次显式请求的任务，依赖仍可命中增量缓存。
-        { $_ -in 'candidate', 'package' } {
-            if ($UiRuntime -eq 'compose') { & .\gradlew.bat --no-daemon clean createRuntimeImage --rerun createDistributable packageDistributionForCurrentOS }
-        }
+        'run' { & $presenter --workbench }
+        'test' { }
+        { $_ -in 'candidate', 'package' } { }
         'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\validation\adversarial-v7.ps1" }
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {
-        if ($UiRuntime -eq 'native') {
-            $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
-            $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
-            $nativeMsi = Join-Path $artifactRoot "HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi"
-            $nativeExe = Join-Path $artifactRoot "HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe"
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\build-native-v7-installer.ps1" -AppImage $nativeAppImage -WixRoot $wixRoot -OutMsi $nativeMsi -OutExe $nativeExe -ProductVersion $productVersion -ProductCode $productCode
-            if ($LASTEXITCODE -ne 0) { throw 'Native installer build failed.' }
-        } else {
-        $exe = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\exe') -Filter "HLSDownloader-$productVersion.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $exe) { throw 'The v7 installer EXE was not produced in the isolated build cache.' }
-        $msi = Get-ChildItem -LiteralPath (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'compose\binaries\main\msi') -Filter "HLSDownloader-$productVersion.msi" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $msi) { throw 'The v7 MSI was not produced in the isolated build cache.' }
         $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
         $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
-        $repackedMsi = Join-Path $artifactRoot '.HLSDownloader-repacked.msi'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\repack-v7-msi.ps1" -MsiPath $msi.FullName -OutMsiPath $repackedMsi -WixRoot (Join-Path $env:HLS_COMPOSE_BUILD_DIR 'wix311')
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        Move-Item -LiteralPath $repackedMsi -Destination $msi.FullName -Force
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\set-v7-msi-rollback-order.ps1" -MsiPath $msi.FullName -ProductCode $productCode
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\set-v7-exe-msi.ps1" -ExePath $exe.FullName -MsiPath $msi.FullName
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
-        Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe")) -Force
-        Copy-Item -LiteralPath $msi.FullName -Destination (Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi")) -Force
-        }
+        $nativeMsi = Join-Path $artifactRoot "HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi"
+        $nativeExe = Join-Path $artifactRoot "HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\build-native-v7-installer.ps1" -AppImage $nativeAppImage -WixRoot $wixRoot -OutMsi $nativeMsi -OutExe $nativeExe -ProductVersion $productVersion -ProductCode $productCode
+        if ($LASTEXITCODE -ne 0) { throw 'Native installer build failed.' }
         $portablePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64-Portable$artifactSuffix.zip")
-        $imageArguments = if ($UiRuntime -eq 'native') { @('-AppImage', $nativeAppImage) } else { @() }
+        $imageArguments = @('-AppImage', $nativeAppImage)
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\create-v7-portable.ps1" -OutZip $portablePath @imageArguments
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $extensionEvidence = [ordered]@{}
@@ -604,11 +512,9 @@ $env:HLS_ENGINE_PATH = $engine
                 Assert-FileSha256 $packagedComponent $expectedComponentHash $component.Name
                 $componentEvidence[$relativeComponent] = $expectedComponentHash
             }
-            if ($UiRuntime -eq 'native') {
-                $launcherHash = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant()
-                Assert-FileSha256 (Join-Path $portableRoot 'HLSDownloader.exe') $launcherHash 'native launcher'
-                $componentEvidence['HLSDownloader.exe'] = $launcherHash
-            }
+            $launcherHash = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant()
+            Assert-FileSha256 (Join-Path $portableRoot 'HLSDownloader.exe') $launcherHash 'native launcher'
+            $componentEvidence['HLSDownloader.exe'] = $launcherHash
             $provenanceInPackage = Join-Path $portableRoot 'app\resources\BUILD-PROVENANCE.json'
             if (-not (Test-Path -LiteralPath $provenanceInPackage -PathType Leaf)) {
                 throw 'Portable package is missing app/resources/BUILD-PROVENANCE.json.'
@@ -679,7 +585,7 @@ $env:HLS_ENGINE_PATH = $engine
             package_tier = $packageTier
             source_commit = $sourceCommit
             source_tree = $sourceTree
-            ui_runtime = $UiRuntime
+            ui_runtime = 'native'
             feature_parity_path = 'FEATURE-PARITY.json'
             feature_parity_sha256 = (Get-FileHash -LiteralPath (Join-Path $artifactRoot 'FEATURE-PARITY.json') -Algorithm SHA256).Hash.ToLowerInvariant()
             artifacts = [ordered]@{
@@ -718,12 +624,10 @@ $env:HLS_ENGINE_PATH = $engine
             $entryPath = [IO.Path]::GetFullPath((Join-Path $artifactRootFull ([string]$entry.path)))
             Assert-FileSha256 $entryPath ([string]$entry.sha256) "$extension extension manifest entry"
         }
-        if ($UiRuntime -eq 'native') {
-            $assemblyRoot = Join-Path $artifactRoot '.native-image'
-            if ((Resolve-Path -LiteralPath $assemblyRoot).Path -ne [IO.Path]::GetFullPath($assemblyRoot)) { throw 'Native assembly path changed unexpectedly.' }
-            Remove-Item -LiteralPath $assemblyRoot -Recurse -Force
-            $packageResources = $null
-        }
+        $assemblyRoot = Join-Path $artifactRoot '.native-image'
+        if ((Resolve-Path -LiteralPath $assemblyRoot).Path -ne [IO.Path]::GetFullPath($assemblyRoot)) { throw 'Native assembly path changed unexpectedly.' }
+        Remove-Item -LiteralPath $assemblyRoot -Recurse -Force
+        $packageResources = $null
         if ($candidateRuntime) {
             Remove-Item -LiteralPath $inputRoot -Recurse -Force
             $candidateRuntime = $null
@@ -774,17 +678,6 @@ $env:HLS_ENGINE_PATH = $engine
     }
     if ($null -ne $packageResources -and (Test-Path -LiteralPath $packageResources)) {
         Remove-Item -LiteralPath $packageResources -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    if ($null -ne $composeSubstDrive) {
-        & subst.exe $composeSubstDrive /d | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Could not remove temporary Compose build mapping $composeSubstDrive"
-        }
-    }
-    if ([String]::IsNullOrEmpty($previousComposeBuildDir)) {
-        Remove-Item Env:HLS_COMPOSE_BUILD_DIR -ErrorAction SilentlyContinue
-    } else {
-        $env:HLS_COMPOSE_BUILD_DIR = $previousComposeBuildDir
     }
     # A swap failure may leave the last usable candidate at the backup path.
     # Preserve it for manual recovery when the in-place restoration also fails.

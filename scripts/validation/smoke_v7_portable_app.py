@@ -5,6 +5,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,6 @@ import struct
 import subprocess
 import threading
 import time
-from urllib.request import Request, urlopen
 import uuid
 
 import psutil
@@ -20,7 +20,6 @@ import psutil
 from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 from smoke_v7_native_host import responses
 from smoke_v7_presenter import native_message, visible_window
-from v7_core_ipc import free_port
 
 
 class Pipe:
@@ -107,6 +106,44 @@ def wait(predicate, description, timeout=60):
     raise TimeoutError(description)
 
 
+def workbench_window(root):
+    from pywinauto import Desktop
+
+    desktop = Desktop(backend="uia")
+    windows = [
+        window
+        for process in runtime_processes(root)
+        if process["name"] == "HLSDownloaderPresenter.exe"
+        for window in desktop.windows(process=process["pid"], title="HLS Downloader", visible_only=True)
+    ]
+    if len(windows) > 1:
+        raise RuntimeError("Multiple native workbench windows belong to this runtime")
+    return windows[0] if windows else None
+
+
+def workbench_state(root):
+    window = workbench_window(root)
+    if window is None:
+        return {"showing": False, "connected": False, "names": []}
+    names = [item.element_info.name for item in window.descendants()]
+    bounds = window.rectangle()
+    return {
+        "showing": window.is_visible(),
+        "connected": "下载引擎已连接" in names,
+        "names": names,
+        "bounds": [bounds.left, bounds.top, bounds.right, bounds.bottom],
+    }
+
+
+def workbench_capture(root):
+    window = workbench_window(root)
+    if window is None:
+        raise RuntimeError("Native workbench is not visible")
+    image = io.BytesIO()
+    window.capture_as_image().save(image, format="PNG")
+    return image.getvalue()
+
+
 def run(args):
     root = args.runtime.resolve()
     evidence = args.report.parent.resolve()
@@ -159,7 +196,7 @@ def run(args):
         check("portable-download-directory", changed.get("download_dir") == str(root / "downloads"), {"download_dir": changed.get("download_dir")})
 
         # 只重启本安装的工作台，Core 与用户数据库保持运行。
-        current_ui = [p for p in runtime_processes(root) if p["name"] == "HLSDownloader.exe"]
+        current_ui = [p for p in runtime_processes(root) if p["name"] in ("HLSDownloader.exe", "HLSDownloaderPresenter.exe")]
         stopping = []
         for info in current_ui:
             try:
@@ -171,26 +208,16 @@ def run(args):
         _, alive = psutil.wait_procs(stopping, timeout=10)
         if alive:
             raise RuntimeError("The current workbench could not be stopped")
-        port, token = free_port(), uuid.uuid4().hex
-        ui_env = {**environment, "HLS_UI_TEST_API": "1", "HLS_UI_TEST_PORT": str(port), "HLS_UI_TEST_TOKEN": token}
         with (evidence / "portable-ui.log").open("wb") as log:
-            subprocess.Popen([str(root / "HLSDownloader.exe")], cwd=root, env=ui_env, stdout=log, stderr=log)
-
-        def ui(path, raw=False):
-            with urlopen(Request(f"http://127.0.0.1:{port}/{path}", headers={"X-HLS-Test-Token": token}), timeout=5) as response:
-                data = response.read()
-            return data if raw else json.loads(data)
+            subprocess.Popen([str(root / "HLSDownloader.exe")], cwd=root, env=environment, stdout=log, stderr=log)
 
         def ready():
-            try:
-                state, window = ui("state"), ui("window")
-                return {"state": state, "window": window} if window.get("showing") and "已连接" in state.get("engineText", "") else None
-            except OSError:
-                return None
+            state = workbench_state(root)
+            return state if state["showing"] and state["connected"] else None
 
         ready_state = wait(ready, "Portable workbench did not connect", 90)
         check("visible-connected-workbench", True, ready_state)
-        (evidence / "portable-workbench.png").write_bytes(ui("screenshot", True))
+        (evidence / "portable-workbench.png").write_bytes(workbench_capture(root))
         duplicate = subprocess.Popen([str(root / "HLSDownloader.exe")], cwd=root, env=environment)
         code = duplicate.wait(timeout=30)
         check("workbench-single-instance", code == 0, {"second_launcher_exit": code})
@@ -202,7 +229,7 @@ def run(args):
         hwnd = user32.FindWindowW(None, "HLS Downloader")
         if not hwnd or not user32.PostMessageW(hwnd, 0x0010, 0, 0):  # WM_CLOSE，走真实关窗隐藏路径。
             raise ctypes.WinError(ctypes.get_last_error())
-        wait(lambda: not ui("window").get("showing"), "Workbench did not hide to tray", 10)
+        wait(lambda: not workbench_state(root)["showing"], "Workbench did not hide to tray", 10)
         host = subprocess.Popen([str(resources / "HLSDownloaderNativeHost.exe")], cwd=root, env=environment,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         activated = native_message(host, {"op": "activate"})
@@ -215,7 +242,7 @@ def run(args):
         hwnd = user32.FindWindowW(None, "HLS Downloader")
         if not hwnd or not user32.PostMessageW(hwnd, 0x0010, 0, 0):
             raise ctypes.WinError(ctypes.get_last_error())
-        wait(lambda: not ui("window").get("showing"), "Workbench did not hide again", 10)
+        wait(lambda: not workbench_state(root)["showing"], "Workbench did not hide again", 10)
         pipe.close()
         pipe = None
         subprocess.run([str(resources / "HLSDownloaderEngine.exe"), "--shutdown"],
@@ -224,7 +251,7 @@ def run(args):
              "Core did not stop", 15)
         started = time.monotonic()
         duplicate = subprocess.Popen([str(root / "HLSDownloader.exe")], cwd=root, env=environment)
-        restored = wait(lambda: (window if (window := ui("window")).get("showing") else None),
+        restored = wait(lambda: (window if (window := workbench_state(root))["showing"] else None),
                         "Repeat launch did not restore the hidden workbench", 15)
         elapsed_ms = round((time.monotonic() - started) * 1000, 2)
         code = duplicate.wait(timeout=15)
@@ -279,13 +306,18 @@ def run(args):
         actual = hashlib.sha256(output.read_bytes()).hexdigest()
         check("32mib-integrity", actual == expected and output.stat().st_size == PAYLOAD_SIZE and output.is_relative_to(root), {"sha256": actual, "size": output.stat().st_size, "path": str(output)})
         # 工作台必须收到实际 Core 状态，而非仅在协议侧完成。
-        bounds = ui("state")["controlBounds"]["sidebar.status.已完成"]
-        action_body = json.dumps({"type": "click", "x": (bounds[0]+bounds[2])//2, "y": (bounds[1]+bounds[3])//2}).encode()
-        with urlopen(Request(f"http://127.0.0.1:{port}/action", data=action_body, headers={"X-HLS-Test-Token": token, "Content-Type": "application/json"}), timeout=5) as response:
-            response.read()
-        rendered = wait(lambda: (s if f"taskrow.{task_id}" in (s := ui("state")).get("controlBounds", {}) else None), "Completed task absent from workbench")
+        completed_tabs = [item for item in workbench_window(root).descendants(control_type="TabItem")
+                          if item.element_info.name.split("，", 1)[0] == "已完成"]
+        if len(completed_tabs) != 1:
+            raise RuntimeError("Native completed-task filter is not unique")
+        completed_tabs[0].click_input()
+        def completed_in_workbench():
+            state = workbench_state(root)
+            return state if any("portable-validation.bin" in name for name in state["names"]) else None
+
+        rendered = wait(completed_in_workbench, "Completed task absent from native workbench")
         check("completion-rendered-in-workbench", True, rendered)
-        (evidence / "portable-download-completed.png").write_bytes(ui("screenshot", True))
+        (evidence / "portable-download-completed.png").write_bytes(workbench_capture(root))
 
         host = subprocess.Popen([str(resources / "HLSDownloaderNativeHost.exe")], env=environment,
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -303,10 +335,10 @@ def run(args):
         remaining = pipe.request({"type": "snapshot", "request_id": 7})
         check("test-task-and-file-cleaned", not remaining["tasks"] and not output.exists(), remaining)
         processes = runtime_processes(root)
-        check("one-core-one-visible-workbench-one-presenter", sum(p["name"] == "HLSDownloaderEngine.exe" for p in processes) == 1
-              and sum(p["name"] == "HLSDownloader.exe" and visible_window(p["pid"], "HLS Downloader") for p in processes) == 1
+        check("one-core-one-visible-workbench-in-presenter", sum(p["name"] == "HLSDownloaderEngine.exe" for p in processes) == 1
+              and sum(p["name"] == "HLSDownloaderPresenter.exe" and visible_window(p["pid"], "HLS Downloader") for p in processes) == 1
               and sum(p["name"] == "HLSDownloaderPresenter.exe" for p in processes) == 1, processes)
-        check("portable-ui-state-files", (root / "data/ui/workbench.lock").is_file() and (root / "data/ui/window-geometry.properties").is_file(), str(root / "data/ui"))
+        check("portable-ui-state-files", (root / "data/presenter.lock").is_file() and (root / "data/ui/window-geometry.properties").is_file(), str(root / "data/ui"))
         result["passed"] = True
     except Exception as error:
         result["error"] = str(error)

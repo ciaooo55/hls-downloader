@@ -101,7 +101,7 @@ flowchart LR
     C --> M["Local Player · LAN Cast"]
 ```
 
-**The Core is the only owner of download state and SQLite**. The native workbench, extension, player and casting path cooperate through it. The stable 7.0.10 package uses the Rust / Slint native entry point; Compose source remains as a migration reference. Matching-source acceptance and publication records are in the [current evidence](docs/validation/current-evidence.json).
+**The Core is the only owner of download state and SQLite**. The native workbench, extension, player and casting path cooperate through it. The stable 7.0.10 package uses the Rust / Slint native entry point; historical workbench source remains available through Git tags. Matching-source acceptance and publication records are in the [current evidence](docs/validation/current-evidence.json).
 
 ## 📁 Repository layout
 
@@ -110,7 +110,6 @@ flowchart LR
 | `native_shell/` | Rust Core, SQLite, transfer engines and background media services |
 | `crates/` | Shared protocol and lightweight IPC client |
 | `native_clients/` | Native Host, CLI, updater and native launcher |
-| `desktop_ui/` | Kotlin / Compose migration reference |
 | `native_ui/` | Rust + Slint workbench, confirmation, progress and completion windows |
 | `extension/` | WXT-based Chromium / Firefox Manifest V3 extension |
 | `scripts/` | Windows build, test, install, upgrade, package, and verification scripts |
@@ -119,11 +118,7 @@ flowchart LR
 
 ## 🛠️ Build from source
 
-The active product line is Windows-first. On a clean development machine, bootstrap the pinned toolchain from the repository root:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-toolchain.ps1
-```
+The active product line is Windows-first. Development requires the Rust MSVC toolchain, Visual Studio C++ Build Tools, Node.js and pnpm; CI defines the pinned versions. The Slint workbench needs no JDK. Run the following commands from the repository root.
 
 Run the integrated test gate:
 
@@ -140,12 +135,8 @@ cargo test --manifest-path native_shell/Cargo.toml --lib
 # Native Presenter
 cargo test --manifest-path native_ui/Cargo.toml
 
-# Compose Desktop
-cd desktop_ui
-.\gradlew.bat test --no-daemon
-
 # Browser Extension
-cd ..\extension
+cd extension
 pnpm install --frozen-lockfile
 pnpm test
 pnpm run build

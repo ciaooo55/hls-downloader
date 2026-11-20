@@ -26,7 +26,7 @@
 | [字幕配置](guides/qwencloud-subtitles.md) | 服务配置、音频预取、等待行为及历史实测边界 |
 | [安装与升级](guides/v7-local-upgrade.md) | 普通 MSI 安装、用户目录、手动升级和当前数据边界 |
 | [包体积](guides/package-slimming.md) | 保留哪些运行依赖、哪些开发工具不进生产包 |
-| [桌面模块](../desktop_ui/README.md)、[Core](../native_shell/README.md)、[Presenter](../native_ui/README.md) | 各模块职责和开发入口 |
+| [Slint 工作台](../native_ui/README.md)、[Core](../native_shell/README.md) | 各模块职责和开发入口 |
 | [插件](../extension/README.md)、[Firefox 审核构建](../extension/AMO-BUILD.md)、[插件隐私](../extension/PRIVACY.md) | 插件源码、打包审核和数据流说明 |
 
 ## 验收与发布维护

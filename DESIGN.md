@@ -2,7 +2,7 @@
 
 ## Product structure
 
-The Rust + Slint presenter is the main workbench (Compose remains a migration reference). Rust Core is the only task, transfer and database owner. WXT is the only browser integration. The same presenter process also owns the latency-sensitive confirmation, progress and completion windows.
+The Rust + Slint presenter is the main workbench. Rust Core is the only task, transfer and database owner. WXT is the only browser integration. The same presenter process also owns the latency-sensitive confirmation, progress and completion windows.
 
 ## Workbench geometry
 

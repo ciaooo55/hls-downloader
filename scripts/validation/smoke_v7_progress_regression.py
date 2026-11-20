@@ -11,11 +11,8 @@ import subprocess
 import threading
 import time
 import traceback
-import uuid
-from urllib.request import Request, urlopen
 
-import psutil
-from smoke_v7_portable_app import Pipe, wait, runtime_processes
+from smoke_v7_portable_app import Pipe, wait, runtime_processes, workbench_state, workbench_capture
 from smoke_v7_presenter_visual import user32, find_window
 
 
@@ -39,25 +36,8 @@ def run(runtime, report_path):
     def task(task_id): return next(t for t in core({'type': 'snapshot', 'request_id': 2})['tasks'] if t['task_id'] == task_id)
     def action(task_id, name): return command({'kind': 'task_action', 'task_id': task_id, 'action': name})
     try:
-        for proc in runtime_processes(runtime):
-            if proc['name'].lower() == 'hlsdownloader.exe': psutil.Process(proc['pid']).terminate()
-        port = 18793
-        token = uuid.uuid4().hex
-        env = {**os.environ, 'HLS_UI_TEST_API': '1', 'HLS_UI_TEST_PORT': str(port), 'HLS_UI_TEST_TOKEN': token}
-        subprocess.Popen([str(runtime / 'HLSDownloader.exe')], cwd=runtime, env=env)
-        def ui(path, raw=False, payload=None):
-            with urlopen(Request(f'http://127.0.0.1:{port}/{path}', data=json.dumps(payload).encode() if payload else None, headers={'X-HLS-Test-Token': token, 'Content-Type': 'application/json'}), timeout=10) as response:
-                body = response.read()
-                return body if raw else json.loads(body)
-        def ready():
-            try: return '已连接' in ui('state')['engineText']
-            except OSError: return False
-        wait(ready, 'Workbench not connected', 90)
-        def dismiss_update():
-            bounds = ui('state')['controlBounds'].get('dialog.secondary.稍后')
-            if bounds:
-                ui('action', payload={'type': 'click', 'x': (bounds[0]+bounds[2])//2, 'y': (bounds[1]+bounds[3])//2})
-                wait(lambda: 'dialog.secondary.稍后' not in ui('state')['controlBounds'], 'Update notice did not dismiss', 10)
+        subprocess.Popen([str(runtime / 'HLSDownloader.exe')], cwd=runtime, env=os.environ.copy())
+        wait(lambda: workbench_state(runtime)['connected'], 'Native workbench not connected', 90)
         media = report_path.parent / 'segment.ts'
         subprocess.run([str(runtime/'app/resources/ffmpeg.exe'), '-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=25', '-t', '0.6', '-c:v', 'libx264', '-f', 'mpegts', str(media)], check=True)
         segment = media.read_bytes()
@@ -97,7 +77,6 @@ def run(runtime, report_path):
             snapshot = next(e['event']['snapshot'] for e in response['events'] if e['event']['kind'] == 'task_created')
             tid = snapshot['task_id']; created.append(tid)
             wait(lambda: task(tid)['downloaded_bytes'] > 0, 'No download bytes', 30)
-            dismiss_update()
             presenter = next(p for p in runtime_processes(runtime) if 'Presenter' in p['name'])
             hud = wait(lambda: find_window(presenter['pid'], '下载进度'), 'No progress window', 15)
             if name == 'known.bin':
@@ -136,9 +115,9 @@ def run(runtime, report_path):
                 if current['status']=='failed': raise AssertionError(current.get('error_message'))
                 ready_to_capture = current['downloaded_bytes'] > 262144 if kind == 'file' else current['completed_ranges'] >= 2
                 if not captured and current['status'] == 'downloading' and ready_to_capture:
-                    dismiss_update()
-                    wait(lambda: 'taskrow.'+tid in ui('state')['controlBounds'], 'Main window omitted active task', 10)
-                    report_path.with_name(name+'-main.png').write_bytes(ui('screenshot', True))
+                    wait(lambda: any(name in label for label in workbench_state(runtime)['names']),
+                         'Native main window omitted active task', 10)
+                    report_path.with_name(name+'-main.png').write_bytes(workbench_capture(runtime))
                     from PIL import ImageGrab
                     user32.SetWindowPos(hud, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001|0x0002|0x0040)
                     user32.SetForegroundWindow(hud); time.sleep(.2)
