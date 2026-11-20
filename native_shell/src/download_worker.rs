@@ -1088,6 +1088,7 @@ impl CoreCoordinator {
         let spec = seal_spec_secrets(self, spec)?;
         let (task_id, status) = {
             let mut core = self.lock()?;
+            let spec = core.store().sanitize_urls(spec)?;
             let duplicate = if spec.local_source_path.is_none() && !spec.allow_duplicate {
                 Self::duplicate_of(&core, &spec)
             } else {
@@ -1841,13 +1842,18 @@ impl CoreCoordinator {
     }
 
     fn duplicate_of(core: &PersistentCore, spec: &TaskSpec) -> Option<(String, String)> {
-        let want = crate::duplicate::canonicalize_url(&spec.url);
+        let without_password = |url: &str| {
+            crate::duplicate::canonicalize_url(&hls_client::url_credentials::redact_ftp_passwords(
+                url,
+            ))
+        };
+        let want = without_password(&spec.url);
         if want.is_empty() {
             return None;
         }
         for task in core.tasks() {
             if let Some(stored) = core.task_spec(&task.task_id) {
-                if crate::duplicate::canonicalize_url(&stored.url) == want
+                if without_password(&stored.url) == want
                     && Self::duplicate_request_identity_matches(spec, stored)
                 {
                     return Some((task.task_id, task.status));
