@@ -2526,7 +2526,8 @@ fn bytes_hex(bytes: &[u8]) -> String {
 pub(crate) fn stable_media_url(uri: &str) -> String {
     let uri = uri.split('#').next().unwrap_or(uri);
     let (left, query) = uri.split_once('?').unwrap_or((uri, ""));
-    let path = if let Some(idx) = left.find("://") {
+    let origin = crate::http_engine::request_origin(uri);
+    let path = if let Some(idx) = left.find("://").filter(|_| !origin.is_empty()) {
         let rest = &left[idx + 3..];
         rest.find('/')
             .map(|at| rest[at..].trim_end_matches('/'))
@@ -2535,6 +2536,7 @@ pub(crate) fn stable_media_url(uri: &str) -> String {
         left.trim_end_matches('/')
     };
     let path = if path.is_empty() { "/" } else { path };
+    let stable_path = format!("{origin}{path}");
     let mut names = Vec::new();
     let mut pairs = Vec::new();
     for part in query.split('&') {
@@ -2560,9 +2562,9 @@ pub(crate) fn stable_media_url(uri: &str) -> String {
         .collect::<Vec<_>>()
         .join("&");
     if query.is_empty() {
-        path.to_string()
+        stable_path
     } else {
-        format!("{path}?{query}")
+        format!("{stable_path}?{query}")
     }
 }
 
@@ -4423,11 +4425,23 @@ mod tests {
             is_ad: false,
         };
         let identity = vod_segment_identity(&segment, 0, None, None);
+        let legacy = crate::crypto_lite::sha256_hex(
+            serde_json::json!({
+                "discontinuity": false, "duration": 1.0, "init": "/", "key": "/",
+                "key_method": null, "iv": null, "part_index": null, "range": null,
+                "sequence": 0, "url": "/a.ts"
+            })
+            .to_string()
+            .as_bytes(),
+        );
         std::fs::write(
             dir.join("vod_segments.json"),
             serde_json::json!({
                 "version": 1,
-                "segments": {"0": {"identity": identity, "size": 3}}
+                "segments": {
+                    "0": {"identity": identity, "size": 3},
+                    "1": {"identity": legacy, "size": 3}
+                }
             })
             .to_string(),
         )
@@ -4435,6 +4449,27 @@ mod tests {
         let vod = VodCheckpoint::load(&dir);
         let path = resume_segment_path(&seg_dir, 0, &segment.uri).unwrap();
         assert!(vod.can_reuse(0, &identity, file_len(&path)));
+        assert!(!vod.can_reuse(1, &identity, 3));
+        for uri in [
+            "https://cdn.test/a.ts?token=new",
+            "HTTPS://CDN.TEST:443/a.ts?token=new",
+        ] {
+            let mut refreshed = segment.clone();
+            refreshed.uri = uri.into();
+            let refreshed = vod_segment_identity(&refreshed, 0, None, None);
+            assert!(vod.can_reuse(0, &refreshed, 3), "{uri}");
+        }
+        for uri in [
+            "https://other.test/a.ts?token=new",
+            "http://cdn.test/a.ts?token=new",
+            "https://cdn.test:8443/a.ts?token=new",
+        ] {
+            let mut refreshed = segment.clone();
+            refreshed.uri = uri.into();
+            let refreshed = vod_segment_identity(&refreshed, 0, None, None);
+            assert!(!vod.can_reuse(0, &refreshed, 3), "{uri}");
+            assert!(!vod.can_reuse(1, &refreshed, 3), "{uri}");
+        }
         let other = vod_segment_identity(
             &Segment {
                 uri: "https://cdn.test/b.ts".into(),
@@ -4456,9 +4491,32 @@ mod tests {
         assert!(!vod.can_reuse(0, &other, 3));
         assert_eq!(
             stable_media_url("https://cdn.test/a.ts?token=new&keep=1"),
-            "/a.ts?keep=1"
+            "https://cdn.test/a.ts?keep=1"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stable_media_url_normalizes_origins_without_changing_query_policy() {
+        for (url, expected) in [
+            (
+                "HTTPS://CDN.TEST:443/a.ts?token=old&keep=1#part",
+                "https://cdn.test/a.ts?keep=1",
+            ),
+            ("HTTP://CDN.TEST:80", "http://cdn.test/"),
+            (
+                "https://cdn.test:8443/a.ts?sig=old&b=2&a=1",
+                "https://cdn.test:8443/a.ts?a=1&b=2",
+            ),
+            (
+                "https://[2001:DB8::1]:443/a.ts?expires=1",
+                "https://[2001:db8::1]/a.ts",
+            ),
+            ("relative.ts?token=old&keep=1", "relative.ts?keep=1"),
+            ("", "/"),
+        ] {
+            assert_eq!(stable_media_url(url), expected, "{url}");
+        }
     }
 
     #[test]

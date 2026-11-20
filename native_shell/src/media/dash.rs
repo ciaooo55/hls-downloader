@@ -4181,17 +4181,45 @@ mod tests {
             None,
             "video/mp4",
         );
+        let legacy = crate::crypto_lite::sha256_hex(
+            serde_json::json!({
+                "kind": "video", "mime": "video/mp4", "representation": "v",
+                "slot": "1", "url": "/1.m4s"
+            })
+            .to_string()
+            .as_bytes(),
+        );
         std::fs::write(
             dir.join("dash_vod_segments.json"),
             serde_json::json!({
                 "version": 1,
-                "files": {"seg-0001.m4s": {"identity": identity, "size": 3}}
+                "files": {
+                    "seg-0001.m4s": {"identity": identity, "size": 3},
+                    "legacy.m4s": {"identity": legacy, "size": 3}
+                }
             })
             .to_string(),
         )
         .unwrap();
         let vod = DashCheckpoint::load(&dir);
         assert!(vod.can_reuse("seg-0001.m4s", &identity, 3));
+        assert!(!vod.can_reuse("legacy.m4s", &identity, 3));
+        for url in [
+            "https://cdn.test/1.m4s?token=new",
+            "HTTPS://CDN.TEST:443/1.m4s?token=new",
+        ] {
+            let refreshed = dash_file_identity("video", "1", "v", url, None, "video/mp4");
+            assert!(vod.can_reuse("seg-0001.m4s", &refreshed, 3), "{url}");
+        }
+        for url in [
+            "https://other.test/1.m4s?token=new",
+            "http://cdn.test/1.m4s?token=new",
+            "https://cdn.test:8443/1.m4s?token=new",
+        ] {
+            let refreshed = dash_file_identity("video", "1", "v", url, None, "video/mp4");
+            assert!(!vod.can_reuse("seg-0001.m4s", &refreshed, 3), "{url}");
+            assert!(!vod.can_reuse("legacy.m4s", &refreshed, 3), "{url}");
+        }
         let other = dash_file_identity(
             "video",
             "1",
