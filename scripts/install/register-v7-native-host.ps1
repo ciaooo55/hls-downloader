@@ -27,7 +27,7 @@ if ([String]::IsNullOrWhiteSpace($EngineExecutable) -or -not (Test-Path -Literal
 }
 
 $argument = if ($Unregister) { '--unregister-native-host' } else { '--register-native-host' }
-& ([IO.Path]::GetFullPath($EngineExecutable)) $argument
-if ($LASTEXITCODE -ne 0) {
-    throw "v7 Native Host command failed with exit $LASTEXITCODE"
+$process = Start-Process -FilePath ([IO.Path]::GetFullPath($EngineExecutable)) -ArgumentList $argument -NoNewWindow -Wait -PassThru
+if ($process.ExitCode -ne 0) {
+    throw "v7 Native Host command failed with exit $($process.ExitCode)"
 }
