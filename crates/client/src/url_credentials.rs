@@ -23,6 +23,21 @@ pub fn map_ftp_passwords(
             .find('/')
             .map_or(text.len(), |offset| authority_start + offset);
         let authority = &text[authority_start..end];
+        let delimiter =
+            |c: char| c.is_whitespace() || matches!(c, '?' | '#' | '"' | '\'' | '<' | '>');
+        let first_delimiter = authority.find(delimiter).unwrap_or(authority.len());
+        let host_start = authority
+            .rfind('@')
+            .filter(|at| {
+                authority[..*at]
+                    .find(':')
+                    .is_some_and(|colon| colon < first_delimiter)
+            })
+            .map_or(0, |at| at + 1);
+        let end = authority[host_start..]
+            .find(delimiter)
+            .map_or(end, |offset| authority_start + host_start + offset);
+        let authority = &text[authority_start..end];
         if let Some(at) = authority.rfind('@') {
             if let Some(colon) = authority[..at].find(':') {
                 let clean = format!(
@@ -101,6 +116,17 @@ mod tests {
             redact_ftp_passwords("🔒sftp://alice:secret@host/file"),
             "🔒sftp://alice@host/file"
         );
+    }
+
+    #[test]
+    fn redacts_every_url_after_a_pathless_url() {
+        for delimiter in [" ", "\n", "\t", "'", "\"", "<", ">", "?", "#"] {
+            let input =
+                format!("ftp://public.example{delimiter}sftp://alice:secret@private.example/file");
+            let expected =
+                format!("ftp://public.example{delimiter}sftp://alice@private.example/file");
+            assert_eq!(redact_ftp_passwords(&input), expected);
+        }
     }
 
     #[test]
