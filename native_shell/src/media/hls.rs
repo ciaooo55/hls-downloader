@@ -2905,6 +2905,7 @@ fn read_control(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::http_engine::fetch_hls_bytes;
+    use std::io::{BufRead, BufReader};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
@@ -2922,6 +2923,33 @@ mod tests {
         write_text_atomic(&path, "second").unwrap();
         assert_eq!(fs::read_to_string(path).unwrap(), "second");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_aes_key_reports_http_status_instead_of_body_limit() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let key = MediaKey {
+            method: "AES-128".into(),
+            uri: format!("http://{}/key", listener.local_addr().unwrap()),
+            iv: None,
+        };
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            let _ = reader.get_mut().write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 23\r\nConnection: close\r\n\r\n<html>missing key</html>");
+        });
+        let error = load_key(&key, &HashMap::new(), "", &mut HashMap::new()).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error, "HLS key HTTP 404");
     }
 
     #[test]

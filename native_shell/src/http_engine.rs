@@ -977,6 +977,10 @@ fn fetch_bytes_with_transport(
             fetch(&job, None)?
         };
         let status = fetched.status;
+        if !(200..300).contains(&status) && status != 304 {
+            check_job_control(&job)?;
+            return Ok((status, Vec::new()));
+        }
         let expected_length = fetched.content_length;
         if status != 304
             && limit.is_some_and(|limit| expected_length.is_some_and(|length| length > limit))
@@ -5666,6 +5670,34 @@ mod tests {
                 },
                 "{command}: {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn metadata_fetch_preserves_http_errors_without_consuming_error_bodies() {
+        for response in [
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n<html>missing key</html>",
+            "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n<html>missing key</html>",
+            "HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n17\r\n<html>missing key</html>\r\n0\r\n\r\n",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/key", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = reader.get_mut().write_all(response.as_bytes());
+            });
+            let result = fetch_hls_bytes_limited(&url, &HashMap::new(), "", 16).unwrap();
+            server.join().unwrap();
+            assert_eq!(result.0, 404);
+            assert!(result.1.is_empty());
         }
     }
 
