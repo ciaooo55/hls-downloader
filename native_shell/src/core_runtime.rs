@@ -926,7 +926,10 @@ impl CoreRuntime {
         if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
             if snapshot.filename != filename {
                 if snapshot.title == snapshot.filename
-                    || self.specs.get(task_id).is_some_and(|spec| spec.title.trim().is_empty())
+                    || self
+                        .specs
+                        .get(task_id)
+                        .is_some_and(|spec| spec.title.trim().is_empty())
                 {
                     snapshot.title = filename.clone();
                 }
@@ -945,7 +948,10 @@ impl CoreRuntime {
                     .and_then(|name| name.to_str())
                 {
                     if snapshot.title == snapshot.filename
-                        || self.specs.get(task_id).is_some_and(|spec| spec.title.trim().is_empty())
+                        || self
+                            .specs
+                            .get(task_id)
+                            .is_some_and(|spec| spec.title.trim().is_empty())
                     {
                         snapshot.title = filename.to_string();
                     }
@@ -1101,7 +1107,10 @@ mod tests {
     fn unnamed_tasks_have_provisional_names_without_pinning_the_output_filename() {
         for (url, expected) in [
             ("https://example.test/slow.bin?token=secret", "slow.bin"),
-            ("magnet:?xt=urn:btih:abcdef&dn=My+payload.bin", "My payload.bin"),
+            (
+                "magnet:?xt=urn:btih:abcdef&dn=My+payload.bin",
+                "My payload.bin",
+            ),
             ("magnet:?bad", "torrent"),
             ("", "download"),
         ] {
@@ -1112,16 +1121,26 @@ mod tests {
             });
             assert_eq!(snapshot.title, expected);
             assert!(snapshot.filename.is_empty());
-            assert!(runtime.task_spec(&snapshot.task_id).unwrap().filename.is_empty());
+            assert!(runtime
+                .task_spec(&snapshot.task_id)
+                .unwrap()
+                .filename
+                .is_empty());
             runtime.set_task_filename(&snapshot.task_id, "resolved.bin".into());
             let renamed = runtime.snapshot(&snapshot.task_id).unwrap();
             assert_eq!(renamed.filename, "resolved.bin");
             assert_eq!(renamed.title, "resolved.bin");
             assert!(renamed.output_path.is_empty());
             runtime.set_task_filename(&snapshot.task_id, String::new());
-            assert_eq!(runtime.snapshot(&snapshot.task_id).unwrap().title, "resolved.bin");
+            assert_eq!(
+                runtime.snapshot(&snapshot.task_id).unwrap().title,
+                "resolved.bin"
+            );
             runtime.set_output_path(&snapshot.task_id, "final.bin".into());
-            assert_eq!(runtime.snapshot(&snapshot.task_id).unwrap().title, "final.bin");
+            assert_eq!(
+                runtime.snapshot(&snapshot.task_id).unwrap().title,
+                "final.bin"
+            );
         }
         let mut runtime = super::CoreRuntime::new();
         let snapshot = runtime.create_task(crate::TaskSpec {
@@ -1132,7 +1151,10 @@ mod tests {
         });
         assert_eq!(snapshot.filename, "chosen.bin");
         runtime.set_task_filename(&snapshot.task_id, "resolved.bin".into());
-        assert_eq!(runtime.snapshot(&snapshot.task_id).unwrap().title, "Custom title");
+        assert_eq!(
+            runtime.snapshot(&snapshot.task_id).unwrap().title,
+            "Custom title"
+        );
     }
 
     #[test]

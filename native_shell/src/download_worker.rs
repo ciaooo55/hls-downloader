@@ -2519,11 +2519,19 @@ fn resolved_torrent_filename(spec: &TaskSpec, metadata_name: &str) -> String {
     let provisional = spec.filename.trim().is_empty()
         || spec.filename == safe_filename("", &spec.url)
         || (spec.url.starts_with("magnet:?")
-            && spec.filename == provisional_task_name(&TaskSpec {
-                filename: String::new(),
-                ..spec.clone()
-            }));
-    safe_filename(if provisional { metadata_name } else { &spec.filename }, &spec.url)
+            && spec.filename
+                == provisional_task_name(&TaskSpec {
+                    filename: String::new(),
+                    ..spec.clone()
+                }));
+    safe_filename(
+        if provisional {
+            metadata_name
+        } else {
+            &spec.filename
+        },
+        &spec.url,
+    )
 }
 
 fn current_progress(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> (u64, Option<u64>) {
@@ -2989,12 +2997,11 @@ fn run_http_file(
 }
 
 fn http_response_filename(paths: &TaskPaths) -> Option<String> {
-    let metadata: Value = serde_json::from_slice(
-        &fs::read(paths.progress.with_extension("response.json")).ok()?,
-    ).ok()?;
-    let filename = crate::output_path::disposition_filename(
-        metadata.get("content_disposition")?.as_str()?,
-    );
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(paths.progress.with_extension("response.json")).ok()?)
+            .ok()?;
+    let filename =
+        crate::output_path::disposition_filename(metadata.get("content_disposition")?.as_str()?);
     (!filename.is_empty()).then_some(filename)
 }
 

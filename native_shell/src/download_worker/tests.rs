@@ -1519,34 +1519,52 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
     ] {
         coordinator.set_setting(key, value).unwrap();
     }
-    coordinator.dispatch(CoreCommand::CreateTask { spec: TaskSpec {
-        url: format!("http://{address}/slow.bin"),
-        start_paused: true,
-        concurrency: 1,
-        ..Default::default()
-    }}).unwrap();
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{address}/slow.bin"),
+                start_paused: true,
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
     let provisional = coordinator.tasks().unwrap().remove(0);
     assert_eq!(provisional.title, "slow.bin");
     assert!(provisional.filename.is_empty());
-    coordinator.dispatch(CoreCommand::TaskAction { task_id: "task-1".into(), action: "resume".into() }).unwrap();
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: "task-1".into(),
+            action: "resume".into(),
+        })
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let task = coordinator.tasks().unwrap().remove(0);
         if task.filename == "resolved payload.bin" {
             assert_ne!(task.status, "completed");
             assert_eq!(task.title, "resolved payload.bin");
-            assert_ne!(Path::new(&task.output_path), root.join("resolved payload.bin"));
+            assert_ne!(
+                Path::new(&task.output_path),
+                root.join("resolved payload.bin")
+            );
             break;
         }
         assert!(Instant::now() < deadline, "{task:?}");
         thread::sleep(Duration::from_millis(20));
     }
     let restored = PersistentCore::open(root.join("tasks.db")).unwrap();
-    assert_eq!(restored.snapshot("task-1").unwrap().filename, "resolved payload.bin");
+    assert_eq!(
+        restored.snapshot("task-1").unwrap().filename,
+        "resolved payload.bin"
+    );
     drop(restored);
     release.store(true, Ordering::SeqCst);
     let completed = wait_for_task_status(&coordinator, "completed");
-    assert_eq!(Path::new(&completed.output_path), root.join("resolved payload.bin"));
+    assert_eq!(
+        Path::new(&completed.output_path),
+        root.join("resolved payload.bin")
+    );
     assert_eq!(fs::read(&completed.output_path).unwrap(), b"abcde");
     stop.store(true, Ordering::SeqCst);
     server.join().unwrap();
@@ -1557,12 +1575,20 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
 #[test]
 fn response_filename_ignores_missing_and_corrupt_metadata() {
     let root = std::env::temp_dir().join(format!("hls-response-name-{}", std::process::id()));
-    let spec = TaskSpec { download_dir: root.to_string_lossy().into_owned(), ..Default::default() };
+    let spec = TaskSpec {
+        download_dir: root.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
     let paths = TaskPaths::for_task("task-1", &spec).unwrap();
     paths.prepare().unwrap();
     let metadata = paths.progress.with_extension("response.json");
     assert_eq!(http_response_filename(&paths), None);
-    for bytes in [b"not json".as_slice(), br#"{}"#, br#"{"content_disposition":"attachment; filename=\"\""}"#, br#"{"content_disposition":"attachment; filename=\"bad\nname.bin\""}"#] {
+    for bytes in [
+        b"not json".as_slice(),
+        br#"{}"#,
+        br#"{"content_disposition":"attachment; filename=\"\""}"#,
+        br#"{"content_disposition":"attachment; filename=\"bad\nname.bin\""}"#,
+    ] {
         fs::write(&metadata, bytes).unwrap();
         assert_eq!(http_response_filename(&paths), None);
     }
@@ -2246,33 +2272,76 @@ fn torrent_category_routing_uses_resolved_names_once() {
     fs::write(&source, b"d4:infod6:lengthi5e4:name9:movie.mkv12:piece lengthi4e6:pieces40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaee").unwrap();
     let base = root.join("downloads");
     for (auto, custom, overrides, expected) in [
-        (true, "", false, base.join(crate::category::category_label("media"))),
+        (
+            true,
+            "",
+            false,
+            base.join(crate::category::category_label("media")),
+        ),
         (false, "", false, base.clone()),
         (true, "", true, base.join("videos")),
         (false, "", true, base.join("videos")),
-        (true, "chosen.zip", false, base.join(crate::category::category_label("archive"))),
+        (
+            true,
+            "chosen.zip",
+            false,
+            base.join(crate::category::category_label("archive")),
+        ),
     ] {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
-        coordinator.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
-        coordinator.set_setting("download_dir", serde_json::json!(base.to_string_lossy())).unwrap();
-        coordinator.set_setting("auto_category_dirs", serde_json::json!(auto)).unwrap();
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting("download_dir", serde_json::json!(base.to_string_lossy()))
+            .unwrap();
+        coordinator
+            .set_setting("auto_category_dirs", serde_json::json!(auto))
+            .unwrap();
         if overrides {
-            coordinator.set_setting("browser_category_dirs", serde_json::json!(serde_json::json!({
-                "media": base.join("videos").to_string_lossy(),
-                "other": base.join("other").to_string_lossy(),
-            }).to_string())).unwrap();
+            coordinator
+                .set_setting(
+                    "browser_category_dirs",
+                    serde_json::json!(serde_json::json!({
+                        "media": base.join("videos").to_string_lossy(),
+                        "other": base.join("other").to_string_lossy(),
+                    })
+                    .to_string()),
+                )
+                .unwrap();
         }
-        coordinator.dispatch(CoreCommand::CreateTask { spec: TaskSpec {
-            url: source.to_string_lossy().into_owned(),
-            resource_kind: ResourceKind::Torrent,
-            filename: custom.into(),
-            start_paused: true,
-            ..Default::default()
-        }}).unwrap();
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: source.to_string_lossy().into_owned(),
+                    resource_kind: ResourceKind::Torrent,
+                    filename: custom.into(),
+                    start_paused: true,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
         let task = coordinator.tasks().unwrap().remove(0);
-        assert_eq!(task.filename, if custom.is_empty() { "movie.mkv" } else { custom });
+        assert_eq!(
+            task.filename,
+            if custom.is_empty() {
+                "movie.mkv"
+            } else {
+                custom
+            }
+        );
         assert_eq!(Path::new(&task.download_dir), expected);
-        assert_eq!(Path::new(&coordinator.lock().unwrap().task_spec("task-1").unwrap().download_dir), expected);
+        assert_eq!(
+            Path::new(
+                &coordinator
+                    .lock()
+                    .unwrap()
+                    .task_spec("task-1")
+                    .unwrap()
+                    .download_dir
+            ),
+            expected
+        );
     }
     fs::remove_dir_all(root).unwrap();
 }

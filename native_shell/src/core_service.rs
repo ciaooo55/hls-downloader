@@ -890,7 +890,9 @@ mod tests {
         assert!(core
             .set_output_path("task-1", "changed.bin".into())
             .is_err());
-        assert!(core.set_task_filename("task-1", "changed.bin".into()).is_err());
+        assert!(core
+            .set_task_filename("task-1", "changed.bin".into())
+            .is_err());
         let mut changed = spec.clone();
         changed.url = "https://example.test/changed.bin".into();
         assert!(core.replace_spec("task-1", changed).is_err());
