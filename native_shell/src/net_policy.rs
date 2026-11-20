@@ -722,7 +722,7 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
+pub(crate) fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
     let (date, time_zone) = value.split_once('T')?;
     let mut date_parts = date.split('-');
     let year = date_parts.next()?.parse::<i64>().ok()?;

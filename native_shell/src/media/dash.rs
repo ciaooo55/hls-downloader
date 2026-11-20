@@ -218,6 +218,14 @@ fn parse_byte_range(value: &str) -> Result<ByteRange, String> {
 }
 
 pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs_f64();
+    parse_mpd_at(xml, base, now)
+}
+
+fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String> {
     let document =
         roxmltree::Document::parse(xml).map_err(|error| format!("invalid DASH XML: {error}"))?;
     let root = document.root_element();
@@ -282,24 +290,25 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 }
             }
         }
-        let mut segment_list = None;
+        let mut segment_lists = Vec::new();
         let mut templates = Vec::new();
         let mut segment_bases = Vec::new();
         for scope in scopes.into_iter().rev().flatten() {
             if let Some(list) = mpd_child(scope, "SegmentList") {
                 if templates.is_empty() && segment_bases.is_empty() {
-                    segment_list = Some(list);
+                    segment_lists.push(list);
+                    continue;
                 }
                 break;
             }
             if let Some(template) = mpd_child(scope, "SegmentTemplate") {
-                if !segment_bases.is_empty() {
+                if !segment_bases.is_empty() || !segment_lists.is_empty() {
                     break;
                 }
                 templates.push(template);
             }
             if let Some(base) = mpd_child(scope, "SegmentBase") {
-                if !templates.is_empty() {
+                if !templates.is_empty() || !segment_lists.is_empty() {
                     break;
                 }
                 segment_bases.push(base);
@@ -310,6 +319,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
                 .iter()
                 .find_map(|template| template.attribute(key))
         };
+        let list_attr = |key: &str| segment_lists.iter().find_map(|list| list.attribute(key));
         let has_timeline = templates
             .iter()
             .any(|template| mpd_child(*template, "SegmentTimeline").is_some());
@@ -325,8 +335,9 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             return Err("unsupported external DASH RepresentationIndex".into());
         }
         let whole_file = !segment_bases.is_empty() && index_range.is_none();
-        let initialization = segment_list
-            .and_then(|list| mpd_child(list, "Initialization"))
+        let initialization = segment_lists
+            .iter()
+            .find_map(|list| mpd_child(*list, "Initialization"))
             .or_else(|| {
                 segment_bases
                     .iter()
@@ -356,7 +367,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
             return Err("invalid DASH initialization URL".into());
         }
         // SegmentURL 的 media 是显式地址，不能当作 SegmentTemplate 重复展开。
-        let media_template = if segment_list.is_some() {
+        let media_template = if !segment_lists.is_empty() {
             None
         } else {
             template_attr("media")
@@ -365,18 +376,52 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         let mut media_ranges = Vec::new();
         let mut media_durations = Vec::new();
         if let Some(template) = media_template {
-            media.extend(expand_timeline(
-                &templates,
-                template,
-                &base_url,
-                &id,
-                bandwidth,
-                period_duration.filter(|_| !dynamic || has_timeline),
-                &mut media_durations,
-            )?);
+            if dynamic && !has_timeline {
+                let mut start = Some(0.0);
+                for (index, period) in periods.iter().enumerate().take(period_index + 1) {
+                    start = period
+                        .attribute("start")
+                        .and_then(parse_duration_seconds)
+                        .or(start);
+                    if index < period_index {
+                        start = start
+                            .zip(period_durations[index])
+                            .map(|(start, duration)| start + duration);
+                    }
+                }
+                media.extend(expand_live_duration(
+                    root,
+                    &templates,
+                    template,
+                    &base_url,
+                    &id,
+                    bandwidth,
+                    start.ok_or("dynamic DASH requires a resolvable Period start")?,
+                    period_duration,
+                    now,
+                    &mut media_durations,
+                )?);
+            } else {
+                media.extend(expand_timeline(
+                    &templates,
+                    template,
+                    &base_url,
+                    &id,
+                    bandwidth,
+                    period_duration.filter(|_| !dynamic || has_timeline),
+                    &mut media_durations,
+                )?);
+            }
             media_ranges.resize(media.len(), None);
         }
-        let list = segment_list.unwrap_or(node);
+        let list = segment_lists
+            .iter()
+            .copied()
+            .find(|list| {
+                list.children()
+                    .any(|child| mpd_element(child, "SegmentURL", root))
+            })
+            .unwrap_or(node);
         for child in list
             .children()
             .filter(|child| mpd_element(*child, "SegmentURL", root))
@@ -416,14 +461,19 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         } else {
             (init, init_range)
         };
-        if let Some(list) = segment_list {
-            let duration = list
-                .attribute("duration")
-                .and_then(|value| value.parse::<f64>().ok());
-            let timescale = list
-                .attribute("timescale")
+        if !segment_lists.is_empty() {
+            let duration = list_attr("duration").and_then(|value| value.parse::<f64>().ok());
+            let timescale = list_attr("timescale")
                 .and_then(|value| value.parse::<f64>().ok())
                 .unwrap_or(1.0);
+            for key in ["presentationTimeOffset", "startNumber"] {
+                if list_attr(key).is_some_and(|value| value.parse::<u64>().is_err()) {
+                    return Err(format!("invalid DASH SegmentList {key}"));
+                }
+            }
+            if timescale <= 0.0 || !timescale.is_finite() {
+                return Err("invalid DASH SegmentList timescale".into());
+            }
             if let Some(seconds) = duration
                 .map(|duration| duration / timescale)
                 .filter(|value| value.is_finite() && *value > 0.0)
@@ -996,11 +1046,7 @@ fn download_live_dash(
         if read_control(control) != "run" {
             return Err(control_stop_error(control));
         }
-        let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
-            .map_err(|error| error.to_string())?;
-        if status != 200 && status != 206 {
-            break;
-        }
+        let body = refresh_live_manifest(url, headers, proxy, control)?;
         xml = String::from_utf8_lossy(&body).into_owned();
         manifest = parse_mpd(&xml, url)?;
     }
@@ -1038,6 +1084,42 @@ fn track_kind(item: &Representation) -> u8 {
     } else {
         3
     }
+}
+
+fn refresh_live_manifest(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    control: &Path,
+) -> Result<Vec<u8>, String> {
+    for attempt in 0..4 {
+        if read_control(control) != "run" {
+            return Err(control_stop_error(control));
+        }
+        let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
+            .map_err(|error| error.to_string())?;
+        if status == 200 || status == 206 {
+            return Ok(body);
+        }
+        if !matches!(status, 408 | 429 | 500..=599) || attempt == 3 {
+            return Err(format!(
+                "DASH live manifest HTTP {status} after {} attempt(s)",
+                attempt + 1
+            ));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250 << attempt);
+        while std::time::Instant::now() < deadline {
+            if read_control(control) != "run" {
+                return Err(control_stop_error(control));
+            }
+            std::thread::sleep(
+                deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .min(std::time::Duration::from_millis(50)),
+            );
+        }
+    }
+    Err("DASH live manifest retries exhausted".into())
 }
 
 /// Picks the representation in `period` that continues `chosen`: same kind,
@@ -2158,6 +2240,129 @@ fn ceil_segment_units(value: f64) -> f64 {
     } else {
         value.ceil()
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expand_live_duration(
+    root: roxmltree::Node<'_, '_>,
+    templates: &[roxmltree::Node<'_, '_>],
+    template: &str,
+    base_url: &str,
+    id: &str,
+    bandwidth: u64,
+    period_start: f64,
+    period_duration: Option<f64>,
+    now: f64,
+    durations: &mut Vec<f64>,
+) -> Result<Vec<String>, String> {
+    const MAX_LIVE_SEGMENTS: u64 = 1200;
+    let attr = |key: &str| templates.iter().find_map(|node| node.attribute(key));
+    let integer = |key: &str, default: Option<u64>| -> Result<u64, String> {
+        match attr(key) {
+            Some(value) => value
+                .parse()
+                .map_err(|_| format!("invalid dynamic DASH {key}")),
+            None => default.ok_or_else(|| format!("dynamic DASH requires SegmentTemplate {key}")),
+        }
+    };
+    let duration = integer("duration", None)?;
+    let timescale = integer("timescale", Some(1))?;
+    let offset = integer("presentationTimeOffset", Some(0))?;
+    let start_number = integer("startNumber", Some(1))?;
+    if duration == 0 || timescale == 0 {
+        return Err("dynamic DASH duration and timescale must be positive".into());
+    }
+    let stamp = root
+        .attribute("availabilityStartTime")
+        .ok_or("dynamic DASH duration template requires availabilityStartTime")?;
+    let bytes = stamp.as_bytes();
+    if bytes.len() < 20
+        || !bytes[..19]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                4 | 7 => *byte == b'-',
+                10 => *byte == b'T',
+                13 | 16 => *byte == b':',
+                _ => byte.is_ascii_digit(),
+            })
+    {
+        return Err("invalid DASH availabilityStartTime".into());
+    }
+    let zone = stamp[19..].trim_start_matches(|ch: char| ch == '.' || ch.is_ascii_digit());
+    if zone != "Z"
+        && !(zone.len() == 6
+            && matches!(zone.as_bytes()[0], b'+' | b'-')
+            && zone.as_bytes()[3] == b':'
+            && zone.as_bytes()[1..3]
+                .iter()
+                .chain(&zone.as_bytes()[4..])
+                .all(u8::is_ascii_digit))
+    {
+        return Err("invalid DASH availabilityStartTime timezone".into());
+    }
+    let epoch = crate::net_policy::parse_rfc3339_epoch(stamp)
+        .ok_or("invalid DASH availabilityStartTime")? as f64;
+    let fraction = stamp
+        .split_once('.')
+        .map(|(_, tail)| {
+            let digits = tail.split(['Z', '+', '-']).next().unwrap_or("");
+            if digits.is_empty() || !digits.bytes().all(|ch| ch.is_ascii_digit()) {
+                return Err("invalid DASH availabilityStartTime fraction");
+            }
+            format!("0.{digits}")
+                .parse::<f64>()
+                .map_err(|_| "invalid DASH availabilityStartTime fraction")
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+    let depth = root
+        .attribute("timeShiftBufferDepth")
+        .map(|value| {
+            parse_duration_seconds(value)
+                .filter(|value| *value > 0.0)
+                .ok_or("invalid DASH timeShiftBufferDepth")
+        })
+        .transpose()?
+        .unwrap_or(60.0);
+    let elapsed = now - epoch - fraction - period_start;
+    if !elapsed.is_finite() || !period_start.is_finite() || period_start < 0.0 {
+        return Err("invalid dynamic DASH clock or Period start".into());
+    }
+    let edge = period_duration.map_or(elapsed, |duration| elapsed.min(duration));
+    if edge <= 0.0 {
+        return Ok(Vec::new());
+    }
+    let units = edge * timescale as f64 + offset as f64;
+    if !units.is_finite() || units >= (1u64 << 53) as f64 {
+        return Err("dynamic DASH timeline exceeds precise integer range".into());
+    }
+    let count = if period_duration.is_some_and(|duration| elapsed >= duration) {
+        ceil_segment_units(units / duration as f64)
+    } else {
+        units / duration as f64
+    }
+    .floor() as u64;
+    let first = (((elapsed - depth).max(0.0) * timescale as f64 + offset as f64) / duration as f64)
+        .floor() as u64;
+    let first = first.max(count.saturating_sub(MAX_LIVE_SEGMENTS));
+    let mut media = Vec::new();
+    for index in first..count {
+        let number = start_number
+            .checked_add(index)
+            .ok_or("DASH segment number overflow")?;
+        let time = index
+            .checked_mul(duration)
+            .ok_or("DASH timeline overflow")?;
+        media.push(resolve(
+            base_url,
+            &apply_template(template, id, number, time, bandwidth),
+        ));
+        let end = ((index + 1) as f64 * duration as f64 - offset as f64) / timescale as f64;
+        let begin = (time as f64 - offset as f64) / timescale as f64;
+        durations.push((end.min(edge) - begin.max(0.0)).max(0.0));
+    }
+    Ok(media)
 }
 
 fn expand_timeline(
@@ -4301,6 +4506,221 @@ mod tests {
         let parsed = parse_mpd(xml, "https://cdn.test/live.mpd").unwrap();
         assert!(parsed.dynamic);
         assert_eq!(minimum_update_period(xml), Some(2.5));
+    }
+
+    #[test]
+    fn dash_live_duration_window_clock_offset_and_refresh() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" timeShiftBufferDepth="PT6S"><Period start="PT10S"><AdaptationSet><SegmentTemplate duration="4" timescale="2" presentationTimeOffset="20" startNumber="7" media="$Number$-$Time$.m4s"/><Representation id="v"/></AdaptationSet></Period></MPD>"#;
+        let first = parse_mpd_at(xml, "https://cdn.test/live.mpd", 20.0).unwrap();
+        let track = &first.representations[0];
+        assert_eq!(
+            track.media,
+            [
+                "https://cdn.test/14-28.m4s",
+                "https://cdn.test/15-32.m4s",
+                "https://cdn.test/16-36.m4s"
+            ]
+        );
+        assert_eq!(track.media_durations, [2.0; 3]);
+        let next = parse_mpd_at(xml, "https://cdn.test/live.mpd", 22.0).unwrap();
+        let mut seen: HashSet<_> = track.media.iter().cloned().collect();
+        let added: Vec<_> = next.representations[0]
+            .media
+            .iter()
+            .filter(|url| seen.insert((*url).clone()))
+            .collect();
+        assert_eq!(added, [&"https://cdn.test/17-40.m4s".to_string()]);
+        assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 9.0)
+            .unwrap()
+            .representations[0]
+            .media
+            .is_empty());
+        let files = ["14-28", "15-32", "16-36", "17-40"]
+            .into_iter()
+            .map(|name| (format!("/{name}.m4s"), b"data".to_vec()))
+            .collect();
+        let (base, server) = serve_dash_files(files, 4);
+        let root = std::env::temp_dir().join(format!("dash-live-window-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut live = LiveDashTrack::default();
+        let other = LiveDashTrack::default();
+        let mut checkpoint = DashCheckpoint::load(&root);
+        for now in [20.0, 22.0] {
+            let parsed = parse_mpd_at(xml, &format!("{base}/live.mpd"), now).unwrap();
+            live.append(
+                &parsed.representations[0],
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut checkpoint,
+                None,
+                &other,
+            )
+            .unwrap();
+        }
+        assert_eq!(live.files.len(), 4);
+        assert_eq!(server.join().unwrap().len(), 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_duration_defaults_limits_and_invalid_inputs() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="2" media="$Number$.m4s"/><Representation id="v"/></Period></MPD>"#;
+        let parsed = parse_mpd_at(xml, "https://cdn.test/live.mpd", 100.0).unwrap();
+        assert_eq!(parsed.representations[0].media.len(), 30);
+        assert!(parsed.representations[0].media[0].ends_with("/21.m4s"));
+        let tiny = xml.replace("duration=\"2\"", "duration=\"1\" timescale=\"1000\"");
+        assert_eq!(
+            parse_mpd_at(&tiny, "https://cdn.test/live.mpd", 100.0)
+                .unwrap()
+                .representations[0]
+                .media
+                .len(),
+            1200
+        );
+        let fraction = xml.replace("00:00:00Z", "00:00:00.500+00:00");
+        assert!(parse_mpd_at(&fraction, "https://cdn.test/live.mpd", 2.4)
+            .unwrap()
+            .representations[0]
+            .media
+            .is_empty());
+        for invalid in [
+            xml.replace(" availabilityStartTime=\"1970-01-01T00:00:00Z\"", ""),
+            xml.replace("1970-01-01T00:00:00Z", "bad-date"),
+            xml.replace("duration=\"2\"", "duration=\"0\""),
+            xml.replace("duration=\"2\"", "duration=\"2\" timescale=\"0\""),
+            xml.replace("<Period>", "<Period/><Period>"),
+        ] {
+            assert!(parse_mpd_at(&invalid, "https://cdn.test/live.mpd", 100.0).is_err());
+        }
+    }
+
+    #[test]
+    fn dash_segment_list_inherits_attributes_and_nearest_children() {
+        let xml = r#"<MPD><Period><SegmentList timescale="10" duration="20" presentationTimeOffset="5" startNumber="9"><Initialization sourceURL="parent.mp4"/><SegmentURL media="parent.m4s"/></SegmentList><AdaptationSet><SegmentList duration="30"/><Representation id="v"><SegmentList startNumber="10"/></Representation><Representation id="a"><SegmentList duration="40"><Initialization sourceURL="child.mp4"/><SegmentURL media="child1.m4s"/><SegmentURL media="child2.m4s"/></SegmentList></Representation></AdaptationSet></Period></MPD>"#;
+        let parsed = parse_mpd(xml, "https://cdn.test/live.mpd").unwrap();
+        let video = &parsed.representations[0];
+        assert_eq!(video.init.as_deref(), Some("https://cdn.test/parent.mp4"));
+        assert_eq!(video.media, ["https://cdn.test/parent.m4s"]);
+        assert_eq!(video.media_durations, [3.0]);
+        let audio = &parsed.representations[1];
+        assert_eq!(audio.init.as_deref(), Some("https://cdn.test/child.mp4"));
+        assert_eq!(
+            audio.media,
+            ["https://cdn.test/child1.m4s", "https://cdn.test/child2.m4s"]
+        );
+        assert_eq!(audio.media_durations, [4.0, 4.0]);
+        assert!(parse_mpd(
+            &xml.replace("timescale=\"10\"", "timescale=\"0\""),
+            "https://cdn.test/live.mpd"
+        )
+        .is_err());
+        let empty = r#"<MPD><Period><SegmentList duration="2"/><Representation><SegmentList/></Representation></Period></MPD>"#;
+        assert!(parse_mpd(empty, "https://cdn.test/live.mpd")
+            .unwrap()
+            .representations[0]
+            .media
+            .is_empty());
+    }
+
+    fn dash_status_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/live.mpd", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for status in statuses {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                )
+                .unwrap();
+            }
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn dash_live_refresh_retries_or_fails_instead_of_succeeding() {
+        let root = std::env::temp_dir().join(format!("dash-refresh-status-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        for statuses in [
+            vec![408, 429, 599, 200],
+            vec![503; 4],
+            vec![401],
+            vec![403],
+            vec![404],
+            vec![400],
+        ] {
+            let success = statuses.last() == Some(&200);
+            let last = *statuses.last().unwrap();
+            let (url, server) = dash_status_server(statuses);
+            let result = refresh_live_manifest(&url, &HashMap::new(), "", &control);
+            if success {
+                assert_eq!(result.unwrap(), b"ok");
+            } else {
+                assert!(result.unwrap_err().contains(&format!("HTTP {last}")));
+            }
+            server.join().unwrap();
+        }
+        fs::write(&control, "pause").unwrap();
+        assert_eq!(
+            refresh_live_manifest("http://127.0.0.1:1", &HashMap::new(), "", &control).unwrap_err(),
+            "paused"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_recording_does_not_publish_success_after_refresh_failure() {
+        let (url, server) = dash_status_server(vec![200, 403]);
+        let xml = format!(
+            r#"<MPD type="dynamic" minimumUpdatePeriod="PT0.4S"><Period><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><SegmentURL media="{url}"/></SegmentList></Representation></Period></MPD>"#
+        );
+        let manifest = parse_mpd(&xml, &url).unwrap();
+        let root =
+            std::env::temp_dir().join(format!("dash-live-refresh-failure-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let result = download_live_dash(
+            manifest,
+            xml,
+            &url,
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            0,
+            0,
+            false,
+            "",
+            &mut DashCheckpoint::load(&root),
+        );
+        assert!(result.unwrap_err().contains("HTTP 403"));
+        assert_eq!(fs::read(root.join("seg-0000.m4s")).unwrap(), b"ok");
+        assert!(!root.join("merged.mp4").exists());
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
