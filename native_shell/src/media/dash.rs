@@ -1028,8 +1028,9 @@ fn download_live_dash(
             if let Some(secondary) = &mut secondary {
                 expand_segment_base(secondary, headers, proxy, control)?;
             }
-            if track.media.is_empty()
-                || secondary.as_ref().is_some_and(|item| item.media.is_empty())
+            if !same_period
+                && (track.media.is_empty()
+                    || secondary.as_ref().is_some_and(|item| item.media.is_empty()))
             {
                 // Future Periods can be present before they advertise both tracks.
                 break;
@@ -5007,11 +5008,22 @@ mod tests {
     }
 
     fn dash_status_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<()>) {
+        dash_response_server(
+            statuses
+                .into_iter()
+                .map(|status| (status, b"ok".to_vec()))
+                .collect(),
+        )
+    }
+
+    fn dash_response_server(
+        responses: Vec<(u16, Vec<u8>)>,
+    ) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/live.mpd", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
-            for status in statuses {
+            for (status, body) in responses {
                 let (mut socket, _) = listener.accept().unwrap();
                 socket
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -5026,12 +5038,73 @@ mod tests {
                 }
                 write!(
                     socket,
-                    "HTTP/1.1 {status} Test\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
                 )
                 .unwrap();
+                socket.write_all(&body).unwrap();
             }
         });
         (url, server)
+    }
+
+    #[test]
+    fn dash_live_refresh_appends_tracks_independently() {
+        for video_advances in [true, false] {
+            let initial = r#"<MPD type="dynamic" minimumUpdatePeriod="PT0.4S"><Period><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><SegmentURL media="v1.m4s"/></SegmentList></Representation><Representation id="a" mimeType="audio/mp4"><SegmentList duration="1"><SegmentURL media="a1.m4s"/></SegmentList></Representation></Period></MPD>"#;
+            let next = if video_advances {
+                initial
+                    .replace("v1.m4s", "v2.m4s")
+                    .replace("<SegmentURL media=\"a1.m4s\"/>", "")
+            } else {
+                initial
+                    .replace("a1.m4s", "a2.m4s")
+                    .replace("<SegmentURL media=\"v1.m4s\"/>", "")
+            };
+            let (url, server) = dash_response_server(vec![
+                (200, b"video".to_vec()),
+                (200, b"audio".to_vec()),
+                (200, next.into_bytes()),
+                (200, b"new".to_vec()),
+                (403, vec![]),
+            ]);
+            let root = std::env::temp_dir().join(format!(
+                "dash-independent-refresh-{}-{video_advances}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let result = download_live_dash(
+                parse_mpd(initial, &url).unwrap(),
+                initial.into(),
+                &url,
+                &HashMap::new(),
+                "",
+                &root,
+                &control,
+                0,
+                0,
+                false,
+                "",
+                &mut DashCheckpoint::load(&root),
+            );
+            assert!(result.unwrap_err().contains("HTTP 403"));
+            let dir = if video_advances {
+                root.clone()
+            } else {
+                root.join("audio")
+            };
+            assert_eq!(fs::read(dir.join("seg-0001.m4s")).unwrap(), b"new");
+            let other = if video_advances {
+                root.join("audio")
+            } else {
+                root.clone()
+            };
+            assert!(!other.join("seg-0001.m4s").exists());
+            server.join().unwrap();
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
