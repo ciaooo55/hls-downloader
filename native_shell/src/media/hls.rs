@@ -1443,31 +1443,8 @@ pub(super) fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
     replace_file_atomic(&temporary, path).map_err(|error| error.to_string())
 }
 
-#[cfg(windows)]
 pub(super) fn replace_file_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    crate::atomic_replace::replace_with_retry(|| {
-        let result = unsafe {
-            windows_sys::Win32::Storage::FileSystem::MoveFileExW(
-                from.as_ptr(),
-                to.as_ptr(),
-                windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
-                    | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
-            )
-        };
-        if result == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    })
-}
-
-#[cfg(not(windows))]
-pub(super) fn replace_file_atomic(from: &Path, to: &Path) -> std::io::Result<()> {
-    fs::rename(from, to)
+    crate::atomic_replace::replace_file(from, to)
 }
 
 fn sort_timeline(entries: &mut [TimelineEntry]) {
@@ -2931,6 +2908,21 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
+
+    #[cfg(windows)]
+    #[test]
+    fn media_checkpoints_replace_in_deep_unicode_directories() {
+        let root = std::env::temp_dir().join(format!("hls-long-media-{}", std::process::id()));
+        let mut directory = root.clone();
+        for _ in 0..6 {
+            directory.push(format!("deep-{}", "测".repeat(35)));
+        }
+        let path = directory.join("checkpoint.json");
+        write_text_atomic(&path, "first").unwrap();
+        write_text_atomic(&path, "second").unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), "second");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn playlist_requires_header_before_segment_or_document_content() {

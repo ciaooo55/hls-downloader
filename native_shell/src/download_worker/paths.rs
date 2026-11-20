@@ -18,6 +18,9 @@ pub struct TaskPaths {
 
 impl TaskPaths {
     pub fn for_task(task_id: &str, spec: &TaskSpec) -> Result<Self, String> {
+        if spec.filename.encode_utf16().count() > 255 {
+            return Err("文件名超过磁盘允许的长度（最多 255 个 UTF-16 单位），请缩短文件名".into());
+        }
         let task_dir = Self::task_dir_for(task_id, spec)?;
         let root = Self::download_root(spec);
         let mut final_name = safe_filename(&spec.filename, &spec.url);

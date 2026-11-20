@@ -4,6 +4,53 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
 #[test]
+fn oversized_filename_component_has_an_actionable_error() {
+    for filename in [
+        format!("{}.bin", "测".repeat(256)),
+        format!("{}.bin", "😀".repeat(128)),
+    ] {
+        let error = TaskPaths::for_task(
+            "task-1",
+            &TaskSpec {
+                filename,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("255 个 UTF-16 单位"), "{error}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn http_download_publishes_in_a_deep_unicode_directory() {
+    let root = std::env::temp_dir().join(format!("hls-long-http-{}", std::process::id()));
+    let mut directory = root.clone();
+    for _ in 0..6 {
+        directory.push(format!("deep-{}", "测".repeat(35)));
+    }
+    assert!(directory.to_string_lossy().encode_utf16().count() > 295);
+    fs::create_dir_all(&directory).unwrap();
+    let address = serve_http_fixture(b"deep unicode payload");
+    let coordinator = direct_http_coordinator(&directory);
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{address}/file.bin"),
+                filename: "深目录验证.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task = wait_for_task_status(&coordinator, "completed");
+    let output = PathBuf::from(&task.output_path);
+    assert_eq!(output.file_name().unwrap(), "深目录验证.bin");
+    assert_eq!(fs::read(&output).unwrap(), b"deep unicode payload");
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn stale_cast_control_cannot_stop_a_replacement_session() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     let previous = {
