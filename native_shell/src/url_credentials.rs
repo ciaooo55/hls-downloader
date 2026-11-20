@@ -3,9 +3,29 @@ use crate::CoreStore;
 use hls_client::url_credentials::map_ftp_passwords;
 use serde::{de::DeserializeOwned, Serialize};
 
+fn url_password_key(authority: &str) -> String {
+    let identity = authority.split_once("://").and_then(|(scheme, rest)| {
+        let scheme = scheme.to_ascii_lowercase();
+        let url = format!("{scheme}://{rest}/credential");
+        match scheme.as_str() {
+            "ftp" | "ftps" => crate::ftp_engine::parse_ftp_url(&url)
+                .ok()
+                .map(|target| (scheme, target.host, target.port, target.user)),
+            "sftp" => crate::sftp_engine::parse_sftp_url(&url)
+                .ok()
+                .map(|target| (scheme, target.host, target.port, target.user)),
+            _ => None,
+        }
+    });
+    match identity {
+        Some(identity) => format!("url-password:{}", serde_json::json!(identity)),
+        None => format!("url-password:{authority}"),
+    }
+}
+
 impl CoreStore {
     fn protect_url_password(&self, authority: &str, password: &str) -> Result<(), String> {
-        let key = format!("url-password:{authority}");
+        let key = url_password_key(authority);
         #[cfg(windows)]
         {
             let encoded = serde_json::to_string(password).map_err(|e| e.to_string())?;
@@ -76,7 +96,7 @@ impl CoreStore {
         let Some(at) = authority.rfind('@') else {
             return Ok(url.into());
         };
-        let key = format!("url-password:{scheme}://{authority}");
+        let key = url_password_key(&format!("{scheme}://{authority}"));
         #[cfg(windows)]
         let password: Option<String> = self
             .load_credential(&key)?
@@ -291,6 +311,49 @@ mod tests {
         let clean = store.sanitize_urls(url.to_string()).unwrap();
         assert_eq!(clean, "ftp://first last@host/file");
         assert_eq!(store.hydrate_url(&clean).unwrap(), url);
+    }
+
+    #[test]
+    fn url_password_keys_follow_engine_host_and_user_normalization() {
+        let store = CoreStore::in_memory().unwrap();
+        for (url, equivalent) in [
+            ("sftp://alice:secret@host /file", "sftp://alice@host/file"),
+            (
+                "sftp://a%6Cice:secret@HOST.:22/file",
+                "sftp://alice@host/file",
+            ),
+            ("ftp://a%6Cice:secret@host:21/file", "ftp://alice@host/file"),
+        ] {
+            let clean = store.sanitize_urls(url.to_string()).unwrap();
+            assert!(!clean.contains("secret"));
+            assert_eq!(store.hydrate_url(&clean).unwrap(), url);
+            let hydrated = store.hydrate_url(equivalent).unwrap();
+            if url.starts_with("sftp") {
+                let expected = crate::sftp_engine::parse_sftp_url(url).unwrap();
+                let actual = crate::sftp_engine::parse_sftp_url(&hydrated).unwrap();
+                assert_eq!(
+                    (actual.host, actual.port, actual.user, actual.password),
+                    (
+                        expected.host,
+                        expected.port,
+                        expected.user,
+                        expected.password
+                    )
+                );
+            } else {
+                let expected = crate::ftp_engine::parse_ftp_url(url).unwrap();
+                let actual = crate::ftp_engine::parse_ftp_url(&hydrated).unwrap();
+                assert_eq!(
+                    (actual.host, actual.port, actual.user, actual.password),
+                    (
+                        expected.host,
+                        expected.port,
+                        expected.user,
+                        expected.password
+                    )
+                );
+            }
+        }
     }
 
     #[test]
