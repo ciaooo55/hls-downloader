@@ -443,6 +443,7 @@ fn parse_mpd_with_url_budget(
                     bandwidth,
                     period_duration.filter(|_| !dynamic || has_timeline),
                     &mut media_durations,
+                    dynamic.then_some(&mut url_budget),
                 )?);
             }
             media_ranges.resize(media.len(), None);
@@ -471,6 +472,9 @@ fn parse_mpd_with_url_budget(
                 };
                 if url.is_empty() {
                     return Err("invalid DASH segment URL".into());
+                }
+                if dynamic {
+                    consume_live_url_budget(&url, &mut url_budget)?;
                 }
                 media.push(url);
                 media_ranges.push(range);
@@ -515,11 +519,6 @@ fn parse_mpd_with_url_budget(
             }
         }
         if dynamic {
-            if media_template.is_none() || has_timeline {
-                for url in &media {
-                    consume_live_url_budget(url, &mut url_budget)?;
-                }
-            }
             consume_live_url_budget(&base_url, &mut url_budget)?;
             if let Some(url) = &init {
                 consume_live_url_budget(url, &mut url_budget)?;
@@ -2475,6 +2474,7 @@ fn expand_timeline(
     bandwidth: u64,
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
+    mut url_budget: Option<&mut usize>,
 ) -> Result<Vec<String>, String> {
     let template_attr = |key: &str| {
         templates
@@ -2509,7 +2509,7 @@ fn expand_timeline(
                     durations.push((duration as f64 / timescale as f64).min(
                         (seconds - index as f64 * duration as f64 / timescale as f64).max(0.0),
                     ));
-                    media.push(resolve(
+                    let url = resolve(
                         base_url,
                         &apply_template(
                             template,
@@ -2518,7 +2518,11 @@ fn expand_timeline(
                             offset.saturating_add(index.saturating_mul(duration)),
                             bandwidth,
                         )?,
-                    ));
+                    );
+                    if let Some(budget) = url_budget.as_deref_mut() {
+                        consume_live_url_budget(&url, budget)?;
+                    }
+                    media.push(url);
                 }
             }
         }
@@ -2573,10 +2577,14 @@ fn expand_timeline(
         clock = time;
         for _ in 0..=repeat {
             durations.push(duration as f64 / timescale as f64);
-            media.push(resolve(
+            let url = resolve(
                 base_url,
                 &apply_template(template, id, number, clock, bandwidth)?,
-            ));
+            );
+            if let Some(budget) = url_budget.as_deref_mut() {
+                consume_live_url_budget(&url, budget)?;
+            }
+            media.push(url);
             number = number
                 .checked_add(1)
                 .ok_or("DASH segment number overflow")?;
@@ -4751,6 +4759,10 @@ mod tests {
         assert!(parse_mpd_with_url_budget(xml, &base, 0.0, 3000).is_ok());
         let list = r#"<MPD type="dynamic"><Period><Representation id="v"><SegmentList><SegmentURL media="a.m4s"/><SegmentURL media="b.m4s"/></SegmentList></Representation></Period></MPD>"#;
         assert!(parse_mpd_with_url_budget(list, &base, 3.0, 3000)
+            .unwrap_err()
+            .contains("live URL byte budget"));
+        let timeline = r#"<MPD type="dynamic"><Period><SegmentTemplate media="$Number$.m4s"><SegmentTimeline><S d="1" r="5"/></SegmentTimeline></SegmentTemplate><Representation id="v"/></Period></MPD>"#;
+        assert!(parse_mpd_with_url_budget(timeline, &base, 3.0, 5000)
             .unwrap_err()
             .contains("live URL byte budget"));
     }
