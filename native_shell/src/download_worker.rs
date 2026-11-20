@@ -222,6 +222,13 @@ pub(crate) fn provisional_task_name(spec: &TaskSpec) -> String {
     safe_filename(&spec.filename, &spec.url)
 }
 
+pub(crate) fn validate_filename(filename: &str) -> Result<(), String> {
+    if filename.encode_utf16().count() > 255 {
+        return Err("文件名超过磁盘允许的长度（最多 255 个 UTF-16 单位），请缩短文件名".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn safe_filename(filename: &str, url: &str) -> String {
     let candidate = if filename.trim().is_empty() {
         url.split(['?', '#'])
@@ -1723,6 +1730,7 @@ impl CoreCoordinator {
     }
 
     fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
+        validate_filename(&spec.filename)?;
         let client_dir = spec.download_dir.trim().to_string();
         if spec.local_source_path.is_none() {
             spec = apply_site_rules_to_spec(&self.core(), spec)?;
@@ -2294,8 +2302,9 @@ impl CoreCoordinator {
         }
         if status.as_deref() == Some("queued") {
             if let Some(spec) = spec.as_ref() {
-                let paths = TaskPaths::for_task(&task_id, spec)?;
-                if let Err(error) = paths.prepare().and_then(|_| paths.set_control("run")) {
+                if let Err(error) = TaskPaths::for_task(&task_id, spec)
+                    .and_then(|paths| paths.prepare().and_then(|_| paths.set_control("run")))
+                {
                     // 无效目录只阻止当前任务，不能把它留在队列头阻塞所有后续下载。
                     core.report_failure(
                         &task_id,

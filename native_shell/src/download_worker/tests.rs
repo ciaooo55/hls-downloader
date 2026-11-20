@@ -21,6 +21,95 @@ fn oversized_filename_component_has_an_actionable_error() {
     }
 }
 
+#[test]
+fn oversized_filenames_are_rejected_before_creation_and_rename() {
+    let mut core = PersistentCore::in_memory().unwrap();
+    for filename in ["测".repeat(256), "😀".repeat(128)] {
+        let error = core
+            .handle(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    filename,
+                    ..Default::default()
+                },
+            })
+            .unwrap_err();
+        assert!(error.contains("255 个 UTF-16 单位"), "{error}");
+        assert!(core.tasks().is_empty());
+    }
+    for filename in [String::new(), "valid.bin".into(), "测".repeat(255)] {
+        core.handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                filename: filename.clone(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        core.set_task_filename("task-1", filename).unwrap();
+    }
+    let original = core.task_spec("task-1").unwrap().clone();
+    let mut invalid = original.clone();
+    invalid.filename = "😀".repeat(128);
+    assert!(core
+        .replace_spec("task-1", invalid.clone())
+        .unwrap_err()
+        .contains("255 个 UTF-16 单位"));
+    assert!(core
+        .set_task_filename("task-1", invalid.filename)
+        .unwrap_err()
+        .contains("255 个 UTF-16 单位"));
+    assert_eq!(
+        core.task_spec("task-1").unwrap().filename,
+        original.filename
+    );
+    assert_eq!(core.snapshot("task-1").unwrap().filename, "测".repeat(255));
+}
+
+#[test]
+fn legacy_oversized_queued_filename_does_not_block_next_download() {
+    let root = lifecycle_test_root("legacy-oversized-name");
+    let address = serve_http_fixture(b"next task payload");
+    let mut runtime = crate::CoreRuntime::default();
+    let mut store = crate::CoreStore::in_memory().unwrap();
+    for filename in ["😀".repeat(128), "valid.bin".into()] {
+        let spec = TaskSpec {
+            url: format!("http://{address}/{filename}"),
+            filename,
+            download_dir: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let events = runtime.handle(CoreCommand::CreateTask { spec: spec.clone() });
+        store.apply_events_and_spec(&events, Some(&spec)).unwrap();
+    }
+    let coordinator = CoreCoordinator::new(PersistentCore::from_store(store).unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+    coordinator.start_next_queued(false).unwrap();
+    let failed = wait_for_task_status(&coordinator, "failed");
+    assert!(format!("{failed:?}").contains("255 个 UTF-16 单位"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let tasks = coordinator.tasks().unwrap();
+        if tasks
+            .iter()
+            .any(|task| task.task_id == "task-2" && task.status == "completed")
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{tasks:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        fs::read(root.join("valid.bin")).unwrap(),
+        b"next task payload"
+    );
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 fn http_download_publishes_in_a_deep_unicode_directory() {
