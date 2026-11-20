@@ -252,7 +252,7 @@ export component WorkbenchWindow inherits Window {
                             }
                             Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.line; }
                             WorkbenchButton { label: "设置"; icon: "settings"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
-                            WorkbenchButton { label: Tokens.dark ? "切换到浅色模式" : "切换到深色模式"; icon: Tokens.dark ? "sun" : "theme"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
+                            WorkbenchButton { label: "切换主题 / Cycle System, Light, Dark"; icon: Tokens.dark ? "sun" : "theme"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
                         }
                     }
                     VerticalLayout {

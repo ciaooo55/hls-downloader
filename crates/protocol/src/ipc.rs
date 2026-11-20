@@ -293,6 +293,8 @@ pub enum CorePipeResponse {
         #[serde(default)]
         dark_mode: bool,
         #[serde(default)]
+        theme_mode: String,
+        #[serde(default)]
         allow_duplicate: bool,
         #[serde(default)]
         queue_auto_start_enabled: bool,

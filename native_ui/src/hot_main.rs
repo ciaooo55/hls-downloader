@@ -16,10 +16,12 @@ mod resource_tools;
 mod service_settings;
 mod settings_editor;
 mod site_rules;
+mod speed_stats;
 mod system_tools;
 mod table_layout;
 mod target_check;
 mod task_list;
+mod theme;
 mod workbench;
 
 use hls_client::{
@@ -319,6 +321,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     progress.hide()?;
     complete.hide()?;
     apply_runtime_settings(&confirm, &progress, &complete, initial_runtime);
+    let theme_timer = Timer::default();
+    theme_timer.start(TimerMode::Repeated, Duration::from_secs(1), {
+        let settings = Rc::clone(&runtime_settings);
+        let confirm = confirm.as_weak();
+        let progress = progress.as_weak();
+        let complete = complete.as_weak();
+        move || {
+            let mut settings = settings.borrow_mut();
+            let dark = settings.theme_mode.is_dark();
+            if settings.dark != dark {
+                settings.dark = dark;
+                if let (Some(confirm), Some(progress), Some(complete)) =
+                    (confirm.upgrade(), progress.upgrade(), complete.upgrade())
+                {
+                    apply_runtime_settings(&confirm, &progress, &complete, *settings);
+                }
+            }
+        }
+    });
 
     let client = Rc::new(RefCell::new(initial_client));
     let workbench = Rc::new(RefCell::new(None::<Rc<workbench::Workbench>>));
@@ -1996,6 +2017,7 @@ struct PresenterRuntimeSettings {
     show_complete: bool,
     sound_enabled: bool,
     dark: bool,
+    theme_mode: theme::ThemeMode,
     reduce_motion: bool,
 }
 
@@ -2006,17 +2028,18 @@ impl PresenterRuntimeSettings {
                 progress_window_enabled,
                 complete_popup_enabled,
                 completion_sound_enabled,
-                dark_mode,
                 reduce_motion,
                 ..
             }) => Self {
                 show_progress: *progress_window_enabled,
                 show_complete: *complete_popup_enabled,
                 sound_enabled: *completion_sound_enabled,
-                dark: *dark_mode,
+                dark: theme::ThemeMode::from_response(response).is_dark(),
+                theme_mode: theme::ThemeMode::from_response(response),
                 reduce_motion: *reduce_motion || os_reduce_motion(),
             },
             _ => Self {
+                dark: theme::ThemeMode::System.is_dark(),
                 reduce_motion: os_reduce_motion(),
                 ..Self::default()
             },

@@ -60,6 +60,50 @@ pub struct Workbench {
 }
 
 impl Workbench {
+    fn apply_theme(&self, dark: bool) {
+        crate::native_window::apply_theme(&self.window, dark);
+        if let Some(editor) = self.editor.borrow().as_ref() {
+            crate::native_window::apply_theme(editor, dark);
+        }
+        if let Some((_, details)) = self.details.borrow().as_ref() {
+            crate::native_window::apply_theme(details, dark);
+        }
+        if let Some(queues) = self.queues.borrow().as_ref() {
+            crate::native_window::apply_theme(&queues.window, dark);
+        }
+        if let Some(tools) = self.tools.borrow().as_ref() {
+            crate::native_window::apply_theme(&tools.window, dark);
+        }
+        if let Some(service) = self.service_settings.borrow().as_ref() {
+            crate::native_window::apply_theme(&service.window, dark);
+        }
+        if let Some(cast) = self.cast.borrow().as_ref() {
+            cast.apply_theme(dark);
+        }
+        if let Some(system) = self.system.borrow().as_ref() {
+            system.apply_theme(dark);
+        }
+        if let Some(media) = self.media.borrow().as_ref() {
+            media.apply_theme(dark);
+        }
+
+        if let Some(editor) = self.settings.borrow().as_ref() {
+            crate::native_window::apply_theme(&editor.window, dark);
+        }
+    }
+
+    fn refresh_theme(&self) {
+        let response = self.settings_response.borrow();
+        let Some(response) = response.as_ref() else {
+            return;
+        };
+        let mode = crate::theme::ThemeMode::from_response(Some(response));
+        let dark = mode.is_dark();
+        if self.window.global::<Tokens>().get_dark() != dark {
+            self.apply_theme(dark);
+        }
+    }
+
     pub fn new(
         tasks: Vec<TaskSnapshot>,
         sequence: u64,
@@ -302,6 +346,7 @@ impl Workbench {
                     if !paths.is_empty() {
                         this.send(CoreCommand::ImportPaths { paths });
                     }
+                    this.refresh_theme();
                     this.render_details();
                     if let Some(tools) = this.tools.borrow().as_ref() {
                         tools.poll();
@@ -1122,11 +1167,13 @@ impl Workbench {
                 }
             }
             "theme" => {
-                let dark = !self.window.global::<Tokens>().get_dark();
-                crate::native_window::apply_theme(&self.window, dark);
+                let mode = crate::theme::ThemeMode::from_response(
+                    self.settings_response.borrow().as_ref(),
+                )
+                .next();
                 self.send(CoreCommand::SetSetting {
-                    key: "dark_mode".into(),
-                    value: dark.into(),
+                    key: "theme_mode".into(),
+                    value: mode.code().into(),
                 });
             }
             "start" | "pause" | "开始 / 继续" | "暂停" | "取消" => {
@@ -1370,37 +1417,10 @@ impl Workbench {
                 }
             }
             response @ CorePipeResponse::Settings { request_id, .. } => {
-                if let CorePipeResponse::Settings {
-                    task_sort,
-                    dark_mode,
-                    ..
-                } = &response
-                {
-                    crate::native_window::apply_theme(&self.window, *dark_mode);
-                    if let Some(editor) = self.editor.borrow().as_ref() {
-                        crate::native_window::apply_theme(editor, *dark_mode);
-                    }
-                    if let Some((_, details)) = self.details.borrow().as_ref() {
-                        crate::native_window::apply_theme(details, *dark_mode);
-                    }
-                    if let Some(queues) = self.queues.borrow().as_ref() {
-                        crate::native_window::apply_theme(&queues.window, *dark_mode);
-                    }
-                    if let Some(tools) = self.tools.borrow().as_ref() {
-                        crate::native_window::apply_theme(&tools.window, *dark_mode);
-                    }
-                    if let Some(service) = self.service_settings.borrow().as_ref() {
-                        crate::native_window::apply_theme(&service.window, *dark_mode);
-                    }
-                    if let Some(cast) = self.cast.borrow().as_ref() {
-                        cast.apply_theme(*dark_mode);
-                    }
-                    if let Some(system) = self.system.borrow().as_ref() {
-                        system.apply_theme(*dark_mode);
-                    }
-                    if let Some(media) = self.media.borrow().as_ref() {
-                        media.apply_theme(*dark_mode);
-                    }
+                if let CorePipeResponse::Settings { task_sort, .. } = &response {
+                    self.apply_theme(
+                        crate::theme::ThemeMode::from_response(Some(&response)).is_dark(),
+                    );
                     let changed = self.state.borrow().sort != *task_sort;
                     if changed {
                         self.state.borrow_mut().sort = task_sort.clone();
@@ -1723,6 +1743,10 @@ impl Workbench {
             .trim()
             .into(),
         );
+        let speeds = crate::speed_stats::summarize(task.speed_bytes_per_sec, &task.speed_history);
+        window.set_current_speed(format!("{} /s", crate::format_bytes(speeds.current)).into());
+        window.set_peak_speed(format!("{} /s", crate::format_bytes(speeds.peak)).into());
+        window.set_average_speed(format!("{} /s", crate::format_bytes(speeds.average)).into());
         let maximum = task.speed_history.iter().copied().max().unwrap_or(1).max(1) as f32;
         window.set_speed_history(ModelRc::new(VecModel::from(
             task.speed_history
@@ -1977,6 +2001,7 @@ impl Workbench {
                             }
                         }
                     }
+                    "preview_sound" => hls_client::completion_sound(),
                     "update" => {
                         if let Some(system) = this.system.borrow().as_ref() {
                             system.show("updates");

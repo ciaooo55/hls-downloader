@@ -11,6 +11,9 @@ export component DetailsWindow inherits Window {
     in property <string> filename;
     in property <string> status;
     in property <string> transfer;
+    in property <string> current-speed;
+    in property <string> peak-speed;
+    in property <string> average-speed;
     in property <float> progress;
     in property <[SegmentBlock]> segments;
     in property <string> connections;
@@ -30,11 +33,11 @@ export component DetailsWindow inherits Window {
         VerticalLayout {
         padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 14px;
         Rectangle {
-            height: 96px; background: Tokens.surface; border-radius: Tokens.card-radius; border-width: 1px; border-color: Tokens.line; clip: true;
+            height: 120px; background: Tokens.surface; border-radius: Tokens.card-radius; border-width: 1px; border-color: Tokens.line; clip: true;
             Text { x: 12px; y: 8px; text: "传输速度"; color: Tokens.ink; font-size: 12px; font-weight: 600; }
             // 速度柱放在内缩的绘图区里，不碰卡片圆角。
             Rectangle {
-                x: 12px; y: 28px; width: parent.width - 24px; height: parent.height - 38px;
+                x: 12px; y: 28px; width: parent.width - 24px; height: parent.height - 64px;
                 Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.hairline; }
                 for sample[index] in root.speed-history: Rectangle {
                     width: parent.width / max(root.speed-history.length, 1) - 1px;
@@ -43,6 +46,12 @@ export component DetailsWindow inherits Window {
                     background: Tokens.accent; opacity: 0.6;
                     animate height { duration: Tokens.motion-fast; easing: ease-out; }
                 }
+            }
+            HorizontalLayout {
+                x: 12px; y: parent.height - 28px; width: parent.width - 24px; height: 20px; spacing: 12px;
+                Text { text: "当前 / Current " + root.current-speed; color: Tokens.muted; font-size: 11px; }
+                Text { text: "峰值 / Peak " + root.peak-speed; color: Tokens.muted; font-size: 11px; }
+                Text { text: "平均 / Average " + root.average-speed; color: Tokens.muted; font-size: 11px; }
             }
         }
         Rectangle {

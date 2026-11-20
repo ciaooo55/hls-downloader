@@ -64,7 +64,14 @@ export component SettingsWindow inherits Window {
                     for field in root.fields: VerticalLayout {
                         spacing: 8px;
                         if field.kind != "bool": Text { text: field.label; color: Tokens.muted; font-size: 12px; wrap: word-wrap; }
-                        if field.kind == "bool": HotCheckBox { text: field.label; checked <=> field.checked; toggled => { root.edited(field.key, self.checked ? "true" : "false"); } }
+                        if field.kind == "bool": HorizontalLayout {
+                            spacing: Tokens.control-gap; alignment: start;
+                            HotCheckBox { text: field.label; checked <=> field.checked; toggled => { root.edited(field.key, self.checked ? "true" : "false"); } }
+                            if field.key == "completion_sound_enabled": HotButton {
+                                label: "试听提示音 / Preview sound"; icon: "play";
+                                clicked => { root.action("preview_sound"); }
+                            }
+                        }
                         if field.kind == "choice": HotComboBox { model: field.choices; current-value <=> field.value; height: Tokens.control-height; selected(value) => { root.edited(field.key, value); } }
                         if field.kind == "text" || field.kind == "number" || field.kind == "directory": HorizontalLayout {
                             spacing: Tokens.control-gap;

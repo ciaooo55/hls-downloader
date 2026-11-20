@@ -89,7 +89,7 @@ const FIELDS: &[(&str, &str, &str)] = &[
     ("安全", "av_scan_fail_on_threat", "发现威胁时阻止打开"),
     ("浏览器", "takeover_enabled", "启用浏览器接管"),
     ("浏览器", "takeover_minimum_bytes", "自动接管最小字节数"),
-    ("外观", "dark_mode", "深色模式"),
+    ("外观", "theme_mode", "主题 / Theme"),
     ("外观", "reduce_motion", "减少动态效果"),
     ("外观", "task_sort", "任务排序"),
 ];
@@ -97,6 +97,11 @@ const FIELDS: &[(&str, &str, &str)] = &[
 // Choice settings keep Core values in storage and show product copy in the UI.
 fn choice_options(key: &str) -> &'static [(&'static str, &'static str)] {
     match key {
+        "theme_mode" => &[
+            ("system", "跟随系统 / System"),
+            ("light", "浅色 / Light"),
+            ("dark", "深色 / Dark"),
+        ],
         "proxy_mode" => &[
             ("direct", "直连"),
             ("system", "系统代理"),
@@ -357,13 +362,9 @@ impl SettingsEditor {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        crate::native_window::apply_theme(
-            &self.window,
-            self.values
-                .get("dark_mode")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        );
+        let mode = crate::theme::ThemeMode::from_response(Some(response));
+        self.values.insert("theme_mode".into(), mode.code().into());
+        crate::native_window::apply_theme(&self.window, mode.is_dark());
         if saved {
             self.dirty.clear();
             self.invalid.clear();
