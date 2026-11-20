@@ -29,11 +29,16 @@ HLS Downloader 是一款面向 Windows 的桌面下载管理器。它把普通�
 
 Windows x64 用户请到[正式版下载页](https://github.com/ciaooo55/hls-downloader/releases/latest)选择 **Windows-x64.exe**。使用 Chrome 或 Edge 接管下载时，另取同一版本的 Chromium 扩展。企业部署可选择 MSI，免安装使用 Portable ZIP。
 
-当前正式版为 [7.0.10](docs/releases/v7.0.10.md)。Windows 安装包未签名，更新需手动安装。Firefox 提供待签名包和源码，标准版永久安装需要 Mozilla 签名。
+当前源码目标版本为 [10.0.0（发布草案）](docs/releases/v10.0.0.md)，是清理历史架构后的新产品线首版，尚未正式发布。Windows 安装包未签名，更新需手动安装。Firefox 提供待签名包和源码，标准版永久安装需要 Mozilla 签名。
 
 安装向导支持选择安装目录。首次使用默认保存到当前 Windows 用户的系统“下载”文件夹，也支持已移动到其他磁盘的下载文件夹；可以在设置或每次确认下载时更改。安装包不含个人任务、下载文件或服务密钥。
 
 当前原生实现、验证范围与组件构建状态见[原生迁移记录](docs/validation/native-migration-progress.md)，逐项范围见[功能映射](docs/validation/native-feature-mapping.md)。[历史交付记录](docs/validation/convergence.md)不代表当前源码或组件版本。功能合同的 readiness 表示实现可进入冻结发布验收，正式交付仍须通过同源成品与安装启动门禁。
+
+### 从 5.x/7.x 升级
+
+- **7.x → 10.0.0**：使用 MSI 覆盖升级，沿用原安装与升级身份，保留任务、设置和 `%LOCALAPPDATA%\HLS Downloader\v7` 数据目录；不要为版本号手动改名或清空该目录。发布前仍须完成 Windows 实际升级验收。
+- **5.x（Tauri/Python）→ 10.0.0**：请备份旧配置、任务库和下载文件，再全新安装。当前 Rust Core **没有自动导入 5.x 任务库、设置或凭据的迁移器**；请重新配置，勿用旧数据库覆盖原生 Core 的数据库。
 
 ### 系统要求
 
@@ -41,13 +46,13 @@ Windows x64 用户请到[正式版下载页](https://github.com/ciaooo55/hls-dow
 | --- | --- |
 | 操作系统 | Windows 10 或 Windows 11（x64） |
 | 处理器架构 | **仅 x64**。播放与部分抓取依赖随包的 x64 原生库（libmpv、curl-impersonate），ARM64 Windows 无法运行 |
-| 运行时 | 7.0.10 原生正式版无需 Java，包内不含 JRE；历史 Compose 版本自带 JRE |
+| 运行时 | 10.0.0 原生实现无需 Java，包内不含 JRE；历史 Compose 版本自带 JRE |
 | 权限 | MSI 安装或覆盖升级需要管理员权限；便携包以对应发布说明为准 |
 | 浏览器 | Chromium 系（Chrome / Edge）或 Firefox，用于下载接管 |
 | 显示器 | 最低 1024×600；界面跟随系统 DPI 缩放 |
 
 > [!NOTE]
-> **7.0.10 正式版**的受测源码为 `deb42d1b`。`main` 可继续包含后续提交；成品身份以发布附件 `ARTIFACT-MANIFEST.json` 为准。
+> **10.0.0 正在准备发布，尚无本版本的成品验收结论。** 历史 [7.0.10 正式版](docs/releases/v7.0.10.md)受测源码为 `deb42d1b`，其证据不代表 10.0.0 已验收；正式成品身份以对应发布附件 `ARTIFACT-MANIFEST.json` 为准。
 
 网页在线字幕的服务、API Key、全局开关、语言、同步模式、原文显示和默认偏移统一在主程序“设置 → 字幕翻译”中配置；Key 由 Core 加密保存。插件仅提供网页开关、播放器选择和开始/停止，默认自动识别到中文。播放器支持本页字幕时间微调、跳到下一句，并对可独立读取的点播音轨最多提前翻译 30 秒。[QwenCloud 配置与使用方法](docs/guides/qwencloud-subtitles.md)包含本机加密备份导入和其他电脑的配置说明。
 
@@ -85,7 +90,7 @@ Windows x64 用户请到[正式版下载页](https://github.com/ciaooo55/hls-dow
 
 当前源码将点击前识别的明确链接通过 Native Messaging 交给 Core 下载。浏览器已经发出请求的普通文件与音视频文件，以及 POST 表单、Blob/data 生成文件，由浏览器保全原响应，完成后导入桌面任务；导入成功后删除浏览器源副本，拒绝或失败时保留文件。默认自动接管全部文件大小；按住 Alt、关闭接管或命中排除规则时保留浏览器下载。
 
-原响应保全避免对一次性地址再次请求，但这部分文件的网络传输由浏览器完成，桌面确认在完成后出现；保全阶段关闭浏览器可能中断传输。HLS/DASH 媒体清单仍交给 Core 的媒体引擎，不将清单本身当作视频成品。7.0.10 已通过独立 Windows 上的 Edge / Firefox 识别、凭据、回执恢复及实际 Host / Core 接管回归；浏览器下载创建事件仍按入口记录。
+原响应保全避免对一次性地址再次请求，但这部分文件的网络传输由浏览器完成，桌面确认在完成后出现；保全阶段关闭浏览器可能中断传输。HLS/DASH 媒体清单仍交给 Core 的媒体引擎，不将清单本身当作视频成品。历史版本已通过独立 Windows 上的 Edge / Firefox 识别、凭据、回执恢复及实际 Host / Core 接管回归（见当前验证表，不表示 10.0.0 已验收）；浏览器下载创建事件仍按入口记录。
 
 这意味着浏览器只是入口，而不是下载生命周期的所有者：浏览器崩溃、关闭或扩展重新连接时，已经进入 Core 的任务仍由桌面端自己的持久状态管理。
 
@@ -101,7 +106,7 @@ flowchart LR
     C --> M["Local Player · LAN Cast"]
 ```
 
-**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。7.0.10 正式包采用 Rust / Slint 原生入口；历史工作台源码可通过 Git 标签查看。同源验收与发布记录见[当前验证表](docs/validation/current-evidence.json)。
+**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。10.0.0 采用 Rust / Slint 原生入口；历史工作台源码可通过 Git 标签查看。同源验收与发布记录见[当前验证表](docs/validation/current-evidence.json)。
 
 ## 📁 项目结构
 

@@ -339,6 +339,13 @@ mod tests {
     }
 
     #[test]
+    fn compares_clean_line_major_upgrade_numerically() {
+        assert!(is_newer_version("v10.0.0", "7.0.10"));
+        assert!(!is_newer_version("7.0.10", "10.0.0"));
+        assert!(!is_newer_version("10.0.0", "10.0.0"));
+    }
+
+    #[test]
     fn parses_github_payload() {
         let json = r#"{"tag_name":"v7.1.0","html_url":"https://github.com/ciaooo55/hls-downloader/releases/tag/v7.1.0","body":"fixes","assets":[{"name":"HLSDownloader-7.1.0-Windows-x64-Setup.exe","browser_download_url":"https://github.com/ciaooo55/hls-downloader/releases/download/v7.1.0/Setup.exe","size":5,"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"name":"HLSDownloader-7.1.0-Windows-x64.msi","browser_download_url":"https://github.com/ciaooo55/hls-downloader/releases/download/v7.1.0/HLSDownloader.msi","size":154453055,"digest":"sha256:a761c958bffea479f736c987be5e335bce6914ddb0267ef6fdd1a3673ac661b0"}]}"#;
         let info = parse_github_release(json, "6.0.0-dev").unwrap();
