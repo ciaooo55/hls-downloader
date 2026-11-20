@@ -201,6 +201,71 @@ fn duplicate_identity_requires_same_safe_request_shape() {
 }
 
 #[test]
+fn password_bearing_ftp_duplicates_reuse_tasks_and_refresh_credentials() {
+    for (scheme, kind) in [("ftp", ResourceKind::Ftp), ("sftp", ResourceKind::Sftp)] {
+        for status in ["paused", "failed"] {
+            let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+            coordinator
+                .set_setting("legal_terms_accepted", serde_json::json!(true))
+                .unwrap();
+            let spec = TaskSpec {
+                url: format!("{scheme}://alice:original@host/file.bin"),
+                resource_kind: kind,
+                filename: "file.bin".into(),
+                scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                start_paused: true,
+                ..Default::default()
+            };
+            coordinator.dispatch_created(spec.clone()).unwrap();
+            let id = coordinator.tasks().unwrap()[0].task_id.clone();
+            assert_eq!(
+                CoreCoordinator::duplicate_of(&coordinator.lock().unwrap(), &spec)
+                    .unwrap()
+                    .0,
+                id
+            );
+            for secret in ["original", "renewed"] {
+                coordinator
+                    .lock()
+                    .unwrap()
+                    .handle(CoreCommand::UpdateProgress {
+                        task_id: id.clone(),
+                        downloaded_bytes: 0,
+                        total_bytes: None,
+                        speed_bytes_per_sec: 0,
+                        stage: "transfer".into(),
+                        status: status.into(),
+                    })
+                    .unwrap();
+                let incoming = TaskSpec {
+                    url: format!("{scheme}://alice:{secret}@host/file.bin"),
+                    ..spec.clone()
+                };
+                let events = coordinator.dispatch_created(incoming.clone()).unwrap();
+                assert!(!events
+                    .iter()
+                    .any(|event| matches!(event.event, CoreEvent::TaskCreated { .. })));
+                let tasks = coordinator.tasks().unwrap();
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].task_id, id);
+                assert_eq!(tasks[0].url, format!("{scheme}://alice@host/file.bin"));
+                assert_eq!(tasks[0].status, "queued");
+                let core = coordinator.lock().unwrap();
+                assert_eq!(
+                    core.store().hydrate_url(&tasks[0].url).unwrap(),
+                    incoming.url
+                );
+                assert!(
+                    !serde_json::to_string(&core.store().load_task_specs().unwrap())
+                        .unwrap()
+                        .contains(secret)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn concurrent_stale_duplicate_lookups_commit_one_task_unless_explicitly_allowed() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     coordinator

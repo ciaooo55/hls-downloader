@@ -15,7 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 pub struct CoreStore {
-    connection: Connection,
+    pub(crate) connection: Connection,
+    #[cfg(not(windows))]
+    pub(crate) url_passwords: std::cell::RefCell<BTreeMap<String, String>>,
     path: Option<PathBuf>,
 }
 
@@ -66,6 +68,8 @@ impl CoreStore {
         mark("version_read");
         let mut store = Self {
             connection,
+            #[cfg(not(windows))]
+            url_passwords: Default::default(),
             path: Some(path.to_path_buf()),
         };
         // 文件库可能另有进度写线程的连接（见 `progress_writer`）。显式事务一律 IMMEDIATE：
@@ -75,6 +79,7 @@ impl CoreStore {
             .connection
             .set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         store.initialize(existing)?;
+        store.migrate_url_passwords()?;
         mark("initialized");
         Ok(store)
     }
@@ -84,6 +89,8 @@ impl CoreStore {
             .map_err(|error| format!("open in-memory Core database: {error}"))?;
         let mut store = Self {
             connection,
+            #[cfg(not(windows))]
+            url_passwords: Default::default(),
             path: None,
         };
         store.initialize(0)?;
@@ -164,7 +171,8 @@ impl CoreStore {
     }
 
     pub(crate) fn save_crawl(&self, state: &crate::crawl::CrawlState) -> Result<(), String> {
-        let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
+        let state = self.sanitize_urls(state.clone())?;
+        let json = serde_json::to_string(&state).map_err(|e| e.to_string())?;
         if json.len() > 3 * 1024 * 1024 {
             return Err("抓站项目状态超过 3 MiB 上限".into());
         }
@@ -341,6 +349,14 @@ impl CoreStore {
         settings: Option<&BTreeMap<String, serde_json::Value>>,
         handoff: Option<&crate::contract::BrowserHandoff>,
     ) -> Result<(), String> {
+        let events = self.sanitize_urls(events.to_vec())?;
+        let spec = self.sanitize_urls(spec.cloned())?;
+        let settings = self.sanitize_urls(settings.cloned())?;
+        let handoff = self.sanitize_urls(handoff.cloned())?;
+        let events = events.as_slice();
+        let spec = spec.as_ref();
+        let settings = settings.as_ref();
+        let handoff = handoff.as_ref();
         if events.is_empty()
             && spec.is_none()
             && settings.is_none_or(BTreeMap::is_empty)
@@ -538,6 +554,7 @@ impl CoreStore {
     }
 
     pub fn set_setting<T: serde::Serialize>(&mut self, key: &str, value: T) -> Result<(), String> {
+        let value = self.sanitize_urls(serde_json::to_value(value).map_err(|e| e.to_string())?)?;
         let value = serde_json::to_string(&value)
             .map_err(|error| format!("encode Core setting {key}: {error}"))?;
         self.connection
@@ -554,11 +571,12 @@ impl CoreStore {
         &mut self,
         values: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
+        let values = self.sanitize_urls(values.clone())?;
         let transaction = self
             .connection
             .transaction()
             .map_err(|error| format!("begin Core settings transaction: {error}"))?;
-        for (key, value) in values {
+        for (key, value) in &values {
             let encoded = serde_json::to_string(value)
                 .map_err(|error| format!("encode Core setting {key}: {error}"))?;
             transaction
@@ -588,6 +606,8 @@ impl CoreStore {
         write: Option<CredentialWrite<'_>>,
         settings: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
+        let settings = self.sanitize_urls(settings.clone())?;
+        let settings = &settings;
         self.commit_with_durability(true, |connection| {
         let transaction = connection.transaction()
             .map_err(|error| format!("begin Core credential transaction: {error}"))?;
@@ -687,6 +707,7 @@ impl CoreStore {
         task_id: Option<&str>,
         created_at_ms: u64,
     ) -> Result<(), String> {
+        let handoff_json = self.sanitize_urls(handoff_json.to_string())?;
         self.commit_with_durability(true, |connection| {
         connection.execute(
                 "INSERT INTO handoffs(handoff_id, public_json, status, task_id, created_at_ms)\
@@ -1404,6 +1425,8 @@ mod tests {
             .unwrap();
         let mut old = CoreStore {
             connection,
+            #[cfg(not(windows))]
+            url_passwords: Default::default(),
             path: Some(database.clone()),
         };
         let mut runtime = CoreRuntime::new();
@@ -1506,6 +1529,8 @@ mod tests {
                 .unwrap();
             let mut store = CoreStore {
                 connection,
+                #[cfg(not(windows))]
+                url_passwords: Default::default(),
                 path: None,
             };
             assert!(store.initialize(version).is_err());

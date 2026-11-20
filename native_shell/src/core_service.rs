@@ -49,7 +49,8 @@ impl PersistentCore {
     }
 
     pub(crate) fn admit_handoff(&mut self, encoded: &str) -> Result<String, String> {
-        let handoff: crate::contract::BrowserHandoff = serde_json::from_str(encoded)
+        let encoded = self.store.sanitize_urls(encoded.to_string())?;
+        let handoff: crate::contract::BrowserHandoff = serde_json::from_str(&encoded)
             .map_err(|error| format!("decode browser handoff: {error}"))?;
         if handoff.id.trim().is_empty()
             || handoff.offer.handoff_id != handoff.id
@@ -92,6 +93,7 @@ impl PersistentCore {
     }
 
     pub fn handle(&mut self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
+        let command = self.store.sanitize_urls(command)?;
         if let CoreCommand::GetTaskLog { task_id } = &command {
             let mut lines = self.store.load_task_log(task_id, 500)?;
             if lines.is_empty() {
@@ -268,6 +270,7 @@ impl PersistentCore {
     }
 
     pub fn emit(&mut self, event: crate::CoreEvent) -> Result<Vec<EventEnvelope>, String> {
+        let event = self.store.sanitize_urls(event)?;
         let envelope = EventEnvelope {
             sequence: self.runtime.latest_sequence() + 1,
             event,
@@ -423,6 +426,7 @@ impl PersistentCore {
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
+        let spec = self.store.sanitize_urls(spec)?;
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();
         self.runtime.replace_spec(task_id, spec.clone());

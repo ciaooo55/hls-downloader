@@ -42,6 +42,8 @@ mod ftp_engine;
 mod harvest;
 #[cfg(feature = "full-core")]
 mod http_engine;
+#[cfg(feature = "full-core")]
+mod url_credentials;
 use hls_client::instance;
 #[cfg(feature = "full-core")]
 mod link_file;
