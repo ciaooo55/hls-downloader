@@ -2415,7 +2415,12 @@ fn canonical_url(value: &str) -> &str {
 fn task_status_label(status: &str) -> &str {
     match status {
         "downloading" => "下载中",
+        "recording" => "录制中",
+        "merging" => "合并中",
+        "checking" => "校验中",
+        "parsing" => "解析中",
         "paused" => "已暂停",
+        "canceled" | "cancelled" => "已取消",
         "completed" | "done" => "已完成",
         "failed" | "error" => "失败",
         "queued" => "排队中",
@@ -2611,9 +2616,32 @@ mod tests {
     use super::{
         build_segment_blocks, confirm_window_logical_size, download_category, file_extension,
         format_connection_summary, format_request_details, format_resource_meta, safe_display_url,
-        ActiveTaskHud,
+        task_status_label, ActiveTaskHud,
     };
     use hls_client::{ConnectionPart, ResourceKind, ResourceOffer, TaskSnapshot};
+
+    #[test]
+    fn task_status_labels_cover_core_states_and_preserve_unknown_values() {
+        for (status, label) in [
+            ("queued", "排队中"),
+            ("downloading", "下载中"),
+            ("recording", "录制中"),
+            ("merging", "合并中"),
+            ("checking", "校验中"),
+            ("parsing", "解析中"),
+            ("paused", "已暂停"),
+            ("canceled", "已取消"),
+            ("cancelled", "已取消"),
+            ("completed", "已完成"),
+            ("done", "已完成"),
+            ("failed", "失败"),
+            ("error", "失败"),
+            ("", ""),
+            ("future_status", "future_status"),
+        ] {
+            assert_eq!(task_status_label(status), label, "{status}");
+        }
+    }
 
     #[test]
     fn confirm_window_size_matches_work_area_height_at_each_dpi() {
