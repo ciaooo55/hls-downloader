@@ -345,6 +345,17 @@ impl PersistentCore {
         Ok(events)
     }
 
+    pub fn set_task_filename(
+        &mut self,
+        task_id: &str,
+        filename: String,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.set_task_filename(task_id, filename);
+        self.persist_runtime_events(before, sequence)
+    }
+
     pub fn set_output_path(
         &mut self,
         task_id: &str,
@@ -878,6 +889,9 @@ mod tests {
         assert!(core.handle(progress.clone()).is_err());
         assert!(core
             .set_output_path("task-1", "changed.bin".into())
+            .is_err());
+        assert!(core
+            .set_task_filename("task-1", "changed.bin".into())
             .is_err());
         let mut changed = spec.clone();
         changed.url = "https://example.test/changed.bin".into();

@@ -157,8 +157,7 @@ pub struct TorrentMeta {
     pub files: Vec<TorrentFileEntry>,
 }
 
-#[cfg(test)]
-fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
+pub(crate) fn parse_magnet(uri: &str) -> Result<TorrentMeta, String> {
     parse_magnet_sources(uri).map(|(magnet, _)| magnet)
 }
 

@@ -248,6 +248,20 @@ pub fn typed_output_path(
 }
 
 fn disposition_extension(value: &str) -> String {
+    let filename = disposition_filename(value);
+    let extension = Path::new(&filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension.len() <= 12 && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        extension
+    } else {
+        String::new()
+    }
+}
+
+pub(crate) fn disposition_filename(value: &str) -> String {
     let mut plain = String::new();
     let mut quoted = false;
     let mut escaped = false;
@@ -301,21 +315,14 @@ fn disposition_extension(value: &str) -> String {
         } else {
             raw.to_string()
         };
-        let extension = Path::new(&name)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if extension.is_empty()
-            || extension.len() > 12
-            || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        {
+        if name.trim().is_empty() || name.chars().any(char::is_control) {
             continue;
         }
+        let name = crate::download_worker::safe_filename(&name, "");
         if key.eq_ignore_ascii_case("filename*") {
-            return extension;
+            return name;
         }
-        plain = extension;
+        plain = name;
     }
     plain
 }

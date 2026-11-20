@@ -213,7 +213,16 @@ pub(crate) fn hydrate_replay_headers(
     Ok((spec, replay))
 }
 
-fn safe_filename(filename: &str, url: &str) -> String {
+pub(crate) fn provisional_task_name(spec: &TaskSpec) -> String {
+    if spec.filename.trim().is_empty() && spec.url.starts_with("magnet:?") {
+        return crate::torrent_engine::parse_magnet(&spec.url)
+            .map(|meta| safe_filename(&meta.name, ""))
+            .unwrap_or_else(|_| "torrent".into());
+    }
+    safe_filename(&spec.filename, &spec.url)
+}
+
+pub(crate) fn safe_filename(filename: &str, url: &str) -> String {
     let candidate = if filename.trim().is_empty() {
         url.split(['?', '#'])
             .next()
@@ -973,7 +982,6 @@ impl CoreCoordinator {
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
             let spec = self.apply_defaults_to_spec(spec)?;
-            let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
                 events.extend(self.dispatch_created(spec)?);
@@ -1018,10 +1026,37 @@ impl CoreCoordinator {
                         imported.queue_id = crate::DEFAULT_QUEUE_ID.into();
                     }
                     imported.allow_duplicate = spec.allow_duplicate;
-                    self.apply_defaults_to_spec(imported)
+                    let imported = self.apply_defaults_to_spec(imported)?;
+                    validate_torrent_spec(imported, settings.bt_enable_dht)
                 })
                 .collect();
         }
+        let enable_dht = self.settings()?.bt_enable_dht;
+        self.expand_new_sources(spec, auto, &dirs)?
+            .into_iter()
+            .map(|spec| {
+                let mut spec = validate_torrent_spec(spec, enable_dht)?;
+                if spec.resource_kind == crate::ResourceKind::Torrent {
+                    spec.download_dir = crate::category::resolve_category_dir(
+                        &spec.download_dir,
+                        &spec.filename,
+                        &spec.url,
+                        spec.resource_kind,
+                        auto,
+                        &dirs,
+                    );
+                }
+                Ok(spec)
+            })
+            .collect()
+    }
+
+    fn expand_new_sources(
+        &self,
+        spec: TaskSpec,
+        auto: bool,
+        dirs: &crate::category::CategoryDirs,
+    ) -> Result<Vec<TaskSpec>, String> {
         if let Some(urls) = crate::link_file::expand_source(&spec.url)? {
             let mut specs = Vec::new();
             for url in urls {
@@ -1029,9 +1064,9 @@ impl CoreCoordinator {
                     continue;
                 }
                 if crate::looks_like_metalink(&url) {
-                    specs.extend(specs_from_metalink(&url, &spec, auto, &dirs)?);
+                    specs.extend(specs_from_metalink(&url, &spec, auto, dirs)?);
                 } else {
-                    specs.push(spec_from_url(&spec, &url, &spec.filename, auto, &dirs));
+                    specs.push(spec_from_url(&spec, &url, &spec.filename, auto, dirs));
                 }
             }
             if specs.is_empty() {
@@ -1049,7 +1084,7 @@ impl CoreCoordinator {
             .map_err(|error| error.to_string())?;
             let text = String::from_utf8_lossy(&body);
             if crate::looks_like_metalink(&text) {
-                return specs_from_metalink(&text, &spec, auto, &dirs);
+                return specs_from_metalink(&text, &spec, auto, dirs);
             }
             let links = crate::harvest_html(&text, &spec.url);
             if links.is_empty() {
@@ -1058,11 +1093,11 @@ impl CoreCoordinator {
             return Ok(links
                 .into_iter()
                 .filter(|link| reject_task_url(&link.url).is_ok())
-                .map(|link| spec_from_url(&spec, &link.url, &link.filename, auto, &dirs))
+                .map(|link| spec_from_url(&spec, &link.url, &link.filename, auto, dirs))
                 .collect());
         }
         if crate::looks_like_metalink(&spec.url) {
-            return specs_from_metalink(&spec.url, &spec, auto, &dirs);
+            return specs_from_metalink(&spec.url, &spec, auto, dirs);
         }
         let lower = spec.url.to_ascii_lowercase();
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
@@ -1073,14 +1108,14 @@ impl CoreCoordinator {
                 1024 * 1024,
             )
             .map_err(|error| error.to_string())?;
-            return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, &dirs);
+            return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, dirs);
         }
         Ok(vec![spec_from_url(
             &spec,
             &spec.url,
             &spec.filename,
             auto,
-            &dirs,
+            dirs,
         )])
     }
 
@@ -2473,9 +2508,7 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
     let meta =
         crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy, enable_dht)?;
     let mut checked = spec;
-    if checked.filename.trim().is_empty() {
-        checked.filename = safe_filename(&meta.name, &checked.url);
-    }
+    checked.filename = resolved_torrent_filename(&checked, &meta.name);
     if checked.title.trim().is_empty() {
         checked.title = checked.filename.clone();
     }
@@ -2491,6 +2524,25 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
         checked.expected_size = Some(meta.length);
     }
     Ok(checked)
+}
+
+fn resolved_torrent_filename(spec: &TaskSpec, metadata_name: &str) -> String {
+    let provisional = spec.filename.trim().is_empty()
+        || spec.filename == safe_filename("", &spec.url)
+        || (spec.url.starts_with("magnet:?")
+            && spec.filename
+                == provisional_task_name(&TaskSpec {
+                    filename: String::new(),
+                    ..spec.clone()
+                }));
+    safe_filename(
+        if provisional {
+            metadata_name
+        } else {
+            &spec.filename
+        },
+        &spec.url,
+    )
 }
 
 fn current_progress(core: &Arc<Mutex<PersistentCore>>, task_id: &str) -> (u64, Option<u64>) {
@@ -2684,7 +2736,7 @@ fn run_task_with_throttle(
             complete_payload(&core, task_id, &paths, &paths.output, &spec)
         }
         crate::ResourceKind::Torrent => {
-            let paths = TaskPaths::for_task(task_id, &spec)?;
+            let mut paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
             initialize_torrent_selection(&paths.torrent_selection, &spec.torrent_selection)?;
             let torrent_options = {
@@ -2733,6 +2785,11 @@ fn run_task_with_throttle(
                     &mut telemetry_reporter,
                 )
             })?;
+            let filename = resolved_torrent_filename(&spec, &meta.name);
+            paths.final_output = paths.final_output.with_file_name(&filename);
+            core.lock()
+                .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                .set_task_filename(task_id, filename)?;
             let (downloaded, total) = current_progress(&core, task_id);
             mark_progress(&core, task_id, downloaded, total, "checking", "checking")?;
             let latest_spec = {
@@ -2744,8 +2801,8 @@ fn run_task_with_throttle(
                     .cloned()
                     .unwrap_or_else(|| spec.clone())
             };
-            if meta.multi_file || !latest_spec.torrent_selection.is_empty() {
-                let destination = paths.torrent_directory(&spec);
+            if meta.multi_file {
+                let destination = paths.final_output.clone();
                 ensure_publish_allowed(&paths.control)?;
                 // Validate the final selection against the metadata actually used by BT.
                 // A late selection update must not publish a hole in the sparse payload.
@@ -2866,7 +2923,7 @@ fn run_http_file(
     spec: TaskSpec,
     replay_json: String,
 ) -> Result<(), String> {
-    let (mut job, paths) = build_job(task_id, &spec)?;
+    let (mut job, mut paths) = build_job(task_id, &spec)?;
     job.replay_json = replay_json;
     let temporary_body = materialize_replay_request_body(&job.replay_json, &paths)?;
     if let Some(path) = &temporary_body.0 {
@@ -2891,7 +2948,16 @@ fn run_http_file(
         let _ = sender.send(result);
     });
     loop {
-        match receiver.recv_timeout(Duration::from_millis(200)) {
+        let result = receiver.recv_timeout(Duration::from_millis(200));
+        if spec.filename.trim().is_empty() {
+            if let Some(filename) = http_response_filename(&paths) {
+                paths.final_output = paths.final_output.with_file_name(&filename);
+                core.lock()
+                    .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                    .set_task_filename(task_id, filename)?;
+            }
+        }
+        match result {
             Ok(result) => {
                 let report = result.map_err(|error| match error {
                     crate::http_engine::EngineError::RangeUnsupported(message)
@@ -2939,6 +3005,15 @@ fn run_http_file(
             }
         }
     }
+}
+
+fn http_response_filename(paths: &TaskPaths) -> Option<String> {
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(paths.progress.with_extension("response.json")).ok()?)
+            .ok()?;
+    let filename =
+        crate::output_path::disposition_filename(metadata.get("content_disposition")?.as_str()?);
+    (!filename.is_empty()).then_some(filename)
 }
 
 fn materialize_replay_request_body(
@@ -4164,14 +4239,16 @@ fn spec_from_url(
     }
     spec.harvest = false;
     drop_cross_origin_task_secrets(&mut spec, &template.url, url);
-    spec.download_dir = crate::category::resolve_category_dir(
-        &template.download_dir,
-        &spec.filename,
-        &spec.url,
-        spec.resource_kind,
-        auto,
-        dirs,
-    );
+    if spec.resource_kind != crate::ResourceKind::Torrent {
+        spec.download_dir = crate::category::resolve_category_dir(
+            &template.download_dir,
+            &spec.filename,
+            &spec.url,
+            spec.resource_kind,
+            auto,
+            dirs,
+        );
+    }
     spec
 }
 
