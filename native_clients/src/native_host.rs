@@ -570,7 +570,16 @@ impl NativeHostSession {
                 request_method: offer.request_method,
                 credential_ref: owned_credential_ref.clone().or(offer.credential_ref),
                 replay_context_ref: offer.replay_context_ref,
-                concurrency: 8,
+                concurrency: payload
+                    .get("concurrency")
+                    .and_then(Value::as_u64)
+                    .and_then(|workers| u32::try_from(workers).ok())
+                    .unwrap_or(0),
+                speed_limit_kib: payload
+                    .get("speed_limit_kib")
+                    .and_then(Value::as_u64)
+                    .and_then(|limit| u32::try_from(limit).ok())
+                    .unwrap_or(0),
                 checksum: None,
                 expected_size: (offer.size > 0).then_some(offer.size),
                 etag: field(payload, "etag"),
@@ -1651,6 +1660,33 @@ mod tests {
         assert_eq!(specs[0].1.url, "https://cdn.test/movie.m3u8");
         assert_eq!(specs[0].1.preferred_bandwidth, 2_500_000);
         assert_eq!(specs[0].1.preferred_height, 720);
+    }
+
+    #[test]
+    fn browser_download_limits_are_unset_unless_explicitly_supplied() {
+        for (limits, expected_workers, expected_speed) in [
+            (json!({}), 0, 0),
+            (json!({"concurrency": 3, "speed_limit_kib": 64}), 3, 64),
+            (json!({"concurrency": 3}), 3, 0),
+            (json!({"speed_limit_kib": 64}), 0, 64),
+            (json!({"concurrency": 0, "speed_limit_kib": 0}), 0, 0),
+            (json!({"concurrency": null, "speed_limit_kib": "64"}), 0, 0),
+            (
+                json!({"concurrency": -1, "speed_limit_kib": 4_294_967_296_u64}),
+                0,
+                0,
+            ),
+        ] {
+            let mut session = NativeHostSession::in_memory().unwrap();
+            let mut resource = limits;
+            resource["url"] = json!("https://cdn.test/file.bin");
+            session
+                .dispatch(&json!({"op": "download", "resource": resource}))
+                .unwrap();
+            let specs = session.core.local().store().load_task_specs().unwrap();
+            assert_eq!(specs[0].1.concurrency, expected_workers);
+            assert_eq!(specs[0].1.speed_limit_kib, expected_speed);
+        }
     }
 
     #[test]
