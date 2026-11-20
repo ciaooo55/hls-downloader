@@ -134,10 +134,13 @@ jobs:
             python scripts/validation/windows_breakaway_job.py python scripts/validation/free_parity_acceptance.py --isolated-engine $engine --isolated-cli $cli --report "$reports/free-functions.json"
             python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_v7_native_host.py --host $hostExe --engine $engine --concurrent-hosts 4 --profile-startup --report "$reports/native-host.json"
             python scripts/validation/verify_v7_host_job_lifetime.py --resources $resources --report "$reports/host-job-lifetime.json"
+            $shutdownFixture = Join-Path $env:GITHUB_WORKSPACE '.tool-cache/test-tmp/candidate-installer-shutdown'
+            python scripts/validation/smoke_v7_installer_shutdown.py --engine $engine --helper (Join-Path $app 'scripts/HLSDownloaderPreflight.exe') --root $shutdownFixture
+            Copy-Item (Join-Path $shutdownFixture 'result.json') "$reports/installer-shutdown.json"
             python scripts/validation/smoke_v7_transfer_performance.py --engine $engine --report "$reports/transfer-performance.json"
             python scripts/validation/soak_v7_runtime.py --engine $engine --idle-seconds 60 --stress-requests 18000 --report "$reports/runtime-soak.json"
             $reportHashes = [ordered]@{}
-            foreach ($name in @('free-functions', 'native-host', 'host-job-lifetime', 'transfer-performance', 'runtime-soak')) {
+            foreach ($name in @('free-functions', 'native-host', 'host-job-lifetime', 'installer-shutdown', 'transfer-performance', 'runtime-soak')) {
               $reportPath = Join-Path $reports "$name.json"
               $reportHashes["$name.json"] = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
             }
@@ -182,6 +185,22 @@ jobs:
             artifacts/v7-productization/msi-lifecycle/*.json
             artifacts/v7-productization/msi-lifecycle/*.log
             artifacts/v7-productization/msi-lifecycle/*-checkpoint/*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify candidate MSI repair with a private Core endpoint
+        id: custom_pipe_repair
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\validation\verify-v7-custom-pipe-maintenance.ps1 -CandidateManifestPath artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json
+          if ($LASTEXITCODE -ne 0) { throw 'Private Core maintenance regression failed.' }
+
+      - name: Upload private Core maintenance evidence
+        if: always() && steps.custom_pipe_repair.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: HLSDownloader-v7-custom-pipe-maintenance-${{ github.sha }}
+          path: artifacts/v7-productization/custom-pipe-maintenance/**
           if-no-files-found: error
           retention-days: 14
 

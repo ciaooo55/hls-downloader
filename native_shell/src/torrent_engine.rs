@@ -1,7 +1,7 @@
 //! Magnet / .torrent import. Web seeds use the HTTP engine; watch-folder imports new files.
 //!
-//! Swarm protocol work is frozen. Core talks only to [`TorrentSession`] so a
-//! later libtorrent/librqbit backend can replace [`BuiltinTorrentEngine`].
+//! [`TorrentSession`] retains the byte-count API. Core also obtains the metadata
+//! used by the built-in transfer so publication never refetches the source.
 
 use crate::http_engine::{run_job, Job};
 use crate::{TorrentFileEntry, TorrentFileSelection};
@@ -120,6 +120,23 @@ impl TorrentSession for BuiltinTorrentEngine {
     }
 }
 
+impl BuiltinTorrentEngine {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn download_for_publication(
+        &self,
+        source: &str,
+        output: &Path,
+        control: &Path,
+        headers: &std::collections::HashMap<String, String>,
+        proxy: &str,
+        options: TorrentOptions,
+        reporter: &mut dyn FnMut(TorrentTelemetry),
+    ) -> Result<TorrentMeta, String> {
+        transfer_torrent(source, output, control, headers, proxy, options, reporter)
+            .map(|(_, meta)| meta)
+    }
+}
+
 /// Returns the BT backend Core should use. Swap the type here to change engines.
 pub fn torrent_session() -> BuiltinTorrentEngine {
     BuiltinTorrentEngine
@@ -129,6 +146,7 @@ pub fn torrent_session() -> BuiltinTorrentEngine {
 pub struct TorrentMeta {
     pub name: String,
     pub magnet: bool,
+    pub multi_file: bool,
     pub web_seeds: Vec<String>,
     pub info_hash: String,
     pub announce: Vec<String>,
@@ -199,6 +217,7 @@ fn parse_magnet_sources(uri: &str) -> Result<(TorrentMeta, Vec<String>), String>
         TorrentMeta {
             name,
             magnet: true,
+            multi_file: false,
             web_seeds,
             info_hash,
             announce,
@@ -312,6 +331,7 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
     Ok(TorrentMeta {
         name,
         magnet: false,
+        multi_file: info.is_some_and(|info| !info.contains_key(b"length".as_ref())),
         web_seeds,
         info_hash: info_hash_from_torrent(bytes).unwrap_or_default(),
         announce,
@@ -493,75 +513,145 @@ pub fn validate_torrent_selection(
     Ok(selected)
 }
 
-pub fn materialize_selected_files(
+pub(crate) fn publish_torrent_directory(
     payload: &Path,
     destination: &Path,
+    control: &Path,
     meta: &TorrentMeta,
     selections: &[TorrentFileSelection],
-) -> Result<u64, String> {
+    skip_existing: bool,
+) -> Result<(PathBuf, u64), String> {
     use std::io::{Seek, SeekFrom};
+    static PUBLISH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let checked = validate_torrent_selection(meta, selections)?;
     let mut source = fs::File::open(payload).map_err(|error| error.to_string())?;
     let source_length = source.metadata().map_err(|error| error.to_string())?.len();
-    let mut files = Vec::new();
-    for selection in checked.iter().filter(|item| item.selected) {
-        let file = meta
-            .files
-            .iter()
-            .find(|file| file.index == selection.index && file.path == selection.path)
-            .ok_or_else(|| format!("种子文件不存在: {}", selection.path))?;
-        if file
-            .offset
-            .checked_add(file.size)
-            .is_none_or(|end| end > source_length)
-        {
-            return Err(format!("种子临时数据不完整: {}", file.path));
-        }
-        // Resolve existing junctions and links before touching the destination.
-        let target = crate::output_path::constrain_untrusted_download_dir(
-            &file.path,
-            &destination.to_string_lossy(),
-        )?;
-        files.push((file, PathBuf::from(target)));
-    }
+    let parent = destination.parent().ok_or("种子目标目录缺少父路径")?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let stage = payload.with_file_name(format!(
+    let stage = parent.join(format!(
         ".hls-torrent-publish-{}-{stamp}",
         std::process::id()
     ));
     fs::create_dir(&stage).map_err(|error| error.to_string())?;
-    let staged_file = stage.join("payload");
     let result = (|| {
         let mut total = 0u64;
-        for (file, target) in files {
+        for selection in checked.iter().filter(|item| item.selected) {
+            if !control.as_os_str().is_empty() {
+                check_torrent_control(control)?;
+            }
+            let file = meta
+                .files
+                .get(selection.index as usize)
+                .filter(|file| file.index == selection.index && file.path == selection.path)
+                .ok_or_else(|| format!("种子文件不存在: {}", selection.path))?;
+            if file
+                .offset
+                .checked_add(file.size)
+                .is_none_or(|end| end > source_length)
+            {
+                return Err(format!("种子临时数据不完整: {}", file.path));
+            }
+            let target = stage.join(&file.path);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             source
                 .seek(SeekFrom::Start(file.offset))
                 .map_err(|error| error.to_string())?;
-            let mut output =
-                fs::File::create_new(&staged_file).map_err(|error| error.to_string())?;
-            let copied = std::io::copy(&mut (&mut source).take(file.size), &mut output)
-                .map_err(|error| error.to_string())?;
+            let mut output = fs::File::create_new(&target).map_err(|error| error.to_string())?;
+            let mut copied = 0u64;
+            let mut buffer = [0u8; 64 * 1024];
+            while copied < file.size {
+                if !control.as_os_str().is_empty() {
+                    check_torrent_control(control)?;
+                }
+                let amount = (file.size - copied).min(buffer.len() as u64) as usize;
+                let read = source
+                    .read(&mut buffer[..amount])
+                    .map_err(|error| error.to_string())?;
+                if read == 0 {
+                    break;
+                }
+                use std::io::Write;
+                output
+                    .write_all(&buffer[..read])
+                    .map_err(|error| error.to_string())?;
+                copied += read as u64;
+            }
             if copied != file.size {
                 return Err(format!("种子临时数据不完整: {}", file.path));
             }
             output.sync_all().map_err(|error| error.to_string())?;
-            drop(output);
-            crate::output_path::publish_file(&staged_file, &target, "overwrite", false)?;
-            total = total
-                .checked_add(copied)
-                .ok_or("selected torrent length overflows")?;
+            total += copied;
         }
-        Ok(total)
+
+        // Publish the directory as a unit. Never merge into an existing tree:
+        // it can contain unrelated user data or links outside the download root.
+        let _guard = PUBLISH_LOCK
+            .lock()
+            .map_err(|_| "BT output publication lock poisoned")?;
+        let published = crate::output_path::choose_output_path(
+            destination,
+            if skip_existing { "skip" } else { "rename" },
+        )?;
+        if !control.as_os_str().is_empty() {
+            check_torrent_control(control)?;
+        }
+        match fs::symlink_metadata(&published) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+            Ok(_) => return Err(format!("种子目标已存在: {}", published.display())),
+        }
+        fs::rename(&stage, &published).map_err(|error| format!("发布种子文件夹失败: {error}"))?;
+        Ok((published, total))
     })();
-    let _ = fs::remove_file(&staged_file);
-    let _ = fs::remove_dir(&stage);
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&stage);
+    }
     result
+}
+
+pub(crate) fn verify_selected_pieces(
+    payload: &Path,
+    meta: &TorrentMeta,
+    selections: &[TorrentFileSelection],
+    control: &Path,
+) -> Result<(), String> {
+    let selected = validate_torrent_selection(meta, selections)?;
+    if meta.length == 0 {
+        return Ok(());
+    }
+    if meta.piece_length == 0 || meta.pieces.len() as u64 != meta.length.div_ceil(meta.piece_length)
+    {
+        return Err("种子缺少可校验的 Piece 元数据".into());
+    }
+    let mut file = fs::File::open(payload).map_err(|error| error.to_string())?;
+    let mut checked = BTreeSet::new();
+    for selection in selected.iter().filter(|item| item.selected) {
+        let entry = &meta.files[selection.index as usize];
+        if entry.size == 0 {
+            continue;
+        }
+        let first = entry.offset / meta.piece_length;
+        let last = (entry.offset + entry.size - 1) / meta.piece_length;
+        for index in first..=last {
+            if !checked.insert(index) {
+                continue;
+            }
+            check_torrent_control(control)?;
+            let start = index * meta.piece_length;
+            let len = (meta.length - start).min(meta.piece_length) as usize;
+            if !piece_is_complete(&mut file, start, len, &meta.pieces[index as usize]) {
+                return Err(format!(
+                    "种子文件选择已变化或数据不完整，Piece {index} 需要重新下载"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn download_torrent(
@@ -609,6 +699,20 @@ fn download_torrent_with_telemetry(
     options: TorrentOptions,
     reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<u64, String> {
+    transfer_torrent(spec_url, output, control, headers, proxy, options, reporter)
+        .map(|(bytes, _)| bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_torrent(
+    spec_url: &str,
+    output: &Path,
+    control: &Path,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+    options: TorrentOptions,
+    reporter: &mut dyn FnMut(TorrentTelemetry),
+) -> Result<(u64, TorrentMeta), String> {
     let meta = if spec_url.starts_with("magnet:") {
         let (mut magnet, exact_sources) = parse_magnet_sources(spec_url)?;
         match fetch_magnet_metadata(
@@ -665,7 +769,7 @@ fn download_torrent_with_telemetry(
                 Ok(()) => match verify_web_seed_pieces(output, &meta) {
                     Ok(()) => {
                         return fs::metadata(output)
-                            .map(|meta| meta.len())
+                            .map(|file| (file.len(), meta))
                             .map_err(|error| error.to_string());
                     }
                     Err(error) => error,
@@ -686,6 +790,7 @@ fn download_torrent_with_telemetry(
         ));
     }
     download_swarm(&meta, output, control, headers, proxy, options, reporter)
+        .map(|bytes| (bytes, meta))
 }
 
 #[derive(Default)]
@@ -2159,6 +2264,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "demo".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: String::new(),
             announce: Vec::new(),
@@ -2181,7 +2287,10 @@ mod tests {
                 },
             ],
         };
-        assert!(materialize_selected_files(&payload, &destination, &meta, &[]).is_err());
+        assert!(
+            publish_torrent_directory(&payload, &destination, Path::new(""), &meta, &[], true)
+                .is_err()
+        );
         assert_eq!(fs::read(destination.join("one.bin")).unwrap(), b"old-one");
         assert_eq!(fs::read(destination.join("two.bin")).unwrap(), b"old-two");
         #[cfg(windows)]
@@ -2206,7 +2315,15 @@ mod tests {
                 }],
                 ..meta
             };
-            assert!(materialize_selected_files(&payload, &destination, &linked, &[]).is_err());
+            assert!(publish_torrent_directory(
+                &payload,
+                &destination,
+                Path::new(""),
+                &linked,
+                &[],
+                true
+            )
+            .is_err());
             assert_eq!(fs::read(outside.join("out.bin")).unwrap(), b"old-outside");
             fs::remove_dir(junction).unwrap();
         }
@@ -2313,6 +2430,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "demo".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: String::new(),
             announce: Vec::new(),
@@ -2341,6 +2459,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "demo".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: String::new(),
             announce: Vec::new(),
@@ -2403,6 +2522,7 @@ mod tests {
         let hostile = TorrentMeta {
             name: "hostile".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: String::new(),
             announce: Vec::new(),
@@ -2459,6 +2579,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "demo".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: String::new(),
             announce: Vec::new(),
@@ -2481,15 +2602,17 @@ mod tests {
                 },
             ],
         };
-        let total = materialize_selected_files(
+        let (_, total) = publish_torrent_directory(
             &payload,
             &destination,
+            Path::new(""),
             &meta,
             &[TorrentFileSelection {
                 index: 1,
                 path: "dir/two.bin".into(),
                 selected: true,
             }],
+            true,
         )
         .unwrap();
         assert_eq!(total, 2);
@@ -2760,6 +2883,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "bitfield-selection".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
             announce: Vec::new(),
@@ -2988,6 +3112,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "resume-selection".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
             announce: Vec::new(),
@@ -3103,7 +3228,9 @@ mod tests {
                 selected: true,
             },
         ];
-        let written = materialize_selected_files(&output, &destination, &meta, &selected).unwrap();
+        let (_, written) =
+            publish_torrent_directory(&output, &destination, Path::new(""), &meta, &selected, true)
+                .unwrap();
         assert_eq!(written, meta.files[0].size + meta.files[2].size);
         assert_eq!(
             fs::read(destination.join("keep/alpha.bin")).unwrap(),
@@ -3247,6 +3374,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "demo".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: String::new(),
             announce: Vec::new(),
@@ -3306,6 +3434,7 @@ mod tests {
         let meta = TorrentMeta {
             name: "cancel-selection".into(),
             magnet: false,
+            multi_file: false,
             web_seeds: Vec::new(),
             info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
             announce: Vec::new(),
@@ -3500,6 +3629,7 @@ mod tests {
             let meta = TorrentMeta {
                 name: "interrupted".into(),
                 magnet: false,
+                multi_file: false,
                 web_seeds: Vec::new(),
                 info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
                 // 显式 Peer 夹具不使用默认公网 tracker。

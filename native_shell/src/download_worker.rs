@@ -6,7 +6,7 @@ use crate::output_path::{constrain_untrusted_download_dir, logical_canonical, re
 use crate::{
     apply_replay_json_for, run_job_report, with_replay_json, AvScanStatus, CoreCommand, CoreEvent,
     CredentialVault, EventEnvelope, MediaPushRequest, MirrorStatus, PersistentCore, QueueProfile,
-    TaskSpec, TorrentSession,
+    TaskSpec,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use hls_client::request_validation::reserved_dos_device_name;
@@ -1859,10 +1859,16 @@ impl CoreCoordinator {
 
     fn reuse_duplicate(&self, task_id: String, status: &str) -> Result<Vec<EventEnvelope>, String> {
         // 先取出 spec 再释放 Core 锁；路径解析与成品存在性检查不在锁内进行。
-        let spec = self.lock()?.task_spec(&task_id).cloned();
+        let (spec, task) = {
+            let core = self.lock()?;
+            (
+                core.task_spec(&task_id).cloned(),
+                core.snapshot(&task_id).cloned(),
+            )
+        };
         let output_missing = spec
             .and_then(|spec| TaskPaths::for_task(&task_id, &spec).ok())
-            .map(|paths| !paths.final_output.exists())
+            .map(|paths| !resolved_snapshot_output(task.as_ref(), &paths).exists())
             .unwrap_or(true);
         let action = crate::duplicate::suggest_duplicate_action(status, output_missing);
         match action {
@@ -2702,64 +2708,56 @@ fn run_task_with_throttle(
             let torrent_headers = headers.clone();
             let torrent_proxy = spec.proxy.clone();
             let torrent_progress = paths.progress.clone();
-            let _ = poll_media_progress(&core, task_id, &torrent_progress, false, move || {
-                crate::torrent_engine::torrent_session()
-                    .download_with_telemetry(
-                        &torrent_url,
-                        &torrent_output,
-                        &torrent_control,
-                        &torrent_headers,
-                        &torrent_proxy,
-                        torrent_options,
-                        &mut telemetry_reporter,
-                    )
-                    .map(|_| torrent_output.clone())
+            let meta = poll_media_progress(&core, task_id, &torrent_progress, false, move || {
+                crate::torrent_engine::torrent_session().download_for_publication(
+                    &torrent_url,
+                    &torrent_output,
+                    &torrent_control,
+                    &torrent_headers,
+                    &torrent_proxy,
+                    torrent_options,
+                    &mut telemetry_reporter,
+                )
             })?;
-            let (latest_spec, enable_dht) = {
+            let (downloaded, total) = current_progress(&core, task_id);
+            mark_progress(&core, task_id, downloaded, total, "checking", "checking")?;
+            let latest_spec = {
                 let guard = core
                     .lock()
                     .map_err(|_| "v7 Core mutex poisoned".to_string())?;
-                (
-                    guard
-                        .task_spec(task_id)
-                        .cloned()
-                        .unwrap_or_else(|| spec.clone()),
-                    guard.store().setting_bool("bt_enable_dht", true)?,
-                )
+                guard
+                    .task_spec(task_id)
+                    .cloned()
+                    .unwrap_or_else(|| spec.clone())
             };
-            if !latest_spec.torrent_selection.is_empty() {
-                // The non-torrent transports run ensure_publish_allowed inside
-                // complete_payload before the payload is moved into place; this branch
-                // publishes without that check, so a pause or cancel that lands in the
-                // finalization window is ignored and the files are published and the task
-                // marked complete anyway.
+            if meta.multi_file || !latest_spec.torrent_selection.is_empty() {
+                let destination = paths.torrent_directory(&spec);
                 ensure_publish_allowed(&paths.control)?;
-                let meta = crate::torrent_engine::probe_torrent_source(
-                    &latest_spec.url,
-                    &headers,
-                    &latest_spec.proxy,
-                    enable_dht,
-                )?;
-                ensure_publish_allowed(&paths.control)?;
-                let published = crate::torrent_engine::materialize_selected_files(
+                // Validate the final selection against the metadata actually used by BT.
+                // A late selection update must not publish a hole in the sparse payload.
+                if !latest_spec.torrent_selection.is_empty() {
+                    crate::torrent_engine::verify_selected_pieces(
+                        &paths.output,
+                        &meta,
+                        &latest_spec.torrent_selection,
+                        &paths.control,
+                    )?;
+                }
+                let (published, bytes) = crate::torrent_engine::publish_torrent_directory(
                     &paths.output,
-                    &paths.final_output,
+                    &destination,
+                    &paths.control,
                     &meta,
                     &latest_spec.torrent_selection,
+                    output_policy(&core).0 == "skip" && !latest_spec.preserve_existing_output,
                 )?;
-                remember_published(&paths, &paths.final_output);
-                // The selected files are already in place and recorded, so this tail
-                // must not fail the task either: the caller would mark it failed and
-                // re-queue it, re-downloading files the user already has — the same
-                // regression finish_published_task closes for every other transport.
-                // `published` is the byte count materialize_selected_files wrote, not
-                // a file size: final_output is the selection directory.
+                remember_published(&paths, &published);
                 finish_published_task(
                     &core,
                     task_id,
                     &paths,
-                    &paths.final_output,
-                    Some(published),
+                    &published,
+                    Some(bytes),
                     &latest_spec,
                     false,
                 )
@@ -3824,9 +3822,11 @@ fn enrich_task_snapshots(tasks: &mut [crate::TaskSnapshot], specs: &HashMap<Stri
             .to_string_lossy()
             .into_owned();
         task.playback_ready = if matches!(task.status.as_str(), "completed" | "done") {
-            task.output_missing = !Path::new(&task.output_path).is_file();
+            let output = Path::new(&task.output_path);
+            task.output_missing = !(output.is_file()
+                || (spec.resource_kind == crate::ResourceKind::Torrent && output.is_dir()));
             task.available_actions = crate::core_runtime::legal_actions(task);
-            !task.output_missing
+            output.is_file()
         } else {
             playable_task_playlist(&paths).is_some() || playable_http_total(&paths, spec).is_some()
         };
@@ -3948,15 +3948,16 @@ fn queue_is_successfully_drained(tasks: &[crate::TaskSnapshot], queue_id: &str) 
     first.status == "completed" && matching.all(|task| task.status == "completed")
 }
 
-fn poll_media_progress<F>(
+fn poll_media_progress<T, F>(
     core: &Arc<Mutex<PersistentCore>>,
     task_id: &str,
     progress: &Path,
     live: bool,
     work: F,
-) -> Result<PathBuf, String>
+) -> Result<T, String>
 where
-    F: FnOnce() -> Result<PathBuf, String> + Send + 'static,
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
 {
     let (sender, receiver) = mpsc::channel();
     let throttle = crate::net_policy::current_throttle_context();
@@ -4983,6 +4984,13 @@ fn set_task_torrent_files(
         .into_iter()
         .find(|task| task.task_id == task_id)
         .ok_or_else(|| format!("unknown task {task_id}"))?;
+    if matches!(
+        task.status.as_str(),
+        "completed" | "done" | "checking" | "canceled"
+    ) || task.stage == "checking"
+    {
+        return Err("BT 任务已进入交付阶段或已结束，不能再修改文件选择".into());
+    }
     let mut spec = coordinator
         .lock()?
         .task_spec(task_id)
@@ -5011,9 +5019,20 @@ fn set_task_torrent_files(
     {
         return Err("至少选择一个 BT 文件".into());
     }
-    let paths = TaskPaths::for_task(task_id, &spec)?;
-    write_torrent_selection(&paths.torrent_selection, &spec.torrent_selection)?;
-    coordinator.lock()?.replace_spec(task_id, spec.clone())?;
+    {
+        let mut core = coordinator.lock()?;
+        let current = core.snapshot(task_id).ok_or("BT 任务已不存在")?;
+        if matches!(
+            current.status.as_str(),
+            "completed" | "done" | "checking" | "canceled"
+        ) || current.stage == "checking"
+        {
+            return Err("BT 任务已进入交付阶段或已结束，不能再修改文件选择".into());
+        }
+        let paths = TaskPaths::for_task(task_id, &spec)?;
+        write_torrent_selection(&paths.torrent_selection, &spec.torrent_selection)?;
+        core.replace_spec(task_id, spec.clone())?;
+    }
     let total_size = selected_torrent_bytes(&meta.files, &spec.torrent_selection);
     let mut events = coordinator.lock()?.emit(CoreEvent::TaskTorrentFiles {
         task_id: task_id.to_string(),

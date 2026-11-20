@@ -3,7 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 fn main() -> ExitCode {
@@ -95,9 +95,9 @@ fn belongs_to(path: &Path, root: &Path) -> bool {
 mod windows {
     use super::*;
     use std::ffi::c_void;
+    use std::io::Read;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
-    use std::os::windows::process::CommandExt;
     type Handle = *mut c_void;
     const QUERY: u32 = 0x1000;
     const SYNCHRONIZE: u32 = 0x0010_0000;
@@ -130,6 +130,12 @@ mod windows {
         fn TerminateProcess(process: Handle, code: u32) -> i32;
         fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
         fn GetNamedPipeServerProcessId(pipe: Handle, pid: *mut u32) -> i32;
+        fn SetNamedPipeHandleState(
+            pipe: Handle,
+            mode: *const u32,
+            collection_count: *const u32,
+            collection_timeout: *const u32,
+        ) -> i32;
         fn CloseHandle(handle: Handle) -> i32;
     }
     #[link(name = "user32")]
@@ -257,70 +263,128 @@ mod windows {
         }
         1
     }
-    fn checkpoint(root: &Path, log: &mut File) -> Result<(), String> {
-        // A custom-pipe Core can coexist with another installation's default
-        // Core. Do not send the shutdown command to that other installation.
-        let pipe_name =
-            std::env::var_os("HLS_V7_PIPE").unwrap_or_else(|| r"\\.\pipe\HLSDownloader.v7".into());
+    fn checkpoint_pipe(process: &Process) -> Result<Option<(OwnedHandle, File)>, String> {
+        let Some(owner) = open(process.pid, 0)? else {
+            return Ok(None);
+        };
+        let path = match image(owner.0) {
+            Ok(path) => path,
+            Err(_) if unsafe { WaitForSingleObject(owner.0, 500) } == 0 => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if normalized(&path) != normalized(&process.path) {
+            return Err(format!("Core {} 的进程身份已变化", process.pid));
+        }
+        let maintenance = format!(r"\\.\pipe\HLSDownloader.v7.maintenance.{}", process.pid);
+        let configured = std::env::var("HLS_V7_PIPE").ok();
+        let mut names = vec![maintenance.as_str()];
+        if let Some(name) = configured.as_deref().filter(|name| {
+            name.len() <= 256
+                && name
+                    .get(..9)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\.\pipe\"))
+        }) {
+            names.push(name);
+        }
+        names.push(r"\\.\pipe\HLSDownloader.v7");
+
         let deadline = Instant::now() + Duration::from_secs(2);
-        let pipe = loop {
-            match OpenOptions::new().read(true).write(true).open(&pipe_name) {
-                Ok(pipe) => break pipe,
-                Err(error)
-                    if matches!(error.raw_os_error(), Some(2 | 231))
-                        && Instant::now() < deadline =>
+        loop {
+            for name in &names {
+                // Limit impersonation even before checking the peer's identity.
+                let Ok(pipe) = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(0x0011_0000) // SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION
+                    .open(name)
+                else {
+                    continue;
+                };
+                let mut pid = 0;
+                if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) } != 0
+                    && pid == process.pid
+                    && unsafe { WaitForSingleObject(owner.0, 0) } == 258
                 {
+                    return Ok(Some((owner, pipe)));
+                }
+            }
+            if unsafe { WaitForSingleObject(owner.0, 0) } == 0 {
+                return Ok(None);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "无法核验 Core {} 的管道归属，未请求停机",
+                    process.pid
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn read_checkpoint_frame(
+        pipe: &mut File,
+        mut buffer: &mut [u8],
+        deadline: Instant,
+    ) -> Result<(), String> {
+        while !buffer.is_empty() {
+            if Instant::now() >= deadline {
+                return Err("Core 检查点超时，旧安装和用户数据已保留".into());
+            }
+            match pipe.read(buffer) {
+                Ok(0) => return Err("Core 未确认检查点，旧安装和用户数据已保留".into()),
+                Ok(count) => buffer = &mut buffer[count..],
+                Err(error) if error.raw_os_error() == Some(232) => {
                     std::thread::sleep(Duration::from_millis(25));
                 }
-                Err(error) => return Err(format!("无法核验 Core 管道归属，未请求停机: {error}")),
+                Err(error) => return Err(format!("读取 Core 检查点回执失败: {error}")),
             }
-        };
-        let mut pid = 0;
-        if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) } == 0 {
+        }
+        Ok(())
+    }
+
+    fn checkpoint(mut pipe: File, owner: OwnedHandle, log: &mut File) -> Result<(), String> {
+        const REQUEST: &[u8] =
+            br#"{"type":"command","request_id":1,"command":{"kind":"shutdown"}}"#;
+        let mut frame = (REQUEST.len() as u32).to_le_bytes().to_vec();
+        frame.extend_from_slice(REQUEST);
+        // The checked handle carries both the command and its reply. No second
+        // connection can select a pipe from a different Core after verification.
+        if unsafe {
+            SetNamedPipeHandleState(pipe.as_raw_handle(), &1, std::ptr::null(), std::ptr::null())
+        } == 0
+        {
             return Err(format!(
-                "无法读取 Core 管道进程: {}",
+                "无法设置 Core 管道等待模式: {}",
                 std::io::Error::last_os_error()
             ));
         }
-        let owner = open(pid, 0)?.ok_or("Core 管道进程已退出，未请求停机")?;
-        let path = image(owner.0)?;
-        if !belongs_to(&path, root) {
-            return Err("Core 管道属于其他安装目录，未请求停机".into());
-        }
-        drop(pipe);
         writeln!(log, "helper stage=checkpoint-start")
             .and_then(|_| log.flush())
-            .map_err(|e| e.to_string())?;
-        let mut child = Command::new(root.join("app/resources/HLSDownloaderEngine.exe"))
-            .arg("--shutdown")
-            // Installer shutdown must use the pipe whose owner was checked.
-            .env_remove("HLS_V7_CORE_TCP")
-            .env_remove("HLS_V7_CORE_BIND")
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
-            .stderr(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
-            .creation_flags(0x0800_0000)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            match child.try_wait().map_err(|e| e.to_string())? {
-                Some(status) => {
-                    writeln!(log, "helper stage=checkpoint-finished status={status}")
-                        .map_err(|e| e.to_string())?;
-                    if status.success() || processes(root)?.iter().all(|p| client_name(&p.name)) {
-                        return Ok(());
-                    }
-                    return Err("任务检查点未成功保存，旧安装和用户数据已保留".into());
-                }
-                None if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("Core 检查点超时，未强制结束 Core 或移除旧安装".into());
-                }
-                None => std::thread::sleep(Duration::from_millis(50)),
-            }
+            .map_err(|error| error.to_string())?;
+        if pipe.write(&frame).map_err(|error| error.to_string())? != frame.len() {
+            return Err("未能发送完整的 Core 停机请求".into());
         }
+        // Core itself can wait up to eight seconds for active transfers.
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let mut header = [0; 4];
+        read_checkpoint_frame(&mut pipe, &mut header, deadline)?;
+        let length = u32::from_le_bytes(header) as usize;
+        if length == 0 || length > 4 * 1024 * 1024 {
+            return Err("Core 停机回执长度异常".into());
+        }
+        let mut response = vec![0; length];
+        read_checkpoint_frame(&mut pipe, &mut response, deadline)?;
+        if !response.starts_with(br#"{"type":"events","request_id":1,"events":"#) {
+            return Err("Core 未成功保存检查点，旧安装和用户数据已保留".into());
+        }
+        drop(pipe);
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u32;
+        if unsafe { WaitForSingleObject(owner.0, wait) } != 0 {
+            return Err("Core 保存检查点后未退出，旧安装和用户数据已保留".into());
+        }
+        writeln!(log, "helper stage=checkpoint-finished").map_err(|error| error.to_string())
     }
     fn files_unlocked(root: &Path) -> Result<(), String> {
         for directory in [root.to_path_buf(), root.join("app/resources")] {
@@ -373,8 +437,13 @@ mod windows {
             terminate(process, root)?;
         }
         // Never force-stop a resident Core: its command must save the checkpoint.
-        if processes(root)?.iter().any(|p| !client_name(&p.name)) {
-            checkpoint(root, log)?;
+        let endpoints = processes(root)?
+            .iter()
+            .filter(|process| !client_name(&process.name))
+            .map(checkpoint_pipe)
+            .collect::<Result<Vec<_>, _>>()?;
+        for (owner, pipe) in endpoints.into_iter().flatten() {
+            checkpoint(pipe, owner, log)?;
         }
         let deadline = Instant::now() + Duration::from_secs(12);
         let mut last_error = String::new();

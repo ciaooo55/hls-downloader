@@ -23,7 +23,7 @@ impl TaskPaths {
         let mut final_name = if spec.resource_kind == crate::ResourceKind::Torrent
             && !spec.torrent_selection.is_empty()
         {
-            format!("{}.files", safe_filename(&spec.filename, &spec.url))
+            Self::torrent_directory_name(spec)
         } else {
             safe_filename(&spec.filename, &spec.url)
         };
@@ -78,6 +78,15 @@ impl TaskPaths {
             progress: task_dir.join("progress.json"),
             torrent_selection: task_dir.join("torrent-selection.json"),
         })
+    }
+
+    fn torrent_directory_name(spec: &TaskSpec) -> String {
+        format!("{}.files", safe_filename(&spec.filename, &spec.url))
+    }
+
+    pub(super) fn torrent_directory(&self, spec: &TaskSpec) -> PathBuf {
+        self.final_output
+            .with_file_name(Self::torrent_directory_name(spec))
     }
 
     fn download_root(spec: &TaskSpec) -> PathBuf {

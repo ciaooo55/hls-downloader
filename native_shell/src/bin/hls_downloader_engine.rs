@@ -77,6 +77,46 @@ fn shutdown_core() -> Result<(), String> {
         .map(|_| ())
 }
 
+#[cfg(windows)]
+fn start_installer_endpoint(server: &hls_native_shell::CoreServer) {
+    use hls_native_shell::{CoreCommand, CorePipeRequest, CorePipeResponse, NamedPipeServer};
+    if hls_native_shell::v7_pipe_name().eq_ignore_ascii_case(hls_native_shell::V7_PIPE_NAME) {
+        return;
+    }
+    let endpoint = NamedPipeServer::new(format!(
+        r"\\.\pipe\HLSDownloader.v7.maintenance.{}",
+        std::process::id()
+    ));
+    let handler = server.handler();
+    let stop = server.stop_handle();
+    let only_shutdown = std::sync::Arc::new(move |request| match request {
+        CorePipeRequest::Command {
+            command: CoreCommand::Shutdown,
+            ..
+        } => handler(request),
+        _ => CorePipeResponse::Error {
+            request_id: None,
+            code: "unsupported_command".into(),
+            message: "Maintenance endpoint only accepts Core shutdown".into(),
+        },
+    });
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    match std::thread::Builder::new()
+        .name("v7-installer-endpoint".into())
+        .spawn(move || endpoint.serve_loop_with_ready(stop, only_shutdown, ready_tx))
+    {
+        Ok(_) => {
+            if !matches!(
+                ready_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Ok(Ok(()))
+            ) {
+                eprintln!("Installer maintenance endpoint failed to start");
+            }
+        }
+        Err(error) => eprintln!("Installer maintenance endpoint failed to start: {error}"),
+    }
+}
+
 fn main() -> ExitCode {
     let started = std::time::Instant::now();
     let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
@@ -190,6 +230,8 @@ fn main() -> ExitCode {
         mark("tray");
         match server.bind_local() {
             Ok((address, worker)) => {
+                #[cfg(windows)]
+                start_installer_endpoint(&server);
                 mark("ipc_ready");
                 hls_native_shell::record_runtime_log(
                     "core_ready",
