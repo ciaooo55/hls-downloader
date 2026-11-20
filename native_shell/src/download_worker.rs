@@ -271,16 +271,32 @@ pub(crate) fn safe_filename(filename: &str, url: &str) -> String {
     let cleaned = cleaned.trim_matches([' ', '.']).to_string();
     let cleaned = if cleaned.is_empty() {
         "download".into()
-    } else if cleaned.chars().count() > 200 {
-        cleaned.chars().take(200).collect()
     } else {
         cleaned
     };
-    if reserved_dos_device_name(&cleaned) {
+    let cleaned = if reserved_dos_device_name(&cleaned) {
         format!("_{cleaned}")
     } else {
         cleaned
+    };
+    if cleaned.encode_utf16().count() <= 255 && cleaned.chars().count() <= 200 {
+        return cleaned;
     }
+    let (stem, extension) = cleaned
+        .rsplit_once('.')
+        .filter(|(stem, extension)| !stem.is_empty() && extension.encode_utf16().count() < 254)
+        .map(|(stem, extension)| (stem, format!(".{extension}")))
+        .unwrap_or((&cleaned, String::new()));
+    let mut units = extension.encode_utf16().count();
+    let stem: String = stem
+        .chars()
+        .take(200usize.saturating_sub(extension.chars().count()).max(1))
+        .take_while(|ch| {
+            units += ch.len_utf16();
+            units <= 255
+        })
+        .collect();
+    format!("{stem}{extension}")
 }
 
 #[derive(Clone)]
@@ -2951,12 +2967,12 @@ fn run_http_file(
     let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
     let worker_job = job.clone();
     let throttle = crate::net_policy::current_throttle_context();
-    thread::spawn(move || {
+    let worker = thread::spawn(move || {
         let result =
             crate::net_policy::with_throttle_context(throttle, || run_job_report(&worker_job));
         let _ = sender.send(result);
     });
-    loop {
+    let result = (|| loop {
         let result = receiver.recv_timeout(Duration::from_millis(200));
         if spec.filename.trim().is_empty() {
             if let Some(filename) = http_response_filename(&paths) {
@@ -3013,7 +3029,17 @@ fn run_http_file(
                 return Err("download HTTP worker disconnected".into())
             }
         }
+    })();
+    if result.is_err()
+        && matches!(
+            crate::http_engine::read_control(&paths.control),
+            crate::http_engine::Control::Run
+        )
+    {
+        let _ = paths.set_control("cancel");
     }
+    let joined = worker.join();
+    result.and_then(|()| joined.map_err(|_| "download HTTP worker panicked".into()))
 }
 
 fn http_response_filename(paths: &TaskPaths) -> Option<String> {

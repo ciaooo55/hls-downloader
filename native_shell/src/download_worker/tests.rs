@@ -1680,6 +1680,22 @@ fn direct_task_pause_reaches_a_stalled_worker_through_the_control_token() {
 
 #[test]
 fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
+    check_unnamed_http_response_filename("resolved payload.bin");
+}
+
+#[test]
+fn unnamed_http_task_shortens_oversized_server_filename_and_keeps_extension() {
+    check_unnamed_http_response_filename(&format!("{}.bin", "😀".repeat(180)));
+}
+
+fn check_unnamed_http_response_filename(server_name: &str) {
+    let expected_name = safe_filename(server_name, "");
+    assert!(expected_name.encode_utf16().count() <= 255);
+    assert!(expected_name.ends_with(".bin"));
+    let encoded_name: String = server_name
+        .bytes()
+        .map(|byte| format!("%{byte:02X}"))
+        .collect();
     let root = std::env::temp_dir().join(format!("hls-http-task-name-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1701,6 +1717,7 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
             };
             stream.set_nonblocking(false).unwrap();
             let release = Arc::clone(&server_release);
+            let encoded_name = encoded_name.clone();
             thread::spawn(move || {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut request = String::new();
@@ -1711,7 +1728,7 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
                         break;
                     }
                 }
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename*=UTF-8''resolved%20payload.bin\r\nConnection: close\r\n\r\n");
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename*=UTF-8''{encoded_name}\r\nConnection: close\r\n\r\n");
                 if !request.starts_with("HEAD ") {
                     while !release.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(5));
@@ -1751,30 +1768,21 @@ fn unnamed_http_task_updates_name_before_payload_completion_and_persists_it() {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let task = coordinator.tasks().unwrap().remove(0);
-        if task.filename == "resolved payload.bin" {
+        if task.filename == expected_name {
             assert_ne!(task.status, "completed");
-            assert_eq!(task.title, "resolved payload.bin");
-            assert_ne!(
-                Path::new(&task.output_path),
-                root.join("resolved payload.bin")
-            );
+            assert_eq!(task.title, expected_name);
+            assert_ne!(Path::new(&task.output_path), root.join(&expected_name));
             break;
         }
         assert!(Instant::now() < deadline, "{task:?}");
         thread::sleep(Duration::from_millis(20));
     }
     let restored = PersistentCore::open(root.join("tasks.db")).unwrap();
-    assert_eq!(
-        restored.snapshot("task-1").unwrap().filename,
-        "resolved payload.bin"
-    );
+    assert_eq!(restored.snapshot("task-1").unwrap().filename, expected_name);
     drop(restored);
     release.store(true, Ordering::SeqCst);
     let completed = wait_for_task_status(&coordinator, "completed");
-    assert_eq!(
-        Path::new(&completed.output_path),
-        root.join("resolved payload.bin")
-    );
+    assert_eq!(Path::new(&completed.output_path), root.join(&expected_name));
     assert_eq!(fs::read(&completed.output_path).unwrap(), b"abcde");
     stop.store(true, Ordering::SeqCst);
     server.join().unwrap();
@@ -1803,6 +1811,86 @@ fn response_filename_ignores_missing_and_corrupt_metadata() {
         assert_eq!(http_response_filename(&paths), None);
     }
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn derived_filenames_fit_utf16_components_and_preserve_extensions() {
+    for filename in [
+        format!("{}.bin", "😀".repeat(180)),
+        format!("{}.mp4", "测".repeat(300)),
+    ] {
+        let expected_extension = Path::new(&filename).extension().unwrap();
+        for derived in [
+            safe_filename(&filename, ""),
+            safe_filename("", &format!("https://cdn.test/{filename}")),
+        ] {
+            assert!(derived.encode_utf16().count() <= 255, "{derived}");
+            assert_eq!(Path::new(&derived).extension().unwrap(), expected_extension);
+        }
+    }
+    assert_eq!(safe_filename("", ""), "download");
+}
+
+#[test]
+fn http_name_update_failure_cancels_and_joins_the_running_transfer() {
+    let root = lifecycle_test_root("http-name-update-error");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let coordinator = direct_http_coordinator(&root);
+    let spec = TaskSpec {
+        url: format!("http://{address}/slow.bin"),
+        download_dir: root.to_string_lossy().into_owned(),
+        concurrency: 1,
+        ..Default::default()
+    };
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    let paths = TaskPaths::for_task("task-1", &spec).unwrap();
+    paths.prepare().unwrap();
+    paths.set_control("run").unwrap();
+    let control = paths.control.clone();
+    let server_core = coordinator.core();
+    let server = thread::spawn(move || {
+        for _ in 0..1 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = server_core.lock().unwrap();
+                panic!("inject Core failure after HTTP worker starts");
+            }));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Disposition: attachment; filename=resolved.bin\r\nConnection: close\r\n\r\n");
+            if !request.starts_with("HEAD ") {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while fs::read_to_string(&control).unwrap_or_default() != "cancel"
+                    && Instant::now() < deadline
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                let _ = stream.write_all(b"abcde");
+            }
+        }
+    });
+    let error = run_http_file(coordinator.core(), "task-1", spec, String::new()).unwrap_err();
+    assert_eq!(error, "v7 Core mutex poisoned");
+    assert_eq!(fs::read_to_string(&paths.control).unwrap(), "cancel");
+    assert!(
+        crate::task_control::current(&paths.control).is_none(),
+        "HTTP worker still registered after failure"
+    );
+    server.join().unwrap();
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
