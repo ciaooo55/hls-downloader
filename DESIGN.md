@@ -1,4 +1,4 @@
-# HLS Downloader 7 design contract
+# HLS Downloader 10.0.0 design contract
 
 ## Product structure
 
