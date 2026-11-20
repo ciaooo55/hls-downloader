@@ -1,14 +1,10 @@
-# HLS Downloader Desktop 7.0.3
+# Historical Compose Desktop Migration Reference
 
-Compose Desktop workbench for HLS Downloader. This module is the 7.x desktop interface; `HLSDownloaderEngine.exe` owns all download state and SQLite through the existing framed IPC protocol.
+This Kotlin / Compose Desktop module is retained as a historical migration reference. It is not the current desktop interface: the stable product uses the Rust / Slint workbench in [`native_ui`](../native_ui/). The independent Rust Core owns download state and SQLite through the framed IPC protocol.
 
-```powershell
-# From the repository root; downloads and build outputs stay in .tool-cache/build-cache.
-.\scripts\bootstrap-v7-toolchain.ps1
-.\scripts\run-v7-local.ps1
-```
+For current source-build and test instructions, see the root [English README](../README_EN.md#-build-from-source) or [简体中文 README](../README.md).
 
-The packaged product defaults to Skiko software rendering for broad Windows compatibility. For diagnostics or performance comparison, opt into a different backend without editing source:
+This historical Compose module defaults to Skiko software rendering. For diagnostics or performance comparison within this module, opt into a different backend without editing source:
 
 ```powershell
 # From desktop_ui, reuse the repository-local toolchain and dependency cache.
@@ -25,4 +21,4 @@ $env:HLS_UI_RENDER_API = 'DIRECT3D'
 .\gradlew.bat run -PhlsRenderApi=OPENGL
 ```
 
-Accepted values are `SOFTWARE`, `ANGLE`, `DIRECT3D`, and `OPENGL`. Release builds should keep the default unless a renderer-specific validation run is intentional. The packaged product supports Windows x64 only; these diagnostic backend options do not imply ARM64 support.
+Accepted values are `SOFTWARE`, `ANGLE`, `DIRECT3D`, and `OPENGL`. These options apply only to the historical Compose module, not the current native workbench. The packaged product supports Windows x64 only; these diagnostic backend options do not imply ARM64 support.
