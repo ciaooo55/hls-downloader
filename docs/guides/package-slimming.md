@@ -13,4 +13,4 @@
 
 ## 运行依赖
 
-FFmpeg 用于下载合并和音频解码，libmpv 用于内置播放，裁剪 JRE 用于 Compose 工作台。当前包体积及验证范围以[本轮记录](../validation/convergence.md)为准，旧包测量保存在 Git 历史。
+FFmpeg 用于下载合并和音频解码，libmpv 用于内置播放；当前 Slint 工作台无需 JRE。当前包体积及验证范围以[本轮记录](../validation/convergence.md)为准，旧包测量保存在 Git 历史。

@@ -271,10 +271,8 @@ def click_download_confirmation(accept=True, input_mode='system', evidence_path=
 def run(args):
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {'passed': False, 'browser': args.browser, 'page': PAGE, 'checks': []}
-    desktop_jars = list((args.runtime / 'app').glob('HLSDownloaderDesktop-*.jar'))
-    assert len(desktop_jars) == 1, desktop_jars
     report['installed_sha256'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in [desktop_jars[0],
+        for p in [args.runtime/'HLSDownloader.exe',
                   args.runtime/'app/resources/HLSDownloaderEngine.exe',
                   args.runtime/'app/resources/HLSDownloaderPresenter.exe']}
     driver = None

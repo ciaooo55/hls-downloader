@@ -66,7 +66,8 @@ $gateBundle = Join-Path $stage "HLSDownloader-$version-Release-Evidence.zip"
 Compress-Archive -Path (Join-Path $evidenceDir '*') -DestinationPath $gateBundle -CompressionLevel Optimal -Force
 
 $sbom = Join-Path $stage "HLSDownloader-$version-SBOM.cdx.json"
-$uiRuntime = if ([string]$manifest.ui_runtime -eq 'native') { 'native' } else { 'compose' }
+if ([string]$manifest.ui_runtime -ne 'native') { throw 'Release requires the native UI runtime.' }
+$uiRuntime = 'native'
 & $Python (Join-Path $PSScriptRoot 'generate_sbom.py') --version $version --output $sbom --ui-runtime $uiRuntime
 if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE." }
 

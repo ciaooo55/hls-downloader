@@ -1,6 +1,6 @@
 //! Versioned named-pipe transport for the single resident v7 Core.
 //!
-//! Native Messaging, Compose UI and native presenter must not open SQLite independently in the
+//! Native Messaging and native UI must not open SQLite independently in the
 //! final product. They connect to this service using a bounded little-endian
 //! length frame carrying versioned JSON.
 
@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-// Compose keeps pooled connections idle for at most 60 seconds. Keep the server
+// Clients keep pooled connections idle for at most 60 seconds. Keep the server
 // bound finite without invalidating a connection that the client may still reuse.
 const V7_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(120);
 const V7_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);

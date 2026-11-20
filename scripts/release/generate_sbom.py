@@ -13,6 +13,8 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
 def component(kind: str, ecosystem: str, name: str, version: str) -> dict:
     normalized_name = name.strip()
     normalized_version = version.split("(", 1)[0].strip()
@@ -48,23 +50,9 @@ def npm_components(lock_path: Path) -> list[dict]:
     return values
 
 
-def compose_components() -> list[dict]:
-    # Compose Desktop keeps its deliberately small production dependency set in
-    # build.gradle.kts. Record the locked versions without reviving the removed
-    # React/Tauri dependency graph.
-    return [
-        component("framework", "maven", "org.jetbrains.compose.desktop/desktop", "1.12.0"),
-        component("library", "maven", "org.jetbrains.compose.material/material-icons-core", "1.7.3"),
-        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-coroutines-swing", "1.11.0"),
-        component("library", "maven", "org.jetbrains.kotlinx/kotlinx-serialization-json", "1.11.0"),
-        component("framework", "generic", "Eclipse Temurin JRE", "21"),
-    ]
-
-
 def build_sbom(version: str, ui_runtime: str = "native") -> dict:
     values = [
         *cargo_components(ROOT / "Cargo.lock"),
-        *(compose_components() if ui_runtime == "compose" else []),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
         component("application", "generic", "ffmpeg", "9.0.2"),
         component("library", "generic", "libmpv", "20261110-git-a61f6c3abd"),
@@ -91,7 +79,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--ui-runtime", choices=("native", "compose"), default="native")
+    parser.add_argument("--ui-runtime", choices=("native",), default="native")
     args = parser.parse_args()
     payload = build_sbom(str(args.version).strip().lstrip("v"), args.ui_runtime)
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,6 @@
 
 | 入口 | 用途 |
 | --- | --- |
-| `bootstrap-v7-toolchain.ps1` | 准备锁定版本的构建工具链 |
 | `build-v7.ps1` | `run`、`test`、`candidate`、`package` 等统一构建入口 |
 | `run-v7-local.ps1` | 使用本仓库工具链启动开发工作台 |
 | `cleanup-v7-build-cache.ps1` | 默认预览工作区内可重建输出；`-Apply` 执行清理，保留依赖缓存与用户数据 |

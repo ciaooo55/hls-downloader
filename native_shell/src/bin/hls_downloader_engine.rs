@@ -23,7 +23,7 @@ fn workbench_candidates(engine: &Path) -> Vec<PathBuf> {
 }
 
 fn open_workbench() -> Result<(), String> {
-    // 由工作台的单实例入口唤醒现有窗口，让 AWT/Compose 同步可见状态。
+    // 由工作台的单实例入口唤醒现有窗口，让原生工作台同步可见状态。
     // 直接 ShowWindow 只恢复 HWND，Java 仍可能认为窗口已隐藏而停止绘制和交互。
     let engine =
         std::env::current_exe().map_err(|error| format!("resolve engine path: {error}"))?;
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_engine_resolves_the_compose_launcher() {
+    fn installed_engine_resolves_the_native_launcher() {
         let engine = platform_path(&["E:", "h", "app", "resources", "HLSDownloaderEngine.exe"]);
         let candidates = workbench_candidates(&engine);
         // 引擎装在 resources 下，工作台 exe 允许出现在三处：同级、上一级、再上一级。

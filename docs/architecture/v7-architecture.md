@@ -2,26 +2,26 @@
 
 ## 唯一状态所有者
 
-Rust Core 是下载、调度、任务恢复和 SQLite 的唯一所有者。Compose 工作台、Presenter 和 Native Host 通过协议使用同一个 Core，不直接读写数据库。
+Rust Core 是下载、调度、任务恢复和 SQLite 的唯一所有者。Slint 工作台、Presenter 和 Native Host 通过协议使用同一个 Core，不直接读写数据库。
 
 进度更新先生成当前任务的新快照，在 SQLite 事务提交成功后才替换内存快照、发布事件并通知客户端。写入失败时不改变运行态、历史事件或通知游标；这条高频路径不复制整个任务库作回滚。其他命令继续使用原有回滚边界。（7.0.7 P0-1 起：任务处于同一活动状态/阶段且距上次写库不足 5 s 的进度只更新内存快照与事件环、照常分配序号并通知，不写 SQLite；序号先由预留检查点覆盖，崩溃重启不重用已发布序号。见 [IDM 对齐复核 §8](idm-alignment-review.md)。7.0.7 P1 起：下载线程的周期进度先进入按任务合并的信箱，由上报线程非阻塞地批量应用，同一任务的同步状态变化先应用其排队样本，事件顺序不变；见同文 §9。）这项修改已完成构建及沙盒回归，具体范围见文末证据；随后新增的 HTTP 调度队列改动仍待验证。
 
 ```text
 WXT 扩展 → Native Messaging Host → Rust Core + SQLite
                                      ↕ 本地 IPC
-                             Compose / Presenter
+                             Slint 工作台 / 热窗口
                                      ↓
                             隔离 libmpv 播放进程
 ```
 
 | 模块 | 职责 |
 | --- | --- |
-| `native_shell/` | 下载协议、任务与设置、媒体服务、Core/Host/播放器进程入口 |
-| `desktop_ui/` | 主工作台、任务与队列、设置、设备选择、主界面播放器浮层 |
-| `native_ui/` | 预热的浏览器确认、下载进度和完成临时窗口，无 SQLite 访问 |
+| `native_shell/` | 下载协议、任务与设置、媒体服务、Core/播放器进程入口 |
+| `native_ui/` | Slint 主工作台、任务与队列、设置、设备选择、播放器及热窗口 |
+| `crates/`、`native_clients/` | 共享协议与客户端、Native Host、CLI、更新器及原生启动器 |
 | `extension/` | 网页资源识别、下载接管、字幕与媒体推送，经 Host 提交给 Core |
 
-关闭主工作台不终止活动下载。浏览器 offer 优先交给已驻留 Presenter，避免为确认下载等待 JVM 冷启动；Compose 的后备确认路径不能与 Presenter 重复接单。
+关闭主工作台不终止活动下载。浏览器 offer 优先交给已驻留 Presenter，同一 Slint 进程负责主工作台与确认窗口，避免重复接单。
 
 ## 进程与请求边界
 
@@ -39,7 +39,7 @@ Windows 正常 IPC 使用带 owner/SYSTEM DACL 的 `\\.\pipe\HLSDownloader.v7` �
 
 ## 媒体推送
 
-浏览器 `media_push` 是持久化 Core handoff。Compose 打开与任务播放共用的来源明确的设备选择器，区分 DLNA/Chromecast 与 TVBox；Core 保存 done/failed/canceled，浏览器读取同一结果。设备发现由 Core 按模式执行，不让两类扫描互相覆盖。
+浏览器 `media_push` 是持久化 Core handoff。Slint 工作台打开与任务播放共用的来源明确的设备选择器，区分 DLNA/Chromecast 与 TVBox；Core 保存 done/failed/canceled，浏览器读取同一结果。设备发现由 Core 按模式执行，不让两类扫描互相覆盖。
 
 直接 Core 调用成功不能证明真实浏览器、安装注册、选择器及接收端拉取组成的整条链路成功。真实设备证据要求见 [媒体推送门禁](browser-media-push-release-gate.md)。
 

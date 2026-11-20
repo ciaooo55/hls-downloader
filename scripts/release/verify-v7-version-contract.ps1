@@ -36,18 +36,6 @@ Assert-Version $version (Match-One 'crates\protocol\Cargo.toml' '(?m)^version = 
 Assert-Version $version (Match-One 'crates\client\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Client manifest') 'Client manifest'
 Assert-Version $version (Match-One 'native_clients\Cargo.toml' '(?m)^version = "(\d+\.\d+\.\d+)"$' 'Native clients manifest') 'Native clients manifest'
 Assert-Version $version (Match-One 'extension\package.json' '(?m)^  "version": "(\d+\.\d+\.\d+)",$' 'Extension package') 'Extension package'
-Assert-Version $version (Match-One 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt' '(?m)^    const val version = "(\d+\.\d+\.\d+)"$' 'Compose Product.version') 'Compose Product.version'
-
-$gradle = Read-Utf8 'desktop_ui\build.gradle.kts'
-foreach ($check in @(
-    @{ Pattern = '(?m)^version = "(\d+\.\d+\.\d+)"$'; Label = 'Compose project version' },
-    @{ Pattern = '(?m)^        packageVersion = "(\d+\.\d+\.\d+)"$'; Label = 'Compose packageVersion' },
-    @{ Pattern = '(?m)^        description = "HLS Downloader (\d+\.\d+\.\d+)"$'; Label = 'Compose package description' }
-)) {
-    $matches = [regex]::Matches($gradle, $check.Pattern)
-    if ($matches.Count -ne 1) { throw "$($check.Label): expected exactly one match, found $($matches.Count)." }
-    Assert-Version $version $matches[0].Groups[1].Value $check.Label
-}
 
 function Assert-LockPackage([string]$RelativePath, [string]$PackageName) {
     $escaped = [regex]::Escape($PackageName)

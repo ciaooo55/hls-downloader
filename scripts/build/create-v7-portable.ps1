@@ -1,13 +1,12 @@
 param(
     [string]$OutZip = '',
-    [string]$AppImage = ''
+    [Parameter(Mandatory = $true)][string]$AppImage
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
 . (Join-Path $PSScriptRoot '..\V7ExtensionArchive.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$composeBuild = if ($env:HLS_COMPOSE_BUILD_DIR) { $env:HLS_COMPOSE_BUILD_DIR } else { Join-Path $repo '.tool-cache\build-cache\compose-build' }
-$appImage = if ($AppImage) { (Resolve-Path -LiteralPath $AppImage).Path } else { Join-Path $composeBuild 'compose\binaries\main\app\HLSDownloader' }
+$appImage = (Resolve-Path -LiteralPath $AppImage).Path
 if (-not (Test-Path -LiteralPath (Join-Path $appImage 'HLSDownloader.exe'))) {
     throw "Application image is missing: $appImage. Build the selected runtime first."
 }

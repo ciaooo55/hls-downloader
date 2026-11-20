@@ -129,8 +129,7 @@ def main():
 
     print()
     print('=== in-process controls (data source stubbed to empty) ===')
-    for path, attr, stub in [('audit_nontext.py', 'rows', lambda: []),
-                             ('audit_desktop_nontext.py', 'rows', lambda: [])]:
+    for path, attr, stub in [('audit_nontext.py', 'rows', lambda: [])]:
         mod = load_module('_ctl_' + path.replace('.py', ''), path)
         record('%s: real' % path, 0, call_main(mod))
         setattr(mod, attr, stub)
@@ -154,17 +153,6 @@ def main():
     record('mixcheck.py: all browser colours are wrong', 1, rc, tail[:40])
     rc, tail = run_script('mixcheck.py')
     record('mixcheck.py: real 42-row cross-check', 0, rc, tail[:40])
-
-    print()
-    print('=== hover probe cleanup preserves existing processes ===')
-    from unittest.mock import patch
-    probe = load_module('_ctl_hover', 'probe_v7_hover_feedback.py')
-    with patch.object(probe, 'product_processes', return_value={10: 'HLSDownloaderEngine.exe', 20: 'HLSDownloader.exe'}):
-        with patch.object(probe.subprocess, 'run') as run:
-            probe.kill_product_processes({10})
-            record('hover cleanup: only newly started PID is stopped',
-                   [['taskkill', '/PID', '20', '/F']],
-                   [call.args[0] for call in run.call_args_list])
 
     print()
     passed = sum(1 for r in results if r)

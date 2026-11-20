@@ -41,13 +41,13 @@ These changes do not normally justify destabilizing the release line solely for 
 
 - extension: `tsc --noEmit`, Vitest, Chrome/Firefox extension build;
 - Rust: locked build/test/clippy/fmt and Rust security audit where relevant;
-- Compose: Gradle test plus distributable/package validation.
+- native UI: Slint build/tests plus native candidate package validation.
 
 Historical TypeScript 7 and Vitest 5 updates are acceptable precedents because those checks remained active after their merges.
 
 ### 5. UI/runtime build-stack majors
 
-Compose, Kotlin, serialization, coroutines and Gradle affect both build compatibility and shipped desktop behavior. A grouped update should be accepted only when the grouping is coherent and the Compose workbench/distribution pipeline passes. Avoid unrelated broad batches that make regressions hard to attribute.
+Slint, winit and the software renderer affect both build compatibility and shipped desktop behavior. A grouped update should be accepted only when the grouping is coherent and the native workbench/candidate pipeline passes. Avoid unrelated broad batches that make regressions hard to attribute.
 
 ## Triage outcomes
 

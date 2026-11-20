@@ -29,26 +29,13 @@ $candidate = Join-Path $runtime 'HLSDownloader'
 $resources = Join-Path $candidate 'app\resources'
 $python = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } else { 'python.exe' }
 function Invoke-Checked([string]$File, [string[]]$Arguments) { & $File @Arguments; if ($LASTEXITCODE -ne 0) { throw "$File failed with exit $LASTEXITCODE" } }
-if ([string]$manifest.ui_runtime -eq 'native') {
-    if (-not $NativeEvidenceRoot) { throw 'Native release performance requires authenticated hosted native acceptance evidence.' }
-    Invoke-Checked $python @((Join-Path $PSScriptRoot 'verify_v7_received_regression.py'), '--kind', 'native', '--manifest', $manifestPath, '--evidence', $NativeEvidenceRoot)
-    $frameReport = @(Get-ChildItem -LiteralPath $NativeEvidenceRoot -Recurse -File -Filter 'native-frames.json')
-    if ($frameReport.Count -ne 1) { throw 'Native frame report is missing or ambiguous.' }
-    $frame = Get-Content -LiteralPath $frameReport[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-    $renderApi = 'SLINT_SOFTWARE'
-} else {
-$launcherConfig = Get-ChildItem -LiteralPath $candidate -Filter 'HLSDownloader.cfg' -Recurse -File | Select-Object -First 1
-if (-not $launcherConfig) { throw 'Candidate Compose launcher configuration is missing.' }
-$launcherText = Get-Content -LiteralPath $launcherConfig.FullName -Raw -Encoding UTF8
-$rendererMatch = [regex]::Match($launcherText, '(?m)-Dskiko\.renderApi=([A-Za-z0-9_]+)')
-if (-not $rendererMatch.Success) { throw 'Candidate Compose launcher does not declare skiko.renderApi.' }
-$composeRenderApi = $rendererMatch.Groups[1].Value.ToUpperInvariant()
-if ($composeRenderApi -ne 'SOFTWARE') { throw "Candidate performance gate requires packaged SOFTWARE renderer, found $composeRenderApi." }
-$frameReport = Join-Path $reportDir 'compose-1000-task-frames.json'
-Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'smoke-v7-compose-frames.ps1'),'-ReportPath',$frameReport,'-AppPath',(Join-Path $candidate 'HLSDownloader.exe'))
-$frame = Get-Content $frameReport -Raw -Encoding UTF8 | ConvertFrom-Json
-$renderApi = $composeRenderApi
-}
+if ([string]$manifest.ui_runtime -ne 'native') { throw 'Candidate must use the native UI runtime.' }
+if (-not $NativeEvidenceRoot) { throw 'Native release performance requires authenticated hosted native acceptance evidence.' }
+Invoke-Checked $python @((Join-Path $PSScriptRoot 'verify_v7_received_regression.py'), '--kind', 'native', '--manifest', $manifestPath, '--evidence', $NativeEvidenceRoot)
+$frameReport = @(Get-ChildItem -LiteralPath $NativeEvidenceRoot -Recurse -File -Filter 'native-frames.json')
+if ($frameReport.Count -ne 1) { throw 'Native frame report is missing or ambiguous.' }
+$frame = Get-Content -LiteralPath $frameReport[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+$renderApi = 'SLINT_SOFTWARE'
 $hostReport = Join-Path $reportDir 'native-host-cold-start.json'
 Invoke-Checked $python @((Join-Path $PSScriptRoot 'windows_breakaway_job.py'),$python,(Join-Path $PSScriptRoot 'smoke_v7_native_host.py'),'--host',(Join-Path $resources 'HLSDownloaderNativeHost.exe'),'--engine',(Join-Path $resources 'HLSDownloaderEngine.exe'),'--stage-root',$stageRoot,'--report',$hostReport)
 $nativeHostResult = Get-Content $hostReport -Raw -Encoding UTF8 | ConvertFrom-Json

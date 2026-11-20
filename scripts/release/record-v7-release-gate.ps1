@@ -68,7 +68,7 @@ if ($Exclude -and ($exclusions.gates -notcontains $GateId -or $GateInput -ne $ex
 $previousErrorActionPreference = $ErrorActionPreference
 try {
     $ErrorActionPreference = 'Continue'
-    # -WindowStyle Hidden：这层子控制台若可见，会把 Compose 窗口挤到后台，performance 门禁的
+    # -WindowStyle Hidden：这层子控制台若可见，会把 工作台窗口挤到后台，performance 门禁的
     # 帧采样会因此失真（实测 p95 从 28.1ms 劣化到 41.6ms、超限样本 0 -> 41），
     # 而窗口本身是被 smoke 以 Hidden 拉起的，本该是前台。这里只改启动方式，不动任何门禁判据。
     if ($Exclude) {

@@ -5,7 +5,6 @@
                            "v3":  "git:v3.0.39",
                            "v5":  "git:v5.0.13",
                            "rust_core":  "worktree:native_shell",
-                           "compose":  "worktree:desktop_ui",
                            "native_ui":  "worktree:native_ui",
                            "protocol_client":  "worktree:crates",
                            "browser_extension":  "worktree:extension",
@@ -60,7 +59,7 @@
                          "id":  "architecture.single_core",
                          "status":  "verified",
                          "v3_entry":  "backend task manager",
-                         "compose_entry":  "EnginePipeClient snapshot/events",
+                         "native_entry":  "native_ui/src/workbench.rs; crates/client",
                          "core_command":  "hello/list_tasks/wait_events",
                          "state_event":  "ready/task_created/task_updated/task_progress",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -69,7 +68,7 @@
                          "id":  "workbench.geometry",
                          "status":  "verified",
                          "v3_entry":  "frontend/src/App.tsx + DesktopToolbar + Sidebar + TaskTable",
-                         "compose_entry":  "AppShell/DesktopToolbar/Sidebar/TaskTable/ConnectionStatus",
+                         "native_entry":  "native_ui/src/native_window.rs; native_ui/ui/workbench.slint",
                          "core_command":  "list_tasks",
                          "state_event":  "task snapshots",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -78,7 +77,7 @@
                          "id":  "workbench.foundation_component_architecture",
                          "status":  "verified",
                          "v3_entry":  "custom React desktop controls",
-                         "compose_entry":  "WorkbenchComponents Text/Icon/Surface/Button/Input/Menu/Dialog/Progress/Slider",
+                         "native_entry":  "native_ui/ui/theme.slint; native_ui/ui/workbench_components.slint",
                          "core_command":  "none (rendering architecture)",
                          "state_event":  "all UI states",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -87,7 +86,7 @@
                          "id":  "tasks.selection_keyboard_queue",
                          "status":  "verified",
                          "v3_entry":  "TaskTable selection and queue reorder",
-                         "compose_entry":  "TaskTable Ctrl/Shift/keyboard/drag handle",
+                         "native_entry":  "native_ui/src/task_list.rs; native_ui/ui/workbench.slint",
                          "core_command":  "task_action/reorder_queue/place_queue",
                          "state_event":  "task_updated",
                          "verification":  "原生候选 c42636a4，使用 c56712f0 验证脚本完成真实 Ctrl+A/Esc、Ctrl/Shift 多选和队列拖动；13 项业务操作通过。开发诊断见 docs/validation/current-evidence.json；正式版仍要求最终同源候选及组件哈希一致的验收。"
@@ -96,7 +95,7 @@
                          "id":  "tasks.named_queue_profiles",
                          "status":  "verified",
                          "v3_entry":  "queue scheduler and queue ordering",
-                         "compose_entry":  "Sidebar queue filters / QueueManagerDialog / QueueAssignDialog / row and batch move actions",
+                         "native_entry":  "native_ui/src/queue_editor.rs; native_ui/ui/queues.slint",
                          "core_command":  "assign_queue/get_settings/set_settings_atomic",
                          "state_event":  "task_updated/structured command result/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -105,7 +104,7 @@
                          "id":  "tasks.details_logs_speed_connections",
                          "status":  "verified",
                          "v3_entry":  "TaskDetailsModal/LogModal/SpeedChart",
-                         "compose_entry":  "TaskDetailsDialog live task lookup",
+                         "native_entry":  "native_ui/ui/details.slint; native_ui/src/workbench.rs",
                          "core_command":  "get_task_log/task_action speed/refresh_task_request",
                          "state_event":  "task_progress/task_log/toast",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -114,7 +113,7 @@
                          "id":  "tasks.refresh_signed_url",
                          "status":  "verified",
                          "v3_entry":  "task URL refresh and resume",
-                         "compose_entry":  "TaskDetailsDialog 更新并继续",
+                         "native_entry":  "native_ui/ui/details.slint",
                          "core_command":  "refresh_task_request",
                          "state_event":  "toast/task_updated/task_progress",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -123,7 +122,7 @@
                          "id":  "create.protocols_and_recognition",
                          "status":  "verified",
                          "v3_entry":  "RecognizeDialog",
-                         "compose_entry":  "NewTaskDialog/ProbeResultDialog/BatchAddDialog/HarvestDialog",
+                         "native_entry":  "native_ui/ui/task_editor.slint; native_ui/src/resource_tools.rs",
                          "core_command":  "probe_url/create_task/harvest_page/import_paths",
                          "state_event":  "probe_result/harvest_result/task_created/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -132,7 +131,7 @@
                          "id":  "import.file_picker_and_drop",
                          "status":  "verified",
                          "v3_entry":  "dropImport/importLinkPath/importTorrentPath",
-                         "compose_entry":  "ContentHeader import + native desktop drop target",
+                         "native_entry":  "native_ui/src/file_dialogs.rs; native_ui/src/workbench.rs",
                          "core_command":  "import_paths",
                          "state_event":  "task_created/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -141,7 +140,7 @@
                          "id":  "export.normalized_task_list",
                          "status":  "verified",
                          "v3_entry":  "formatTaskExport/downloadTextFile",
-                         "compose_entry":  "ContentHeader export",
+                         "native_entry":  "native_ui/src/workbench.rs",
                          "core_command":  "export_tasks",
                          "state_event":  "task_export",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -150,7 +149,7 @@
                          "id":  "import.exported_task_json",
                          "status":  "verified",
                          "v3_entry":  "no versioned task JSON import round trip",
-                         "compose_entry":  "ContentHeader import / desktop drop target with .json filter",
+                         "native_entry":  "native_ui/src/workbench.rs",
                          "core_command":  "import_paths/create_task",
                          "state_event":  "task_created/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -159,7 +158,7 @@
                          "id":  "workbench.automatic_responsive_layout",
                          "status":  "verified",
                          "v3_entry":  "fixed task columns and toolbar",
-                         "compose_entry":  "原生自动收缩任务列与工具栏；保留排序和完整标题提示",
+                         "native_entry":  "native_ui/ui/workbench.slint",
                          "core_command":  "store_settings(task_sort); task_action/reorder_queue",
                          "state_event":  "task snapshots",
                          "verification":  "原生候选实际窗口 620×480、960×640、1400×820 和 Slint 1/1.25/1.5/2 缩放通过，工具栏控件在窗口内；OS DPI 为 96，不宣称物理多显示器切换。开发诊断见 docs/validation/current-evidence.json；正式版要求同源验收。"
@@ -168,7 +167,7 @@
                          "id":  "media.hls_transfer_parity",
                          "status":  "verified",
                          "v3_entry":  "HLSDownloader build_task_headers / concurrent segment workers / per-segment key and map parsing / blocking LL-HLS reload",
-                         "compose_entry":  "NewTaskDialog and browser media handoff",
+                         "native_entry":  "native_ui/ui/task_editor.slint; native_ui/src/workbench.rs",
                          "core_command":  "create_task/task_action/refresh_task_request",
                          "state_event":  "task_progress/task_updated/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -177,7 +176,7 @@
                          "id":  "media.local_player_controls",
                          "status":  "verified",
                          "v3_entry":  "VideoPlayerModal with timeline, tracks and preview",
-                         "compose_entry":  "LocalVideoPlayer in the main-window overlay; optional picture-in-picture reuses the same libmpv session",
+                         "native_entry":  "native_ui/src/media_controller.rs; native_ui/ui/media.slint",
                          "core_command":  "play_task/player_control",
                          "state_event":  "player_session",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -186,7 +185,7 @@
                          "id":  "media.cast_dlna_chromecast",
                          "status":  "verified",
                          "v3_entry":  "castTask/controlCast",
-                         "compose_entry":  "MediaSourcePickerDialog/DevicePickerDialog/CastSessionHud",
+                         "native_entry":  "native_ui/src/cast_tools.rs; native_ui/ui/cast_tools.slint",
                          "core_command":  "discover_cast_devices/cast_to_device/share_media/control_cast",
                          "state_event":  "cast_devices/cast_session/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -195,7 +194,7 @@
                          "id":  "media.lan_share",
                          "status":  "verified",
                          "v3_entry":  "cast local file/media URL",
-                         "compose_entry":  "局域网播放 + 地址复制",
+                         "native_entry":  "native_ui/src/cast_tools.rs; native_ui/ui/cast_tools.slint",
                          "core_command":  "cast_task/share_media/control_cast stop",
                          "state_event":  "cast_session.media_url",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -204,7 +203,7 @@
                          "id":  "media.tvbox_push",
                          "status":  "verified",
                          "v3_entry":  "pushTaskToTvbox/pushTvboxUrl",
-                         "compose_entry":  "TVBox media source, dedicated device picker and Settings \u003e 投屏与推送 \u003e TVBox 推送",
+                         "native_entry":  "native_ui/src/cast_tools.rs; native_ui/ui/cast_tools.slint",
                          "core_command":  "discover_cast_devices/cast_to_device/share_media",
                          "state_event":  "cast_devices/cast_session/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -213,7 +212,7 @@
                          "id":  "media.cast_and_player_concurrency",
                          "status":  "verified",
                          "v3_entry":  "player and cast activity overlays",
-                         "compose_entry":  "LocalVideoPlayer overlay and independent CastSessionHud; local player and cast controls keep separate sessions",
+                         "native_entry":  "native_ui/src/media_controller.rs; native_ui/src/cast_tools.rs",
                          "core_command":  "player_control/control_cast",
                          "state_event":  "player_session/cast_session",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -222,7 +221,7 @@
                          "id":  "torrent.multi_file_selection",
                          "status":  "verified",
                          "v3_entry":  "torrent metadata and file selection",
-                         "compose_entry":  "TorrentSelectionDialog with tree-safe file selection",
+                         "native_entry":  "native_ui/src/resource_tools.rs; native_ui/ui/resource_tools.slint",
                          "core_command":  "probe_torrent/select_torrent_files/create_task",
                          "state_event":  "torrent_probe_result/torrent_selection_result",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -231,7 +230,7 @@
                          "id":  "settings.current",
                          "status":  "verified",
                          "v3_entry":  "SettingsPanel",
-                         "compose_entry":  "FullSettingsDialog ten sections: 通用/下载/计划/网络/媒体/BT/投屏与推送/安全/浏览器/外观; segmented 投屏/TVBox 推送 modes",
+                         "native_entry":  "native_ui/src/settings_editor.rs; native_ui/src/service_settings.rs",
                          "core_command":  "get_settings/set_settings_atomic",
                          "state_event":  "structured command result/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -240,7 +239,7 @@
                          "id":  "updates.confirmed_download",
                          "status":  "verified",
                          "v3_entry":  "UpdateNotice",
-                         "compose_entry":  "UpdateDialog/UpdatePreparedDialog",
+                         "native_entry":  "native_ui/src/system_tools.rs; native_ui/ui/system.slint",
                          "core_command":  "check_update/download_update/install_update",
                          "state_event":  "update_available/update_current/update_ready/update_install_started/update_install_result/error:update_failed",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -249,7 +248,7 @@
                          "id":  "browser.request_context_replay",
                          "status":  "verified",
                          "v3_entry":  "request_context.source_page_identity/build_task_headers",
-                         "compose_entry":  "Settings \u003e 网络 explains automatic browser identity and manual-only fallback headers",
+                         "native_entry":  "native_ui/src/settings_editor.rs; native_ui/src/site_rules.rs",
                          "core_command":  "offer_resource/create_task",
                          "state_event":  "handoff_offered/task_created/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -258,7 +257,7 @@
                          "id":  "browser.takeover_and_recovery",
                          "status":  "verified",
                          "v3_entry":  "BrowserExtensionDialog/handoff confirmation",
-                         "compose_entry":  "ExtensionDialog/HandoffDialog",
+                         "native_entry":  "native_ui/src/system_tools.rs; native_ui/src/hot_main.rs",
                          "core_command":  "present_handoff/accept_handoff/reject_handoff",
                          "state_event":  "handoff_offered/handoff_resolved/browser_status",
                          "verification":  "已发布 rc3 的 Edge/Firefox 实际扩展、Host/Core 接管、凭据和回执恢复通过，报告绑定成品哈希；最终版本须重新执行同源浏览器矩阵。Firefox 按用户决定交付待 Mozilla 签名 ZIP 与源码，不宣称标准 Firefox 永久安装已完成。见 docs/validation/current-evidence.json。"
@@ -267,7 +266,7 @@
                          "id":  "browser.media_push_device_selection",
                          "status":  "partial",
                          "v3_entry":  "browser cast/TVBox push request",
-                         "compose_entry":  "MediaPushRequested event -\u003e DevicePickerDialog -\u003e CastSessionHud",
+                         "native_entry":  "native_ui/src/cast_tools.rs; native_ui/ui/cast_tools.slint",
                          "core_command":  "request_media_push/resolve_media_push/discover_cast_devices/share_media",
                          "state_event":  "media_push_requested/media_push_resolved/cast_devices/cast_session/error",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
@@ -277,7 +276,7 @@
                          "id":  "browser.hot_confirmation_process",
                          "status":  "verified",
                          "v3_entry":  "native confirmation window",
-                         "compose_entry":  "Compose HandoffDialog fallback",
+                         "native_entry":  "native_ui/src/hot_main.rs; native_ui/ui/hot.slint",
                          "core_command":  "present_handoff",
                          "state_event":  "handoff_offered",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -286,7 +285,7 @@
                          "id":  "browser.online_subtitle_translation",
                          "status":  "partial",
                          "v3_entry":  "新增在线字幕功能，参考实时音频协议与语句配对",
-                         "compose_entry":  "现有 WXT 插件弹窗与网页播放器字幕按钮；凭据由常驻 Rust Core 持有",
+                         "native_entry":  "extension/entrypoints; native_ui/src/service_settings.rs",
                          "core_command":  "subtitle configuration/configure/start/audio/reset/poll/stop",
                          "state_event":  "CorePipeResponse::Subtitle / subtitle-state",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。",
@@ -296,7 +295,7 @@
                          "id":  "accessibility.automation",
                          "status":  "verified",
                          "v3_entry":  "browser semantic controls",
-                         "compose_entry":  "keyboard and tooltip support",
+                         "native_entry":  "native_ui/ui/workbench.slint; native_ui/ui/theme.slint",
                          "core_command":  "none",
                          "state_event":  "none",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -305,7 +304,7 @@
                          "id":  "performance.release_thresholds",
                          "status":  "verified",
                          "v3_entry":  "legacy baseline",
-                         "compose_entry":  "virtualized LazyColumn and coalesced events",
+                         "native_entry":  "native_ui/src/task_list.rs; native_ui/src/workbench.rs",
                          "core_command":  "all",
                          "state_event":  "all",
                          "verification":  "历史验证范围见 git:27fd2d06b8426356ded1372c31d11265ca4c436f:config/release/feature-parity.json 中的本项；当前验证见 docs/validation/current-evidence.json。"
@@ -314,7 +313,7 @@
                          "id":  "package.install_upgrade_rollback",
                          "status":  "verified",
                          "v3_entry":  "shipping installer",
-                         "compose_entry":  "build-v7 preview packaging",
+                         "native_entry":  "scripts/build-v7.ps1; scripts/build/build-native-v7-installer.ps1",
                          "core_command":  "engine/native host startup",
                          "state_event":  "ready/browser_status",
                          "verification":  "原生 rc3 与 c42636a4 候选实际 EXE 安装和快捷方式启动、MSI 升级/故障回滚、Portable 升级/回滚通过；包含中文空格路径、schema 6→7 和不支持 schema 的数据库保全。最终正式 EXE 独立复验；见 docs/validation/current-evidence.json。"
@@ -323,7 +322,7 @@
                          "id":  "free.cli",
                          "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
-                         "compose_entry":  "app/resources/HLSDownloaderCli.exe; add/list/show/pause/resume/retry/remove/queue/import/export",
+                         "native_entry":  "native_clients/src/bin/hls_downloader_cli.rs",
                          "core_command":  "CoreIpcClient versioned Named Pipe; create_task_paused capability",
                          "state_event":  "TaskCreated/TaskUpdated/TaskExport",
                          "verification":  "原生候选成品 CLI/Core 回归覆盖单 Core 启动、下载/暂停/重启恢复、队列、导入导出、显式删除、stdin 上下文和默认脱敏；不扩大为所有命令组合保证。见 docs/validation/native-feature-mapping.md。"
@@ -332,7 +331,7 @@
                          "id":  "free.crawl_sync",
                          "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
-                         "compose_entry":  "工具 / 抓站与同步项目; CLI crawl",
+                         "native_entry":  "native_ui/src/resource_tools.rs",
                          "core_command":  "crawl capability and request; ordinary CreateTask",
                          "state_event":  "CrawlProject/CrawlResource; SQLite schema 6 to 7",
                          "verification":  "原生候选成品 API 的循环/深度/跨域、ETag、失败保留旧文件、队列窗口与定时同步，以及真实 GUI 创建、发现、刷新勾选保留和入队通过；见 docs/validation/native-feature-mapping.md。"
@@ -341,7 +340,7 @@
                          "id":  "free.zip_preview",
                          "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
-                         "compose_entry":  "工具 / ZIP 内容预览; CLI zip",
+                         "native_entry":  "native_ui/src/resource_tools.rs",
                          "core_command":  "preview_zip capability and request",
                          "state_event":  "ZipPreview with metadata_bytes_read",
                          "verification":  "原生候选远程 ZIP 有界读取、资源变化和 2200 项中央目录通过，真实原生 GUI 输入远程 URL 并列出内容通过；见 docs/validation/native-feature-mapping.md。"
@@ -350,7 +349,7 @@
                          "id":  "http.active_tail_split",
                          "status":  "verified",
                          "v3_entry":  "IDM / AB free-edition parity plan",
-                         "compose_entry":  "原生 Core 默认启用已校验 Range 资源的动态尾块；HLS_HTTP_ACTIVE_SPLIT=0 可关闭",
+                         "native_entry":  "native_ui/src/workbench.rs",
                          "core_command":  "existing RangeScheduler pending first, reserved read region",
                          "state_event":  "existing durable range checkpoints",
                          "verification":  "默认动态尾块调度真实成品比较、暂停与强杀恢复通过；均匀资源持平、慢尾资源约 5.07 秒降至 2.03/2.04 秒，完整报告分别记录额外服务端字节。不是同条件 IDM 比较。见 docs/validation/native-feature-mapping.md。"

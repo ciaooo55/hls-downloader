@@ -22,8 +22,6 @@ native_ui/target/
 extension/node_modules/
 extension/.wxt/
 extension/.output/
-**/.gradle/
-desktop_ui/.kotlin/
 
 # Build and packaging output
 bin/
@@ -32,13 +30,11 @@ bin/
 !native_clients/src/bin/
 !native_clients/src/bin/*.rs
 /build/
-/desktop_ui/build/
 /release/
 tools/
 .tool-cache/
 # Generated packages and active validation output; source contracts live in config/.
 /artifacts/
-desktop_ui/resources/common/
 
 # Runtime state
 downloads/

@@ -13,7 +13,6 @@ if ([String]::IsNullOrWhiteSpace($EngineExecutable)) {
     foreach ($candidate in @(
         (Join-Path $target 'release\hls-downloader-engine.exe'),
         (Join-Path $target 'debug\hls-downloader-engine.exe'),
-        (Join-Path $root 'desktop_ui\resources\common\HLSDownloaderEngine.exe'),
         (Join-Path $root 'app\resources\HLSDownloaderEngine.exe')
     )) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {

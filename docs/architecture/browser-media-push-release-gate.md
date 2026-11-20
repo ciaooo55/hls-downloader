@@ -6,7 +6,7 @@
 
 1. candidate MSI 安装后，Edge/Firefox 的实际 Native Messaging 登记指向该包的 Host；核对 host 名称、浏览器 allowlist、manifest 和可执行文件哈希。
 2. 两种真实浏览器通过生产扩展触发媒体推送，经 Native Host 和 Core 形成持久化请求。
-3. Compose 的生产 DevicePicker 展示该来源，用户操作路径选择配置的真实接收端并确认；直接 Core `share_media` 不能替代此步骤。
+3. Slint 的生产投屏与媒体推送窗口展示该来源，用户操作路径选择配置的真实接收端并确认；直接 Core `share_media` 不能替代此步骤。
 4. 浏览器收到明确成功结果；指定的局域网接收端自身实际拉取确定性媒体 fixture。
 5. 报告记录接收端身份、来源地址、字节/Range、fixture 哈希及时间，能将拉取归属于被选择的设备。
 

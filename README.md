@@ -101,7 +101,7 @@ flowchart LR
     C --> M["Local Player · LAN Cast"]
 ```
 
-**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。7.0.10 正式包采用 Rust / Slint 原生入口；Compose 源码保留作迁移对照。同源验收与发布记录见[当前验证表](docs/validation/current-evidence.json)。
+**只有 Core 拥有下载状态和 SQLite**。原生工作台、浏览器扩展、播放器和投屏链路都通过同一个 Core 协作。7.0.10 正式包采用 Rust / Slint 原生入口；历史工作台源码可通过 Git 标签查看。同源验收与发布记录见[当前验证表](docs/validation/current-evidence.json)。
 
 ## 📁 项目结构
 
@@ -110,7 +110,6 @@ flowchart LR
 | `native_shell/` | Rust Core、SQLite、传输引擎及后台媒体服务 |
 | `crates/` | 共享协议及轻量 IPC 客户端 |
 | `native_clients/` | Native Host、CLI、更新器及原生启动入口 |
-| `desktop_ui/` | 迁移对照用的 Kotlin / Compose 工作台 |
 | `native_ui/` | Rust + Slint 原生工作台、确认、进度与完成窗口 |
 | `extension/` | WXT 构建的 Chromium / Firefox Manifest V3 扩展 |
 | `scripts/` | Windows 构建、测试、安装、升级、打包与验证脚本 |
@@ -119,11 +118,7 @@ flowchart LR
 
 ## 🛠️ 从源码构建
 
-项目优先面向 Windows。首次开发时，可从仓库根目录引导固定版本的工具链：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-v7-toolchain.ps1
-```
+项目优先面向 Windows。开发需要 Rust MSVC 工具链、Visual Studio C++ Build Tools、Node.js 和 pnpm；版本以 CI 为准。工作台使用 Slint，无需 JDK。以下命令从仓库根目录运行。
 
 运行集成测试：
 
@@ -140,12 +135,8 @@ cargo test --manifest-path native_shell/Cargo.toml --lib
 # Native Presenter
 cargo test --manifest-path native_ui/Cargo.toml
 
-# Compose Desktop
-cd desktop_ui
-.\gradlew.bat test --no-daemon
-
 # Browser Extension
-cd ..\extension
+cd extension
 pnpm install --frozen-lockfile
 pnpm test
 pnpm run build

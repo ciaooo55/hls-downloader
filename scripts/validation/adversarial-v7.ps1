@@ -27,11 +27,6 @@ $cargoCommand = Get-Command cargo.exe -ErrorAction SilentlyContinue
 $cargo = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 $env:CARGO_HOME = Join-Path $cacheRoot 'cargo'
 $env:CARGO_TARGET_DIR = Join-Path $cacheRoot 'cargo-target'
-$env:GRADLE_USER_HOME = Join-Path $cacheRoot 'gradle'
-$jdkRoot = $env:HLS_V7_JAVA_HOME
-if(-not $jdkRoot -and (Test-Path (Join-Path $cacheRoot 'jdk-21\bin\java.exe'))){ $jdkRoot = Join-Path $cacheRoot 'jdk-21' }
-if(-not $jdkRoot){ throw 'JDK 21 was not found. Set HLS_V7_JAVA_HOME or run scripts\bootstrap-v7-toolchain.ps1.' }
-$env:JAVA_HOME = $jdkRoot
 $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
 $pythonExe = if ($env:HLS_V7_PYTHON) { $env:HLS_V7_PYTHON } elseif ($pythonCommand) { $pythonCommand.Source } else { $null }
 if ([String]::IsNullOrWhiteSpace($pythonExe)) {
@@ -54,12 +49,8 @@ function Invoke-Gate {
 }
 
 function Assert-ArchitectureBoundary {
-    $composeSources = Join-Path $repo 'desktop_ui\src'
-    $forbidden = Get-ChildItem -LiteralPath $composeSources -Recurse -File -Filter '*.kt' |
-        Select-String -Pattern 'jdbc:sqlite|DriverManager|rusqlite' -CaseSensitive:$false
-    if ($forbidden) {
-        throw "Compose must not access SQLite directly: $($forbidden[0].Path):$($forbidden[0].LineNumber)"
-    }
+    & (Join-Path $PSScriptRoot 'verify-native-boundaries.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Native client architecture boundary failed.' }
     $nativeHostSource = Join-Path $repo 'native_clients\src\native_host.rs'
     if (-not (Select-String -LiteralPath $nativeHostSource -Pattern 'connect_or_start_core' -Quiet)) {
         throw 'Native Host cold-start boundary is missing.'
@@ -97,10 +88,6 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "v7 hot presenter smoke failed (exit $LASTEXITCODE)" }
         & $pythonExe scripts\validation\smoke_v7_player_process.py --engine $engine
         if ($LASTEXITCODE -ne 0) { throw "v7 player process smoke failed (exit $LASTEXITCODE)" }
-    }
-    Invoke-Gate 'Compose protocol and hostile-input invariants' {
-        Push-Location desktop_ui
-        try { & .\gradlew.bat test --no-daemon } finally { Pop-Location }
     }
     Invoke-Gate 'Native Host cold-start and framed-message boundary' {
         & $pythonExe scripts\validation\smoke_v7_native_host.py `

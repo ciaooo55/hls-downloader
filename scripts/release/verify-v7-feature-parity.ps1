@@ -60,14 +60,10 @@ if ([int]$json.schema -ne 1) {
     $errors.Add("Unsupported feature parity schema: $($json.schema)")
 }
 $productVersion = [string]$json.product_version
-$composeBuildSource = [IO.File]::ReadAllText((Join-Path $repo 'desktop_ui\build.gradle.kts'), $utf8NoBom)
 $moduleVersions = @(
     ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'native_shell\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
     ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'native_ui\Cargo.toml'), $utf8NoBom), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    [string]([IO.File]::ReadAllText((Join-Path $repo 'extension\package.json'), $utf8NoBom) | ConvertFrom-Json).version,
-    ([regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt'), $utf8NoBom), 'const val version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    ([regex]::Match($composeBuildSource, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
-    ([regex]::Match($composeBuildSource, 'packageVersion\s*=\s*"([^"]+)"')).Groups[1].Value
+    [string]([IO.File]::ReadAllText((Join-Path $repo 'extension\package.json'), $utf8NoBom) | ConvertFrom-Json).version
 )
 if ([String]::IsNullOrWhiteSpace($productVersion) -or @($moduleVersions | Where-Object { $_ -ne $productVersion }).Count -ne 0) {
     $errors.Add("Product version mismatch: feature parity=$productVersion; modules=$($moduleVersions -join ', ')")
@@ -76,7 +72,7 @@ $features = @($json.features)
 if ($features.Count -eq 0) {
     $errors.Add('Feature parity matrix is empty.')
 }
-$requiredFields = @('id', 'status', 'v3_entry', 'compose_entry', 'core_command', 'state_event', 'verification')
+$requiredFields = @('id', 'status', 'v3_entry', 'native_entry', 'core_command', 'state_event', 'verification')
 $allowedStatuses = @('verified', 'partial', 'blocked')
 foreach ($feature in $features) {
     foreach ($field in $requiredFields) {
@@ -101,13 +97,12 @@ $citedEvidenceRoots = @(
     (Join-Path $repo 'native_shell\src'),
     (Join-Path $repo 'crates'),
     (Join-Path $repo 'native_clients\src'),
-    (Join-Path $repo 'desktop_ui\src'),
     (Join-Path $repo 'native_ui\src'),
     (Join-Path $repo 'extension\entrypoints'),
     (Join-Path $repo 'extension\lib'),
     (Join-Path $repo 'scripts')
 )
-$searchableEvidenceExtensions = @('.rs', '.kt', '.ts', '.ps1', '.py')
+$searchableEvidenceExtensions = @('.rs', '.ts', '.ps1', '.py')
 $citedEvidenceHaystack = New-Object 'System.Text.StringBuilder'
 foreach ($root in $citedEvidenceRoots) {
     if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }

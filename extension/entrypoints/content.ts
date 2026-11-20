@@ -326,7 +326,7 @@ export default defineContentScript({
           /* 统一按钮微交互。视频悬浮按钮与面板按钮此前要么完全没有 transition，
              要么声明了 transform 过渡却没有任何状态去改 transform（等于死代码），
              点击时只剩颜色硬切。这里给它们一套与 .hlsd-button（transform .12s）和
-             Compose 工作台（hover 130ms / press 90ms）对齐的反馈。 */
+             工作台（hover 130ms / press 90ms）对齐的反馈。 */
           .video-download,.video-more,.hover-action,.pin,.close,.download{transition:background-color .15s ease,color .15s ease,transform .12s ease,box-shadow .15s ease}
           .video-download:hover,.video-more:hover{transform:translateY(-1px)}
           .video-download:hover{box-shadow:0 5px 14px var(--shadow)}

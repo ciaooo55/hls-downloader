@@ -10,4 +10,4 @@ cargo build --manifest-path native_shell/Cargo.toml --bin hls-downloader-engine
 cargo build --manifest-path native_shell/Cargo.toml --bin HLSDownloaderNativeHost
 ```
 
-The Core owns SQLite and serves the Compose workbench, browser host and native presenter only over the v7 named-pipe contract. Only the current protocol and database schema are supported; older data is never imported automatically.
+The Core owns SQLite and serves the Slint workbench, browser host and native presenter only over the v7 named-pipe contract. Only the current protocol and database schema are supported; older data is never imported automatically.

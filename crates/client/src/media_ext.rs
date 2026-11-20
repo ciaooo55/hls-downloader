@@ -11,8 +11,7 @@
 //! `playable_is_subset_of_folder` 钉住了 playable ⊂ folder：将来只改一边，那条测试会
 //! 提醒你是有意的还是漏了。
 
-/// 归"媒体"分类文件夹的扩展名。与 `desktop_ui` 的 `catMEDIA_EXTENSIONS` 逐项相等，
-/// 由 `desktop_ui` 的 `CategoryParityTest` 跨语言比对守卫。
+/// 归"媒体"分类文件夹的扩展名。由共享客户端分类逻辑统一使用。
 pub const MEDIA_FOLDER_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "webm", "mov", "avi", "m4v", "ts", "mp3", "m4a", "flac", "wav", "ac3", "aac",
     "3gp", "flv", "m2ts", "mka", "mpd", "mpeg", "mpg", "ogg", "opus", "wma", "wmv", "jpg", "png",

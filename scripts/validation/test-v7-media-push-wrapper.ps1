@@ -40,7 +40,7 @@ function Invoke-Case([string]$Name, [string]$ExpectedError = '') {
     $hashModule = Join-Path $PSScriptRoot '..\V7HashFunctions.ps1'
     if (-not [IO.File]::Exists($hashModule)) { throw "V7HashFunctions.ps1 not found: $hashModule" }
     Copy-Item -LiteralPath $hashModule -Destination (Join-Path (Split-Path $scripts -Parent) 'V7HashFunctions.ps1') -ErrorAction Stop
-    $resources = Join-Path $caseRoot 'desktop_ui\resources\common'
+    $resources = Join-Path $caseRoot 'artifacts\v7-productization\media-push-input'
     $calledPath = Join-Path $caseRoot 'core-called.txt'
     $zipPath = Join-Path $candidateRoot 'portable.zip'
     $manifestPath = Join-Path $candidateRoot 'ARTIFACT-MANIFEST.json'
@@ -78,7 +78,7 @@ $mode = Split-Path $root -Leaf
 if ($mode -eq 'core-failure') { throw 'injected core verifier failure' }
 if ($mode -eq 'missing-summary') { Write-Output 'no summary'; return }
 $m = [IO.File]::ReadAllText($CandidateManifestPath) | ConvertFrom-Json
-$hostPath = Join-Path $root 'desktop_ui\resources\common\HLSDownloaderNativeHost.exe'
+$hostPath = Join-Path $root 'artifacts\v7-productization\media-push-input\HLSDownloaderNativeHost.exe'
 $hash = (Get-FileHash -LiteralPath $hostPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($mode -eq 'host-mismatch') { $hash = ('0' * 64) }
 [ordered]@{

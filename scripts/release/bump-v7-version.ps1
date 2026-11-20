@@ -44,10 +44,6 @@ Replace-Required 'crates\protocol\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' 
 Replace-Required 'crates\client\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'native_clients\Cargo.toml' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
 Replace-Required 'extension\package.json' '(?m)^  "version": "\d+\.\d+\.\d+",$' "  `"version`": `"$Version`"," 
-Replace-Required 'desktop_ui\src\main\kotlin\com\hlsdownloader\desktop\Protocol.kt' '(?m)^    const val version = "\d+\.\d+\.\d+"$' "    const val version = `"$Version`""
-Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^version = "\d+\.\d+\.\d+"$' "version = `"$Version`""
-Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^        packageVersion = "\d+\.\d+\.\d+"$' "        packageVersion = `"$Version`""
-Replace-Required 'desktop_ui\build.gradle.kts' '(?m)^        description = "HLS Downloader \d+\.\d+\.\d+"$' "        description = `"HLS Downloader $Version`""
 
 Set-CargoLockLocalVersion 'Cargo.lock' 'hls-native-shell'
 Set-CargoLockLocalVersion 'Cargo.lock' 'hls-native-ui'
