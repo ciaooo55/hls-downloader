@@ -984,22 +984,6 @@ impl CoreCoordinator {
             let spec = self.apply_defaults_to_spec(spec)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
-                let mut spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
-                if spec.resource_kind == crate::ResourceKind::Torrent {
-                    let core = self.lock()?;
-                    let auto = core.store().setting_bool("auto_category_dirs", false)?;
-                    let dirs = crate::category::parse_category_dirs(
-                        &core.store().setting_string("browser_category_dirs", "")?,
-                    );
-                    spec.download_dir = crate::category::resolve_category_dir(
-                        &spec.download_dir,
-                        &spec.filename,
-                        &spec.url,
-                        spec.resource_kind,
-                        auto,
-                        &dirs,
-                    );
-                }
                 events.extend(self.dispatch_created(spec)?);
             }
             self.start_next_queued(false)?;
@@ -1042,10 +1026,37 @@ impl CoreCoordinator {
                         imported.queue_id = crate::DEFAULT_QUEUE_ID.into();
                     }
                     imported.allow_duplicate = spec.allow_duplicate;
-                    self.apply_defaults_to_spec(imported)
+                    let imported = self.apply_defaults_to_spec(imported)?;
+                    validate_torrent_spec(imported, settings.bt_enable_dht)
                 })
                 .collect();
         }
+        let enable_dht = self.settings()?.bt_enable_dht;
+        self.expand_new_sources(spec, auto, &dirs)?
+            .into_iter()
+            .map(|spec| {
+                let mut spec = validate_torrent_spec(spec, enable_dht)?;
+                if spec.resource_kind == crate::ResourceKind::Torrent {
+                    spec.download_dir = crate::category::resolve_category_dir(
+                        &spec.download_dir,
+                        &spec.filename,
+                        &spec.url,
+                        spec.resource_kind,
+                        auto,
+                        &dirs,
+                    );
+                }
+                Ok(spec)
+            })
+            .collect()
+    }
+
+    fn expand_new_sources(
+        &self,
+        spec: TaskSpec,
+        auto: bool,
+        dirs: &crate::category::CategoryDirs,
+    ) -> Result<Vec<TaskSpec>, String> {
         if let Some(urls) = crate::link_file::expand_source(&spec.url)? {
             let mut specs = Vec::new();
             for url in urls {
@@ -1053,9 +1064,9 @@ impl CoreCoordinator {
                     continue;
                 }
                 if crate::looks_like_metalink(&url) {
-                    specs.extend(specs_from_metalink(&url, &spec, auto, &dirs)?);
+                    specs.extend(specs_from_metalink(&url, &spec, auto, dirs)?);
                 } else {
-                    specs.push(spec_from_url(&spec, &url, &spec.filename, auto, &dirs));
+                    specs.push(spec_from_url(&spec, &url, &spec.filename, auto, dirs));
                 }
             }
             if specs.is_empty() {
@@ -1073,7 +1084,7 @@ impl CoreCoordinator {
             .map_err(|error| error.to_string())?;
             let text = String::from_utf8_lossy(&body);
             if crate::looks_like_metalink(&text) {
-                return specs_from_metalink(&text, &spec, auto, &dirs);
+                return specs_from_metalink(&text, &spec, auto, dirs);
             }
             let links = crate::harvest_html(&text, &spec.url);
             if links.is_empty() {
@@ -1082,11 +1093,11 @@ impl CoreCoordinator {
             return Ok(links
                 .into_iter()
                 .filter(|link| reject_task_url(&link.url).is_ok())
-                .map(|link| spec_from_url(&spec, &link.url, &link.filename, auto, &dirs))
+                .map(|link| spec_from_url(&spec, &link.url, &link.filename, auto, dirs))
                 .collect());
         }
         if crate::looks_like_metalink(&spec.url) {
-            return specs_from_metalink(&spec.url, &spec, auto, &dirs);
+            return specs_from_metalink(&spec.url, &spec, auto, dirs);
         }
         let lower = spec.url.to_ascii_lowercase();
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
@@ -1097,14 +1108,14 @@ impl CoreCoordinator {
                 1024 * 1024,
             )
             .map_err(|error| error.to_string())?;
-            return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, &dirs);
+            return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, dirs);
         }
         Ok(vec![spec_from_url(
             &spec,
             &spec.url,
             &spec.filename,
             auto,
-            &dirs,
+            dirs,
         )])
     }
 

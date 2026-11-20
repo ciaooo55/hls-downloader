@@ -2265,6 +2265,60 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
 }
 
 #[test]
+fn imported_torrent_preserves_saved_category_directory() {
+    let root = std::env::temp_dir().join(format!(
+        "hls-import-torrent-category-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let address = serve_http_fixture(b"d4:infod6:lengthi5e4:name9:movie.mkv12:piece lengthi4e6:pieces40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaee");
+    let base = root.join("downloads");
+    let saved = base.join(crate::category::category_label("media"));
+    let source = root.join("tasks.json");
+    fs::write(
+        &source,
+        serde_json::json!({
+            "schema": "hls-downloader.tasks.v1",
+            "tasks": [{
+                "url": format!("http://{address}/source.torrent"),
+                "resource_kind": ResourceKind::Torrent,
+                "filename": "movie.mkv",
+                "download_dir": saved,
+                "scheduled_start_at": "2999-01-01T00:00:00Z",
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let coordinator = direct_http_coordinator(&base);
+    coordinator
+        .set_setting("auto_category_dirs", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: source.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task = coordinator.tasks().unwrap().remove(0);
+    assert_eq!(Path::new(&task.download_dir), saved);
+    assert_eq!(
+        Path::new(
+            &coordinator
+                .lock()
+                .unwrap()
+                .task_spec("task-1")
+                .unwrap()
+                .download_dir
+        ),
+        saved
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn torrent_category_routing_uses_resolved_names_once() {
     let root = std::env::temp_dir().join(format!("hls-torrent-categories-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
