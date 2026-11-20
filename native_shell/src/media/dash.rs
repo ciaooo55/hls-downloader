@@ -2340,20 +2340,21 @@ fn expand_live_duration(
         })
         .transpose()?
         .unwrap_or(0.0);
-    let depth = root
+    let declared_depth = root
         .attribute("timeShiftBufferDepth")
         .map(|value| {
             parse_duration_seconds(value)
                 .filter(|value| *value > 0.0)
                 .ok_or("invalid DASH timeShiftBufferDepth")
         })
-        .transpose()?
-        .unwrap_or(60.0);
+        .transpose()?;
+    let depth = declared_depth.unwrap_or(60.0);
     let elapsed = now - epoch - fraction - period_start;
     if !elapsed.is_finite() || !period_start.is_finite() || period_start < 0.0 {
         return Err("invalid dynamic DASH clock or Period start".into());
     }
-    *expired = period_duration.is_some_and(|duration| elapsed - depth >= duration);
+    *expired = declared_depth.is_some()
+        && period_duration.is_some_and(|duration| elapsed - depth >= duration);
     if *expired {
         return Ok(Vec::new());
     }
@@ -2371,7 +2372,13 @@ fn expand_live_duration(
         units / duration as f64
     }
     .floor() as u64;
-    let first = (((elapsed - depth).max(0.0) * timescale as f64) / duration as f64).floor() as u64;
+    let window_edge = if declared_depth.is_some() {
+        elapsed
+    } else {
+        edge
+    };
+    let first =
+        (((window_edge - depth).max(0.0) * timescale as f64) / duration as f64).floor() as u64;
     let first = first.max(count.saturating_sub(MAX_LIVE_SEGMENTS));
     *segment_budget = segment_budget
         .checked_sub(count.saturating_sub(first))
@@ -4667,6 +4674,24 @@ mod tests {
             .representations
             .iter()
             .all(|track| track.media.len() == 300));
+    }
+
+    #[test]
+    fn dash_live_periods_expire_only_with_an_explicit_buffer_depth() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period duration="PT10S"><SegmentTemplate duration="1" media="$Number$.m4s"/><Representation id="v"/></Period></MPD>"#;
+        let unbounded = parse_mpd_at(xml, "https://cdn.test/live.mpd", 1000.0).unwrap();
+        assert!(unbounded.expired_periods.is_empty());
+        assert_eq!(unbounded.representations[0].media.len(), 10);
+        let bounded = xml.replace(
+            "type=\"dynamic\"",
+            "type=\"dynamic\" timeShiftBufferDepth=\"PT60S\"",
+        );
+        let expired = parse_mpd_at(&bounded, "https://cdn.test/live.mpd", 1000.0).unwrap();
+        assert!(expired.expired_periods.contains(&0));
+        assert!(expired.representations[0].media.is_empty());
+        let future = parse_mpd_at(xml, "https://cdn.test/live.mpd", -1.0).unwrap();
+        assert!(future.expired_periods.is_empty());
+        assert!(future.representations[0].media.is_empty());
     }
 
     #[test]
