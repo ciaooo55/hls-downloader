@@ -11,6 +11,7 @@ pub mod request_validation;
 pub mod runtime_log;
 pub mod tray;
 pub mod update_install;
+pub mod url_credentials;
 pub mod window_util;
 pub use core_ipc::*;
 pub use core_spawn::*;

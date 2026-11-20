@@ -42,7 +42,7 @@ pub fn record_runtime_log(event: &str, fields: serde_json::Value) {
         "timestamp_ms": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
         "pid": std::process::id(), "event": event, "fields": fields,
     });
-    let mut line = record.to_string();
+    let mut line = crate::url_credentials::redact_ftp_passwords(&record.to_string());
     if line.len() > 4095 {
         return;
     }

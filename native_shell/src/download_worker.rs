@@ -2644,7 +2644,11 @@ fn run_task_with_throttle(
         crate::ResourceKind::Ftp => {
             let paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
-            let url = spec.url.clone();
+            let url = core
+                .lock()
+                .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                .store()
+                .hydrate_url(&spec.url)?;
             let output = paths.output.clone();
             let control = paths.control.clone();
             let progress = paths.output.with_extension("progress.json");
@@ -2660,7 +2664,11 @@ fn run_task_with_throttle(
         crate::ResourceKind::Sftp => {
             let paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
-            let url = spec.url.clone();
+            let url = core
+                .lock()
+                .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                .store()
+                .hydrate_url(&spec.url)?;
             let output = paths.output.clone();
             let control = paths.control.clone();
             let progress = paths.output.with_extension("progress.json");

@@ -137,7 +137,7 @@ impl Write for Conn<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct FtpTarget {
     pub host: String,
     pub port: u16,
@@ -145,6 +145,19 @@ pub struct FtpTarget {
     pub password: String,
     pub path: String,
     pub tls: bool,
+}
+
+impl std::fmt::Debug for FtpTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FtpTarget")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &"***")
+            .field("path", &self.path)
+            .field("tls", &self.tls)
+            .finish()
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Clone, Debug)]
