@@ -346,7 +346,11 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
         } else {
             template_attr("initialization")
                 .or_else(|| node.attribute("initialization"))
-                .map(|value| resolve(&base_url, &apply_template(value, &id, 0, 0, bandwidth)))
+                .map(|value| {
+                    apply_template(value, &id, 0, 0, bandwidth)
+                        .map(|expanded| resolve(&base_url, &expanded))
+                })
+                .transpose()?
         };
         if init_range.is_some() && init.as_ref().is_none_or(|url| url.is_empty()) {
             return Err("invalid DASH initialization URL".into());
@@ -2176,6 +2180,7 @@ fn expand_timeline(
     let start_number = template_attr("startNumber")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1);
+    apply_template(template, id, start_number, 0, bandwidth)?;
     let mut media = Vec::new();
     let mut number = start_number;
     let mut clock = 0u64;
@@ -2205,7 +2210,7 @@ fn expand_timeline(
                             start_number.saturating_add(index),
                             offset.saturating_add(index.saturating_mul(duration)),
                             bandwidth,
-                        ),
+                        )?,
                     ));
                 }
             }
@@ -2263,7 +2268,7 @@ fn expand_timeline(
             durations.push(duration as f64 / timescale as f64);
             media.push(resolve(
                 base_url,
-                &apply_template(template, id, number, clock, bandwidth),
+                &apply_template(template, id, number, clock, bandwidth)?,
             ));
             number = number
                 .checked_add(1)
@@ -2276,31 +2281,87 @@ fn expand_timeline(
     Ok(media)
 }
 
-fn apply_template(template: &str, id: &str, number: u64, time: u64, bandwidth: u64) -> String {
-    let mut out = template
-        .replace("$RepresentationID$", id)
-        .replace("$Bandwidth$", &bandwidth.to_string())
-        .replace("$Time$", &time.to_string());
-    while let Some(start) = out.find("$Number") {
-        let after = &out[start + 7..];
-        if after.starts_with('$') {
-            out.replace_range(start..start + 8, &number.to_string());
-        } else if let Some(rest) = after.strip_prefix('%') {
-            if let Some(spec_end) = rest.find('$') {
-                let width = rest[..spec_end]
-                    .trim_end_matches('d')
-                    .parse::<usize>()
-                    .unwrap_or(0);
-                let formatted = format!("{number:0width$}");
-                out.replace_range(start..start + 8 + spec_end + 1, &formatted);
-            } else {
-                break;
-            }
-        } else {
-            break;
+const MAX_DASH_TEMPLATE_WIDTH: usize = 32;
+const MAX_DASH_TEMPLATE_URL_BYTES: usize = 8192;
+
+fn apply_template(
+    template: &str,
+    id: &str,
+    number: u64,
+    time: u64,
+    bandwidth: u64,
+) -> Result<String, String> {
+    fn append(out: &mut String, value: &str) -> Result<(), String> {
+        if value.len() > MAX_DASH_TEMPLATE_URL_BYTES - out.len() {
+            return Err("DASH template URL exceeds byte limit".into());
         }
+        out.push_str(value);
+        Ok(())
     }
-    out
+
+    let mut out = String::new();
+    let mut remaining = template;
+    while let Some(start) = remaining.find('$') {
+        append(&mut out, &remaining[..start])?;
+        remaining = &remaining[start + 1..];
+        if let Some(rest) = remaining.strip_prefix('$') {
+            append(&mut out, "$")?;
+            remaining = rest;
+            continue;
+        }
+        let end = remaining
+            .find('$')
+            .ok_or("unterminated DASH template identifier")?;
+        let token = &remaining[..end];
+        remaining = &remaining[end + 1..];
+        let (identifier, format) = token
+            .split_once('%')
+            .map_or((token, None), |(name, format)| (name, Some(format)));
+        if identifier == "RepresentationID" {
+            if format.is_some() {
+                return Err("DASH RepresentationID cannot have a format tag".into());
+            }
+            append(&mut out, id)?;
+            continue;
+        }
+        let value = match identifier {
+            "Number" => number,
+            "Bandwidth" => bandwidth,
+            "Time" => time,
+            "SubNumber" => {
+                return Err("DASH SubNumber requires unsupported subsegment addressing".into())
+            }
+            _ => return Err("unknown DASH template identifier".into()),
+        };
+        let width = match format {
+            None => 0,
+            Some(format) => {
+                let digits = format
+                    .strip_prefix('0')
+                    .and_then(|value| value.strip_suffix('d'))
+                    .filter(|value| value.bytes().all(|ch| ch.is_ascii_digit()))
+                    .ok_or("invalid DASH template format tag")?;
+                let width = if digits.is_empty() {
+                    0
+                } else {
+                    digits
+                        .parse::<usize>()
+                        .map_err(|_| "DASH template width exceeds limit")?
+                };
+                if width > MAX_DASH_TEMPLATE_WIDTH {
+                    return Err("DASH template width exceeds limit".into());
+                }
+                width
+            }
+        };
+        let length = value.to_string().len().max(width);
+        if length > MAX_DASH_TEMPLATE_URL_BYTES - out.len() {
+            return Err("DASH template URL exceeds byte limit".into());
+        }
+        append(&mut out, &format!("{value:0width$}"))?;
+    }
+    append(&mut out, remaining)?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -4150,13 +4211,88 @@ mod tests {
     #[test]
     fn formats_padded_number_templates() {
         assert_eq!(
-            apply_template("seg_$Number%05d$.m4s", "v", 12, 0, 1),
+            apply_template("seg_$Number%05d$.m4s", "v", 12, 0, 1).unwrap(),
             "seg_00012.m4s"
         );
         assert_eq!(
-            apply_template("$RepresentationID$_$Number$.m4s", "v1", 3, 0, 1),
+            apply_template("$RepresentationID$_$Number$.m4s", "v1", 3, 0, 1).unwrap(),
             "v1_3.m4s"
         );
+    }
+
+    #[test]
+    fn dash_template_tokens_formats_and_escapes() {
+        for (template, expected) in [
+            ("$Time%010d$", "0000000042"),
+            ("$Bandwidth%08d$", "00000123"),
+            ("$Number%05d$", "00007"),
+            ("$$Number$$", "$Number$"),
+            (
+                "$RepresentationID$/$Number$/$Time$/$Bandwidth$",
+                "v/7/42/123",
+            ),
+            ("$Number%01d$", "7"),
+            ("$Number%00d$", "7"),
+            ("$Number%0d$", "7"),
+            ("plain.m4s", "plain.m4s"),
+            ("", ""),
+        ] {
+            assert_eq!(apply_template(template, "v", 7, 42, 123).unwrap(), expected);
+        }
+        assert_eq!(
+            apply_template("$RepresentationID$", "$$Number$", 7, 0, 0).unwrap(),
+            "$$Number$"
+        );
+        assert_eq!(
+            apply_template("$Time%01d$", "v", 0, u64::MAX, 0).unwrap(),
+            u64::MAX.to_string()
+        );
+    }
+
+    #[test]
+    fn dash_template_rejects_invalid_and_unbounded_expansion() {
+        for template in [
+            "$Number%01000000000d$",
+            "$Number%099999999999999999999999999999999999d$",
+            "$Number%033d$",
+            "$Unknown$",
+            "$SubNumber$",
+            "$Number",
+            "$",
+            "$RepresentationID%05d$",
+            "$Time%5d$",
+            "$Bandwidth%05x$",
+            "$Number%01dd$",
+            "$Number%01%d$",
+        ] {
+            assert!(
+                apply_template(template, "v", 1, 2, 3).is_err(),
+                "{template}"
+            );
+        }
+        let limit = "a".repeat(MAX_DASH_TEMPLATE_URL_BYTES);
+        assert_eq!(apply_template(&limit, "v", 0, 0, 0).unwrap(), limit);
+        assert!(apply_template(&format!("{limit}a"), "v", 0, 0, 0).is_err());
+        assert!(apply_template(&format!("{limit}$Number$"), "v", 0, 0, 0).is_err());
+        assert!(apply_template("$RepresentationID$", &format!("{limit}a"), 0, 0, 0).is_err());
+        assert_eq!(
+            apply_template("$Time%032d$", "v", 0, 1, 0).unwrap().len(),
+            32
+        );
+    }
+
+    #[test]
+    fn dash_template_errors_propagate_from_manifest_parsing() {
+        for template in [
+            "<SegmentTemplate initialization=\"$Unknown$\" media=\"$Number$\" duration=\"1\"/>",
+            "<SegmentTemplate media=\"$Number%01000000000d$\" duration=\"1\"/>",
+            "<SegmentTemplate media=\"$Unknown$\"><SegmentTimeline><S d=\"1\"/></SegmentTimeline></SegmentTemplate>",
+        ] {
+            let xml = format!("<MPD mediaPresentationDuration=\"PT1S\"><Period><AdaptationSet>{template}<Representation id=\"v\"/></AdaptationSet></Period></MPD>");
+            assert!(parse_mpd(&xml, "https://cdn.test/video.mpd").is_err());
+        }
+        let xml = "<MPD type=\"dynamic\"><Period><AdaptationSet><SegmentTemplate media=\"$Unknown$\" duration=\"1\"/><Representation id=\"v\"/></AdaptationSet></Period></MPD>";
+        assert!(parse_mpd(xml, "https://cdn.test/live.mpd").is_err());
     }
 
     #[test]
