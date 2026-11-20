@@ -14,6 +14,7 @@ pub struct DashManifest {
     pub period_count: usize,
     pub representations: Vec<Representation>,
     periods: Vec<DashPeriod>,
+    expired_periods: HashSet<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +241,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
     let period_durations = period_durations(&periods, root);
     let mut representations = Vec::new();
     let mut live_segment_budget = 1200;
+    let mut expired_periods = HashSet::new();
     for node in root
         .descendants()
         .filter(|node| mpd_element(*node, "Representation", root))
@@ -378,6 +380,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
         let mut media_durations = Vec::new();
         if let Some(template) = media_template {
             if dynamic && !has_timeline {
+                let mut expired = false;
                 let mut start = Some(0.0);
                 for (index, period) in periods.iter().enumerate().take(period_index + 1) {
                     start = period
@@ -402,7 +405,11 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
                     now,
                     &mut media_durations,
                     &mut live_segment_budget,
+                    &mut expired,
                 )?);
+                if expired {
+                    expired_periods.insert(period_index);
+                }
             } else {
                 media.extend(expand_timeline(
                     &templates,
@@ -510,6 +517,7 @@ fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String>
     }
     Ok(DashManifest {
         dynamic,
+        expired_periods,
         period_count: periods.len(),
         periods: periods
             .iter()
@@ -917,6 +925,9 @@ fn download_live_dash(
     loop {
         let start = live_period_begin(&manifest.periods, active.as_ref())?;
         for (index, period) in manifest.periods.iter().enumerate().skip(start) {
+            if manifest.expired_periods.contains(&index) {
+                continue;
+            }
             let same_period = active.as_ref().is_some_and(|old| period.same_as(old));
             if let (Some(old_start), Some(new_start)) =
                 (active.as_ref().and_then(|old| old.start), period.start)
@@ -2257,6 +2268,7 @@ fn expand_live_duration(
     now: f64,
     durations: &mut Vec<f64>,
     segment_budget: &mut u64,
+    expired: &mut bool,
 ) -> Result<Vec<String>, String> {
     const MAX_LIVE_SEGMENTS: u64 = 1200;
     let attr = |key: &str| templates.iter().find_map(|node| node.attribute(key));
@@ -2331,6 +2343,10 @@ fn expand_live_duration(
     let elapsed = now - epoch - fraction - period_start;
     if !elapsed.is_finite() || !period_start.is_finite() || period_start < 0.0 {
         return Err("invalid dynamic DASH clock or Period start".into());
+    }
+    *expired = period_duration.is_some_and(|duration| elapsed - depth >= duration);
+    if *expired {
+        return Ok(Vec::new());
     }
     let edge = period_duration.map_or(elapsed, |duration| elapsed.min(duration));
     if edge <= 0.0 {
@@ -4745,6 +4761,43 @@ mod tests {
         assert!(result.unwrap_err().contains("HTTP 403"));
         assert_eq!(fs::read(root.join("seg-0000.m4s")).unwrap(), b"ok");
         assert!(!root.join("merged.mp4").exists());
+        server.join().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_recording_skips_expired_but_waits_for_future_periods() {
+        let (url, server) = dash_status_server(vec![200, 403]);
+        let xml = format!(
+            r#"<MPD type="dynamic" minimumUpdatePeriod="PT0.4S" availabilityStartTime="1970-01-01T00:00:00Z" timeShiftBufferDepth="PT1S"><SegmentTemplate duration="1" media="{url}?n=$Number$"/><Period start="PT0S" duration="PT2S"><Representation id="v" mimeType="video/mp4"/></Period><Period start="PT2S"><Representation id="v" mimeType="video/mp4"/></Period></MPD>"#
+        );
+        let manifest = parse_mpd_at(&xml, &url, 4.0).unwrap();
+        assert!(manifest.expired_periods.contains(&0));
+        assert!(manifest.representations[0].media.is_empty());
+        assert_eq!(manifest.representations[1].media.len(), 1);
+        let future = parse_mpd_at(&xml, &url, 1.0).unwrap();
+        assert!(!future.expired_periods.contains(&1));
+        assert!(future.representations[1].media.is_empty());
+        let root = std::env::temp_dir().join(format!("dash-expired-period-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let result = download_live_dash(
+            manifest,
+            xml,
+            &url,
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            0,
+            0,
+            false,
+            "",
+            &mut DashCheckpoint::load(&root),
+        );
+        assert!(result.unwrap_err().contains("HTTP 403"));
+        assert_eq!(fs::read(root.join("seg-0000.m4s")).unwrap(), b"ok");
         server.join().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
