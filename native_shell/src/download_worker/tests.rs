@@ -1993,6 +1993,7 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
