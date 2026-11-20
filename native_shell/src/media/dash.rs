@@ -51,6 +51,7 @@ pub struct Representation {
     pub media: Vec<String>,
     pub media_ranges: Vec<Option<ByteRange>>,
     pub media_durations: Vec<f64>,
+    pub live_end: Option<f64>,
     /// Zero-based index of the Period this representation belongs to.
     pub period: usize,
     /// Indices in `media` that are a later Period's initialization segment
@@ -235,7 +236,17 @@ fn parse_mpd_with_url_budget(
     xml: &str,
     base: &str,
     now: f64,
+    url_budget: usize,
+) -> Result<DashManifest, String> {
+    parse_mpd_for_recording(xml, base, now, url_budget, None)
+}
+
+fn parse_mpd_for_recording(
+    xml: &str,
+    base: &str,
+    now: f64,
     mut url_budget: usize,
+    recorded_until: Option<f64>,
 ) -> Result<DashManifest, String> {
     let document =
         roxmltree::Document::parse(xml).map_err(|error| format!("invalid DASH XML: {error}"))?;
@@ -390,9 +401,9 @@ fn parse_mpd_with_url_budget(
         let mut media = Vec::new();
         let mut media_ranges = Vec::new();
         let mut media_durations = Vec::new();
+        let mut live_end = None;
         if let Some(template) = media_template {
             if dynamic && !has_timeline {
-                let mut expired = false;
                 let mut start = Some(0.0);
                 for (index, period) in periods.iter().enumerate().take(period_index + 1) {
                     start = period
@@ -409,15 +420,20 @@ fn parse_mpd_with_url_budget(
                 let window = match presentation_window {
                     Some(window) => window,
                     None => {
-                        let window = live_presentation_window(root, now)?;
+                        let window = live_presentation_window(root, now, recorded_until)?;
                         presentation_window = Some(window);
                         window
                     }
                 };
                 if period_duration.is_some_and(|duration| start + duration <= window.start) {
                     before_start_window_periods.insert(period_index);
+                    if window.expired_before.is_some_and(|cutoff| {
+                        period_duration.is_some_and(|duration| start + duration <= cutoff)
+                    }) {
+                        expired_periods.insert(period_index);
+                    }
                 }
-                media.extend(expand_live_duration(
+                let (expanded, end) = expand_live_duration(
                     window,
                     &templates,
                     template,
@@ -428,12 +444,10 @@ fn parse_mpd_with_url_budget(
                     period_duration,
                     &mut media_durations,
                     &mut live_segment_budget,
-                    &mut expired,
                     &mut url_budget,
-                )?);
-                if expired {
-                    expired_periods.insert(period_index);
-                }
+                )?;
+                media.extend(expanded);
+                live_end = end;
             } else {
                 media.extend(expand_timeline(
                     &templates,
@@ -540,6 +554,7 @@ fn parse_mpd_with_url_budget(
             media,
             media_ranges,
             media_durations,
+            live_end,
             period: period_index,
             init_markers: Vec::new(),
             period_markers: Vec::new(),
@@ -959,6 +974,7 @@ fn download_live_dash(
     vod: &mut DashCheckpoint,
 ) -> Result<PathBuf, String> {
     let mut active = None;
+    let mut recorded_until = None;
     let mut primary = LiveDashTrack::default();
     let mut audio = LiveDashTrack::default();
     let mut choices: Option<(Representation, Option<Representation>)> = None;
@@ -1055,6 +1071,13 @@ fn download_live_dash(
                     &primary,
                 )?;
             }
+            if let Some(end) = track.live_end {
+                let end = secondary
+                    .as_ref()
+                    .and_then(|item| item.live_end)
+                    .map_or(end, |audio_end| end.min(audio_end));
+                recorded_until = Some(recorded_until.map_or(end, |cursor: f64| cursor.max(end)));
+            }
             if !same_period {
                 // Keep only the selected representation metadata across refreshes.
                 for item in std::iter::once(&mut track).chain(secondary.iter_mut()) {
@@ -1107,7 +1130,11 @@ fn download_live_dash(
         }
         let body = refresh_live_manifest(url, headers, proxy, control)?;
         xml = String::from_utf8_lossy(&body).into_owned();
-        manifest = parse_mpd(&xml, url)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs_f64();
+        manifest = parse_mpd_for_recording(&xml, url, now, 32 * 1024 * 1024, recorded_until)?;
     }
     if primary.durations.is_empty() {
         return Err("DASH representation produced no segments".into());
@@ -2312,12 +2339,14 @@ fn consume_live_url_budget(url: &str, remaining: &mut usize) -> Result<(), Strin
 struct LivePresentationWindow {
     edge: f64,
     start: f64,
-    bounded: bool,
+    expired_before: Option<f64>,
+    continuing: bool,
 }
 
 fn live_presentation_window(
     root: roxmltree::Node<'_, '_>,
     now: f64,
+    recorded_until: Option<f64>,
 ) -> Result<LivePresentationWindow, String> {
     let stamp = root
         .attribute("availabilityStartTime")
@@ -2378,8 +2407,15 @@ fn live_presentation_window(
     }
     Ok(LivePresentationWindow {
         edge,
-        start: edge - depth,
-        bounded: declared_depth.is_some(),
+        start: recorded_until.map_or(edge - depth, |cursor| {
+            if declared_depth.is_some() {
+                cursor.max(edge - depth)
+            } else {
+                cursor
+            }
+        }),
+        expired_before: declared_depth.map(|depth| edge - depth),
+        continuing: recorded_until.is_some(),
     })
 }
 
@@ -2395,9 +2431,8 @@ fn expand_live_duration(
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
     segment_budget: &mut u64,
-    expired: &mut bool,
     url_budget: &mut usize,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, Option<f64>), String> {
     const MAX_LIVE_SEGMENTS: u64 = 1200;
     let attr = |key: &str| templates.iter().find_map(|node| node.attribute(key));
     let integer = |key: &str, default: Option<u64>| -> Result<u64, String> {
@@ -2419,14 +2454,12 @@ fn expand_live_duration(
     if !elapsed.is_finite() || !period_start.is_finite() || period_start < 0.0 {
         return Err("invalid dynamic DASH clock or Period start".into());
     }
-    *expired = window.bounded
-        && period_duration.is_some_and(|duration| period_start + duration <= window.start);
-    if *expired {
-        return Ok(Vec::new());
+    if period_duration.is_some_and(|duration| period_start + duration <= window.start) {
+        return Ok((Vec::new(), None));
     }
     let edge = period_duration.map_or(elapsed, |duration| elapsed.min(duration));
     if edge <= 0.0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let units = edge * timescale as f64;
     if !units.is_finite() || units >= (1u64 << 53) as f64 {
@@ -2440,6 +2473,9 @@ fn expand_live_duration(
     .floor() as u64;
     let first = (((window.start - period_start).max(0.0) * timescale as f64) / duration as f64)
         .floor() as u64;
+    if window.continuing && count.saturating_sub(first) > MAX_LIVE_SEGMENTS {
+        return Err("dynamic DASH refresh exceeds contiguous segment limit".into());
+    }
     let first = first.max(count.saturating_sub(MAX_LIVE_SEGMENTS));
     *segment_budget = segment_budget
         .checked_sub(count.saturating_sub(first))
@@ -2463,7 +2499,9 @@ fn expand_live_duration(
         let begin = index as f64 * duration as f64 / timescale as f64;
         durations.push((end.min(edge) - begin.max(0.0)).max(0.0));
     }
-    Ok(media)
+    let end = (!media.is_empty())
+        .then_some(period_start + (count as f64 * duration as f64 / timescale as f64).min(edge));
+    Ok((media, end))
 }
 
 fn expand_timeline(
@@ -4831,6 +4869,70 @@ mod tests {
     }
 
     #[test]
+    fn dash_live_slow_refresh_keeps_every_unrecorded_segment() {
+        let files = (5..=20).map(|n| (format!("/{n}.m4s"), vec![n])).collect();
+        let (base, server) = serve_dash_files(files, 16);
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="10" media="$Number$.m4s"/><Representation id="v"/></Period></MPD>"#;
+        let root = std::env::temp_dir().join(format!("dash-slow-refresh-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut checkpoint = DashCheckpoint::load(&root);
+        let mut live = LiveDashTrack::default();
+        let other = LiveDashTrack::default();
+        let mut cursor = None;
+        for now in [100.0, 200.0] {
+            let manifest = parse_mpd_for_recording(
+                xml,
+                &format!("{base}/live.mpd"),
+                now,
+                32 * 1024 * 1024,
+                cursor,
+            )
+            .unwrap();
+            let track = &manifest.representations[0];
+            live.append(
+                track,
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut checkpoint,
+                None,
+                &other,
+            )
+            .unwrap();
+            cursor = track.live_end;
+        }
+        let bytes: Vec<_> = live
+            .files
+            .iter()
+            .map(|path| fs::read(path).unwrap()[0])
+            .collect();
+        assert_eq!(bytes, (5..=20).collect::<Vec<_>>());
+        assert_eq!(cursor, Some(200.0));
+        let bounded = xml.replace(
+            "type=\"dynamic\"",
+            "type=\"dynamic\" timeShiftBufferDepth=\"PT60S\"",
+        );
+        let bounded =
+            parse_mpd_for_recording(&bounded, &base, 200.0, 32 * 1024 * 1024, Some(100.0)).unwrap();
+        assert_eq!(bounded.representations[0].media.len(), 6);
+        let empty = parse_mpd_for_recording(xml, &base, 200.0, 32 * 1024 * 1024, cursor).unwrap();
+        assert!(empty.representations[0].media.is_empty());
+        assert!(
+            parse_mpd_for_recording(xml, &base, 20_000.0, 32 * 1024 * 1024, cursor)
+                .unwrap_err()
+                .contains("contiguous segment limit")
+        );
+        assert_eq!(server.join().unwrap().len(), 16);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn dash_live_static_transition_does_not_append_older_segments() {
         let files = (1..=5).map(|n| (format!("/{n}.m4s"), vec![n])).collect();
         let (base, server) = serve_dash_files(files, 8);
@@ -5164,6 +5266,7 @@ mod tests {
                 media: vec!["https://cdn.test/en-0.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                live_end: None,
                 period: 0,
                 init_markers: Vec::new(),
                 period_markers: Vec::new(),
@@ -5188,6 +5291,7 @@ mod tests {
                 media: vec!["https://cdn.test/en-1.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                live_end: None,
                 period: 0,
                 init_markers: Vec::new(),
                 period_markers: Vec::new(),
