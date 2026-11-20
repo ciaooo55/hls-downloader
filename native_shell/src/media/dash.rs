@@ -753,6 +753,15 @@ impl LiveDashTrack {
         if next_period {
             self.seen.clear();
         }
+        let first_media = track
+            .media
+            .iter()
+            .enumerate()
+            .rfind(|(index, url)| {
+                self.seen
+                    .contains(&((*url).clone(), track.media_ranges[*index]))
+            })
+            .map_or(0, |(index, _)| index + 1);
         let checkpoint_id = checkpoint_scope.map(|scope| format!("{scope}:{}", track.id));
         let mut index = self.files.len();
         let mut push =
@@ -805,7 +814,7 @@ impl LiveDashTrack {
             self.init = init;
         }
         let mut boundary = next_period && !change_init;
-        for (media_index, url) in track.media.iter().enumerate() {
+        for (media_index, url) in track.media.iter().enumerate().skip(first_media) {
             let range = track.media_ranges[media_index];
             if !self.seen.insert((url.clone(), range)) {
                 continue;
@@ -4641,6 +4650,52 @@ mod tests {
             .contains("live segment budget"));
         assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 0.5).is_ok());
         assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 0.0).is_ok());
+    }
+
+    #[test]
+    fn dash_live_static_transition_does_not_append_older_segments() {
+        let files = (1..=5).map(|n| (format!("/{n}.m4s"), vec![n])).collect();
+        let (base, server) = serve_dash_files(files, 8);
+        let root =
+            std::env::temp_dir().join(format!("dash-static-transition-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut live = LiveDashTrack::default();
+        let other = LiveDashTrack::default();
+        let mut checkpoint = DashCheckpoint::load(&root);
+        let dynamic = r#"<MPD type="dynamic"><Period><Representation id="v"><SegmentTemplate media="$Number$.m4s" startNumber="3"><SegmentTimeline><S d="1" r="1"/></SegmentTimeline></SegmentTemplate></Representation></Period></MPD>"#;
+        let ended = r#"<MPD type="static" mediaPresentationDuration="PT5S"><Period><Representation id="v"><SegmentTemplate duration="1" media="$Number$.m4s"/></Representation></Period></MPD>"#;
+        for (xml, next_period) in [
+            (dynamic, false),
+            (ended, false),
+            (ended, false),
+            (ended, true),
+        ] {
+            let parsed = parse_mpd(xml, &format!("{base}/live.mpd")).unwrap();
+            live.append(
+                &parsed.representations[0],
+                next_period,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut checkpoint,
+                None,
+                &other,
+            )
+            .unwrap();
+        }
+        let bytes: Vec<_> = live
+            .files
+            .iter()
+            .map(|path| fs::read(path).unwrap()[0])
+            .collect();
+        assert_eq!(bytes, [3, 4, 5, 1, 2, 3, 4, 5]);
+        assert_eq!(server.join().unwrap().len(), 8);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
