@@ -25,6 +25,16 @@ struct DashPeriod {
 }
 
 impl DashPeriod {
+    fn from_node(node: roxmltree::Node<'_, '_>) -> Self {
+        Self {
+            id: node
+                .attribute("id")
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            start: node.attribute("start").and_then(parse_duration_seconds),
+        }
+    }
+
     fn same_as(&self, other: &Self) -> bool {
         match (&self.id, &other.id) {
             (Some(a), Some(b)) => a == b,
@@ -425,18 +435,33 @@ fn parse_mpd_for_recording(
                         window
                     }
                 };
-                let current_period = DashPeriod {
-                    id: period
-                        .and_then(|node| node.attribute("id"))
-                        .filter(|id| !id.is_empty())
-                        .map(str::to_owned),
-                    start: period
-                        .and_then(|node| node.attribute("start"))
-                        .and_then(parse_duration_seconds),
-                };
+                let current_period = period.map(DashPeriod::from_node).unwrap_or(DashPeriod {
+                    id: None,
+                    start: None,
+                });
                 let recording_period = cursors
                     .iter()
                     .any(|cursor| cursor.period.same_as(&current_period));
+                let after_recording = !recording_period
+                    && cursors.iter().any(|cursor| {
+                        periods
+                            .iter()
+                            .position(|node| DashPeriod::from_node(*node).same_as(&cursor.period))
+                            .map_or_else(
+                                || {
+                                    cursor
+                                        .end
+                                        .or(cursor.period.start)
+                                        .is_some_and(|position| start >= position)
+                                },
+                                |index| period_index > index,
+                            )
+                    });
+                let window = if after_recording && window.expired_before.is_none() {
+                    LivePresentationWindow { start, ..window }
+                } else {
+                    window
+                };
                 if period_duration.is_some_and(|duration| start + duration <= window.start)
                     && (window.expired_before.is_some() || !recording_period)
                 {
@@ -455,7 +480,7 @@ fn parse_mpd_for_recording(
                     start: cursor.map_or(window.start, |end| {
                         window.expired_before.map_or(end, |cutoff| end.max(cutoff))
                     }),
-                    continuing: cursor.is_some(),
+                    continuing: cursor.is_some() || after_recording,
                     ..window
                 };
                 let (expanded, end) = expand_live_duration(
@@ -596,13 +621,7 @@ fn parse_mpd_for_recording(
         period_count: periods.len(),
         periods: periods
             .iter()
-            .map(|period| DashPeriod {
-                id: period
-                    .attribute("id")
-                    .filter(|id| !id.is_empty())
-                    .map(str::to_owned),
-                start: period.attribute("start").and_then(parse_duration_seconds),
-            })
+            .map(|period| DashPeriod::from_node(*period))
             .collect(),
         representations,
     })
@@ -5004,6 +5023,104 @@ mod tests {
                 .contains("contiguous segment limit")
         );
         assert_eq!(server.join().unwrap().len(), 16);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dash_live_slow_refresh_keeps_intermediate_and_new_periods() {
+        let files = (0..3)
+            .flat_map(|period| {
+                let numbers = match period {
+                    0 => 5..=10,
+                    1 => 1..=10,
+                    _ => 1..=5,
+                };
+                numbers.map(move |number| {
+                    (
+                        format!("/p{period}/{number}.m4s"),
+                        vec![(period * 10 + number - 1) as u8],
+                    )
+                })
+            })
+            .collect();
+        let (base, server) = serve_dash_files(files, 21);
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><SegmentTemplate duration="10" media="$Number$.m4s"/><Period start="PT0S" duration="PT100S"><BaseURL>p0/</BaseURL><Representation id="v" mimeType="video/mp4"/></Period><Period start="PT100S" duration="PT100S"><BaseURL>p1/</BaseURL><Representation id="v" mimeType="video/mp4"/></Period><Period start="PT200S"><BaseURL>p2/</BaseURL><Representation id="v" mimeType="video/mp4"/></Period></MPD>"#;
+        let root =
+            std::env::temp_dir().join(format!("dash-slow-period-refresh-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut checkpoint = DashCheckpoint::load(&root);
+        let mut live = LiveDashTrack::default();
+        let other = LiveDashTrack::default();
+        let mut cursors = Vec::new();
+        let initial = parse_mpd_at(xml, &format!("{base}/live.mpd"), 100.0).unwrap();
+        let track = &initial.representations[0];
+        live.append(
+            track,
+            false,
+            "video",
+            &root,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut checkpoint,
+            None,
+            &other,
+        )
+        .unwrap();
+        remember_live_cursor(&mut cursors, &initial.periods[0], track);
+        let next = parse_mpd_for_recording(
+            xml,
+            &format!("{base}/live.mpd"),
+            250.0,
+            32 * 1024 * 1024,
+            &cursors,
+        )
+        .unwrap();
+        assert!(next.representations[0].media.is_empty());
+        assert_eq!(next.representations[1].media.len(), 10);
+        assert_eq!(next.representations[2].media.len(), 5);
+        assert!(!next.before_start_window_periods.contains(&1));
+        let bounded = xml.replace(
+            "type=\"dynamic\"",
+            "type=\"dynamic\" timeShiftBufferDepth=\"PT60S\"",
+        );
+        let bounded =
+            parse_mpd_for_recording(&bounded, &base, 250.0, 32 * 1024 * 1024, &cursors).unwrap();
+        assert!(bounded.expired_periods.contains(&0));
+        assert_eq!(bounded.representations[1].media.len(), 1);
+        assert_eq!(bounded.representations[2].media.len(), 5);
+        for track in &next.representations[1..] {
+            live.append(
+                track,
+                true,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut checkpoint,
+                None,
+                &other,
+            )
+            .unwrap();
+        }
+        let bytes: Vec<_> = live
+            .files
+            .iter()
+            .map(|path| fs::read(path).unwrap()[0])
+            .collect();
+        assert_eq!(bytes, (4..25).collect::<Vec<_>>());
+        let oversized = xml.replace("duration=\"10\"", "duration=\"1\" timescale=\"100\"");
+        assert!(
+            parse_mpd_for_recording(&oversized, &base, 250.0, 32 * 1024 * 1024, &cursors)
+                .unwrap_err()
+                .contains("contiguous segment limit")
+        );
+        assert_eq!(server.join().unwrap().len(), 21);
         fs::remove_dir_all(root).unwrap();
     }
 
