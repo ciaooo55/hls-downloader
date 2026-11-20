@@ -281,6 +281,19 @@ mod tests {
     }
 
     #[test]
+    fn url_password_whole_url_with_spaces_in_username_roundtrips() {
+        let store = CoreStore::in_memory().unwrap();
+        let url = "ftp://first last:secret@host/file";
+        assert_eq!(
+            crate::ftp_engine::parse_ftp_url(url).unwrap().user,
+            "first last"
+        );
+        let clean = store.sanitize_urls(url.to_string()).unwrap();
+        assert_eq!(clean, "ftp://first last@host/file");
+        assert_eq!(store.hydrate_url(&clean).unwrap(), url);
+    }
+
+    #[test]
     fn url_password_empty_absent_and_corrupt_credentials() {
         let store = CoreStore::in_memory().unwrap();
         for url in ["", "not a URL", "ftp://host/file", "sftp://alice@host/file"] {
