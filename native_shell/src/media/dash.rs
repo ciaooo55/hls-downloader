@@ -2336,7 +2336,7 @@ fn expand_live_duration(
     if edge <= 0.0 {
         return Ok(Vec::new());
     }
-    let units = edge * timescale as f64 + offset as f64;
+    let units = edge * timescale as f64;
     if !units.is_finite() || units >= (1u64 << 53) as f64 {
         return Err("dynamic DASH timeline exceeds precise integer range".into());
     }
@@ -2346,8 +2346,7 @@ fn expand_live_duration(
         units / duration as f64
     }
     .floor() as u64;
-    let first = (((elapsed - depth).max(0.0) * timescale as f64 + offset as f64) / duration as f64)
-        .floor() as u64;
+    let first = (((elapsed - depth).max(0.0) * timescale as f64) / duration as f64).floor() as u64;
     let first = first.max(count.saturating_sub(MAX_LIVE_SEGMENTS));
     *segment_budget = segment_budget
         .checked_sub(count.saturating_sub(first))
@@ -2359,13 +2358,14 @@ fn expand_live_duration(
             .ok_or("DASH segment number overflow")?;
         let time = index
             .checked_mul(duration)
+            .and_then(|time| time.checked_add(offset))
             .ok_or("DASH timeline overflow")?;
         media.push(resolve(
             base_url,
             &apply_template(template, id, number, time, bandwidth)?,
         ));
-        let end = ((index + 1) as f64 * duration as f64 - offset as f64) / timescale as f64;
-        let begin = (time as f64 - offset as f64) / timescale as f64;
+        let end = (index + 1) as f64 * duration as f64 / timescale as f64;
+        let begin = index as f64 * duration as f64 / timescale as f64;
         durations.push((end.min(edge) - begin.max(0.0)).max(0.0));
     }
     Ok(media)
@@ -4522,9 +4522,9 @@ mod tests {
         assert_eq!(
             track.media,
             [
-                "https://cdn.test/14-28.m4s",
-                "https://cdn.test/15-32.m4s",
-                "https://cdn.test/16-36.m4s"
+                "https://cdn.test/9-28.m4s",
+                "https://cdn.test/10-32.m4s",
+                "https://cdn.test/11-36.m4s"
             ]
         );
         assert_eq!(track.media_durations, [2.0; 3]);
@@ -4535,13 +4535,23 @@ mod tests {
             .iter()
             .filter(|url| seen.insert((*url).clone()))
             .collect();
-        assert_eq!(added, [&"https://cdn.test/17-40.m4s".to_string()]);
+        assert_eq!(added, [&"https://cdn.test/12-40.m4s".to_string()]);
+        let without_offset = xml.replace(
+            "presentationTimeOffset=\"20\"",
+            "presentationTimeOffset=\"0\"",
+        );
+        let unshifted = parse_mpd_at(&without_offset, "https://cdn.test/live.mpd", 20.0).unwrap();
+        assert_eq!(
+            unshifted.representations[0].media_durations,
+            track.media_durations
+        );
+        assert!(unshifted.representations[0].media[0].ends_with("/9-8.m4s"));
         assert!(parse_mpd_at(xml, "https://cdn.test/live.mpd", 9.0)
             .unwrap()
             .representations[0]
             .media
             .is_empty());
-        let files = ["14-28", "15-32", "16-36", "17-40"]
+        let files = ["9-28", "10-32", "11-36", "12-40"]
             .into_iter()
             .map(|name| (format!("/{name}.m4s"), b"data".to_vec()))
             .collect();
