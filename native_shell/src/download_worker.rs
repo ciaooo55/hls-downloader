@@ -984,7 +984,22 @@ impl CoreCoordinator {
             let spec = self.apply_defaults_to_spec(spec)?;
             let mut events = Vec::new();
             for spec in self.expand_create(spec)? {
-                let spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
+                let mut spec = validate_torrent_spec(spec, self.settings()?.bt_enable_dht)?;
+                if spec.resource_kind == crate::ResourceKind::Torrent {
+                    let core = self.lock()?;
+                    let auto = core.store().setting_bool("auto_category_dirs", false)?;
+                    let dirs = crate::category::parse_category_dirs(
+                        &core.store().setting_string("browser_category_dirs", "")?,
+                    );
+                    spec.download_dir = crate::category::resolve_category_dir(
+                        &spec.download_dir,
+                        &spec.filename,
+                        &spec.url,
+                        spec.resource_kind,
+                        auto,
+                        &dirs,
+                    );
+                }
                 events.extend(self.dispatch_created(spec)?);
             }
             self.start_next_queued(false)?;
@@ -4206,14 +4221,16 @@ fn spec_from_url(
     }
     spec.harvest = false;
     drop_cross_origin_task_secrets(&mut spec, &template.url, url);
-    spec.download_dir = crate::category::resolve_category_dir(
-        &template.download_dir,
-        &spec.filename,
-        &spec.url,
-        spec.resource_kind,
-        auto,
-        dirs,
-    );
+    if spec.resource_kind != crate::ResourceKind::Torrent {
+        spec.download_dir = crate::category::resolve_category_dir(
+            &template.download_dir,
+            &spec.filename,
+            &spec.url,
+            spec.resource_kind,
+            auto,
+            dirs,
+        );
+    }
     spec
 }
 

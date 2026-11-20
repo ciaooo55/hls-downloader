@@ -2239,6 +2239,45 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
 }
 
 #[test]
+fn torrent_category_routing_uses_resolved_names_once() {
+    let root = std::env::temp_dir().join(format!("hls-torrent-categories-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("source.torrent");
+    fs::write(&source, b"d4:infod6:lengthi5e4:name9:movie.mkv12:piece lengthi4e6:pieces40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaee").unwrap();
+    let base = root.join("downloads");
+    for (auto, custom, overrides, expected) in [
+        (true, "", false, base.join(crate::category::category_label("media"))),
+        (false, "", false, base.clone()),
+        (true, "", true, base.join("videos")),
+        (false, "", true, base.join("videos")),
+        (true, "chosen.zip", false, base.join(crate::category::category_label("archive"))),
+    ] {
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+        coordinator.set_setting("legal_terms_accepted", serde_json::json!(true)).unwrap();
+        coordinator.set_setting("download_dir", serde_json::json!(base.to_string_lossy())).unwrap();
+        coordinator.set_setting("auto_category_dirs", serde_json::json!(auto)).unwrap();
+        if overrides {
+            coordinator.set_setting("browser_category_dirs", serde_json::json!(serde_json::json!({
+                "media": base.join("videos").to_string_lossy(),
+                "other": base.join("other").to_string_lossy(),
+            }).to_string())).unwrap();
+        }
+        coordinator.dispatch(CoreCommand::CreateTask { spec: TaskSpec {
+            url: source.to_string_lossy().into_owned(),
+            resource_kind: ResourceKind::Torrent,
+            filename: custom.into(),
+            start_paused: true,
+            ..Default::default()
+        }}).unwrap();
+        let task = coordinator.tasks().unwrap().remove(0);
+        assert_eq!(task.filename, if custom.is_empty() { "movie.mkv" } else { custom });
+        assert_eq!(Path::new(&task.download_dir), expected);
+        assert_eq!(Path::new(&coordinator.lock().unwrap().task_spec("task-1").unwrap().download_dir), expected);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn task_torrent_file_contract_reads_and_persists_selection_before_start() {
     let root = std::env::temp_dir().join(format!("hls-v7-task-torrent-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
