@@ -2339,14 +2339,16 @@ fn apply_template(
                 let digits = format
                     .strip_prefix('0')
                     .and_then(|value| value.strip_suffix('d'))
-                    .filter(|value| {
-                        !value.is_empty() && value.bytes().all(|ch| ch.is_ascii_digit())
-                    })
+                    .filter(|value| value.bytes().all(|ch| ch.is_ascii_digit()))
                     .ok_or("invalid DASH template format tag")?;
-                let width = digits
-                    .parse::<usize>()
-                    .map_err(|_| "DASH template width exceeds limit")?;
-                if width == 0 || width > MAX_DASH_TEMPLATE_WIDTH {
+                let width = if digits.is_empty() {
+                    0
+                } else {
+                    digits
+                        .parse::<usize>()
+                        .map_err(|_| "DASH template width exceeds limit")?
+                };
+                if width > MAX_DASH_TEMPLATE_WIDTH {
                     return Err("DASH template width exceeds limit".into());
                 }
                 width
@@ -4230,6 +4232,8 @@ mod tests {
                 "v/7/42/123",
             ),
             ("$Number%01d$", "7"),
+            ("$Number%00d$", "7"),
+            ("$Number%0d$", "7"),
             ("plain.m4s", "plain.m4s"),
             ("", ""),
         ] {
@@ -4256,10 +4260,8 @@ mod tests {
             "$Number",
             "$",
             "$RepresentationID%05d$",
-            "$Number%00d$",
             "$Time%5d$",
             "$Bandwidth%05x$",
-            "$Number%0d$",
             "$Number%01dd$",
             "$Number%01%d$",
         ] {
