@@ -87,6 +87,7 @@ jobs:
           python.exe -m unittest discover -s scripts/validation -p test_v7_received_regression.py
           python.exe -m unittest discover -s scripts/validation -p test_native_soak_resources.py
           python.exe -m unittest discover -s scripts/validation -p test_native_tvbox_ui.py
+          python.exe -m unittest discover -s scripts/validation -p test_native_workbench_ui.py
 
   rust_core:
     name: Rust Core

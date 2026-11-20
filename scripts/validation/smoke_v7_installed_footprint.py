@@ -1,0 +1,513 @@
+"""Sandbox-only install at a custom path, actual UI startup, resource usage and uninstall."""
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import ctypes
+from ctypes import wintypes
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
+import json
+import os
+from pathlib import Path
+from validation_workspace import test_tmp
+import shutil
+import socket
+import subprocess
+import threading
+import time
+import traceback
+from urllib.request import Request, urlopen
+import uuid
+import zipfile
+
+import psutil
+from PIL import Image
+
+from v7_core_ipc import connect, send_frame as send, wait_task
+from smoke_v7_download_playback import wait
+from smoke_v7_native_host import responses
+from smoke_v7_portable_app import Pipe, workbench_state, workbench_capture
+
+
+def downloads_folder():
+    class Guid(ctypes.Structure):
+        _fields_ = [('a', ctypes.c_uint32), ('b', ctypes.c_uint16), ('c', ctypes.c_uint16),
+                    ('d', ctypes.c_ubyte*8)]
+    folder = Guid.from_buffer_copy(uuid.UUID('374de290-123f-4565-9164-39c4925e467b').bytes_le)
+    path = ctypes.c_wchar_p()
+    shell = ctypes.windll.shell32
+    shell.SHGetKnownFolderPath.argtypes = [ctypes.POINTER(Guid), wintypes.DWORD,
+                                         wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
+    assert shell.SHGetKnownFolderPath(ctypes.byref(folder), 0, None, ctypes.byref(path)) == 0
+    result = Path(path.value)
+    ctypes.windll.ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    ctypes.windll.ole32.CoTaskMemFree(ctypes.cast(path, ctypes.c_void_p))
+    return result
+
+
+def free_port():
+    with socket.socket() as server:
+        server.bind(('127.0.0.1', 0))
+        return server.getsockname()[1]
+
+
+def verify_http_retry(ipc, download_dir):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status = int(self.path.strip('/').split('-')[0])
+            invalid_range = status == 206 and 'invalid-range' in self.path
+            self.send_response(206 if status == 200 else status)
+            if status in (200, 206) and not invalid_range:
+                self.send_header('Content-Range', 'bytes 0-0/1')
+            if status == 206:
+                self.send_header('ETag', '"retry-fixture"' if invalid_range else '"changed-entity"')
+            self.send_header('Content-Length', '1' if status in (200, 206) else '0')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            if status in (200, 206):
+                self.wfile.write(b'x')
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cases = []
+    try:
+        send(ipc, {'type': 'store_settings', 'request_id': 100, 'values': {
+            'auto_retry_failed_max': 2, 'queue_max_active': 1}})
+        for status, invalid_range, attempts in ((403, False, 1), (503, False, 3),
+                                                (206, False, 1), (206, True, 1)):
+            suffix = f'{status}-invalid-range' if invalid_range else str(status)
+            ids = []
+            for code in (status, 200):
+                created = send(ipc, {'type': 'command', 'request_id': 101, 'command': {
+                    'kind': 'create_task', 'spec': {
+                        'url': f'http://127.0.0.1:{server.server_port}/{code}-{suffix}.bin',
+                        'filename': f'retry-{code}-{suffix}.bin', 'resource_kind': 'file',
+                        'expected_size': 1, 'etag': '"retry-fixture"', 'concurrency': 1,
+                        'proxy': 'hls-downloader://direct-proxy'}}})
+                ids.append(next(e['event']['snapshot']['task_id'] for e in created['events']
+                                if e['event']['kind'] == 'task_created'))
+            completed = wait_task(ipc, ids[1], lambda t: t['status'] in ('completed', 'failed'), 102)
+            assert completed['status'] == 'completed', completed
+            assert Path(completed['output_path']).read_bytes() == b'x'
+            snapshots = send(ipc, {'type': 'snapshot', 'request_id': 103})['tasks']
+            failed = next(task for task in snapshots if task['task_id'] == ids[0])
+            assert failed['status'] == 'failed', failed
+            if status == 206:
+                assert failed['error_code'] == ('RANGE_UNSUPPORTED' if invalid_range else 'RESOURCE_CHANGED'), failed
+                assert '新建任务' in failed['error_hint'], failed
+                assert not (download_dir/f'retry-{status}-{suffix}.bin').exists()
+            else:
+                assert failed['http_status'] == status, failed
+            assert failed['error_attempt'] == attempts and 'retry' in failed['available_actions'], failed
+            for tid in ids:
+                send(ipc, {'type': 'command', 'request_id': 104, 'command': {
+                    'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
+                assert not (download_dir/'.hls-tasks'/tid).exists(), tid
+            assert not Path(completed['output_path']).exists()
+            cases.append({'http_status': status, 'invalid_range': invalid_range, 'task_attempts': attempts,
+                          'following_download_verified': True, 'test_tasks_and_files_removed': True})
+    finally:
+        send(ipc, {'type': 'store_settings', 'request_id': 105, 'values': {
+            'auto_retry_failed_max': 0, 'queue_max_active': 3}})
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return cases
+
+
+def verify_hls_retry(ipc, download_dir, media_bytes):
+    counts = {}
+    counts_lock = threading.Lock()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            with counts_lock:
+                hit = counts[self.path] = counts.get(self.path, 0) + 1
+            route = self.path.strip('/')
+            if route.endswith('.m3u8'):
+                case = route.removesuffix('.m3u8')
+                byterange = f'#EXT-X-BYTERANGE:{len(media_bytes)}@0\n' if case.startswith('range-') else ''
+                body = f'#EXTM3U\n#EXTINF:1,\n{byterange}{case}.ts\n#EXT-X-ENDLIST\n'.encode()
+                status = 200
+            else:
+                case = route.removesuffix('.ts')
+                ranged = case.startswith('range-')
+                case = case.removeprefix('range-')
+                status = (403 if case == 'forbidden' else
+                          503 if case == 'transient' and hit < 3 else
+                          206 if ranged else 200)
+                body = media_bytes if status in (200, 206) else b''
+                if ranged:
+                    assert self.headers.get('Range') == f'bytes=0-{len(media_bytes)-1}'
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(body)))
+            if status == 206:
+                self.send_header('Content-Range', f'bytes 0-{len(body)-1}/{len(body)}')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            if not route.endswith('.m3u8') and case == 'truncated' and hit == 1:
+                body = body[:len(body)//2]
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    cases = []
+    try:
+        send(ipc, {'type': 'store_settings', 'request_id': 110, 'values': {
+            'auto_retry_failed_max': 0, 'queue_max_active': 1}})
+        for case in ('forbidden', 'range-forbidden', 'transient', 'range-transient',
+                     'truncated', 'range-truncated'):
+            created = send(ipc, {'type': 'command', 'request_id': 111, 'command': {
+                'kind': 'create_task', 'spec': {
+                    'url': f'http://127.0.0.1:{server.server_port}/{case}.m3u8',
+                    'filename': f'hls-retry-{case}.webm', 'resource_kind': 'hls',
+                    'concurrency': 1, 'proxy': 'hls-downloader://direct-proxy'}}})
+            tid = next(e['event']['snapshot']['task_id'] for e in created['events']
+                       if e['event']['kind'] == 'task_created')
+            task = wait_task(ipc, tid, lambda t: t['status'] in ('completed', 'failed'), 112)
+            # 安装包含 curl：HTTP 403 会先经过既有的单次浏览器身份回退。
+            expected_requests = 2 if case.endswith('forbidden') else 3 if case.endswith('transient') else 2
+            with counts_lock:
+                requests = counts.get(f'/{case}.ts', 0)
+            assert requests == expected_requests, (case, requests, task)
+            if case.endswith('forbidden'):
+                assert task['status'] == 'failed' and task['http_status'] == 403, task
+            else:
+                assert task['status'] == 'completed', task
+                assert Path(task['output_path']).read_bytes() == media_bytes, case
+                wait(lambda: not (download_dir/'.hls-tasks'/tid).exists(), f'{case}: completed cache remains')
+            send(ipc, {'type': 'command', 'request_id': 113, 'command': {
+                'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
+            assert not (download_dir/'.hls-tasks'/tid).exists(), case
+            assert not Path(task['output_path']).is_file(), case
+            cases.append({'case': case, 'segment_requests': requests, 'status': task['status'],
+                          'test_tasks_and_files_removed': True})
+    finally:
+        send(ipc, {'type': 'store_settings', 'request_id': 114, 'values': {'queue_max_active': 3}})
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return cases
+
+
+def verify_native_host_startup(resources, result, save):
+    # 不传测试 IPC/数据目录，核对实际安装用户的默认命名管道和首次任务库。
+    environment = {key: value for key, value in os.environ.items() if not key.startswith('HLS_')}
+    environment['HLS_V7_STARTUP_PROFILE'] = '1'
+    database = Path(environment['LOCALAPPDATA'])/'HLS Downloader/v7/data.db'
+    result.update(transport='default Windows named pipe', concurrent_hosts=4,
+                  database_existed_before_first_launch=database.exists(), rounds=[])
+    engine = resources/'HLSDownloaderEngine.exe'
+    previous_pid = None
+    for phase in ('first-installed-launch', 'resident-core', 'relaunch-after-shutdown'):
+        barrier = threading.Barrier(4)
+
+        def ping():
+            barrier.wait(timeout=10)
+            return responses(resources/'HLSDownloaderNativeHost.exe', environment)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            replies = list(executor.map(lambda _: ping(), range(4)))
+        resident = [proc for proc in psutil.process_iter(['pid', 'exe'])
+                    if proc.info['exe'] and Path(proc.info['exe']) == engine]
+        diagnostics = [reply[3] for reply in replies]
+        spawns = sum('core_spawn stage=before_spawn' in line['message']
+                     for host in diagnostics for line in host)
+        sample = {'phase': phase, 'first_response_ms': [round(reply[1], 2) for reply in replies],
+                  'responses': [reply[0] for reply in replies], 'startup_diagnostics': diagnostics,
+                  'core_spawn_attempts': spawns, 'resident_pids': [proc.pid for proc in resident]}
+        result['rounds'].append(sample)
+        save()
+        assert len(resident) == 1, sample
+        assert spawns == (0 if phase == 'resident-core' else 1), sample
+        assert all(len(reply[0]) == 2 and all(message.get('ok') is True and
+                   message.get('protocol_version') == 1 for message in reply[0]) for reply in replies), sample
+        # 沿用已有 Native Host 冷启动验收的 1.5 秒目标，不放宽期限掩盖超时。
+        assert max(reply[1] for reply in replies) <= 1500, sample
+        if phase == 'resident-core':
+            assert resident[0].pid == previous_pid, sample
+        pipe = Pipe()
+        try:
+            hello = pipe.request({'type': 'hello', 'protocol': 'hls-downloader-v7-core', 'version': 1})
+            assert hello['type'] == 'hello' and hello['pid'] == resident[0].pid, hello
+            settings = pipe.request({'type': 'load_settings', 'request_id': 1})
+            assert Path(settings['download_dir']) == downloads_folder(), settings
+            sample['hello_pid'] = hello['pid']
+            sample['download_dir'] = settings['download_dir']
+            if phase != 'first-installed-launch':
+                pipe.request({'type': 'command', 'request_id': 2, 'command': {'kind': 'shutdown'}})
+        finally:
+            pipe.close()
+        if phase != 'first-installed-launch':
+            wait(lambda: not resident[0].is_running(), 'Native-started Core did not shut down', 10)
+        previous_pid = resident[0].pid
+        save()
+    result['passed'] = True
+    save()
+
+
+def run(args):
+    assert os.environ.get('HLS_VM_ACCEPTANCE') == '1', 'Sandbox only'
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    product = json.loads(args.manifest.read_text(encoding='utf-8-sig'))['product_code']
+    install = (test_tmp() / 'Custom Install Path') / ('HLSDownloader-' + uuid.uuid4().hex[:8])
+    assert not install.exists(), 'Fresh custom installation required'
+    report = {'passed': False, 'checks': [], 'msi_sha256': hashlib.sha256(args.msi.read_bytes()).hexdigest()}
+    processes = []
+    installed = False
+    stage = test_tmp() / ('installer-' + product.strip('{}'))
+    stage.mkdir(parents=True, exist_ok=True)
+    local_msi = stage/'package.msi'
+    # Windows Installer 服务不共享桌面用户的沙盒映射，安装文件和日志先落在虚拟机本地。
+    shutil.copyfile(args.msi, local_msi)
+    assert hashlib.sha256(local_msi.read_bytes()).hexdigest() == report['msi_sha256']
+    query = ctypes.windll.msi.MsiQueryProductStateW
+    query.argtypes = [wintypes.LPCWSTR]
+    query.restype = ctypes.c_int
+
+    def record(name, actual=True):
+        report['checks'].append({'name': name, 'actual': actual})
+        save()
+        print(name, flush=True)
+
+    def save():
+        args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    def terminate():
+        all_processes = []
+        for proc in psutil.process_iter(['exe']):
+            if proc.info['exe'] and Path(proc.info['exe']).is_relative_to(install):
+                all_processes.append(proc)
+        for proc in all_processes:
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        psutil.wait_procs(all_processes, timeout=15)
+
+    try:
+        record('MSI staged on VM local disk with matching SHA256')
+        # msiexec 的属性必须只引号包围值，list2cmdline 会错误地引号包围整个 KEY=value。
+        command_line = subprocess.list2cmdline(['msiexec.exe', '/i', str(local_msi), '/qn',
+            '/norestart', '/l*v', str(stage/'install.log')]) + f' INSTALLDIR="{install}"'
+        code = subprocess.run(command_line, timeout=180).returncode
+        assert code in (0, 3010), f'MSI install exit {code}'
+        installed = True
+        assert query(product) == 5 and (install/'HLSDownloader.exe').is_file()
+        record('MSI installs at requested path containing spaces', str(install))
+        resources = install/'app/resources'
+        paths = [path for path in install.rglob('*') if path.is_file()]
+        report['installed_bytes'] = sum(path.stat().st_size for path in paths)
+        report['installed_files'] = len(paths)
+        report['largest_files'] = [{'path': p.relative_to(install).as_posix(), 'bytes': p.stat().st_size}
+                                  for p in sorted(paths, key=lambda p: p.stat().st_size, reverse=True)[:12]]
+        report['installed_components_sha256'] = {name: hashlib.sha256((resources/name).read_bytes()).hexdigest()
+            for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe',
+                         'HLSDownloaderPresenter.exe', 'HLSDownloaderUpdater.exe')}
+        if args.expected_components:
+            expected_components = json.loads(args.expected_components.read_text(encoding='utf-8-sig'))
+            actual_components = {}
+            for relative, expected_hash in expected_components.items():
+                path = install / relative
+                assert path.resolve().is_relative_to(install.resolve()), relative
+                actual_components[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                assert actual_components[relative] == expected_hash, f'Installed payload differs: {relative}'
+            record('installed payload hashes match the tested components and delivery archives', actual_components)
+        version = json.loads((resources/'BUILD-PROVENANCE.json').read_text(encoding='utf-8-sig'))['product_version']
+        extensions = {}
+        for family in ('Chromium', 'Firefox'):
+            root = install/'extensions'/family
+            archives = list((resources/'extensions').glob(f'*-{family}.zip'))
+            assert archives, f'Installed {family} archive missing'
+            for archive in archives:
+                with zipfile.ZipFile(archive) as zipped:
+                    files = {name for name in zipped.namelist() if not name.endswith('/')}
+                    assert zipped.testzip() is None, f'Corrupt installed extension: {family}'
+                    manifest = json.loads(zipped.read('manifest.json'))
+                    assert manifest['version'] == version and manifest['action']['default_popup'] == 'popup.html'
+                    assert {'background.js', 'popup.html'} <= files
+                    # 当前安装包按需解压插件；旧安装映像若附带解压目录，仍核对两份内容。
+                    if root.exists():
+                        assert files == {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()}
+                        for name in files:
+                            assert (root/name).read_bytes() == zipped.read(name), f'Installed extension mismatch: {family}/{name}'
+                    background_sha256 = hashlib.sha256(zipped.read('background.js')).hexdigest()
+            extensions[family] = {'background_sha256': background_sha256,
+                'unpacked_directory_present': root.exists(),
+                'archives_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in archives}}
+        record('installed extension ZIPs are valid; unpacked copies match when present', extensions)
+        if args.verify_native_host_startup:
+            report['native_host_startup'] = {}
+            verify_native_host_startup(resources, report['native_host_startup'], save)
+            record('installed Native Host cold/concurrent/resident/restart paths use one Core over the default pipe')
+        port = free_port()
+        # 安装验收必须加载真实任务库，不能继承前一轮离线界面夹具。
+        env = {**{key: value for key, value in os.environ.items() if not key.startswith('HLS_UI_AUDIT_')},
+               'HLS_V7_CORE_TCP': '1', 'HLS_V7_CORE_BIND': f'127.0.0.1:{port}',
+               'HLS_V7_STARTUP_PROFILE': '1'}
+        for key in ('HLS_V7_DATA_DIR', 'HLS_V7_DOWNLOAD_DIR', 'HLS_V7_PIPE', 'HLS_ENGINE_PATH'):
+            env.pop(key, None)
+        log = args.report.with_suffix('.runtime.log').open('wb')
+        processes.append(subprocess.Popen([str(resources/'HLSDownloaderEngine.exe')], env=env,
+            stdout=log, stderr=log, creationflags=subprocess.CREATE_NO_WINDOW))
+        with connect(port) as ipc:
+            settings = send(ipc, {'type': 'load_settings', 'request_id': 1})
+            expected = downloads_folder()
+            assert Path(settings['download_dir']) == expected, settings['download_dir']
+            record('default download directory matches Windows Known Folder', str(expected))
+            send(ipc, {'type': 'store_settings', 'request_id': 2, 'values': {
+                'legal_terms_accepted': True, 'legal_terms_version': '2026-08-06-cn-1',
+                'av_scan_enabled': False, 'download_progress_window_enabled': False,
+                'download_complete_popup_enabled': False}})
+            url = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm'
+            with urlopen(url, timeout=45) as response:
+                expected_body = response.read(8*1024*1024+1)
+            assert 0 < len(expected_body) <= 8*1024*1024
+            created = send(ipc, {'type': 'command', 'request_id': 3, 'command': {
+                'kind': 'create_task', 'spec': {'url': url, 'resource_kind': 'file',
+                    'filename': 'hls-acceptance-public.webm', 'concurrency': 2,
+                    'proxy': 'hls-downloader://direct-proxy'}}})
+            tid = next(e['event']['snapshot']['task_id'] for e in created['events']
+                       if e['event']['kind'] == 'task_created')
+            downloaded = wait_task(ipc, tid, lambda t: t['status'] in ('completed', 'failed'), 90)
+            assert downloaded['status'] == 'completed', downloaded
+            output = Path(downloaded['output_path'])
+            assert output.parent == expected and output.read_bytes() == expected_body
+            wait(lambda: not (expected/'.hls-tasks'/tid).exists(), 'Public download cache remains')
+            record('real public MDN video downloads into the default folder with identical bytes',
+                   {'url': url, 'bytes': len(expected_body),
+                    'sha256': hashlib.sha256(expected_body).hexdigest()})
+            deleted = send(ipc, {'type': 'command', 'request_id': 4, 'command': {
+                'kind': 'task_action', 'task_id': tid, 'action': 'delete_files'}})
+            assert 'events' in deleted and not output.exists(), deleted
+            if args.verify_http_retry:
+                record('installed release Engine respects HTTP retry policy and removes test caches',
+                       verify_http_retry(ipc, expected))
+            if args.verify_hls_retry:
+                record('installed release Engine retries recoverable HLS segments and cleans completed/deleted caches',
+                       verify_hls_retry(ipc, expected, expected_body))
+        report['ui_exercised'] = not args.core_only
+        if not args.core_only:
+            started = time.monotonic()
+            processes.append(subprocess.Popen([str(install/'HLSDownloader.exe')], cwd=install,
+                                              env=env, stdout=log, stderr=log))
+
+            def ready():
+                state = workbench_state(install)
+                return state if state["showing"] and state["connected"] else None
+
+            window = wait(ready, 'Installed native UI not visibly connected', 120)
+            report['ui_visible_connected_seconds'] = time.monotonic()-started
+            def nonblank(data):
+                with Image.open(io.BytesIO(data)) as image:
+                    # Resampling a flat canvas's rounded corners creates many
+                    # colors without proving that any application content drew.
+                    rgb = image.convert('RGB')
+                    pixels = rgb.width * rgb.height
+                    colors = rgb.getcolors(pixels)
+                    counts = sorted((count for count, _ in colors), reverse=True)
+                    return pixels - sum(counts[:2]) > max(500, pixels * .005)
+            def rendered():
+                screen = workbench_capture(install)
+                args.report.with_suffix('.png').write_bytes(screen)
+                report['ui_capture'] = {'screen_nonblank': nonblank(screen)}
+                report.setdefault('ui_first_capture', dict(report['ui_capture']))
+                return report['ui_capture']['screen_nonblank']
+
+            # Showing/connected is not a first-frame acknowledgement. Keep the
+            # content requirement and fail if rendering never catches up.
+            render_started = time.monotonic()
+            try:
+                wait(rendered, 'Native UI reports showing but screen capture remains blank', 15)
+            finally:
+                report['ui_render_wait_seconds'] = time.monotonic()-render_started
+            record('installed UI reports showing, connects to Core and produces a nonblank render',
+                   {'window': window, 'capture': report['ui_capture']})
+            if args.verify_browser_color:
+                before = workbench_capture(install)
+                assert '浏览器未连接' in workbench_state(install)['names'], 'Browser was already connected'
+                with connect(port) as ipc:
+                    reply = send(ipc, {'type': 'command', 'request_id': 20, 'command': {
+                        'kind': 'browser_hello', 'version': version, 'browser': 'sandbox-verification'}})
+                    assert 'events' in reply, reply
+                connected = wait(lambda: '浏览器已连接' in workbench_state(install)['names'],
+                                 'Browser handshake did not update the native footer', 15)
+                args.report.with_suffix('.disconnected.png').write_bytes(before)
+                args.report.with_suffix('.connected.png').write_bytes(workbench_capture(install))
+                record('simulated browser handshake updates the native connection label',
+                       {'connected': connected,
+                        'transport': 'Core IPC browser_hello; no real browser extension used'})
+            time.sleep(3)
+
+
+        def sample():
+            result = {}
+            for proc in psutil.process_iter(['exe', 'name']):
+                if proc.info['exe'] and Path(proc.info['exe']).is_relative_to(install):
+                    cpu, memory = proc.cpu_times(), proc.memory_info()
+                    result[proc.pid] = {'name': proc.info['name'], 'cpu': cpu.user+cpu.system,
+                                       'rss_bytes': memory.rss, 'private_bytes': getattr(memory, 'private', 0)}
+            return result
+        before = sample()
+        started = time.monotonic()
+        time.sleep(args.idle_seconds)
+        after = sample()
+        elapsed = time.monotonic()-started
+        cpu = sum(max(0, p['cpu']-before.get(pid, p)['cpu']) for pid, p in after.items())
+        report['idle'] = {'seconds': elapsed, 'logical_cpus': psutil.cpu_count(),
+            'cpu_one_core_percent': cpu/elapsed*100,
+            'cpu_machine_percent': cpu/elapsed*100/psutil.cpu_count(), 'processes': after,
+            'rss_sum_bytes': sum(p['rss_bytes'] for p in after.values()),
+            'private_sum_bytes': sum(p['private_bytes'] for p in after.values())}
+        record('measured installed runtime idle CPU and memory', report['idle'])
+        terminate()
+        code = subprocess.run(['msiexec.exe', '/x', product, '/qn', '/norestart', '/l*v',
+                str(stage/'uninstall.log')], timeout=180).returncode
+        assert code in (0, 3010) and query(product) == -1, f'Uninstall failed: {code}'
+        installed = False
+        assert not (install/'HLSDownloader.exe').exists()
+        record('MSI uninstalls and removes its product registration')
+        report['passed'] = True
+    except Exception:
+        report['error'] = traceback.format_exc()
+        report['launched_processes'] = [{'pid': proc.pid, 'exit_code': proc.poll()}
+                                        for proc in processes]
+    finally:
+        terminate()
+        if installed:
+            report['cleanup_uninstall_exit'] = subprocess.run(['msiexec.exe', '/x', product,
+                '/qn', '/norestart'], timeout=180).returncode
+        for name in ('install', 'uninstall'):
+            log_path = stage/(name+'.log')
+            if log_path.exists():
+                shutil.copyfile(log_path, args.report.with_suffix('.'+name+'.log'))
+        save()
+        print(json.dumps(report, ensure_ascii=False), flush=True)
+    return 0 if report['passed'] else 1
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--msi', type=Path, required=True)
+    parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--expected-components', type=Path,
+                        help='JSON mapping installation-relative paths to tested SHA256 values')
+    parser.add_argument('--core-only', action='store_true', help='Skip UI when desktop interaction is blocked')
+    parser.add_argument('--idle-seconds', type=float, default=5,
+                        help='Duration of the installed product resource sample (default: 5 seconds)')
+    parser.add_argument('--verify-browser-color', action='store_true', help='Verify native footer status before/after a simulated browser handshake (legacy flag name)')
+    parser.add_argument('--verify-http-retry', action='store_true', help='Verify permanent/transient HTTP failures and queue continuation with the installed Engine')
+    parser.add_argument('--verify-hls-retry', action='store_true', help='Verify full/range HLS segment errors, recovery and cache cleanup with the installed Engine')
+    parser.add_argument('--verify-native-host-startup', action='store_true', help='Verify installed default-pipe cold/concurrent/resident/restart Native Host startup')
+    raise SystemExit(run(parser.parse_args()))

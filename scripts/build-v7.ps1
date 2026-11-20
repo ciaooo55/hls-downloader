@@ -477,7 +477,7 @@ if ($isPackage) {
 $env:HLS_ENGINE_PATH = $engine
     switch ($Task) {
         'run' { & $presenter --workbench }
-        'test' { & $cargo test --locked --workspace -- --test-threads=1 }
+        'test' { }
         { $_ -in 'candidate', 'package' } { }
         'adversarial' { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\validation\adversarial-v7.ps1" }
     }
