@@ -39,9 +39,10 @@ fn open_workbench() -> Result<(), String> {
         .map_err(|error| format!("open workbench: {error}"))
 }
 
-fn start_resident_tray() {
+fn start_resident_tray(server: &hls_native_shell::CoreServer) {
     let (sender, receiver) = std::sync::mpsc::channel();
     hls_native_shell::spawn_tray(sender);
+    let handler = server.handler();
     std::thread::Builder::new()
         .name("v7-tray-actions".into())
         .spawn(move || {
@@ -53,7 +54,22 @@ fn start_resident_tray() {
                             eprintln!("tray action failed: {error}");
                         }
                     }
-                    hls_native_shell::TrayAction::Quit => std::process::exit(0),
+                    hls_native_shell::TrayAction::Quit => {
+                        let response = handler(hls_native_shell::CorePipeRequest::Command {
+                            request_id: 0,
+                            command: hls_native_shell::CoreCommand::Shutdown,
+                        });
+                        match response {
+                            hls_native_shell::CorePipeResponse::Events { .. } => break,
+                            response => {
+                                eprintln!("tray shutdown failed: {response:?}");
+                                hls_native_shell::show_notification(
+                                    "暂时无法退出",
+                                    "下载检查点未能保存，请稍后重试。",
+                                );
+                            }
+                        }
+                    }
                 }
             }
         })
@@ -225,7 +241,7 @@ fn main() -> ExitCode {
         };
         mark("store_ready");
         if !args.iter().any(|arg| arg == "--no-tray") {
-            start_resident_tray();
+            start_resident_tray(&server);
         }
         mark("tray");
         match server.bind_local() {
@@ -355,7 +371,7 @@ mod tests {
     #[test]
     fn engine_entry_wires_the_resident_tray() {
         let source = include_str!("hls_downloader_engine.rs");
-        assert!(source.contains("start_resident_tray();"));
+        assert!(source.contains("start_resident_tray(&server);"));
         assert!(source.contains("hls_native_shell::spawn_tray(sender)"));
         assert!(source.contains("--prepare-native-host-manifests"));
         assert!(source.contains("register_packaged_native_host"));

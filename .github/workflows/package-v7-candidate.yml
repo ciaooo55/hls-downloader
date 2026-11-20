@@ -137,10 +137,11 @@ jobs:
             $shutdownFixture = Join-Path $env:GITHUB_WORKSPACE '.tool-cache/test-tmp/candidate-installer-shutdown'
             python scripts/validation/smoke_v7_installer_shutdown.py --engine $engine --helper (Join-Path $app 'scripts/HLSDownloaderPreflight.exe') --root $shutdownFixture
             Copy-Item (Join-Path $shutdownFixture 'result.json') "$reports/installer-shutdown.json"
+            python scripts/validation/windows_breakaway_job.py python scripts/validation/smoke_v7_tray_shutdown.py --engine $engine --report "$reports/tray-shutdown.json"
             python scripts/validation/smoke_v7_transfer_performance.py --engine $engine --report "$reports/transfer-performance.json"
             python scripts/validation/soak_v7_runtime.py --engine $engine --idle-seconds 60 --stress-requests 18000 --report "$reports/runtime-soak.json"
             $reportHashes = [ordered]@{}
-            foreach ($name in @('free-functions', 'native-host', 'host-job-lifetime', 'installer-shutdown', 'transfer-performance', 'runtime-soak')) {
+            foreach ($name in @('free-functions', 'native-host', 'host-job-lifetime', 'installer-shutdown', 'tray-shutdown', 'transfer-performance', 'runtime-soak')) {
               $reportPath = Join-Path $reports "$name.json"
               $reportHashes["$name.json"] = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
             }

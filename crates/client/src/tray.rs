@@ -305,10 +305,8 @@ unsafe extern "system" fn tray_wnd_proc(
     if msg == WM_COMMAND {
         match wparam & 0xffff {
             ID_SHOW => send_action(sender, TrayAction::ShowMain),
-            ID_QUIT => {
-                send_action(sender, TrayAction::Quit);
-                PostQuitMessage(0);
-            }
+            // Keep the tray available if Core cannot save its exit checkpoint.
+            ID_QUIT => send_action(sender, TrayAction::Quit),
             _ => {}
         }
         return 0;
