@@ -10,8 +10,9 @@ pub fn map_ftp_passwords(
     while let Some(relative) = lower[cursor..].find("://") {
         let separator = cursor + relative;
         let start = lower[..separator]
-            .rfind(|c: char| !c.is_ascii_alphabetic())
-            .map_or(0, |index| index + 1);
+            .char_indices()
+            .rfind(|(_, c)| !c.is_ascii_alphabetic())
+            .map_or(0, |(index, c)| index + c.len_utf8());
         if !matches!(&lower[start..separator], "ftp" | "ftps" | "sftp") {
             output.push_str(&text[cursor..separator + 3]);
             cursor = separator + 3;
@@ -85,6 +86,21 @@ mod tests {
             assert_eq!(clean, "ftp://alice@host/file.bin");
             assert_eq!(captured, Some(("ftp://alice@host".into(), secret.into())));
         }
+    }
+
+    #[test]
+    fn redacts_urls_after_multibyte_text_without_panicking() {
+        for text in ["来源：https://host/file", "来源：", ""] {
+            assert_eq!(redact_ftp_passwords(text), text);
+        }
+        assert_eq!(
+            redact_ftp_passwords("来源：ftp://alice:secret@host/file"),
+            "来源：ftp://alice@host/file"
+        );
+        assert_eq!(
+            redact_ftp_passwords("🔒sftp://alice:secret@host/file"),
+            "🔒sftp://alice@host/file"
+        );
     }
 
     #[test]

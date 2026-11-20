@@ -266,6 +266,21 @@ mod tests {
     }
 
     #[test]
+    fn url_password_migration_accepts_multibyte_text_before_urls() {
+        let store = CoreStore::in_memory().unwrap();
+        store.connection.execute("INSERT INTO settings(key,value_json) VALUES ('source',?1)", [serde_json::json!({"source":"来源：https://host/file", "url":"来源：ftp://alice:secret@host/file"}).to_string()]).unwrap();
+        store.migrate_url_passwords().unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&store.setting_string("source", "").unwrap()).unwrap();
+        assert_eq!(value["source"], "来源：https://host/file");
+        assert_eq!(value["url"], "来源：ftp://alice@host/file");
+        assert_eq!(
+            store.hydrate_url("ftp://alice@host/file").unwrap(),
+            "ftp://alice:secret@host/file"
+        );
+    }
+
+    #[test]
     fn url_password_empty_absent_and_corrupt_credentials() {
         let store = CoreStore::in_memory().unwrap();
         for url in ["", "not a URL", "ftp://host/file", "sftp://alice@host/file"] {
