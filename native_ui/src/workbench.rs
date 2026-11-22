@@ -35,6 +35,7 @@ pub struct Workbench {
     navigation: Rc<VecModel<NavigationRow>>,
     positions: RefCell<HashMap<String, usize>>,
     commands: mpsc::SyncSender<WorkbenchJob>,
+    editor_commands: mpsc::SyncSender<WorkbenchJob>,
     next_id: Cell<u64>,
     editor: RefCell<Option<TaskEditorWindow>>,
     editor_id: Cell<u64>,
@@ -105,22 +106,11 @@ impl Workbench {
         }
     }
 
-    pub fn new(
-        tasks: Vec<TaskSnapshot>,
-        sequence: u64,
-        dark: bool,
-        reduce_motion: bool,
-    ) -> Result<Rc<Self>, slint::PlatformError> {
-        let window = WorkbenchWindow::new()?;
-        window.set_product_version(env!("CARGO_PKG_VERSION").into());
-        native_window::apply_appearance(&window, dark, reduce_motion);
-        let state = Rc::new(RefCell::new(TaskList::default()));
-        state.borrow_mut().replace(tasks, sequence);
-        let rows = Rc::new(VecModel::default());
-        window.set_tasks(ModelRc::from(rows.clone()));
-        let navigation = Rc::new(VecModel::default());
-        window.set_navigation(ModelRc::from(navigation.clone()));
-        let (commands, jobs) = mpsc::sync_channel::<WorkbenchJob>(32);
+    fn spawn_command_worker(
+        window: &WorkbenchWindow,
+        capacity: usize,
+    ) -> mpsc::SyncSender<WorkbenchJob> {
+        let (commands, jobs) = mpsc::sync_channel::<WorkbenchJob>(capacity);
         let weak = window.as_weak();
         std::thread::spawn(move || {
             let mut client = None;
@@ -230,6 +220,27 @@ impl Workbench {
                 }
             }
         });
+        commands
+    }
+
+    pub fn new(
+        tasks: Vec<TaskSnapshot>,
+        sequence: u64,
+        dark: bool,
+        reduce_motion: bool,
+    ) -> Result<Rc<Self>, slint::PlatformError> {
+        let window = WorkbenchWindow::new()?;
+        window.set_product_version(env!("CARGO_PKG_VERSION").into());
+        native_window::apply_appearance(&window, dark, reduce_motion);
+        let state = Rc::new(RefCell::new(TaskList::default()));
+        state.borrow_mut().replace(tasks, sequence);
+        let rows = Rc::new(VecModel::default());
+        window.set_tasks(ModelRc::from(rows.clone()));
+        let navigation = Rc::new(VecModel::default());
+        window.set_navigation(ModelRc::from(navigation.clone()));
+        let commands = Self::spawn_command_worker(&window, 32);
+        // Editor probes and task creation can wait for network metadata.
+        let editor_commands = Self::spawn_command_worker(&window, 8);
         let controller = Rc::new(Self {
             window,
             state,
@@ -237,6 +248,7 @@ impl Workbench {
             navigation,
             positions: RefCell::new(HashMap::new()),
             commands,
+            editor_commands,
             next_id: Cell::new(1),
             editor: RefCell::new(None),
             editor_id: Cell::new(0),
@@ -972,13 +984,17 @@ impl Workbench {
     }
 
     fn job(&self, job: WorkbenchJob) -> bool {
+        self.enqueue(&self.commands, job)
+    }
+
+    fn enqueue(&self, commands: &mpsc::SyncSender<WorkbenchJob>, job: WorkbenchJob) -> bool {
         let id = match &job {
             WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
             WorkbenchJob::Request(request) => serde_json::to_value(request)
                 .ok()
                 .and_then(|value| value["request_id"].as_u64()),
         };
-        if self.commands.try_send(job).is_err() {
+        if commands.try_send(job).is_err() {
             self.window
                 .set_notice("操作队列已满或连接关闭，请稍后重试".into());
             false
@@ -1591,18 +1607,18 @@ impl Workbench {
                 };
                 let request_id = self.editor_id.get();
                 let submitted = if action == "probe" {
-                    self.request(CorePipeRequest::Command {
+                    let request = CorePipeRequest::Command {
                         request_id,
                         command: CoreCommand::ProbeUrl {
                             url: spec.url.clone(),
                             spec: Some(spec),
                         },
-                    })
+                    };
+                    self.enqueue(
+                        &self.editor_commands,
+                        WorkbenchJob::Request(Box::new(request)),
+                    )
                 } else {
-                    self.send(CoreCommand::SetSetting {
-                        key: "legal_terms_accepted".into(),
-                        value: true.into(),
-                    });
                     let commands = match editor.get_mode().as_str() {
                         "curl" => vec![CoreCommand::ImportCurl {
                             command: editor.get_url().to_string(),
@@ -1632,9 +1648,26 @@ impl Workbench {
                         }
                         _ => vec![CoreCommand::CreateTask { spec }],
                     };
-                    self.job(WorkbenchJob::Batch(request_id, commands))
+                    let accept_terms = CorePipeRequest::Command {
+                        request_id: self.id(),
+                        command: CoreCommand::SetSetting {
+                            key: "legal_terms_accepted".into(),
+                            value: true.into(),
+                        },
+                    };
+                    self.enqueue(
+                        &self.editor_commands,
+                        WorkbenchJob::Request(Box::new(accept_terms)),
+                    ) && self.enqueue(
+                        &self.editor_commands,
+                        WorkbenchJob::Batch(request_id, commands),
+                    )
                 };
                 editor.set_busy(submitted);
+                if !submitted {
+                    editor.set_result_tone("error".into());
+                    editor.set_result(self.window.get_notice());
+                }
             }
             _ => {}
         }

@@ -86,6 +86,7 @@ impl ResourceTools {
                     if let Some(mut row) = this.rows.row_data(index) {
                         row.selected = selected;
                         this.rows.set_row_data(index, row);
+                        this.update_torrent_selection();
                     }
                 }
             }
@@ -143,6 +144,13 @@ impl ResourceTools {
             .enumerate()
             .filter_map(|(index, row)| row.selected.then_some(index))
             .collect()
+    }
+
+    fn update_torrent_selection(&self) {
+        if self.window.get_mode() == "torrent" {
+            self.window
+                .set_has_torrent_selection(self.rows.iter().any(|row| row.selected));
+        }
     }
 
     pub fn poll(&self) {
@@ -209,6 +217,7 @@ impl ResourceTools {
                         self.rows.set_row_data(index, row);
                     }
                 }
+                self.update_torrent_selection();
             }
             "inspect" | "list" | "pause" | "resume" | "sync" | "probe" | "download" => {
                 let id = (self.id)();
@@ -625,6 +634,7 @@ impl ResourceTools {
                 })
                 .collect::<Vec<_>>(),
         );
+        self.update_torrent_selection();
         self.window.set_summary(
             format!(
                 "{} 个文件 · {}",
