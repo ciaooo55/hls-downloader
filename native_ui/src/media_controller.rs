@@ -38,6 +38,8 @@ impl VideoHost {
 pub struct MediaController {
     main: WorkbenchWindow,
     pip: RefCell<Option<PlayerWindow>>,
+    main_placement: native_window::FullscreenPlacement,
+    pip_placement: native_window::FullscreenPlacement,
     detached: Cell<bool>,
     active: Cell<bool>,
     session: Cell<u64>,
@@ -133,6 +135,8 @@ impl MediaController {
         let this = Rc::new(Self {
             main,
             pip: RefCell::new(None),
+            main_placement: Default::default(),
+            pip_placement: Default::default(),
             detached: Cell::new(false),
             active: Cell::new(false),
             session: Cell::new(0),
@@ -266,6 +270,16 @@ impl MediaController {
         }
     }
 
+    fn set_main_fullscreen(&self, fullscreen: bool) {
+        self.main.set_media_fullscreen(fullscreen);
+        self.main_placement.set(self.main.window(), fullscreen);
+    }
+
+    fn set_pip_fullscreen(&self, pip: &PlayerWindow, fullscreen: bool) {
+        pip.set_fullscreen(fullscreen);
+        self.pip_placement.set(pip.window(), fullscreen);
+    }
+
     fn action(self: &Rc<Self>, action: &str) {
         match action {
             "translate" => {
@@ -276,7 +290,7 @@ impl MediaController {
                 self.detached.set(false);
                 self.main.set_media_detached(false);
                 if let Some(pip) = self.pip.borrow().as_ref() {
-                    pip.window().set_fullscreen(false);
+                    self.set_pip_fullscreen(pip, false);
                     let _ = pip.hide();
                 }
                 let _ = self.main.show();
@@ -285,25 +299,19 @@ impl MediaController {
             "fullscreen" => {
                 if self.detached.get() {
                     if let Some(pip) = self.pip.borrow().as_ref() {
-                        let full = !pip.window().is_fullscreen();
-                        pip.set_fullscreen(full);
-                        pip.window().set_fullscreen(full);
+                        self.set_pip_fullscreen(pip, !pip.window().is_fullscreen());
                     }
                 } else {
-                    let full = !self.main.window().is_fullscreen();
-                    self.main.set_media_fullscreen(full);
-                    self.main.window().set_fullscreen(full);
+                    self.set_main_fullscreen(!self.main.window().is_fullscreen());
                 }
             }
             "escape" => {
                 if self.detached.get() {
                     if let Some(pip) = self.pip.borrow().as_ref() {
-                        pip.set_fullscreen(false);
-                        pip.window().set_fullscreen(false);
+                        self.set_pip_fullscreen(pip, false);
                     }
                 } else {
-                    self.main.set_media_fullscreen(false);
-                    self.main.window().set_fullscreen(false);
+                    self.set_main_fullscreen(false);
                 }
             }
             "clear_preview" => {
@@ -377,8 +385,7 @@ impl MediaController {
             });
             *self.pip.borrow_mut() = Some(pip);
         }
-        self.main.set_media_fullscreen(false);
-        self.main.window().set_fullscreen(false);
+        self.set_main_fullscreen(false);
         self.detached.set(true);
         self.main.set_media_detached(true);
         if let Some(pip) = self.pip.borrow().as_ref() {
@@ -519,10 +526,9 @@ impl MediaController {
         }
         self.main.set_media_visible(*active);
         if !active {
-            self.main.set_media_fullscreen(false);
-            self.main.window().set_fullscreen(false);
+            self.set_main_fullscreen(false);
             if let Some(pip) = self.pip.borrow().as_ref() {
-                pip.window().set_fullscreen(false);
+                self.set_pip_fullscreen(pip, false);
                 let _ = pip.hide();
             }
             self.detached.set(false);

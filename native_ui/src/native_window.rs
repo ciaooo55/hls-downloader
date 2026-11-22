@@ -1,5 +1,40 @@
 use slint::Window;
 
+#[derive(Default)]
+pub struct FullscreenPlacement {
+    #[cfg(windows)]
+    saved: std::cell::Cell<Option<windows_sys::Win32::UI::WindowsAndMessaging::WINDOWPLACEMENT>>,
+}
+
+impl FullscreenPlacement {
+    pub fn set(&self, window: &Window, fullscreen: bool) {
+        if window.is_fullscreen() == fullscreen {
+            return;
+        }
+        #[cfg(windows)]
+        if fullscreen {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetWindowPlacement, WINDOWPLACEMENT,
+            };
+            // Winit captures placement after changing the frame; keep the original restore state.
+            self.saved.set(hwnd(window).and_then(|handle| {
+                let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
+                placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+                (unsafe { GetWindowPlacement(handle as _, &mut placement) } != 0)
+                    .then_some(placement)
+            }));
+        }
+        window.set_fullscreen(fullscreen);
+        #[cfg(windows)]
+        if !fullscreen {
+            if let (Some(handle), Some(placement)) = (hwnd(window), self.saved.take()) {
+                use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPlacement;
+                unsafe { SetWindowPlacement(handle as _, &placement) };
+            }
+        }
+    }
+}
+
 pub fn apply_theme<C: slint::ComponentHandle>(component: &C, dark: bool)
 where
     for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
