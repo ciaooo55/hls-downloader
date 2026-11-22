@@ -99,7 +99,10 @@ impl ResourceTools {
             }
         });
         if mode == "crawl" {
-            let _ = this.action("list");
+            if let Err(error) = this.action("list") {
+                this.window.set_status_tone("error".into());
+                this.window.set_status(error.into());
+            }
         }
         if mode == "torrent" && !this.task_id.is_empty() {
             this.command(CoreCommand::GetTaskTorrentFiles {
@@ -337,6 +340,9 @@ impl ResourceTools {
                         self.window.set_status_tone("success".into());
                         self.window
                             .set_status("所选资源已提交，结果见任务列表".into());
+                    } else {
+                        self.window.set_status_tone("error".into());
+                        self.window.set_status("命令队列已满，请稍后重试".into());
                     }
                 } else {
                     let probe_urls = if action == "probe" {
@@ -438,6 +444,15 @@ impl ResourceTools {
             return;
         }
         self.pending.set(None);
+        if let Some(message) = crate::core_feedback::response_error(response) {
+            self.waiting_torrent.set(false);
+            self.creating_project.set(false);
+            self.listing_projects.set(false);
+            self.window.set_busy(false);
+            self.window.set_status_tone("error".into());
+            self.window.set_status(message.into());
+            return;
+        }
         // ProbeTorrent is acknowledged before metadata discovery finishes.
         // Only the matching result/error may enable another probe.
         self.window.set_busy(self.waiting_torrent.get());
@@ -515,14 +530,6 @@ impl ResourceTools {
             }
             // Workbench applies these events once through event().
             CorePipeResponse::Events { .. } => {}
-            CorePipeResponse::Error { message, .. } => {
-                self.waiting_torrent.set(false);
-                self.creating_project.set(false);
-                self.listing_projects.set(false);
-                self.window.set_busy(false);
-                self.window.set_status_tone("error".into());
-                self.window.set_status(message.clone().into());
-            }
             _ => {}
         }
     }

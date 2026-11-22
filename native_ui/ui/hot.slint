@@ -128,6 +128,7 @@ export component ConfirmWindow inherits Window {
     callback core-events-ready();
     callback core-resynced(string);
     callback open-workbench(bool, string);
+    callback notice(string);
     callback command(string);
     callback move-window(float, float);
     // 窄窗（< 440px）时次要操作收为图标，保证四个主控件同屏完整可用。

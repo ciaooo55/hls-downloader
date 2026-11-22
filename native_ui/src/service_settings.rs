@@ -53,7 +53,10 @@ impl ServiceSettings {
             slint::CloseRequestResponse::KeepWindowShown
         });
         if mode == "subtitle" {
-            let _ = this.action("reload");
+            if let Err(error) = this.action("reload") {
+                this.window.set_status_tone("error".into());
+                this.window.set_status(error.into());
+            }
         }
         Ok(this)
     }

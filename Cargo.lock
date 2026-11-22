@@ -2328,6 +2328,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "syn 2.0.119",
  "windows-sys 0.59.0",
  "winresource",
 ]
