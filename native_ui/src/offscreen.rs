@@ -28,6 +28,16 @@ pub struct OffscreenPlatform {
 }
 
 impl OffscreenPlatform {
+    #[cfg(test)]
+    pub(crate) fn init_test() {
+        let _ = slint::platform::set_platform(Box::new(Self {
+            windows: RefCell::new(Vec::new()),
+            output: PathBuf::new(),
+            size: None,
+            scale: 1.0,
+        }));
+    }
+
     pub fn from_env() -> Option<Self> {
         let output = PathBuf::from(std::env::var_os("HLS_V7_RENDER_PNG")?);
         let size = std::env::var("HLS_V7_RENDER_SIZE").ok().and_then(|value| {

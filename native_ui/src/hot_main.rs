@@ -83,13 +83,62 @@ struct PersistedHandoff {
     offer: ResourceOffer,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PresenterSettings {
     download_dir: String,
     category_media: String,
     category_program: String,
     category_archive: String,
     category_other: String,
+}
+
+struct SettingsReload<C> {
+    client: Option<C>,
+    last_request: std::time::Instant,
+}
+
+impl<C> SettingsReload<C> {
+    fn reload(
+        &mut self,
+        now: std::time::Instant,
+        mut connect: impl FnMut() -> Result<C, String>,
+        mut load: impl FnMut(&mut C) -> Result<CorePipeResponse, String>,
+    ) -> Option<CorePipeResponse> {
+        if now.saturating_duration_since(self.last_request) >= Duration::from_secs(60) {
+            self.client = None;
+        }
+        self.last_request = now;
+        // Settings reads are safe to retry once if an idle/broken pipe fails.
+        for _ in 0..2 {
+            if self.client.is_none() {
+                self.client = connect().ok();
+            }
+            let Some(client) = self.client.as_mut() else {
+                continue;
+            };
+            match load(client) {
+                Ok(response) => {
+                    return matches!(response, CorePipeResponse::Settings { .. })
+                        .then_some(response);
+                }
+                Err(_) => self.client = None,
+            }
+        }
+        None
+    }
+}
+
+fn update_presenter_settings(
+    response: &CorePipeResponse,
+    presenter: &mut PresenterSettings,
+    runtime: &mut PresenterRuntimeSettings,
+) -> Option<PresenterRuntimeSettings> {
+    if !matches!(response, CorePipeResponse::Settings { .. }) {
+        return None;
+    }
+    *presenter = PresenterSettings::from_response(Some(response));
+    *runtime = PresenterRuntimeSettings::from_response(Some(response));
+    Some(*runtime)
 }
 
 fn presenter_id() -> &'static str {
@@ -344,7 +393,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let client = Rc::new(RefCell::new(initial_client));
+    let (settings_reload, settings_requests) = mpsc::channel::<()>();
+    let (settings_tx, settings_responses) = mpsc::channel();
+    thread::spawn({
+        let confirm = confirm.as_weak();
+        move || {
+            let mut reload = SettingsReload {
+                client: Some(initial_client),
+                last_request: std::time::Instant::now(),
+            };
+            while settings_requests.recv().is_ok() {
+                while settings_requests.try_recv().is_ok() {}
+                if let Some(response) = reload.reload(
+                    std::time::Instant::now(),
+                    CoreIpcClient::connect,
+                    CoreIpcClient::load_settings,
+                ) {
+                    if settings_tx.send(response).is_err()
+                        || confirm
+                            .upgrade_in_event_loop(|ui| ui.invoke_core_events_ready())
+                            .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    });
     let workbench = Rc::new(RefCell::new(None::<Rc<workbench::Workbench>>));
     let ui_sequence = Rc::new(std::cell::Cell::new(initial_sequence));
     let native_workbench = Rc::new(std::cell::Cell::new(
@@ -423,10 +498,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     confirm.on_core_resynced({
+        let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
         let known_tasks = Arc::clone(&known_tasks);
         let ui_sequence = Rc::clone(&ui_sequence);
         move |sequence| {
+            let _ = settings_reload.send(());
             let sequence = sequence.parse().unwrap_or_default();
             ui_sequence.set(sequence);
             if let (Some(window), Ok(tasks)) = (workbench.borrow().as_ref(), known_tasks.lock()) {
@@ -854,13 +931,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
-        let client = Rc::clone(&client);
+        let settings_reload = settings_reload.clone();
         let runtime_settings = Rc::clone(&runtime_settings);
         let presenter_settings = Arc::clone(&presenter_settings);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
         move || {
+            while let Ok(response) = settings_responses.try_recv() {
+                let next = presenter_settings.lock().ok().and_then(|mut settings| {
+                    update_presenter_settings(
+                        &response,
+                        &mut settings,
+                        &mut runtime_settings.borrow_mut(),
+                    )
+                });
+                if let Some(next) = next {
+                    if let (Some(confirm), Some(progress), Some(complete)) =
+                        (confirm.upgrade(), progress.upgrade(), complete.upgrade())
+                    {
+                        apply_runtime_settings(&confirm, &progress, &complete, next);
+                        if !next.show_progress {
+                            let _ = progress.hide();
+                        }
+                        if !next.show_complete {
+                            let _ = complete.hide();
+                        }
+                    }
+                }
+            }
             while let Ok(events) = rx.borrow_mut().try_recv() {
                 for envelope in events {
                     ui_sequence.set(ui_sequence.get().max(envelope.sequence));
@@ -883,24 +982,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     match envelope.event {
                         CoreEvent::HandoffOffered { .. } | CoreEvent::HandoffResolved { .. } => {}
                         CoreEvent::SettingsChanged { .. } => {
-                            if let Ok(response) = client.borrow_mut().load_settings() {
-                                if let Ok(mut settings) = presenter_settings.lock() {
-                                    *settings = PresenterSettings::from_response(Some(&response));
-                                }
-                                let next = PresenterRuntimeSettings::from_response(Some(&response));
-                                *runtime_settings.borrow_mut() = next;
-                                if let (Some(confirm), Some(progress), Some(complete)) =
-                                    (confirm.upgrade(), progress.upgrade(), complete.upgrade())
-                                {
-                                    apply_runtime_settings(&confirm, &progress, &complete, next);
-                                    if !next.show_progress {
-                                        let _ = progress.hide();
-                                    }
-                                    if !next.show_complete {
-                                        let _ = complete.hide();
-                                    }
-                                }
-                            }
+                            let _ = settings_reload.send(());
                         }
                         CoreEvent::TaskCreated { snapshot }
                         | CoreEvent::TaskUpdated { snapshot }
@@ -2693,6 +2775,111 @@ fn attach_parent_console() {}
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        update_presenter_settings, PresenterRuntimeSettings, PresenterSettings, SettingsReload,
+    };
+    use hls_client::CorePipeResponse;
+
+    fn settings_response(directory: &str) -> CorePipeResponse {
+        serde_json::from_value(serde_json::json!({
+            "type": "settings", "request_id": 1,
+            "takeover_enabled": true, "takeover_minimum_bytes": 0,
+            "legal_accepted": true, "speed_limit_kib": 0,
+            "download_dir": directory, "theme_mode": "dark",
+            "progress_window_enabled": false, "complete_popup_enabled": false,
+            "completion_sound_enabled": true, "reduce_motion": true
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn settings_reload_reconnects_after_disconnect_and_delivers_consecutive_changes() {
+        let now = std::time::Instant::now();
+        let mut reload = SettingsReload {
+            client: Some(false),
+            last_request: now,
+        };
+        let mut connections = 0;
+        for directory in ["first", "second"] {
+            let response = reload
+                .reload(
+                    now,
+                    || {
+                        connections += 1;
+                        Ok(true)
+                    },
+                    |connected| {
+                        if *connected {
+                            Ok(settings_response(directory))
+                        } else {
+                            Err("disconnected".into())
+                        }
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                PresenterSettings::from_response(Some(&response)).download_dir,
+                directory
+            );
+        }
+        assert_eq!(connections, 1);
+        let response = reload
+            .reload(
+                now + std::time::Duration::from_secs(121),
+                || {
+                    connections += 1;
+                    Ok(true)
+                },
+                |_| Ok(settings_response("after idle")),
+            )
+            .unwrap();
+        assert_eq!(connections, 2);
+        assert_eq!(
+            PresenterSettings::from_response(Some(&response)).download_dir,
+            "after idle"
+        );
+    }
+
+    #[test]
+    fn non_settings_responses_preserve_presenter_and_runtime_settings() {
+        let initial = settings_response("kept");
+        let mut presenter = PresenterSettings::from_response(Some(&initial));
+        let mut runtime = PresenterRuntimeSettings::from_response(Some(&initial));
+        let original = (presenter.clone(), runtime);
+        let mut reload = SettingsReload {
+            client: Some(()),
+            last_request: std::time::Instant::now(),
+        };
+        for response in [
+            CorePipeResponse::Error {
+                request_id: Some(1),
+                code: "unavailable".into(),
+                message: "try later".into(),
+            },
+            CorePipeResponse::Events {
+                request_id: 1,
+                events: vec![],
+            },
+        ] {
+            assert!(reload
+                .reload(
+                    std::time::Instant::now(),
+                    || Ok(()),
+                    |_| Ok(response.clone())
+                )
+                .is_none());
+            assert!(update_presenter_settings(&response, &mut presenter, &mut runtime).is_none());
+            assert_eq!((&presenter, runtime), (&original.0, original.1));
+        }
+        assert!(update_presenter_settings(
+            &settings_response("updated"),
+            &mut presenter,
+            &mut runtime
+        )
+        .is_some());
+        assert_eq!(presenter.download_dir, "updated");
+    }
+
     use super::{
         build_segment_blocks, confirm_window_logical_size, download_category, file_extension,
         format_connection_summary, format_request_details, format_resource_meta, safe_display_url,

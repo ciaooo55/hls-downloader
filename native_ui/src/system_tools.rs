@@ -573,6 +573,9 @@ impl SystemTools {
                 message,
                 ..
             } if self.pending.borrow_mut().remove(id) => {
+                if self.handoff_request.get() == Some(*id) {
+                    self.handoff_request.set(None);
+                }
                 window.set_notice_tone("error".into());
                 window.set_notice(message.clone().into());
                 window.set_busy(false);
@@ -596,8 +599,10 @@ impl SystemTools {
                 request_id,
                 items,
                 next,
-            } if self.handoff_request.get() == Some(*request_id) => {
-                self.pending.borrow_mut().remove(request_id);
+            } if self.pending.borrow_mut().remove(request_id) => {
+                if self.handoff_request.get() != Some(*request_id) {
+                    return;
+                }
                 self.handoff_request.set(None);
                 *self.handoffs.borrow_mut() = if items.is_empty() {
                     "没有待恢复的浏览器交接".into()
@@ -631,6 +636,7 @@ impl SystemTools {
         self.seen.borrow_mut().clear();
         window.set_busy(false);
         self.pending.borrow_mut().clear();
+        self.handoff_request.set(None);
         self.decision_request.set(None);
         self.decision.set_busy(false);
     }
@@ -681,4 +687,80 @@ fn open_extensions_page() -> bool {
         .into_iter()
         .find(|(path, _)| path.is_file())
         .is_some_and(|(path, page)| std::process::Command::new(path).arg(page).spawn().is_ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tools() -> Rc<SystemTools> {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let next = Cell::new(0);
+        SystemTools::new(
+            WorkbenchWindow::new().unwrap(),
+            Rc::new(|_| true),
+            Rc::new(move || {
+                next.set(next.get() + 1);
+                next.get()
+            }),
+        )
+        .unwrap()
+    }
+
+    fn handoffs(request_id: u64, status: &str) -> CorePipeResponse {
+        CorePipeResponse::Handoffs {
+            request_id,
+            items: vec![
+                serde_json::json!({"status": status, "presentation": "pending"}).to_string(),
+            ],
+            next: None,
+        }
+    }
+
+    fn overlapping_handoffs(order: [u64; 2]) {
+        let tools = tools();
+        tools.action("handoffs");
+        tools.action("handoffs");
+        assert_eq!(tools.handoff_request.get(), Some(2));
+        assert!(tools.keeps_ui_alive());
+        for id in order {
+            tools.response(&handoffs(id, if id == 1 { "stale" } else { "current" }));
+            assert!(!tools.pending.borrow().contains(&id));
+            if id == 1 {
+                assert!(!tools.handoffs.borrow().contains("stale"));
+            }
+        }
+        assert!(tools.pending.borrow().is_empty());
+        assert_eq!(tools.handoff_request.get(), None);
+        assert_eq!(tools.handoffs.borrow().as_str(), "current · pending");
+        assert_eq!(tools.window().get_content().as_str(), "current · pending");
+        assert!(!tools.keeps_ui_alive());
+    }
+
+    #[test]
+    fn superseded_handoff_response_before_current_releases_pending_id() {
+        overlapping_handoffs([1, 2]);
+    }
+
+    #[test]
+    fn superseded_handoff_response_after_current_cannot_overwrite_display() {
+        overlapping_handoffs([2, 1]);
+    }
+
+    #[test]
+    fn handoff_error_and_resync_clear_active_request() {
+        let tools = tools();
+        tools.action("handoffs");
+        tools.response(&CorePipeResponse::Error {
+            request_id: Some(1),
+            code: "failed".into(),
+            message: "failed".into(),
+        });
+        assert_eq!(tools.handoff_request.get(), None);
+        assert!(!tools.keeps_ui_alive());
+        tools.action("handoffs");
+        tools.resynchronize();
+        assert_eq!(tools.handoff_request.get(), None);
+        assert!(!tools.keeps_ui_alive());
+    }
 }
