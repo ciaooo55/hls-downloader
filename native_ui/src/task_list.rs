@@ -16,6 +16,19 @@ pub struct TaskList {
     pub view_revision: u64,
 }
 
+pub struct TaskChange {
+    pub id: String,
+    pub notice: Option<String>,
+}
+
+fn terminal_notice(status: &str) -> Option<&'static str> {
+    match status {
+        "completed" | "done" => Some("下载完成"),
+        "failed" => Some("下载失败"),
+        _ => None,
+    }
+}
+
 impl TaskList {
     pub fn toolbar_targets(&self) -> Vec<&TaskSnapshot> {
         if self.selected.is_empty() {
@@ -48,7 +61,7 @@ impl TaskList {
         self.rebuild();
     }
 
-    pub fn apply(&mut self, envelope: &EventEnvelope) -> Option<String> {
+    pub fn apply(&mut self, envelope: &EventEnvelope) -> Option<TaskChange> {
         let (id, snapshot) = match &envelope.event {
             CoreEvent::TaskCreated { snapshot }
             | CoreEvent::TaskUpdated { snapshot }
@@ -65,7 +78,21 @@ impl TaskList {
             return None;
         }
         self.versions.insert(id.clone(), envelope.sequence);
+        let mut notice = None;
         if let Some(task) = snapshot {
+            if let Some(label) = terminal_notice(&task.status) {
+                let previous = self
+                    .tasks
+                    .get(&id)
+                    .and_then(|prev| terminal_notice(&prev.status));
+                if previous != Some(label) {
+                    let name = [&task.filename, &task.title, &id]
+                        .into_iter()
+                        .find(|name| !name.is_empty())
+                        .unwrap_or(&id);
+                    notice = Some(format!("{label}：{name}"));
+                }
+            }
             self.tasks.insert(id.clone(), task.clone());
         } else {
             self.tasks.remove(&id);
@@ -82,7 +109,7 @@ impl TaskList {
         if was_visible != is_visible || order_changed {
             self.rebuild();
         }
-        Some(id)
+        Some(TaskChange { id, notice })
     }
 
     pub fn rebuild(&mut self) {
@@ -291,6 +318,31 @@ mod tests {
             },
         });
         assert!(list.tasks.is_empty());
+    }
+
+    #[test]
+    fn task_notices_follow_new_terminal_transitions_only() {
+        let mut list = TaskList::default();
+        let mut snapshot = task("a", 0);
+        list.replace(vec![snapshot.clone()], 5);
+        let mut update = |sequence, status: &str| {
+            snapshot.status = status.into();
+            list.apply(&EventEnvelope {
+                sequence,
+                event: CoreEvent::TaskUpdated {
+                    snapshot: snapshot.clone(),
+                },
+            })
+            .and_then(|change| change.notice)
+        };
+        assert_eq!(update(5, "completed"), None);
+        assert_eq!(update(6, "completed").as_deref(), Some("下载完成：a.mp4"));
+        assert_eq!(update(7, "done"), None);
+        assert_eq!(update(6, "failed"), None);
+        assert_eq!(update(8, "downloading"), None);
+        assert_eq!(update(9, "failed").as_deref(), Some("下载失败：a.mp4"));
+        assert_eq!(update(10, "failed"), None);
+        assert_eq!(update(11, "canceled"), None);
     }
 
     #[test]

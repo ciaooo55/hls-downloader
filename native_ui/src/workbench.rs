@@ -679,7 +679,10 @@ impl Workbench {
         }
         let view_revision = self.state.borrow().view_revision;
         let changed = self.state.borrow_mut().apply(event);
-        if let Some(id) = changed {
+        if let Some(crate::task_list::TaskChange { id, notice }) = changed {
+            if let (Some(system), Some(notice)) = (self.system.borrow().as_ref(), notice) {
+                system.notify(notice);
+            }
             if self.state.borrow().view_revision != view_revision {
                 self.render();
             } else if let Some(index) = self.positions.borrow().get(&id).copied() {

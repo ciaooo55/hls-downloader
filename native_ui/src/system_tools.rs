@@ -243,7 +243,7 @@ impl SystemTools {
         self.window.set_content(text.into());
     }
 
-    fn notify(&self, text: String) {
+    pub fn notify(&self, text: String) {
         let mut notices = self.notices.borrow_mut();
         notices.push_back(text.chars().take(8192).collect());
         while notices.len() > 128 {
