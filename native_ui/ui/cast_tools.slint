@@ -56,9 +56,12 @@ export component CastWindow inherits Window {
         HotScrollView {
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;
+            viewport-height: page-content.preferred-height;
             FadePanel {
             page: root.page;
-            VerticalLayout {
+            height: page-content.preferred-height;
+            page-content := VerticalLayout {
+                height: self.preferred-height;
                 spacing: 14px; alignment: start; padding-left: 24px; padding-right: 24px; padding-bottom: 20px;
                 if root.page == "source": VerticalLayout {
                     spacing: 12px; alignment: start;

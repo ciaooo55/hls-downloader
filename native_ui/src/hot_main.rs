@@ -1053,6 +1053,14 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     );
 
     match kind {
+        "cast" => {
+            let window = CastWindow::new()?;
+            crate::native_window::apply_theme(&window, dark);
+            window.global::<Tokens>().set_reduce_motion(true);
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
         "settings" => {
             let window = SettingsWindow::new()?;
             crate::native_window::apply_theme(&window, dark);
