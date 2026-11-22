@@ -152,9 +152,12 @@ pub struct SettingsEditor {
 }
 
 impl SettingsEditor {
-    pub fn new(response: &CorePipeResponse, dark: bool) -> Result<Self, slint::PlatformError> {
+    pub fn new(
+        response: &CorePipeResponse,
+        parent: &crate::WorkbenchWindow,
+    ) -> Result<Self, slint::PlatformError> {
         let window = SettingsWindow::new()?;
-        crate::native_window::apply_theme(&window, dark);
+        crate::native_window::inherit_appearance(&window, parent);
         window.set_groups(ModelRc::new(VecModel::from(
             GROUPS
                 .iter()

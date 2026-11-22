@@ -1,4 +1,4 @@
-use crate::{file_dialogs, native_window, DecisionWindow, SystemWindow, Tokens, WorkbenchWindow};
+use crate::{file_dialogs, native_window, DecisionWindow, SystemWindow, WorkbenchWindow};
 use hls_client::{CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope};
 use slint::ComponentHandle;
 use std::{
@@ -37,9 +37,9 @@ pub struct SystemTools {
 }
 
 impl SystemTools {
-    pub fn apply_theme(&self, dark: bool) {
-        crate::native_window::apply_theme(&self.window, dark);
-        crate::native_window::apply_theme(&self.decision, dark);
+    pub fn sync_appearance(&self) {
+        native_window::inherit_appearance(&self.window, &self.main);
+        native_window::inherit_appearance(&self.decision, &self.main);
     }
 
     pub fn keeps_ui_alive(&self) -> bool {
@@ -100,7 +100,7 @@ impl SystemTools {
     }
 
     pub fn show(&self, page: &str) {
-        crate::native_window::apply_theme(&self.window, self.main.global::<Tokens>().get_dark());
+        native_window::inherit_appearance(&self.window, &self.main);
         self.window.set_page(page.into());
         self.window
             .set_browser_status(self.main.get_browser_status());
@@ -442,7 +442,7 @@ impl SystemTools {
                 "立即执行",
             ),
         };
-        crate::native_window::apply_theme(&self.decision, self.main.global::<Tokens>().get_dark());
+        native_window::inherit_appearance(&self.decision, &self.main);
         self.decision.set_heading(title.into());
         self.decision.set_message(message.into());
         self.decision.set_confirm_label(confirm.into());

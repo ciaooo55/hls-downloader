@@ -1,4 +1,4 @@
-use crate::{file_dialogs, native_window, ResourceRow, ResourceToolsWindow};
+use crate::{file_dialogs, native_window, ResourceRow, ResourceToolsWindow, WorkbenchWindow};
 use hls_client::{
     CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, CrawlProject, CrawlRequest,
     CrawlSpec, HarvestCandidate, ResourceKind, TaskSpec, TorrentFileEntry, TorrentFileSelection,
@@ -41,7 +41,7 @@ impl ResourceTools {
         mode: &str,
         task_id: String,
         directory: &str,
-        dark: bool,
+        parent: &WorkbenchWindow,
         request: Rc<dyn Fn(CorePipeRequest) -> bool>,
         batch: Rc<dyn Fn(Vec<CoreCommand>) -> bool>,
         id: Rc<dyn Fn() -> u64>,
@@ -49,7 +49,7 @@ impl ResourceTools {
         let window = ResourceToolsWindow::new()?;
         window.set_mode(mode.into());
         window.set_output_dir(directory.into());
-        crate::native_window::apply_theme(&window, dark);
+        native_window::inherit_appearance(&window, parent);
         let rows = Rc::new(VecModel::default());
         window.set_rows(ModelRc::from(rows.clone()));
         let this = Rc::new(Self {

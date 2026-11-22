@@ -70,9 +70,9 @@ pub struct MediaController {
 }
 
 impl MediaController {
-    pub fn apply_theme(&self, dark: bool) {
+    pub fn sync_appearance(&self) {
         if let Some(window) = self.pip.borrow().as_ref() {
-            crate::native_window::apply_theme(window, dark);
+            native_window::inherit_appearance(window, &self.main);
         }
     }
 
@@ -384,7 +384,7 @@ impl MediaController {
         if let Some(pip) = self.pip.borrow().as_ref() {
             pip.set_state(self.main.get_media_state());
             pip.set_thumbnail(self.main.get_media_thumbnail());
-            native_window::apply_theme(pip, self.main.global::<crate::Tokens>().get_dark());
+            native_window::inherit_appearance(pip, &self.main);
             pip.set_notice(self.main.get_media_notice());
             let _ = pip.show();
             native_window::prepare_dialog(pip, true, true, None);

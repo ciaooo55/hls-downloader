@@ -1,4 +1,4 @@
-use crate::{file_dialogs, native_window, CastWindow, Tokens, WorkbenchWindow};
+use crate::{file_dialogs, native_window, CastWindow, WorkbenchWindow};
 use hls_client::{
     CastDeviceInfo, CoreCommand, CoreEvent, CoreIpcClient, CorePipeRequest, CorePipeResponse,
     EventEnvelope, MediaPushRequest,
@@ -44,8 +44,8 @@ pub struct CastTools {
 }
 
 impl CastTools {
-    pub fn apply_theme(&self, dark: bool) {
-        crate::native_window::apply_theme(&self.window, dark);
+    pub fn sync_appearance(&self) {
+        native_window::inherit_appearance(&self.window, &self.main);
     }
 
     pub fn keeps_ui_alive(&self) -> bool {
@@ -256,7 +256,7 @@ impl CastTools {
     }
 
     fn show_window(&self) {
-        crate::native_window::apply_theme(&self.window, self.main.global::<Tokens>().get_dark());
+        self.sync_appearance();
         let _ = self.window.show();
         native_window::prepare_dialog(
             &self.window,

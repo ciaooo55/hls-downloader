@@ -377,10 +377,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .lock()
                     .map(|tasks| tasks.clone())
                     .unwrap_or_default();
+                let settings = *runtime_settings.borrow();
                 match workbench::Workbench::new(
                     tasks,
                     ui_sequence.get(),
-                    runtime_settings.borrow().dark,
+                    settings.dark,
+                    settings.reduce_motion,
                 ) {
                     Ok(window) => {
                         let owner = Rc::downgrade(&workbench);
@@ -1105,7 +1107,12 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                     ..Default::default()
                 })
                 .collect();
-            let workbench = workbench::Workbench::new(tasks, 1, dark)?;
+            let workbench = workbench::Workbench::new(
+                tasks,
+                1,
+                dark,
+                env::var_os("HLS_V7_RENDER_MOTION").is_none(),
+            )?;
             workbench.show()?;
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
@@ -2109,18 +2116,9 @@ fn apply_runtime_settings(
     complete: &CompleteWindow,
     settings: PresenterRuntimeSettings,
 ) {
-    native_window::apply_theme(confirm, settings.dark);
-    confirm
-        .global::<Tokens>()
-        .set_reduce_motion(settings.reduce_motion);
-    native_window::apply_theme(progress, settings.dark);
-    progress
-        .global::<Tokens>()
-        .set_reduce_motion(settings.reduce_motion);
-    native_window::apply_theme(complete, settings.dark);
-    complete
-        .global::<Tokens>()
-        .set_reduce_motion(settings.reduce_motion);
+    native_window::apply_appearance(confirm, settings.dark, settings.reduce_motion);
+    native_window::apply_appearance(progress, settings.dark, settings.reduce_motion);
+    native_window::apply_appearance(complete, settings.dark, settings.reduce_motion);
 }
 
 fn task_is_active(status: &str) -> bool {
