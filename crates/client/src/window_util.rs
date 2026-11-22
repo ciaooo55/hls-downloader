@@ -188,16 +188,18 @@ pub fn activate_window(raw_hwnd: i64) -> bool {
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            BringWindowToTop, GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow,
-            SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, WS_EX_TOPMOST,
+            BringWindowToTop, GetForegroundWindow, GetWindowLongPtrW, IsIconic,
+            SetForegroundWindow, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST,
+            HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, WS_EX_TOPMOST,
         };
 
         let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
         unsafe {
             // Slint 已声明置顶的弹窗必须保留该状态；否则主界面下一次获得焦点就会遮住它。
             let was_topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
-            ShowWindow(hwnd, SW_RESTORE);
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
             let raised = SetWindowPos(
                 hwnd,
                 HWND_TOPMOST,
