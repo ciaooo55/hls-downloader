@@ -36,6 +36,7 @@ pub struct Workbench {
     positions: RefCell<HashMap<String, usize>>,
     commands: mpsc::SyncSender<WorkbenchJob>,
     editor_commands: mpsc::SyncSender<WorkbenchJob>,
+    resource_commands: mpsc::SyncSender<WorkbenchJob>,
     next_id: Cell<u64>,
     editor: RefCell<Option<TaskEditorWindow>>,
     editor_id: Cell<u64>,
@@ -239,8 +240,9 @@ impl Workbench {
         let navigation = Rc::new(VecModel::default());
         window.set_navigation(ModelRc::from(navigation.clone()));
         let commands = Self::spawn_command_worker(&window, 32);
-        // Editor probes and task creation can wait for network metadata.
+        // Task setup and resource tools can each wait for network metadata.
         let editor_commands = Self::spawn_command_worker(&window, 8);
+        let resource_commands = Self::spawn_command_worker(&window, 8);
         let controller = Rc::new(Self {
             window,
             state,
@@ -249,6 +251,7 @@ impl Workbench {
             positions: RefCell::new(HashMap::new()),
             commands,
             editor_commands,
+            resource_commands,
             next_id: Cell::new(1),
             editor: RefCell::new(None),
             editor_id: Cell::new(0),
@@ -1818,14 +1821,20 @@ impl Workbench {
         let batch_owner = Rc::downgrade(self);
         let id_owner = Rc::downgrade(self);
         let request = Rc::new(move |request| {
-            request_owner
-                .upgrade()
-                .is_some_and(|this| this.request(request))
+            request_owner.upgrade().is_some_and(|this| {
+                this.enqueue(
+                    &this.resource_commands,
+                    WorkbenchJob::Request(Box::new(request)),
+                )
+            })
         });
         let batch = Rc::new(move |commands| {
-            batch_owner
-                .upgrade()
-                .is_some_and(|this| this.job(WorkbenchJob::Batch(this.id(), commands)))
+            batch_owner.upgrade().is_some_and(|this| {
+                this.enqueue(
+                    &this.resource_commands,
+                    WorkbenchJob::Batch(this.id(), commands),
+                )
+            })
         });
         let id = Rc::new(move || id_owner.upgrade().map_or(0, |this| this.id()));
         match ResourceTools::new(mode, task_id, &directory, &self.window, request, batch, id) {
