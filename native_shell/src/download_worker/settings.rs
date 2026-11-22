@@ -230,17 +230,18 @@ impl CoreCoordinator {
                 .map(|task| task.task_id)
                 .collect();
             core.assign_queue_and_set_settings(orphaned, crate::DEFAULT_QUEUE_ID.into(), &values)?;
+            if values.contains_key("ffmpeg_path") {
+                super::sync_configured_ffmpeg(core.store());
+            }
         } else {
             let mut core = self.lock()?;
             core.store_mut().set_settings(&values)?;
+            if values.contains_key("ffmpeg_path") {
+                super::sync_configured_ffmpeg(core.store());
+            }
             core.emit(CoreEvent::SettingsChanged {
                 keys: values.keys().cloned().collect(),
             })?;
-        }
-        if let Some(path) = values.get("ffmpeg_path").and_then(Value::as_str) {
-            crate::media::set_configured_ffmpeg(
-                (!path.trim().is_empty()).then(|| std::path::PathBuf::from(path.trim())),
-            );
         }
         if values.keys().any(|key| {
             matches!(

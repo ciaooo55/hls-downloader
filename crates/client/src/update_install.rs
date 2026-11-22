@@ -363,7 +363,54 @@ where
     F: FnOnce(&Path) -> Result<(), String>,
 {
     let args = parse_helper_args(args)?;
-    match run_update_helper_inner(&args, verify_msi) {
+    run_update_helper_with_hooks(
+        &args,
+        verify_msi,
+        verify_installer_identity,
+        wait_for_product_shutdown,
+        run_msiexec,
+        restart_workbench,
+    )
+}
+
+fn run_update_helper_with_hooks<V, I, W, R, S>(
+    args: &HelperArgs,
+    verify_msi: V,
+    verify_identity: I,
+    mut wait_shutdown: W,
+    run_installer: R,
+    mut restart: S,
+) -> Result<u8, String>
+where
+    V: FnOnce(&Path) -> Result<(), String>,
+    I: FnOnce(&Path, &str) -> Result<InstallerIdentity, String>,
+    W: FnMut(&HelperArgs) -> Result<(), String>,
+    R: FnOnce(&Path, &Path) -> Result<i32, String>,
+    S: FnMut(&HelperArgs),
+{
+    let mut shutdown_attempted = false;
+    let outcome: Result<u8, String> = (|| {
+        verify_msi(&args.msi)?;
+        let identity = verify_identity(&args.msi, &args.version)?;
+        if !identity.per_user {
+            return Err("升级包安装上下文不是每用户安装".into());
+        }
+        shutdown_attempted = true;
+        wait_shutdown(args)?;
+        let exit_code = run_installer(&args.msi, &args.log)?;
+        let (status, message) = installer_exit_status(exit_code);
+        let result = InstallResult {
+            version: args.version.clone(),
+            status: status.into(),
+            exit_code,
+            message: message.into(),
+            install_log: args.log.display().to_string(),
+        };
+        write_install_result(&args.result, &result)?;
+        restart(args);
+        Ok(if status == "success" { 0 } else { 1 })
+    })();
+    match outcome {
         Ok(code) => Ok(code),
         Err(error) => {
             let result = InstallResult {
@@ -374,34 +421,13 @@ where
                 install_log: args.log.display().to_string(),
             };
             let _ = write_install_result(&args.result, &result);
-            restart_workbench(&args);
+            if !shutdown_attempted && (args.core_pid != 0 || args.workbench_pid != 0) {
+                let _ = wait_shutdown(args);
+            }
+            restart(args);
             Err(error)
         }
     }
-}
-
-fn run_update_helper_inner<F>(args: &HelperArgs, verify_msi: F) -> Result<u8, String>
-where
-    F: FnOnce(&Path) -> Result<(), String>,
-{
-    verify_msi(&args.msi)?;
-    let identity = verify_installer_identity(&args.msi, &args.version)?;
-    if !identity.per_user {
-        return Err("升级包安装上下文不是每用户安装".into());
-    }
-    wait_for_product_shutdown(args)?;
-    let exit_code = run_msiexec(&args.msi, &args.log)?;
-    let (status, message) = installer_exit_status(exit_code);
-    let result = InstallResult {
-        version: args.version.clone(),
-        status: status.into(),
-        exit_code,
-        message: message.into(),
-        install_log: args.log.display().to_string(),
-    };
-    write_install_result(&args.result, &result)?;
-    restart_workbench(args);
-    Ok(if status == "success" { 0 } else { 1 })
 }
 
 fn restart_workbench(args: &HelperArgs) {
@@ -867,6 +893,76 @@ mod tests {
             assert_eq!(recorded.message, error);
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn verifier_rejection_waits_for_running_product_shutdown_before_restarting() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/audit-tests")
+            .join(format!(
+                "verifier-shutdown-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let result = root.join("last-install-result.json");
+        let args = HelperArgs {
+            msi: root.join("unverified.msi"),
+            version: "10.0.0".into(),
+            core_pid: 4242,
+            workbench_pid: 4343,
+            install_root: root.clone(),
+            workbench: root.join("absent.exe"),
+            log: root.join("install.log"),
+            result: result.clone(),
+        };
+        let steps = std::cell::RefCell::new(Vec::new());
+        let error = run_update_helper_with_hooks(
+            &args,
+            |_| Err("rejected signer".into()),
+            |_, _| panic!("identity check must not run after signer rejection"),
+            |_| {
+                assert!(
+                    result.is_file(),
+                    "failure result must be persisted before waiting for shutdown"
+                );
+                steps.borrow_mut().push("wait_shutdown");
+                Ok(())
+            },
+            |_, _| panic!("msiexec must not run after signer rejection"),
+            |_| steps.borrow_mut().push("restart"),
+        )
+        .unwrap_err();
+        assert_eq!(error, "rejected signer");
+        assert_eq!(*steps.borrow(), vec!["wait_shutdown", "restart"]);
+
+        let mut shutdown_calls = 0usize;
+        let mut restarted = false;
+        let timeout = run_update_helper_with_hooks(
+            &args,
+            |_| Ok(()),
+            |_, _| {
+                Ok(InstallerIdentity {
+                    product_name: EXPECTED_PRODUCT_NAME.into(),
+                    product_version: "10.0.0".into(),
+                    upgrade_code: EXPECTED_UPGRADE_CODE.into(),
+                    per_user: true,
+                })
+            },
+            |_| {
+                shutdown_calls += 1;
+                Err("shutdown timeout".into())
+            },
+            |_, _| panic!("msiexec must not run after shutdown failure"),
+            |_| restarted = true,
+        )
+        .unwrap_err();
+        assert_eq!(timeout, "shutdown timeout");
+        assert_eq!(shutdown_calls, 1);
+        assert!(restarted);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

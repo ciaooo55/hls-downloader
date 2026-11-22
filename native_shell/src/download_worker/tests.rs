@@ -7437,3 +7437,80 @@ fn torrent_probe_and_selection_use_the_configured_http_proxy() {
     .any(|event| matches!(event.event, CoreEvent::TorrentSelectionResult { .. })));
     server.join().unwrap();
 }
+
+#[test]
+fn untrusted_relative_download_dir_also_constrains_default_work_dir() {
+    let (coordinator, root) = audit_handoff_fixture("relative-work-dir");
+    let expected = root.join("downloads").join("sub");
+    audit_accept_handoff(&coordinator, "sub".into(), false).unwrap();
+    let handoff_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-1")
+        .unwrap()
+        .clone();
+    assert_eq!(Path::new(&handoff_spec.download_dir), expected);
+    assert_eq!(Path::new(&handoff_spec.work_dir), expected);
+
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://other.test/b.bin".into(),
+                filename: "b.bin".into(),
+                download_dir: "sub".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let create_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .unwrap()
+        .clone();
+    assert_eq!(Path::new(&create_spec.download_dir), expected);
+    assert_eq!(Path::new(&create_spec.work_dir), expected);
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn coordinator_startup_syncs_persisted_ffmpeg_and_task_defaults_do_not_clobber_it() {
+    let root = audit_test_root("ffmpeg-sync");
+    let persisted = root.join("a").join("ffmpeg.exe");
+    let updated = root.join("b").join("ffmpeg.exe");
+    fs::create_dir_all(persisted.parent().unwrap()).unwrap();
+    fs::create_dir_all(updated.parent().unwrap()).unwrap();
+    fs::write(&persisted, b"ffmpeg a").unwrap();
+    fs::write(&updated, b"ffmpeg b").unwrap();
+
+    let mut core = PersistentCore::in_memory().unwrap();
+    core.store_mut()
+        .set_setting("ffmpeg_path", persisted.to_string_lossy().as_ref())
+        .unwrap();
+    let coordinator = CoreCoordinator::new(core);
+    assert_eq!(crate::media::locate_ffmpeg(), Some(persisted.clone()));
+
+    coordinator
+        .set_setting("ffmpeg_path", serde_json::json!(updated))
+        .unwrap();
+    assert_eq!(crate::media::locate_ffmpeg(), Some(updated.clone()));
+
+    // Overriding the runtime cache directly verifies task preparation never writes it back.
+    crate::media::set_configured_ffmpeg(Some(persisted.clone()));
+    let _ = coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://cdn.test/video.m3u8".into(),
+            filename: "video.mp4".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(crate::media::locate_ffmpeg(), Some(persisted));
+
+    coordinator
+        .set_setting("ffmpeg_path", serde_json::json!(""))
+        .unwrap();
+    assert_ne!(crate::media::locate_ffmpeg(), Some(updated));
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}

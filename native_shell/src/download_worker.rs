@@ -310,8 +310,22 @@ pub struct CoreCoordinator {
     worker_wait_started: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
 
+fn sync_configured_ffmpeg(store: &crate::CoreStore) {
+    let path = store
+        .setting_string("ffmpeg_path", "")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| {
+            !value.is_empty()
+                && validate_helper_executable(value, &["ffmpeg", "ffmpeg.exe"]).is_ok()
+        })
+        .map(PathBuf::from);
+    crate::media::set_configured_ffmpeg(path);
+}
+
 impl CoreCoordinator {
     pub fn new(core: PersistentCore) -> Self {
+        sync_configured_ffmpeg(core.store());
         Self {
             core: Arc::new(Mutex::new(core)),
             active: Arc::new(Mutex::new(HashSet::new())),
@@ -1787,6 +1801,12 @@ impl CoreCoordinator {
         if spec.download_dir.trim().is_empty() {
             spec.download_dir = settings.download_dir.clone();
         }
+        if client_dir.is_empty() || trust_download_dir {
+            reject_path_escape(&spec.download_dir)?;
+        } else {
+            spec.download_dir =
+                constrain_untrusted_download_dir(&client_dir, &settings.download_dir)?;
+        }
         if spec.work_dir.trim().is_empty() {
             spec.work_dir = if settings.temp_dir.trim().is_empty() {
                 spec.download_dir.clone()
@@ -1795,12 +1815,6 @@ impl CoreCoordinator {
             };
         }
         reject_path_escape(&spec.work_dir)?;
-        if client_dir.is_empty() || trust_download_dir {
-            reject_path_escape(&spec.download_dir)?;
-        } else {
-            spec.download_dir =
-                constrain_untrusted_download_dir(&client_dir, &settings.download_dir)?;
-        }
         if !spec.body_path.trim().is_empty() {
             reject_path_escape(&spec.body_path)?;
             if !Path::new(&spec.body_path).is_file() {
@@ -1853,10 +1867,6 @@ impl CoreCoordinator {
         if !settings.ffmpeg_path.trim().is_empty() {
             validate_helper_executable(&settings.ffmpeg_path, &["ffmpeg", "ffmpeg.exe"])?;
         }
-        crate::media::set_configured_ffmpeg(
-            (!settings.ffmpeg_path.trim().is_empty())
-                .then(|| PathBuf::from(settings.ffmpeg_path.trim())),
-        );
         if !settings.default_user_agent.trim().is_empty()
             && header_value_allowed("User-Agent", &settings.default_user_agent)
             && !spec
