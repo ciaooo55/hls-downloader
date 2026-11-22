@@ -30,7 +30,7 @@ def run(args):
     host_thread = None
 
     def host_windows():
-        # 宿主消息循环独立运行，模拟 Compose EDT；IPC 等待不能阻塞 SetParent 消息。
+        # 宿主消息循环独立运行，模拟原生 UI 线程；IPC 等待不能阻塞 SetParent 消息。
         user = ctypes.windll.user32
         kernel = ctypes.windll.kernel32
         user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]

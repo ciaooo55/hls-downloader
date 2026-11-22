@@ -3,7 +3,9 @@
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 const SIGNER_TRUST_JSON: &str = include_str!("../../../config/release/update-signer-trust.json");

@@ -49,7 +49,6 @@ pub struct CoreSettings {
     pub keep_temp_files: bool,
     pub default_user_agent: String,
     pub tvbox_endpoint: String,
-    pub dark_mode: bool,
     pub theme_mode: String,
     pub allow_duplicate: bool,
     pub queue_auto_start_enabled: bool,
@@ -73,8 +72,6 @@ pub struct CoreSettings {
     pub bt_max_connections: u64,
     pub bt_enable_dht: bool,
     pub preferred_cast_device_id: String,
-    pub task_column_layout: String,
-    pub toolbar_actions: String,
     pub task_sort: String,
 }
 
@@ -151,7 +148,6 @@ impl CoreCoordinator {
             keep_temp_files: core.store().setting_bool("keep_temp_files", false)?,
             default_user_agent: core.store().setting_string("default_user_agent", "")?,
             tvbox_endpoint: core.store().setting_string("tvbox_endpoint", "")?,
-            dark_mode: core.store().setting_bool("dark_mode", false)?,
             theme_mode: core.store().theme_mode()?,
             allow_duplicate: core.store().setting_bool("allow_duplicate", false)?,
             queue_auto_start_enabled: core
@@ -195,8 +191,6 @@ impl CoreCoordinator {
             preferred_cast_device_id: core
                 .store()
                 .setting_string("preferred_cast_device_id", "")?,
-            task_column_layout: core.store().setting_string("task_column_layout", "")?,
-            toolbar_actions: core.store().setting_string("toolbar_actions", "")?,
             task_sort: core.store().setting_string("task_sort", "queue:asc")?,
         })
     }
@@ -422,32 +416,6 @@ impl CoreCoordinator {
                 .ok_or_else(|| "站点规则必须是文本".to_string())?;
             crate::site_rules::validate_site_rules(raw)?;
         }
-        if key == "task_column_layout" {
-            validate_ui_layout(
-                value,
-                &["name", "progress", "status", "speed", "size", "actions"],
-                true,
-                "name",
-            )?;
-        }
-        if key == "toolbar_actions" {
-            validate_ui_layout(
-                value,
-                &[
-                    "new",
-                    "paste",
-                    "batch",
-                    "harvest",
-                    "start_all",
-                    "pause_all",
-                    "cast",
-                    "tvbox",
-                    "extension",
-                ],
-                false,
-                "new",
-            )?;
-        }
         if key == "task_sort" {
             let sort = value
                 .as_str()
@@ -463,54 +431,6 @@ impl CoreCoordinator {
         }
         Ok(())
     }
-}
-
-fn validate_ui_layout(
-    value: &Value,
-    allowed: &[&str],
-    widths: bool,
-    required_visible: &str,
-) -> Result<(), String> {
-    let raw = value
-        .as_str()
-        .ok_or_else(|| "界面布局设置必须是文本".to_string())?;
-    if raw.is_empty() {
-        return Ok(());
-    }
-    if raw.len() > 4096 || raw.chars().any(char::is_control) {
-        return Err("界面布局设置过长或包含控制字符".into());
-    }
-    let mut seen = HashSet::new();
-    let mut required_enabled = false;
-    for entry in raw.split(',') {
-        let parts: Vec<_> = entry.split(':').collect();
-        if parts.len() != if widths { 3 } else { 2 } {
-            return Err("界面布局设置格式无效".into());
-        }
-        let id = parts[0];
-        if !allowed.contains(&id) || !seen.insert(id) {
-            return Err("界面布局包含未知或重复项目".into());
-        }
-        let enabled = parts.last().is_some_and(|flag| matches!(*flag, "0" | "1"));
-        if !enabled {
-            return Err("界面布局启用状态无效".into());
-        }
-        if widths {
-            let width = parts[1]
-                .parse::<u32>()
-                .map_err(|_| "任务列宽度必须是整数".to_string())?;
-            if !(48..=800).contains(&width) {
-                return Err("任务列宽度必须在 48 到 800 之间".into());
-            }
-        }
-        if id == required_visible && parts.last() == Some(&"1") {
-            required_enabled = true;
-        }
-    }
-    if !required_enabled {
-        return Err(format!("界面布局必须保留 {required_visible}"));
-    }
-    Ok(())
 }
 
 pub(super) fn validate_queue_profiles(value: &Value) -> Result<(), String> {
@@ -629,7 +549,6 @@ pub const PUBLIC_SETTING_KEYS: &[&str] = &[
     "keep_temp_files",
     "default_user_agent",
     "tvbox_endpoint",
-    "dark_mode",
     "theme_mode",
     "allow_duplicate",
     "queue_auto_start_enabled",
@@ -652,7 +571,5 @@ pub const PUBLIC_SETTING_KEYS: &[&str] = &[
     "bt_max_connections",
     "bt_enable_dht",
     "preferred_cast_device_id",
-    "task_column_layout",
-    "toolbar_actions",
     "task_sort",
 ];

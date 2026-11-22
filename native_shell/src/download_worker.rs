@@ -2136,7 +2136,10 @@ impl CoreCoordinator {
                     );
                 } else {
                     object.insert("presentation".into(), Value::String("fallback".into()));
-                    object.insert("presentation_owner".into(), Value::String("compose".into()));
+                    object.insert(
+                        "presentation_owner".into(),
+                        Value::String("workbench".into()),
+                    );
                     object.insert("presentation_lease_until_ms".into(), Value::from(0));
                     object.insert("status".into(), Value::String("pending".into()));
                 }

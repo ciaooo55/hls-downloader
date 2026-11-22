@@ -3768,7 +3768,7 @@ fn site_rules_fill_unset_task_speed_and_proxy() {
     coordinator
         .set_setting(
             "site_rules",
-            serde_json::json!("example.test=speed:64,conn:2,proxy:http://127.0.0.1:9"),
+            serde_json::json!(r#"[{"host":"example.test","speed_limit_kib":64,"concurrency":2,"proxy":"http://127.0.0.1:9"}]"#),
         )
         .unwrap();
     let spec = apply_site_rules_to_spec(
@@ -3788,19 +3788,24 @@ fn site_rules_fill_unset_task_speed_and_proxy() {
 fn created_tasks_preserve_explicit_limits_over_site_defaults() {
     for (rules, url, site_speed, site_workers) in [
         (
-            "127.0.0.1=speed:10000,conn:12",
+            r#"[{"host":"127.0.0.1","speed_limit_kib":10000,"concurrency":12}]"#,
             "http://127.0.0.1/a.bin",
             10000,
             12,
         ),
         (
-            "127.0.0.1=speed:10000,conn:12",
+            r#"[{"host":"127.0.0.1","speed_limit_kib":10000,"concurrency":12}]"#,
             "http://other.test/a.bin",
             0,
             7,
         ),
         ("", "http://127.0.0.1/a.bin", 0, 7),
-        ("127.0.0.1=speed:0,conn:0", "http://127.0.0.1/a.bin", 0, 7),
+        (
+            r#"[{"host":"127.0.0.1","speed_limit_kib":0,"concurrency":0}]"#,
+            "http://127.0.0.1/a.bin",
+            0,
+            7,
+        ),
     ] {
         for (speed, workers) in [(0, 0), (64, 0), (0, 3), (64, 3), (10000, 12)] {
             let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
@@ -3860,7 +3865,9 @@ fn restored_task_worker_keeps_speed_changed_in_details() {
                 ),
                 (
                     "site_rules".into(),
-                    serde_json::json!("127.0.0.1=speed:10000,conn:12"),
+                    serde_json::json!(
+                        r#"[{"host":"127.0.0.1","speed_limit_kib":10000,"concurrency":12}]"#
+                    ),
                 ),
             ]))
             .unwrap();
@@ -4608,6 +4615,7 @@ fn expired_presenter_lease_transfers_pending_row_to_fallback() {
         .unwrap()
         .join("\n");
     assert!(json.contains("\"presentation\":\"fallback\""));
+    assert!(json.contains("\"presentation_owner\":\"workbench\""));
     assert!(json.contains("\"status\":\"pending\""));
     assert!(coordinator
         .lock()
@@ -4617,7 +4625,7 @@ fn expired_presenter_lease_transfers_pending_row_to_fallback() {
 }
 
 #[test]
-fn presenter_lease_blocks_compose_and_owner_can_release() {
+fn presenter_lease_blocks_workbench_and_owner_can_release() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     coordinator
         .lock()
@@ -5778,34 +5786,16 @@ fn curl_import_creates_a_task_with_encrypted_replay_context() {
 }
 
 #[test]
-fn ui_layout_settings_validate_required_entries_widths_and_persistence() {
+fn retired_settings_are_rejected_and_sort_is_current() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
-    let columns = "name:320:1,progress:180:1,status:120:1,speed:120:0,size:120:1,actions:96:0";
+    for key in ["dark_mode", "task_column_layout", "toolbar_actions"] {
+        assert!(coordinator
+            .set_setting(key, serde_json::json!("unused"))
+            .is_err());
+    }
     coordinator
-        .set_setting("task_column_layout", serde_json::json!(columns))
+        .set_setting("task_sort", serde_json::json!("name"))
         .unwrap();
-    assert_eq!(
-        coordinator
-            .lock()
-            .unwrap()
-            .store()
-            .setting_string("task_column_layout", "")
-            .unwrap(),
-        columns
-    );
-
-    assert!(coordinator
-        .set_setting("task_column_layout", serde_json::json!("name:47:1"))
-        .is_err());
-    assert!(coordinator
-        .set_setting(
-            "task_column_layout",
-            serde_json::json!("name:120:0,progress:120:1")
-        )
-        .is_err());
-    assert!(coordinator
-        .set_setting("toolbar_actions", serde_json::json!("new:0,paste:1"))
-        .is_err());
 }
 
 #[test]

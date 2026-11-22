@@ -291,8 +291,6 @@ pub enum CorePipeResponse {
         #[serde(default)]
         tvbox_endpoint: String,
         #[serde(default)]
-        dark_mode: bool,
-        #[serde(default)]
         theme_mode: String,
         #[serde(default)]
         allow_duplicate: bool,
@@ -338,10 +336,6 @@ pub enum CorePipeResponse {
         bt_enable_dht: bool,
         #[serde(default)]
         preferred_cast_device_id: String,
-        #[serde(default)]
-        task_column_layout: String,
-        #[serde(default)]
-        toolbar_actions: String,
         #[serde(default = "default_task_sort")]
         task_sort: String,
         #[serde(default)]

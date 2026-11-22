@@ -1,4 +1,5 @@
--- Frozen schema from v7.0.3-r22 native_shell/src/store.rs.
+-- Current Core schema fixture.
+CREATE TABLE IF NOT EXISTS crawl_projects (project_id TEXT PRIMARY KEY, state_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (
 task_id TEXT PRIMARY KEY,
 snapshot_json TEXT NOT NULL,
@@ -57,4 +58,4 @@ created_at_ms INTEGER NOT NULL
 CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_task_ranges_task ON task_ranges(task_id);
 CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;

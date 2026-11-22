@@ -168,7 +168,7 @@ def main():
                      report_path.with_suffix(".ui.log").open("w", encoding="utf-8") as ui_log:
                     engine = subprocess.Popen([str(args.engine.resolve())], env=environment, stdout=core_log, stderr=core_log)
                     stream = connect(port)
-                    request("store_settings", values=dict(legal_terms_accepted=True, dark_mode=False,
+                    request("store_settings", values=dict(legal_terms_accepted=True, theme_mode="light",
                             download_dir=str(directory / "downloads"), download_progress_window_enabled=False,
                             download_complete_popup_enabled=False, site_rules=json.dumps([dict(host="media.example.test", enabled=True)])))
                     request("set_site_rule_credential", host="media.example.test", cookie="native-tools-synthetic-cookie")
@@ -211,7 +211,7 @@ def main():
                         for dark in (False, True, False):
                             if report["caption_api_checks"]:
                                 offset = len(caption_trace.read_text(encoding="utf-8"))
-                                request("store_settings", values=dict(dark_mode=dark))
+                                request("store_settings", values=dict(theme_mode="dark" if dark else "light"))
                             colors = {20: int(dark), 35: 0x2a2622 if dark else 0xfefdfc, 36: 0xf6f5f4 if dark else 0x2a170f}
                             expected = [f"native caption dark={str(dark).lower()} attribute={attribute} value={value:#010x} hresult=0x00000000" for attribute, value in colors.items()]
                             timeout = time.monotonic()+15
@@ -230,7 +230,7 @@ def main():
                     while time.monotonic() < deadline and not finish.exists():
                         assert ui.poll() is None, "native UI exited during review"
                         settings = request("load_settings")
-                        observation = {key: settings[key] for key in ("dark_mode", "task_column_layout", "toolbar_actions", "site_rules", "queue_profiles")}
+                        observation = {key: settings[key] for key in ("theme_mode", "task_sort", "site_rules", "queue_profiles")}
                         assert "native-tools-synthetic-cookie" not in json.dumps(settings), "credential leaked in settings"
                         if observation != previous:
                             report["settings_observations"].append(observation)
@@ -238,7 +238,7 @@ def main():
                             save()
                         time.sleep(.5)
                     settings = request("load_settings")
-                    report["final_settings"] = {key: settings[key] for key in ("dark_mode", "task_column_layout", "toolbar_actions", "site_rules", "queue_profiles")}
+                    report["final_settings"] = {key: settings[key] for key in ("theme_mode", "task_sort", "site_rules", "queue_profiles")}
                     report["final_tasks"] = request("snapshot").get("tasks", [])
                     if args.file_transfers:
                         imported = [task for task in report["final_tasks"] if task["filename"] in ("粘贴导入1.bin", "粘贴导入3.bin")]

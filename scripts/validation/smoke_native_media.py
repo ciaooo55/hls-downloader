@@ -314,7 +314,7 @@ def main() -> None:
                         report["playback_extra_source_requests"] = 0
                         settings_after_ui = request("load_settings")
                         report["queue_after_ui"] = settings_after_ui["queue_profiles"]
-                        report["appearance_after_ui"] = {key: settings_after_ui[key] for key in ("task_column_layout", "toolbar_actions", "dark_mode")}
+                        report["appearance_after_ui"] = {key: settings_after_ui[key] for key in ("task_sort", "theme_mode")}
                         report["passed"] = True
                     finally:
                         owned_children = psutil.Process(engine.pid).children(recursive=True) if engine.poll() is None else owned_children

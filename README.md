@@ -35,10 +35,10 @@ Windows x64 用户请到[正式版下载页](https://github.com/ciaooo55/hls-dow
 
 当前原生实现、验证范围与组件构建状态见[原生迁移记录](docs/validation/native-migration-progress.md)，逐项范围见[功能映射](docs/validation/native-feature-mapping.md)。[历史交付记录](docs/validation/convergence.md)不代表当前源码或组件版本。功能合同的 readiness 表示实现可进入冻结发布验收，正式交付仍须通过同源成品与安装启动门禁。
 
-### 从 5.x/7.x 升级
+### 安装与数据
 
-- **7.x → 10.0.0**：使用 MSI 覆盖升级，沿用原安装与升级身份，保留任务、设置和 `%LOCALAPPDATA%\HLS Downloader\v7` 数据目录；不要为版本号手动改名或清空该目录。发布前仍须完成 Windows 实际升级验收。
-- **5.x（Tauri/Python）→ 10.0.0**：请备份旧配置、任务库和下载文件，再全新安装。当前 Rust Core **没有自动导入 5.x 任务库、设置或凭据的迁移器**；请重新配置，勿用旧数据库覆盖原生 Core 的数据库。
+- **10.x**：保留现有产品身份和 `%LOCALAPPDATA%\HLS Downloader\v7` 数据目录；不要为营销版本改名或清空目录。
+- **10 之前的版本**：不再提供兼容迁移，请备份配置、任务库和下载文件后全新安装并重新配置；不要用旧数据库覆盖当前 Core。已发布成品的升级范围以对应发布说明为准。
 
 ### 系统要求
 
@@ -46,13 +46,13 @@ Windows x64 用户请到[正式版下载页](https://github.com/ciaooo55/hls-dow
 | --- | --- |
 | 操作系统 | Windows 10 或 Windows 11（x64） |
 | 处理器架构 | **仅 x64**。播放与部分抓取依赖随包的 x64 原生库（libmpv、curl-impersonate），ARM64 Windows 无法运行 |
-| 运行时 | 10.0.0 原生实现无需 Java，包内不含 JRE；历史 Compose 版本自带 JRE |
+| 运行时 | 10.0.0 原生实现无需 Java，包内不含 JRE |
 | 权限 | MSI 安装或覆盖升级需要管理员权限；便携包以对应发布说明为准 |
 | 浏览器 | Chromium 系（Chrome / Edge）或 Firefox，用于下载接管 |
 | 显示器 | 最低 1024×600；界面跟随系统 DPI 缩放 |
 
 > [!NOTE]
-> **10.0.0 正在准备发布，尚无本版本的成品验收结论。** 历史 [7.0.10 正式版](docs/releases/v7.0.10.md)受测源码为 `deb42d1b`，其证据不代表 10.0.0 已验收；正式成品身份以对应发布附件 `ARTIFACT-MANIFEST.json` 为准。
+> **[10.0.0 已正式发布](https://github.com/ciaooo55/hls-downloader/releases/tag/v10.0.0)。** 成品身份与验收范围以该发布的 `ARTIFACT-MANIFEST.json` 和 `RELEASE-EVIDENCE.json` 为准；后续源码修改不自动继承已发布成品的验收结论。
 
 网页在线字幕的服务、API Key、全局开关、语言、同步模式、原文显示和默认偏移统一在主程序“设置 → 字幕翻译”中配置；Key 由 Core 加密保存。插件仅提供网页开关、播放器选择和开始/停止，默认自动识别到中文。播放器支持本页字幕时间微调、跳到下一句，并对可独立读取的点播音轨最多提前翻译 30 秒。[QwenCloud 配置与使用方法](docs/guides/qwencloud-subtitles.md)包含本机加密备份导入和其他电脑的配置说明。
 
@@ -157,15 +157,9 @@ pnpm run build
 - [本地升级与回滚](docs/guides/v7-local-upgrade.md)
 - [源码布局与历史版本](docs/architecture/source-layout-and-history.md)
 
-## 🧬 一个仓库，多代实现
+## 🧬 当前源码
 
-当前 `main` 保留完整的 v7 源码；v3、v5、v6 的历史实现保留在 Git tags 中，而不是复制成多个互相漂移的项目。
-
-```powershell
-git show v3.0.39:frontend/package.json
-git show v5.0.13:backend/app/main.py
-git show v6.0.1:native_ui/Cargo.toml
-```
+`main` 只维护 Rust Core、Slint 原生界面与 MV3 扩展这一条 10.x 产品线。构建和使用不依赖旧版源码或已删除的历史标签。源码、成品与证据绑定到具体提交和发布。
 
 ## 🔐 安全、隐私与合法使用
 

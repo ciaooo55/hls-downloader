@@ -2,7 +2,7 @@
 
 > 本文为用户提供的外部 AI 分轮评审记录，包含当时的实现状态和其自述验证结果；本次实际整合、Windows 验证及仍存限制见 [整合记录](source-integration-20261117.md)。未完成同条件原版对照，不能从材料未提及某机制推断 IDM 没有该机制。
 
-日期：2026-11-16。范围：Rust Core（`native_shell/`）、协议与客户端（`crates/`）、Native Host/CLI（`native_clients/`）的架构与性能；UI（`native_ui/`、`extension/`、`desktop_ui/`）由另一项工作重做，本文只给出与 UI 相关的进程边界建议，不改其文件。
+日期：2026-11-16。范围：Rust Core（`native_shell/`）、协议与客户端（`crates/`）、Native Host/CLI（`native_clients/`）的架构与性能；UI（`native_ui/`、`extension/`）由另一项工作重做，本文只给出与 UI 相关的进程边界建议，不改其文件。
 
 IDM 侧依据：参考目录 `README.md`、`RECONSTRUCTION.md`（§5、§9–§12、§27、§82–§83）、`2_项目主体源码/download_engine/` 的恢复注释，以及本仓库已有的 [源码核查](../validation/idm-source-audit.md)、[原生交接追踪](../validation/idm-native-handoff.md)、[逐项验证](../validation/idm-port-validation.md)。只借鉴**行为与架构**；反编译代码和其中的标识符不进入本项目，本轮代码均按通用原理自行编写。
 
@@ -67,7 +67,7 @@ IDM 侧依据：参考目录 `README.md`、`RECONSTRUCTION.md`（§5、§9–§1
 5. **启动关键路径上的注册写入**（已在本轮修复）。
 6. **重试无抖动**：同一任务的多连接常因同一次抖动同时失败，固定 200/400/800/1600 ms 会同步重连、再次同时撞上限流（已在本轮修复）。
 7. **浏览器身份路径每响应一个 curl 子进程 + 读线程**（`fetch_via_curl_impersonate`，`http_engine.rs:3371`）。多连接时进程数随连接数线性增长，是 IDM 没有的开销。
-8. **文档滞后**：`v7-architecture.md` 仍以 Compose 为主工作台，与 7.0.6 起的原生包不符，容易误导后续架构决策。
+8. **文档边界**：`v7-architecture.md` 描述当前 Slint 工作台及 Rust Core，不以历史 UI 进程图指导当前构建。
 
 ---
 
@@ -112,7 +112,7 @@ IDM 侧依据：参考目录 `README.md`、`RECONSTRUCTION.md`（§5、§9–§1
 
 8. **自带轻量 TS/fMP4 → MP4 重封装**（IDM 的做法；**2026-11-16 先做了可选的 FFmpeg `-c copy` 重封装设置 `hls_remux_ts_to_mp4`，默认关，进程内封装器未做**），仅对“单视频+单音频、无需转码”的常见 HLS 走进程内流式封装，其余仍交 FFmpeg；可省去 FFmpeg 进程启动和一次全文件读写。需按现有“合法媒体解码哈希”标准验收后才能替换。
 9. **包体**：Presenter 字体子集化（~16 MiB → 按常用汉字集 2–4 MiB）；FFmpeg 定制裁剪（只保留 demux/mux/aac/h264/hevc 拷贝相关组件）。只影响安装体积，不影响常驻内存。
-10. **文档**：更新 `v7-architecture.md` 的进程图（Slint Presenter 取代 Compose），避免后续评审基于旧图。
+10. **文档**：保持 `v7-architecture.md` 的 Slint Presenter / Rust Core 进程边界与当前源码一致。
 
 ### 预期效果（定性，未实测）
 

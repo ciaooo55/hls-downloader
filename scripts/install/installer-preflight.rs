@@ -2,8 +2,11 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::process::ExitCode;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 fn main() -> ExitCode {
@@ -69,14 +72,14 @@ fn target_name(name: &str) -> bool {
             | "hls-native-shell.exe"
             | "hlsnativeengine.exe"
             | "hls-native-engine.exe"
-    ) || name.starts_with("hlsdownloadernativehost") && name.ends_with(".exe")
+    ) || name == "hlsdownloadernativehost.exe"
 }
 fn client_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     matches!(
         name.as_str(),
         "hlsdownloader.exe" | "hlsdownloaderpresenter.exe" | "hlsdownloadercli.exe"
-    ) || name.starts_with("hlsdownloadernativehost") && name.ends_with(".exe")
+    ) || name == "hlsdownloadernativehost.exe"
 }
 fn normalized(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
@@ -90,18 +93,6 @@ fn normalized(path: &Path) -> String {
 fn belongs_to(path: &Path, root: &Path) -> bool {
     normalized(path).starts_with(&(normalized(root) + "\\"))
 }
-/// Looks up one variable in a Windows environment block (`KEY=value\0...\0\0`).
-fn environment_value(block: &[u16], key: &str) -> Option<String> {
-    block
-        .split(|unit| *unit == 0)
-        .take_while(|entry| !entry.is_empty())
-        .filter_map(|entry| String::from_utf16(entry).ok())
-        .find_map(|entry| {
-            let (name, value) = entry.split_once('=')?;
-            (name.eq_ignore_ascii_case(key) && !value.is_empty()).then(|| value.to_owned())
-        })
-}
-
 #[cfg(windows)]
 mod windows {
     use super::*;
@@ -155,24 +146,7 @@ mod windows {
             bytes_available: *mut u32,
             bytes_left: *mut u32,
         ) -> i32;
-        fn ReadProcessMemory(
-            process: Handle,
-            address: usize,
-            buffer: *mut c_void,
-            size: usize,
-            read: *mut usize,
-        ) -> i32;
         fn CloseHandle(handle: Handle) -> i32;
-    }
-    #[link(name = "ntdll")]
-    extern "system" {
-        fn NtQueryInformationProcess(
-            process: Handle,
-            class: u32,
-            information: *mut c_void,
-            length: u32,
-            returned: *mut u32,
-        ) -> i32;
     }
     #[link(name = "user32")]
     extern "system" {
@@ -299,63 +273,6 @@ mod windows {
         }
         1
     }
-    fn read_memory(process: Handle, address: usize, buffer: &mut [u16]) -> Option<()> {
-        let size = std::mem::size_of_val(buffer);
-        let mut read = 0;
-        let ok = unsafe {
-            ReadProcessMemory(
-                process,
-                address,
-                buffer.as_mut_ptr().cast(),
-                size,
-                &mut read,
-            )
-        };
-        (ok != 0 && read == size).then_some(())
-    }
-    fn read_pointer(process: Handle, address: usize) -> Option<usize> {
-        let mut units = [0u16; 4];
-        read_memory(process, address, &mut units)?;
-        Some(
-            units
-                .iter()
-                .rev()
-                .fold(0, |value, unit| value << 16 | usize::from(*unit)),
-        )
-    }
-    /// The pipe a running Core was started with (`HLS_V7_PIPE`), read from its
-    /// own environment. `None` means the default pipe or an unreadable process.
-    #[cfg(target_pointer_width = "64")]
-    fn core_pipe(pid: u32) -> Option<String> {
-        const VM_READ: u32 = 0x0010;
-        const QUERY_INFORMATION: u32 = 0x0400;
-        let process = open(pid, VM_READ | QUERY_INFORMATION).ok()??;
-        // PROCESS_BASIC_INFORMATION: the PEB address is the second pointer.
-        let mut basic = [0usize; 6];
-        let status = unsafe {
-            NtQueryInformationProcess(
-                process.0,
-                0,
-                basic.as_mut_ptr().cast(),
-                std::mem::size_of_val(&basic) as u32,
-                std::ptr::null_mut(),
-            )
-        };
-        if status != 0 || basic[1] == 0 {
-            return None;
-        }
-        // x64 PEB.ProcessParameters, then Environment and EnvironmentSize.
-        let parameters = read_pointer(process.0, basic[1] + 0x20)?;
-        let environment = read_pointer(process.0, parameters + 0x80)?;
-        let size = read_pointer(process.0, parameters + 0x3f0)?.min(1 << 20);
-        let mut block = vec![0u16; size / 2];
-        read_memory(process.0, environment, &mut block)?;
-        environment_value(&block, "HLS_V7_PIPE")
-    }
-    #[cfg(not(target_pointer_width = "64"))]
-    fn core_pipe(_pid: u32) -> Option<String> {
-        None
-    }
     fn checkpoint_pipe(process: &Process) -> Result<Option<(OwnedHandle, File)>, String> {
         let Some(owner) = open(process.pid, 0)? else {
             return Ok(None);
@@ -369,28 +286,7 @@ mod windows {
             return Err(format!("Core {} 的进程身份已变化", process.pid));
         }
         let maintenance = format!(r"\\.\pipe\HLSDownloader.v7.maintenance.{}", process.pid);
-        let configured = std::env::var("HLS_V7_PIPE").ok();
-        // A Core without the maintenance endpoint (7.0.9 and earlier) started
-        // on its own pipe is only reachable through that pipe.
-        let own = core_pipe(process.pid);
-        let mut names = vec![maintenance.as_str()];
-        if let Some(name) = own.as_deref().filter(|name| {
-            name.len() <= 256
-                && name
-                    .get(..9)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\.\pipe\"))
-        }) {
-            names.push(name);
-        }
-        if let Some(name) = configured.as_deref().filter(|name| {
-            name.len() <= 256
-                && name
-                    .get(..9)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(r"\\.\pipe\"))
-        }) {
-            names.push(name);
-        }
-        names.push(r"\\.\pipe\HLSDownloader.v7");
+        let names = [maintenance.as_str()];
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -615,8 +511,9 @@ mod windows {
 mod tests {
     use super::*;
     #[test]
-    fn process_names_include_versioned_hosts_but_not_unrelated_apps() {
-        assert!(target_name("HLSDownloaderNativeHost-7.0.3.exe"));
+    fn process_names_include_current_hosts_but_not_unrelated_apps() {
+        assert!(target_name("HLSDownloaderNativeHost.exe"));
+        assert!(!target_name("HLSDownloaderNativeHost-other.exe"));
         assert!(client_name("HLSDownloaderPresenter.exe"));
         assert!(client_name("HLSDownloaderCli.exe"));
         assert!(target_name("hls-downloader-engine.exe"));
@@ -635,19 +532,5 @@ mod tests {
             root
         ));
         assert!(!belongs_to(Path::new(r"D:\HLSDownloader\engine.exe"), root));
-    }
-    #[test]
-    fn environment_lookup_reads_only_the_named_variable() {
-        let block: Vec<u16> =
-            "=C:=C:\\\0HLS_V7_PIPE_OTHER=x\0hls_v7_pipe=pipe-a\0A=b\0\0HLS_V7_PIPE=late\0"
-                .encode_utf16()
-                .collect();
-        assert_eq!(
-            environment_value(&block, "HLS_V7_PIPE").as_deref(),
-            Some("pipe-a")
-        );
-        assert_eq!(environment_value(&block, "HLS_V7_CORE_BIND"), None);
-        let empty: Vec<u16> = "HLS_V7_PIPE=\0\0".encode_utf16().collect();
-        assert_eq!(environment_value(&empty, "HLS_V7_PIPE"), None);
     }
 }

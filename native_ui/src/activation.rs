@@ -1,9 +1,11 @@
 //! The UI pipe carries temporary display intent only; Core owns all task state.
+#[cfg(windows)]
 use hls_client::{CoreCommand, CorePipeRequest, CorePipeResponse};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc,
 };
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 pub struct ActivationServer {
@@ -11,6 +13,7 @@ pub struct ActivationServer {
     stop: Arc<AtomicBool>,
 }
 
+#[cfg(windows)]
 fn pipe_name() -> String {
     format!("{}.ui", hls_client::v7_pipe_name())
 }

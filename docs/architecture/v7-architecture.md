@@ -45,7 +45,7 @@ Windows 正常 IPC 使用带 owner/SYSTEM DACL 的 `\\.\pipe\HLSDownloader.v7` �
 
 ## 构建和证据
 
-运行包包含裁剪 JRE、Core、Host、Presenter、FFmpeg 和 libmpv；ffprobe 和完整扩展图标库不进入生产包。依赖按固定配置重建，源码中不保留依赖缓存或安装镜像。
+运行包包含 Rust Core、Native Host、Slint Presenter、FFmpeg 和 libmpv；ffprobe 和完整扩展图标库不进入生产包。依赖按固定配置重建，源码中不保留依赖缓存或安装镜像。
 
 候选包与正式包的门禁不同。canonical 功能合同、具体包 provenance 和某次实测报告各自描述不同范围；不能以一个布尔值或旧测试数量代替当前包的证据。见 [验证状态](../validation/v7-verification.md)与 [发布 runner](../releases/v7-release-runner.md)。
 

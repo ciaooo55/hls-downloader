@@ -140,9 +140,8 @@ foreach ($desktop in @(Get-TargetProcesses @("HLSDownloader"))) {
 Get-TargetProcesses @("HLSDownloaderCore") | Stop-Process -Force
 
 if ($IncludeNativeHost) {
-    # Versioned hosts are named HLSDownloaderNativeHost-<version>.exe.  This
     # 卸载和升级预停机都必须关闭桥接进程，防止它在事务期间再次启动 Core。
-    Get-TargetProcesses @("HLSDownloaderNativeHost*") | Stop-Process -Force
+    Get-TargetProcesses @("HLSDownloaderNativeHost") | Stop-Process -Force
 }
 
 function Test-ApplicationFilesWritable {

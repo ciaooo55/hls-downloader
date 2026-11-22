@@ -2,8 +2,8 @@ use crate::SiteRuleRow;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
-// Keep unedited fields and vault references when converting the existing JSON
-// or legacy line format to a form. This module never handles plaintext secrets.
+// Keep unedited fields and vault references when converting JSON to a form.
+// This module never handles plaintext secrets.
 pub struct SiteRuleDraft {
     pub row: SiteRuleRow,
     original: Map<String, Value>,
@@ -59,48 +59,8 @@ impl SiteRuleDraft {
         if raw.is_empty() {
             return Ok(Vec::new());
         }
-        let objects: Vec<Map<String, Value>> = if raw.starts_with('[') {
-            serde_json::from_str(raw).map_err(|_| "站点规则格式无效，原配置已保留".to_owned())?
-        } else {
-            let mut objects = Vec::new();
-            for line in raw
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            {
-                let (host, rest) = line
-                    .split_once('=')
-                    .ok_or("站点规则逐行格式无效，原配置已保留")?;
-                let mut object = Map::from_iter([(
-                    "host".into(),
-                    Value::from(host.trim().to_ascii_lowercase()),
-                )]);
-                for part in rest.split(',') {
-                    let (key, value) = part.split_once(':').unwrap_or((part, ""));
-                    let key = match key.trim() {
-                        "speed" | "kib" => "speed_limit_kib",
-                        "conn" | "concurrency" => "concurrency",
-                        "dir" | "download_dir" => "download_dir",
-                        "ua" | "user_agent" => "user_agent",
-                        "proxy" => "proxy",
-                        "proxy_mode" => "proxy_mode",
-                        "referer" => "referer",
-                        "origin" => "origin",
-                        _ => continue,
-                    };
-                    let value = if matches!(key, "speed_limit_kib" | "concurrency") {
-                        Value::from(value.trim().parse::<u32>().unwrap_or(0))
-                    } else if key == "proxy_mode" {
-                        Value::from(value.trim().to_ascii_lowercase())
-                    } else {
-                        Value::from(value.trim())
-                    };
-                    object.insert(key.into(), value);
-                }
-                objects.push(object);
-            }
-            objects
-        };
+        let objects: Vec<Map<String, Value>> = serde_json::from_str(raw)
+            .map_err(|_| "站点规则 JSON 格式无效，原配置已保留".to_owned())?;
         Ok(objects.into_iter().map(Self::from_object).collect())
     }
 
@@ -184,8 +144,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_form_roundtrip_keeps_all_download_and_request_fields() {
-        let raw = "# rules\ncdn.test=speed:256,conn:2,proxy:http://localhost:8080,proxy_mode:MANUAL,dir:D:/media,ua:fixture,referer:https://cdn.test/page,origin:https://cdn.test";
+    fn parsing_accepts_empty_and_json_but_rejects_other_formats() {
+        assert!(SiteRuleDraft::parse("").unwrap().is_empty());
+        assert!(SiteRuleDraft::parse("[]").unwrap().is_empty());
+        assert!(SiteRuleDraft::parse("cdn.test=speed:256,conn:2").is_err());
+        assert!(SiteRuleDraft::parse("[{invalid]").is_err());
+        assert!(SiteRuleDraft::parse("{}").is_err());
+    }
+
+    #[test]
+    fn json_form_roundtrip_keeps_all_download_and_request_fields() {
+        let raw = r#"[{"host":"cdn.test","speed_limit_kib":256,"concurrency":2,"proxy":"http://localhost:8080","proxy_mode":"manual","download_dir":"D:/media","user_agent":"fixture","referer":"https://cdn.test/page","origin":"https://cdn.test"}]"#;
         let rules = SiteRuleDraft::parse(raw).unwrap();
         let encoded: Value = serde_json::from_str(&encode(&rules, raw).unwrap()).unwrap();
         let row = &encoded[0];
@@ -236,5 +205,7 @@ mod tests {
         );
         assert!(encode(&rules, "").is_err());
         assert!(SiteRuleDraft::parse("invalid rule").is_err());
+        assert!(SiteRuleDraft::parse("cdn.test=speed:64,conn:2").is_err());
+        assert!(SiteRuleDraft::parse("").unwrap().is_empty());
     }
 }

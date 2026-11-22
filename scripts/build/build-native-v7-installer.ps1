@@ -87,8 +87,6 @@ try {
   <Property Id="ARPPRODUCTICON" Value="AppIcon" />
   <Icon Id="AppIcon" SourceFile="$icon" />
   <Property Id="V7_SAVED_INSTALLDIR"><RegistrySearch Id="NativeInstallDirSearch" Root="HKCU" Key="Software\HLS Downloader\Native" Name="InstallDir" Type="raw" Win64="yes" /></Property>
-  <!-- The published Compose 7.0.3 package persisted custom paths here. -->
-  <Property Id="V7_LEGACY_INSTALLDIR"><RegistrySearch Id="LegacyComposeInstallDirSearch" Root="HKCU" Key="Software\HLS Downloader\HLSDownloader\7.0.3" Name="RM_RF48431AECBD69377EA800D62616352F20" Type="raw" Win64="yes" /></Property>
   <Directory Id="TARGETDIR" Name="SourceDir"><Directory Id="LocalAppDataFolder"><Directory Id="INSTALLDIR" Name="HLSDownloader" /></Directory><Directory Id="ProgramMenuFolder"><Directory Id="AppMenu" Name="HLS Downloader" /></Directory></Directory>
   $tree
   $payload

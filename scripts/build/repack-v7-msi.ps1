@@ -43,7 +43,7 @@ try {
     foreach ($node in @($product.SelectNodes("./*[local-name()='Binary' and starts-with(@Id,'WixUI')] | ./*[local-name()='CustomAction' and starts-with(@Id,'WixUI')] | ./*[local-name()='Property' and (@Id='DefaultUIFont' or @Id='WixUI_Mode' or @Id='WixUIRMOption' or @Id='ARPNOMODIFY' or @Id='ErrorDialog')] | ./*[local-name()='InstallUISequence']/*[local-name()='Show']"))) {
         $node.ParentNode.RemoveChild($node) | Out-Null
     }
-    # jpackage 的包可能已有向导，但缺少间接目录控件依赖的属性；不能只在新增向导时补。
+    # 同步目录选择控件依赖的属性。
     if ($model.SelectNodes("//*[local-name()='Directory' and @Id='INSTALLDIR']").Count -ne 1) {
         throw 'Installer INSTALLDIR directory is not unique.'
     }
@@ -69,15 +69,6 @@ try {
         $product.AppendChild($variable) | Out-Null
     }
     $variable.SetAttribute('Value', $licensePath)
-    # 标准 FindRelatedProducts 已支持三段版本；jpackage 自定义检测会错误清空已找到的旧产品。
-    foreach ($node in @($model.SelectNodes("//*[local-name()='Custom' and @Action='JpFindRelatedProducts'] | //*[local-name()='CustomAction' and @Id='JpFindRelatedProducts']"))) {
-        $node.ParentNode.RemoveChild($node) | Out-Null
-    }
-    if ($model.SelectNodes("//*[local-name()='CustomAction' and @BinaryKey='JpCaDll']").Count -eq 0) {
-        foreach ($node in @($model.SelectNodes("//*[local-name()='Binary' and @Id='JpCaDll']"))) {
-            $node.ParentNode.RemoveChild($node) | Out-Null
-        }
-    }
     $model.Save($wxs)
     $engineFile = $model.SelectNodes("//*[local-name()='File' and @Name='HLSDownloaderEngine.exe']")
     if ($engineFile.Count -ne 1) { throw 'Installer Engine file is not unique.' }
@@ -265,10 +256,7 @@ try {
     & (Join-Path $WixRoot 'candle.exe') $wxs -o $wixobj -nologo -ext (Join-Path $WixRoot 'WixUtilExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX candle failed: $LASTEXITCODE" }
     $built = Join-Path $work 'repacked.msi'
-    # jpackage emits RemoveExistingProducts before the final lifecycle patch
-    # moves it to 1510. Suppress that transient ICE27 finding here; the patch
-    # script verifies the persisted sequence after repacking.
-    & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -cultures:zh-CN -sice:ICE27 -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
+    & (Join-Path $WixRoot 'light.exe') $wixobj -out $built -b $work -nologo -cultures:zh-CN -sice:ICE64 -sice:ICE91 -ext (Join-Path $WixRoot 'WixUtilExtension.dll') -ext (Join-Path $WixRoot 'WixUIExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw "WiX light failed: $LASTEXITCODE" }
     # 静默安装不会初始化向导控件；在交付前检查最终 MSI 中的目录绑定及完整许可正文。
     $installer = $null

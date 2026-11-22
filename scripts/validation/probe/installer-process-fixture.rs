@@ -11,7 +11,6 @@ fn main() {
     }
     if args.first().is_some_and(|arg| arg == "--pipe-server") {
         use std::ffi::c_void;
-        use std::os::windows::ffi::OsStrExt;
         #[link(name = "kernel32")]
         extern "system" {
             fn CreateNamedPipeW(
@@ -27,7 +26,11 @@ fn main() {
             fn ConnectNamedPipe(pipe: *mut c_void, overlapped: *mut c_void) -> i32;
             fn DisconnectNamedPipe(pipe: *mut c_void) -> i32;
         }
-        let name: Vec<u16> = args[1].encode_wide().chain(Some(0)).collect();
+        let maintenance = format!(
+            r"\\.\pipe\HLSDownloader.v7.maintenance.{}",
+            std::process::id()
+        );
+        let name: Vec<u16> = maintenance.encode_utf16().chain(Some(0)).collect();
         let pipe =
             unsafe { CreateNamedPipeW(name.as_ptr(), 3, 0, 1, 4096, 4096, 0, std::ptr::null()) };
         assert_ne!(pipe as isize, -1);
