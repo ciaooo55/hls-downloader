@@ -1688,7 +1688,9 @@ impl Workbench {
                     "profile" => this.send(CoreCommand::SaveSiteProfile {
                         task_id: id.clone(),
                     }),
-                    "torrent" => this.open_resource_tools("torrent", id.clone()),
+                    "torrent" if window.get_can_select_torrent_files() => {
+                        this.open_resource_tools("torrent", id.clone())
+                    }
                     _ => {}
                 }
             }
@@ -1725,6 +1727,7 @@ impl Workbench {
             return;
         };
         window.set_filename(task.filename.clone().into());
+        window.set_can_select_torrent_files(task.resource_kind == ResourceKind::Torrent);
         window.set_status(crate::task_status_label(&task.status).into());
         window.set_transfer(
             format!(

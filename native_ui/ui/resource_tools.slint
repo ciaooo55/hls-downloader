@@ -167,7 +167,8 @@ export component ResourceToolsWindow inherits Window {
             if root.mode != "zip" && root.rows.length > 0: HotButton { label: "清空选择"; enabled: !root.busy; clicked => { root.action("select_none"); } }
             if root.mode == "harvest": HotButton { label: "探测所选"; icon: "search"; enabled: !root.busy; clicked => { root.action("probe"); } }
             if root.mode != "zip" && !(root.mode == "crawl" && root.creating): HotButton {
-                label: root.mode == "torrent" ? "保存文件选择" : "下载所选"; primary: true; enabled: !root.busy;
+                label: root.mode == "torrent" ? "保存文件选择" : "下载所选"; primary: true;
+                enabled: !root.busy && (root.mode != "torrent" || root.rows.length > 0);
                 clicked => { root.action("download"); }
             }
         }
