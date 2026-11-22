@@ -1,6 +1,6 @@
 import { LineEdit } from "std-widgets.slint";
 import { MediaSeek } from "media.slint";
-import { Tokens, HotButton, ChoiceButton, HotScrollView, HotComboBox } from "theme.slint";
+import { Tokens, HotButton, ChoiceButton, HotScrollView, HotComboBox, FadePanel } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component CastWindow inherits Window {
@@ -56,6 +56,8 @@ export component CastWindow inherits Window {
         HotScrollView {
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;
+            FadePanel {
+            page: root.page;
             VerticalLayout {
                 spacing: 14px; alignment: start; padding-left: 24px; padding-right: 24px; padding-bottom: 20px;
                 if root.page == "source": VerticalLayout {
@@ -120,6 +122,7 @@ export component CastWindow inherits Window {
                         HotButton { label: "刷新会话"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("control:status"); } }
                     }
                 }
+            }
             }
         }
         }

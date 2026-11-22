@@ -469,6 +469,8 @@ export component WorkbenchWindow inherits Window {
             }
             media := MediaSurface {
                 visible: root.media-visible && !root.media-detached;
+                opacity: self.visible ? 1 : 0;
+                animate opacity { duration: Tokens.motion; easing: ease-out; }
                 height: !self.visible ? 0px : root.media-fullscreen ? max(180px, root.viewport-height - 2px) : min(390px, root.viewport-height * 0.48);
                 state: root.media-state; fullscreen: root.media-fullscreen; detached: false;
                 thumbnail: root.media-thumbnail; notice: root.media-notice;
@@ -501,28 +503,31 @@ export component WorkbenchWindow inherits Window {
             }
         }
         if root.tools-open || root.context-open: TouchArea { clicked => { root.tools-open = false; root.context-open = false; } }
-        if root.tools-open || root.context-open: Rectangle {
+        menu := Rectangle {
+            private property <bool> context: false;
+            in property <bool> context-open: root.context-open;
+            in property <bool> tools-open: root.tools-open;
+            changed context-open => { if self.context-open { self.context = true; } }
+            changed tools-open => { if self.tools-open { self.context = false; } }
             width: 224px; height: min(menu-layout.preferred-height, root.height - 12px);
-            x: min(max(0px, root.context-open ? root.context-x : root.tools-x), root.width - self.width);
-            y: min(max(0px, root.context-open ? root.context-y : root.tools-y), root.height - self.height);
+            x: min(max(0px, self.context ? root.context-x : root.tools-x), root.width - self.width);
+            y: min(max(0px, self.context ? root.context-y : root.tools-y), root.height - self.height);
             background: Tokens.surface; border-width: 1px; border-color: Tokens.line; border-radius: Tokens.card-radius;
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: Tokens.dark ? #00000066 : #10182826;
-            // 菜单每次打开都重新创建，init 即可触发淡入；减少动态效果下 motion-fast 为 1ms。
-            private property <bool> menu-entered: false;
-            init => { self.menu-entered = true; }
-            opacity: self.menu-entered ? 1 : 0;
+            opacity: root.tools-open || root.context-open ? 1 : 0;
+            visible: self.opacity > 0;
             animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
             HotScrollView {
                 menu-layout := VerticalLayout {
                     padding: 6px; spacing: 1px;
-                    if root.context-open: VerticalLayout {
+                    if menu.context: VerticalLayout {
                         spacing: 1px;
                         for item[index] in root.task-menu: VerticalLayout {
                         spacing: 1px;
                         // 删除类危险操作前加分隔线，与普通操作分组。
                         if item.action == "delete" && index > 0: Rectangle { height: 9px; Rectangle { x: 8px; y: 4px; height: 1px; width: parent.width - 16px; background: Tokens.line; } }
                         WorkbenchButton {
-                            label: item.label; icon: item.icon; enabled: item.enabled; menu-item: true;
+                            label: item.label; icon: item.icon; enabled: root.context-open && item.enabled; menu-item: true;
                             drag-source: item.action == "task:drag_file";
                             hint: item.action == "task:drag_file" ? "按住鼠标左键，将所选文件拖到资源管理器；Esc 取消" : item.label;
                             danger: item.action == "delete" || item.action == "delete_files";
@@ -534,9 +539,10 @@ export component WorkbenchWindow inherits Window {
                         }
                         }
                     }
-                    if !root.context-open: VerticalLayout {
+                    if !menu.context: VerticalLayout {
                         for item in ["批量添加", "导入 cURL", "页面抓取", "抓站与同步项目", "ZIP 内容预览", "投屏到电视", "TVBox 推送", "浏览器插件", "通知", "检查更新", "取消完成动作", "队列顺序", "关于"]: WorkbenchButton {
                             label: item; menu-item: true;
+                            enabled: root.tools-open;
                             icon: item == "批量添加" ? "batch" : item == "导入 cURL" ? "import" : item == "页面抓取" ? "harvest" : item == "抓站与同步项目" ? "network" : item == "ZIP 内容预览" ? "archive" : item == "投屏到电视" ? "cast" : item == "TVBox 推送" ? "tvbox" : item == "浏览器插件" ? "extension" : item == "检查更新" ? "refresh" : item == "通知" ? "notices" : item == "关于" ? "info" : item == "取消完成动作" ? "close" : item == "队列顺序" ? "queue" : "details";
                             clicked => { root.tools-open = false; root.action(item); }
                         }

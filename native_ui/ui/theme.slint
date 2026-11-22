@@ -390,6 +390,19 @@ export component CheckRow inherits Rectangle {
     }
 }
 
+export component FadePanel inherits Rectangle {
+    in property <string> page;
+    private property <bool> entered: false;
+    public function enter() { self.entered = false; reveal.restart(); }
+    init => { self.enter(); }
+    changed page => { self.enter(); }
+    opacity: entered ? 1 : 0;
+    visible: self.opacity > 0;
+    animate opacity { duration: entered ? Tokens.motion : 0ms; easing: ease-out; }
+    reveal := Timer { interval: 16ms; running: !root.entered; triggered => { root.entered = true; } }
+    @children
+}
+
 export component Panel inherits Rectangle {
     border-radius: Tokens.panel-radius;
     background: Tokens.surface;

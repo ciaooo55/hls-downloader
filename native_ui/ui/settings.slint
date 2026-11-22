@@ -1,5 +1,5 @@
 import { LineEdit } from "std-widgets.slint";
-import { Tokens, HotButton, HotCheckBox, HotScrollView, HotComboBox } from "theme.slint";
+import { Tokens, HotButton, HotCheckBox, HotScrollView, HotComboBox, FadePanel } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 import { NavigationItem } from "workbench_components.slint";
 import { SiteRulesEditor, SiteRuleRow } from "site_rules.slint";
@@ -50,7 +50,8 @@ export component SettingsWindow inherits Window {
             VerticalLayout {
             padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 16px;
             Text { text: root.selected-group; color: Tokens.ink; font-size: 17px; font-weight: 600; }
-            Rectangle {
+            FadePanel {
+                page: root.selected-group;
                 background: Tokens.surface;
                 border-radius: Tokens.panel-radius;
                 border-width: 1px; border-color: Tokens.line;

@@ -1032,6 +1032,28 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     );
 
     match kind {
+        "settings" => {
+            let window = SettingsWindow::new()?;
+            crate::native_window::apply_theme(&window, dark);
+            window
+                .global::<Tokens>()
+                .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
+            window.set_groups(slint::ModelRc::new(slint::VecModel::from(vec![
+                "通用".into(),
+                "网络".into(),
+            ])));
+            window.set_site_rules(slint::ModelRc::new(slint::VecModel::from(vec![
+                SiteRuleRow {
+                    host: "media.example.test".into(),
+                    enabled: true,
+                    ..Default::default()
+                },
+            ])));
+            window.set_selected_group("网络".into());
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
         "workbench" => {
             let tasks = (0..1000)
                 .map(|index| TaskSnapshot {
@@ -2308,6 +2330,9 @@ fn render_progress_hud(
         None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
     });
     let first_show = !item.window().is_visible();
+    if first_show {
+        item.invoke_enter();
+    }
     if first_show && item.show().is_ok() {
         round_native_window(item.window());
         native_window::prepare_dialog(&item, true, false, None);

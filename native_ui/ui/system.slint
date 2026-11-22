@@ -1,4 +1,4 @@
-import { Tokens, HotButton, ChoiceButton, WorkbenchIcon, HotScrollView } from "theme.slint";
+import { Tokens, HotButton, ChoiceButton, WorkbenchIcon, HotScrollView, FadePanel } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 
 export component SystemWindow inherits Window {
@@ -39,7 +39,8 @@ export component SystemWindow inherits Window {
                 clicked => { root.action(item); }
             }
         }
-        Rectangle {
+        FadePanel {
+            page: root.page;
             vertical-stretch: 1;
             background: Tokens.surface; border-radius: Tokens.panel-radius;
             border-width: 1px; border-color: Tokens.line;
@@ -116,6 +117,8 @@ export component DecisionWindow inherits Window {
     in property <string> confirm-label;
     in property <bool> busy;
     callback decided(bool);
+    public function enter() { content.enter(); }
+    content := FadePanel {
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.heading; description: "请确认后继续"; icon: "info"; }
@@ -129,5 +132,6 @@ export component DecisionWindow inherits Window {
             HotButton { label: "取消"; enabled: !root.busy; clicked => { root.decided(false); } }
             HotButton { label: root.confirm-label; enabled: !root.busy; primary: true; clicked => { root.decided(true); } }
         }
+    }
     }
 }

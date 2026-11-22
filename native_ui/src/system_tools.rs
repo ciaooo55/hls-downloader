@@ -446,6 +446,9 @@ impl SystemTools {
         self.decision.set_heading(title.into());
         self.decision.set_message(message.into());
         self.decision.set_confirm_label(confirm.into());
+        if !self.decision.window().is_visible() {
+            self.decision.invoke_enter();
+        }
         let _ = self.decision.show();
         native_window::prepare_dialog(
             &self.decision,
