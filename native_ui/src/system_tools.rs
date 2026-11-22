@@ -22,7 +22,7 @@ enum Decision {
 
 pub struct SystemTools {
     main: WorkbenchWindow,
-    window: SystemWindow,
+    window: RefCell<SystemWindow>,
     decision: DecisionWindow,
     decisions: RefCell<VecDeque<Decision>>,
     notices: RefCell<VecDeque<String>>,
@@ -38,12 +38,12 @@ pub struct SystemTools {
 
 impl SystemTools {
     pub fn sync_appearance(&self) {
-        native_window::inherit_appearance(&self.window, &self.main);
+        native_window::inherit_appearance(&self.window(), &self.main);
         native_window::inherit_appearance(&self.decision, &self.main);
     }
 
     pub fn keeps_ui_alive(&self) -> bool {
-        self.window.window().is_visible()
+        self.window().window().is_visible()
             || self.decision.window().is_visible()
             || !self.decisions.borrow().is_empty()
             || !self.pending.borrow().is_empty()
@@ -54,17 +54,14 @@ impl SystemTools {
         request: Rc<dyn Fn(CorePipeRequest) -> bool>,
         id: Rc<dyn Fn() -> u64>,
     ) -> Result<Rc<Self>, slint::PlatformError> {
-        let window = SystemWindow::new()?;
+        let window = Self::new_window()?;
         let decision = DecisionWindow::new()?;
-        window
-            .window()
-            .set_size(slint::LogicalSize::new(780.0, 620.0));
         decision
             .window()
             .set_size(slint::LogicalSize::new(520.0, 320.0));
         let this = Rc::new(Self {
             main,
-            window,
+            window: RefCell::new(window),
             decision,
             decisions: RefCell::new(VecDeque::new()),
             notices: RefCell::new(VecDeque::new()),
@@ -77,12 +74,7 @@ impl SystemTools {
             request,
             id,
         });
-        let weak = Rc::downgrade(&this);
-        this.window.on_action(move |action| {
-            if let Some(this) = weak.upgrade() {
-                this.action(&action);
-            }
-        });
+        this.bind_window(&this.window());
         let weak = Rc::downgrade(&this);
         this.decision.on_decided(move |accepted| {
             if let Some(this) = weak.upgrade() {
@@ -99,19 +91,59 @@ impl SystemTools {
         Ok(this)
     }
 
+    fn new_window() -> Result<SystemWindow, slint::PlatformError> {
+        let window = SystemWindow::new()?;
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(780.0, 620.0));
+        Ok(window)
+    }
+
+    fn window(&self) -> SystemWindow {
+        self.window.borrow().clone_strong()
+    }
+
+    fn bind_window(self: &Rc<Self>, window: &SystemWindow) {
+        let weak = Rc::downgrade(self);
+        window.on_action(move |action| {
+            if let Some(this) = weak.upgrade() {
+                this.action(&action);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.window().on_close_requested(move || {
+            if let Some(this) = weak.upgrade() {
+                this.close();
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+    }
+
+    fn close(self: &Rc<Self>) {
+        let window = self.window();
+        let _ = window.hide();
+
+        // The Windows software surface can lose its pixels while the window is hidden.
+        let Ok(next) = Self::new_window() else {
+            return;
+        };
+        next.set_busy(window.get_busy());
+        next.set_can_download(window.get_can_download());
+        next.set_can_install(window.get_can_install());
+        next.set_notice(window.get_notice());
+        next.set_notice_tone(window.get_notice_tone());
+        self.bind_window(&next);
+        *self.window.borrow_mut() = next;
+    }
+
     pub fn show(&self, page: &str) {
-        native_window::inherit_appearance(&self.window, &self.main);
-        self.window.set_page(page.into());
-        self.window
-            .set_browser_status(self.main.get_browser_status());
+        let window = self.window();
+        native_window::inherit_appearance(&window, &self.main);
+        window.set_page(page.into());
+        window.set_browser_status(self.main.get_browser_status());
         self.render();
-        let _ = self.window.show();
-        native_window::prepare_dialog(
-            &self.window,
-            true,
-            true,
-            native_window::hwnd(self.main.window()),
-        );
+        let _ = window.show();
+        native_window::prepare_dialog(&window, true, true, native_window::hwnd(self.main.window()));
     }
 
     fn send(&self, command: CoreCommand) -> bool {
@@ -126,25 +158,25 @@ impl SystemTools {
     }
 
     fn send_request(&self, id: u64, request: CorePipeRequest) -> bool {
+        let window = self.window();
         if !(self.request)(request) {
-            self.window.set_notice_tone("error".into());
-            self.window.set_notice("命令队列已满，请稍后重试".into());
+            window.set_notice_tone("error".into());
+            window.set_notice("命令队列已满，请稍后重试".into());
             return false;
         }
         self.pending.borrow_mut().insert(id);
         true
     }
 
-    fn action(&self, action: &str) {
-        self.window.set_notice("".into());
+    fn action(self: &Rc<Self>, action: &str) {
+        let window = self.window();
+        window.set_notice("".into());
         match action {
             "浏览器插件" => self.show("browser"),
             "通知" => self.show("notices"),
             "更新" => self.show("updates"),
             "关于" => self.show("about"),
-            "close" => {
-                let _ = self.window.hide();
-            }
+            "close" => self.close(),
             "clear_notices" => {
                 self.notices.borrow_mut().clear();
                 self.render();
@@ -167,32 +199,31 @@ impl SystemTools {
             }
             "check_update" => {
                 if self.send(CoreCommand::CheckUpdate { silent: false }) {
-                    self.window.set_busy(true);
+                    window.set_busy(true);
                 }
             }
-            "download_update" if self.window.get_can_download() && !self.window.get_busy() => {
+            "download_update" if window.get_can_download() && !window.get_busy() => {
                 if self.send(CoreCommand::DownloadUpdate) {
-                    self.window.set_busy(true);
+                    window.set_busy(true);
                 }
             }
-            "install_update" if self.window.get_can_install() && !self.window.get_busy() => {
+            "install_update" if window.get_can_install() && !window.get_busy() => {
                 if file_dialogs::confirm(
-                    native_window::hwnd(self.window.window()),
+                    native_window::hwnd(window.window()),
                     "安装更新",
                     "将暂停活动任务并保存断点，退出当前程序后运行已校验的安装包。继续安装？",
                 ) && self.send(CoreCommand::InstallUpdate {
                     workbench_pid: std::process::id(),
                 }) {
-                    self.window.set_busy(true);
+                    window.set_busy(true);
                 }
             }
             "chromium" => match chromium_directory() {
                 Ok(path) => {
                     let result = file_dialogs::open(&path.to_string_lossy());
                     let browser = open_extensions_page();
-                    self.window
-                        .set_notice_tone(if result.is_ok() { "success" } else { "error" }.into());
-                    self.window.set_notice(match result {
+                    window.set_notice_tone(if result.is_ok() { "success" } else { "error" }.into());
+                    window.set_notice(match result {
                         Ok(()) => format!(
                             "已打开插件目录：{}。{}",
                             path.display(),
@@ -207,16 +238,16 @@ impl SystemTools {
                     });
                 }
                 Err(error) => {
-                    self.window.set_notice_tone("error".into());
-                    self.window.set_notice(error.into())
+                    window.set_notice_tone("error".into());
+                    window.set_notice(error.into())
                 }
             },
             "firefox" => {
                 if let Err(error) = file_dialogs::open(
                     "https://addons.mozilla.org/zh-CN/firefox/addon/hls_downloader/",
                 ) {
-                    self.window.set_notice_tone("error".into());
-                    self.window.set_notice(error.into());
+                    window.set_notice_tone("error".into());
+                    window.set_notice(error.into());
                 }
             }
             "logs" => {
@@ -225,8 +256,8 @@ impl SystemTools {
                     .unwrap_or(std::path::Path::new("."))
                     .join("logs");
                 if let Err(error) = file_dialogs::open(&path.to_string_lossy()) {
-                    self.window.set_notice_tone("error".into());
-                    self.window.set_notice(error.into());
+                    window.set_notice_tone("error".into());
+                    window.set_notice(error.into());
                 }
             }
             _ => {}
@@ -234,13 +265,14 @@ impl SystemTools {
     }
 
     fn render(&self) {
-        let text = match self.window.get_page().as_str() {
+        let window = self.window();
+        let text = match window.get_page().as_str() {
             "browser" => self.handoffs.borrow().clone(),
             "notices" => self.notices.borrow().iter().rev().cloned().collect::<Vec<_>>().join("\n\n"),
             "updates" => self.update.borrow().clone(),
             _ => format!("HLS Downloader {}\n\nHTTP / HTTPS、FTP / SFTP、BT、HLS / DASH、直播、边播边下、字幕、投屏与 TVBox、抓站和 ZIP 预览。\n\n下载与任务由单一 Rust Core 管理。\n本工作台使用 Rust + Slint。\n\n配置与任务目录：{}", env!("CARGO_PKG_VERSION"), hls_client::default_v7_database_path().parent().unwrap_or(std::path::Path::new(".")).display()),
         };
-        self.window.set_content(text.into());
+        window.set_content(text.into());
     }
 
     pub fn notify(&self, text: String) {
@@ -254,6 +286,7 @@ impl SystemTools {
     }
 
     pub fn event(&self, envelope: &EventEnvelope) {
+        let window = self.window();
         if envelope.sequence != 0 {
             let mut seen = self.seen.borrow_mut();
             if seen.contains(&envelope.sequence) {
@@ -270,7 +303,7 @@ impl SystemTools {
                 version,
                 browser,
                 message,
-            } => self.window.set_browser_status(
+            } => window.set_browser_status(
                 format!(
                     "{} · {} {}\n{}",
                     if *connected { "已连接" } else { "未连接" },
@@ -282,16 +315,16 @@ impl SystemTools {
             ),
             CoreEvent::Error { code, message } => {
                 self.notify(message.clone());
-                self.window.set_notice_tone("error".into());
-                self.window.set_notice(message.clone().into());
+                window.set_notice_tone("error".into());
+                window.set_notice(message.clone().into());
                 if code.starts_with("update") {
-                    self.window.set_busy(false);
+                    window.set_busy(false);
                 }
             }
             CoreEvent::Toast { level, message } => {
                 self.notify(message.clone());
-                self.window.set_notice_tone(toast_tone(level).into());
-                self.window.set_notice(message.clone().into());
+                window.set_notice_tone(toast_tone(level).into());
+                window.set_notice(message.clone().into());
             }
             CoreEvent::UpdateAvailable {
                 current,
@@ -303,19 +336,19 @@ impl SystemTools {
                 ..
             } => {
                 *self.update.borrow_mut() = format!("当前：{current} → 可用：{latest}\n\n{notes}\n\n{installer_name} · {installer_size} 字节\n发布摘要：{}",if *sha256_verified { "已确认" } else { "缺失，自动下载不可用" });
-                self.window.set_can_download(
+                window.set_can_download(
                     *sha256_verified
                         && *installer_size > 0
                         && installer_name.to_ascii_lowercase().ends_with(".msi"),
                 );
-                self.window.set_can_install(false);
-                self.window.set_busy(false);
+                window.set_can_install(false);
+                window.set_busy(false);
                 self.show("updates");
             }
             CoreEvent::UpdateCurrent { current } => {
                 *self.update.borrow_mut() = format!("当前已是最新版本：{current}");
-                self.window.set_busy(false);
-                self.window.set_can_download(false);
+                window.set_busy(false);
+                window.set_can_download(false);
                 self.render();
             }
             CoreEvent::UpdateReady {
@@ -326,9 +359,9 @@ impl SystemTools {
                 ..
             } => {
                 *self.update.borrow_mut() = format!("更新已下载并校验\n\n版本：{latest}\n产品：{product_name} {product_version}\n安装包：{installer_path}\n\n安装会暂停活动任务并保存断点；保留配置、任务数据库和下载文件。");
-                self.window.set_busy(false);
-                self.window.set_can_download(false);
-                self.window.set_can_install(true);
+                window.set_busy(false);
+                window.set_can_download(false);
+                window.set_can_install(true);
                 self.show("updates");
             }
             CoreEvent::UpdateInstallStarted {
@@ -337,7 +370,7 @@ impl SystemTools {
                 ..
             } => {
                 *self.update.borrow_mut() = format!("正在安装 {latest}\n日志：{install_log}");
-                self.window.set_busy(true);
+                window.set_busy(true);
                 self.render();
             }
             CoreEvent::UpdateInstallResult {
@@ -346,8 +379,8 @@ impl SystemTools {
                 ..
             } => {
                 *self.update.borrow_mut() = format!("{message}\n日志：{install_log}");
-                self.window.set_busy(false);
-                self.window.set_can_install(false);
+                window.set_busy(false);
+                window.set_can_install(false);
                 self.show("updates");
             }
             CoreEvent::DuplicateOffered {
@@ -507,6 +540,7 @@ impl SystemTools {
     }
 
     pub fn response(&self, response: &CorePipeResponse) {
+        let window = self.window();
         let id = match response {
             CorePipeResponse::Events { request_id, .. } => Some(*request_id),
             CorePipeResponse::Error { request_id, .. } => *request_id,
@@ -539,9 +573,9 @@ impl SystemTools {
                 message,
                 ..
             } if self.pending.borrow_mut().remove(id) => {
-                self.window.set_notice_tone("error".into());
-                self.window.set_notice(message.clone().into());
-                self.window.set_busy(false);
+                window.set_notice_tone("error".into());
+                window.set_notice(message.clone().into());
+                window.set_busy(false);
             }
             CorePipeResponse::Events { request_id, events }
                 if self.pending.borrow_mut().remove(request_id) =>
@@ -553,9 +587,9 @@ impl SystemTools {
                         None
                     }
                 }) {
-                    self.window.set_busy(false);
-                    self.window.set_notice_tone("error".into());
-                    self.window.set_notice(message.clone().into());
+                    window.set_busy(false);
+                    window.set_notice_tone("error".into());
+                    window.set_notice(message.clone().into());
                 }
             }
             CorePipeResponse::Handoffs {
@@ -593,8 +627,9 @@ impl SystemTools {
     }
 
     pub fn resynchronize(&self) {
+        let window = self.window();
         self.seen.borrow_mut().clear();
-        self.window.set_busy(false);
+        window.set_busy(false);
         self.pending.borrow_mut().clear();
         self.decision_request.set(None);
         self.decision.set_busy(false);
