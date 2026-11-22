@@ -29,6 +29,7 @@ export component ResourceToolsWindow inherits Window {
     in-out property <int> project-index: 0;
     in property <[string]> projects;
     in property <[ResourceRow]> rows;
+    in property <bool> has-torrent-selection;
     in property <bool> busy;
     in property <string> status;
     // 页脚状态语气：info / success / warning / error，由 Rust 随状态文字一起设置。
@@ -130,7 +131,7 @@ export component ResourceToolsWindow inherits Window {
                     WorkbenchIcon { name: root.mode == "zip" ? "archive" : root.mode == "torrent" ? "torrent" : root.mode == "crawl" ? "network" : "harvest"; width: 24px; height: 24px; x: 12px; y: 12px; ink: Tokens.faint; }
                 }
             }
-            Text { text: root.busy ? "正在读取资源…" : "填写来源后，点击「读取 / 发现」"; color: Tokens.faint; font-size: 13px; horizontal-alignment: center; }
+            Text { text: root.busy ? "正在读取资源…" : root.mode == "torrent" ? "没有可供选择的种子文件" : "填写来源后，点击「读取 / 发现」"; color: Tokens.faint; font-size: 13px; horizontal-alignment: center; }
         }
         rows-list := ListView {
             width: parent.width; height: parent.height;
@@ -167,7 +168,8 @@ export component ResourceToolsWindow inherits Window {
             if root.mode != "zip" && root.rows.length > 0: HotButton { label: "清空选择"; enabled: !root.busy; clicked => { root.action("select_none"); } }
             if root.mode == "harvest": HotButton { label: "探测所选"; icon: "search"; enabled: !root.busy; clicked => { root.action("probe"); } }
             if root.mode != "zip" && !(root.mode == "crawl" && root.creating): HotButton {
-                label: root.mode == "torrent" ? "保存文件选择" : "下载所选"; primary: true; enabled: !root.busy;
+                label: root.mode == "torrent" ? "保存文件选择" : "下载所选"; primary: true;
+                enabled: !root.busy && (root.mode != "torrent" || root.has-torrent-selection);
                 clicked => { root.action("download"); }
             }
         }

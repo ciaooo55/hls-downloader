@@ -1,4 +1,4 @@
-use crate::{file_dialogs, native_window, ResourceRow, ResourceToolsWindow};
+use crate::{file_dialogs, native_window, ResourceRow, ResourceToolsWindow, WorkbenchWindow};
 use hls_client::{
     CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, CrawlProject, CrawlRequest,
     CrawlSpec, HarvestCandidate, ResourceKind, TaskSpec, TorrentFileEntry, TorrentFileSelection,
@@ -41,7 +41,7 @@ impl ResourceTools {
         mode: &str,
         task_id: String,
         directory: &str,
-        dark: bool,
+        parent: &WorkbenchWindow,
         request: Rc<dyn Fn(CorePipeRequest) -> bool>,
         batch: Rc<dyn Fn(Vec<CoreCommand>) -> bool>,
         id: Rc<dyn Fn() -> u64>,
@@ -49,7 +49,7 @@ impl ResourceTools {
         let window = ResourceToolsWindow::new()?;
         window.set_mode(mode.into());
         window.set_output_dir(directory.into());
-        crate::native_window::apply_theme(&window, dark);
+        native_window::inherit_appearance(&window, parent);
         let rows = Rc::new(VecModel::default());
         window.set_rows(ModelRc::from(rows.clone()));
         let this = Rc::new(Self {
@@ -86,6 +86,7 @@ impl ResourceTools {
                     if let Some(mut row) = this.rows.row_data(index) {
                         row.selected = selected;
                         this.rows.set_row_data(index, row);
+                        this.update_torrent_selection();
                     }
                 }
             }
@@ -143,6 +144,13 @@ impl ResourceTools {
             .enumerate()
             .filter_map(|(index, row)| row.selected.then_some(index))
             .collect()
+    }
+
+    fn update_torrent_selection(&self) {
+        if self.window.get_mode() == "torrent" {
+            self.window
+                .set_has_torrent_selection(self.rows.iter().any(|row| row.selected));
+        }
     }
 
     pub fn poll(&self) {
@@ -209,6 +217,7 @@ impl ResourceTools {
                         self.rows.set_row_data(index, row);
                     }
                 }
+                self.update_torrent_selection();
             }
             "inspect" | "list" | "pause" | "resume" | "sync" | "probe" | "download" => {
                 let id = (self.id)();
@@ -625,6 +634,7 @@ impl ResourceTools {
                 })
                 .collect::<Vec<_>>(),
         );
+        self.update_torrent_selection();
         self.window.set_summary(
             format!(
                 "{} 个文件 · {}",

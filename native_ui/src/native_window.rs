@@ -14,6 +14,25 @@ where
     );
 }
 
+pub fn apply_appearance<C: slint::ComponentHandle>(component: &C, dark: bool, reduce_motion: bool)
+where
+    for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
+{
+    component
+        .global::<crate::Tokens>()
+        .set_reduce_motion(reduce_motion);
+    apply_theme(component, dark);
+}
+
+pub fn inherit_appearance<C: slint::ComponentHandle>(component: &C, parent: &crate::WorkbenchWindow)
+where
+    for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
+{
+    use slint::ComponentHandle;
+    let tokens = parent.global::<crate::Tokens>();
+    apply_appearance(component, tokens.get_dark(), tokens.get_reduce_motion());
+}
+
 fn apply_caption_theme(window: &Window, dark: bool, background: slint::Color, text: slint::Color) {
     #[cfg(windows)]
     {

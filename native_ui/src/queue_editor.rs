@@ -1,4 +1,4 @@
-use crate::QueueWindow;
+use crate::{QueueWindow, WorkbenchWindow};
 use hls_client::QueueProfile;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
@@ -11,14 +11,14 @@ pub struct QueueEditor {
 impl QueueEditor {
     pub fn new(
         mut profiles: Vec<QueueProfile>,
-        dark: bool,
+        parent: &WorkbenchWindow,
         assign: bool,
     ) -> Result<Self, slint::PlatformError> {
         if profiles.is_empty() {
             profiles.push(QueueProfile::default());
         }
         let window = QueueWindow::new()?;
-        crate::native_window::apply_theme(&window, dark);
+        crate::native_window::inherit_appearance(&window, parent);
         window.set_can_assign(assign);
         let editor = Self {
             window,

@@ -1,4 +1,4 @@
-use crate::{native_window, ServiceSettingsWindow};
+use crate::{native_window, ServiceSettingsWindow, WorkbenchWindow};
 use hls_client::{CorePipeRequest, CorePipeResponse};
 use slint::ComponentHandle;
 use std::{
@@ -19,12 +19,12 @@ pub struct ServiceSettings {
 impl ServiceSettings {
     pub fn new(
         mode: &str,
-        dark: bool,
+        parent: &WorkbenchWindow,
         request: Rc<dyn Fn(CorePipeRequest) -> bool>,
         id: Rc<dyn Fn() -> u64>,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let window = ServiceSettingsWindow::new()?;
-        crate::native_window::apply_theme(&window, dark);
+        native_window::inherit_appearance(&window, parent);
         window.set_mode(mode.into());
         window.set_loaded(mode != "subtitle");
         let this = Rc::new(Self {

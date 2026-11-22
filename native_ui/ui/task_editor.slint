@@ -101,7 +101,7 @@ export component TaskEditorWindow inherits Window {
         }
         DialogFooter {
             status: root.result; tone: root.result-tone;
-            HotButton { label: "取消"; clicked => { root.action("close"); } }
+            HotButton { label: root.busy ? "关闭" : "取消"; clicked => { root.action("close"); } }
             HotButton { label: root.busy ? "处理中…" : "添加任务"; icon: "new"; primary: true; enabled: !root.busy && root.legal-accepted && root.url != ""; clicked => { root.action("create"); } }
         }
     }

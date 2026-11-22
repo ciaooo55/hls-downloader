@@ -210,3 +210,28 @@ fn replay_input(window: &MinimalSoftwareWindow, script: &str) {
         slint::platform::update_timers_and_animations();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{native_window, SettingsWindow, Tokens, WorkbenchWindow};
+    use slint::ComponentHandle;
+
+    #[test]
+    fn workbench_dialog_inherits_changes_to_reduced_motion() {
+        slint::platform::set_platform(Box::new(OffscreenPlatform {
+            windows: RefCell::new(Vec::new()),
+            output: PathBuf::new(),
+            size: None,
+            scale: 1.0,
+        }))
+        .unwrap();
+        let workbench = WorkbenchWindow::new().unwrap();
+        let dialog = SettingsWindow::new().unwrap();
+        for reduce_motion in [true, false] {
+            native_window::apply_appearance(&workbench, false, reduce_motion);
+            native_window::inherit_appearance(&dialog, &workbench);
+            assert_eq!(dialog.global::<Tokens>().get_reduce_motion(), reduce_motion);
+        }
+    }
+}

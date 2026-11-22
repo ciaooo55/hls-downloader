@@ -35,6 +35,8 @@ pub struct Workbench {
     navigation: Rc<VecModel<NavigationRow>>,
     positions: RefCell<HashMap<String, usize>>,
     commands: mpsc::SyncSender<WorkbenchJob>,
+    editor_commands: mpsc::SyncSender<WorkbenchJob>,
+    resource_commands: mpsc::SyncSender<WorkbenchJob>,
     next_id: Cell<u64>,
     editor: RefCell<Option<TaskEditorWindow>>,
     editor_id: Cell<u64>,
@@ -60,35 +62,35 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    fn apply_theme(&self, dark: bool) {
-        crate::native_window::apply_theme(&self.window, dark);
+    fn apply_appearance(&self, dark: bool, reduce_motion: bool) {
+        native_window::apply_appearance(&self.window, dark, reduce_motion);
         if let Some(editor) = self.editor.borrow().as_ref() {
-            crate::native_window::apply_theme(editor, dark);
+            native_window::inherit_appearance(editor, &self.window);
         }
         if let Some((_, details)) = self.details.borrow().as_ref() {
-            crate::native_window::apply_theme(details, dark);
+            native_window::inherit_appearance(details, &self.window);
         }
         if let Some(queues) = self.queues.borrow().as_ref() {
-            crate::native_window::apply_theme(&queues.window, dark);
+            native_window::inherit_appearance(&queues.window, &self.window);
         }
         if let Some(tools) = self.tools.borrow().as_ref() {
-            crate::native_window::apply_theme(&tools.window, dark);
+            native_window::inherit_appearance(&tools.window, &self.window);
         }
         if let Some(service) = self.service_settings.borrow().as_ref() {
-            crate::native_window::apply_theme(&service.window, dark);
+            native_window::inherit_appearance(&service.window, &self.window);
         }
         if let Some(cast) = self.cast.borrow().as_ref() {
-            cast.apply_theme(dark);
+            cast.sync_appearance();
         }
         if let Some(system) = self.system.borrow().as_ref() {
-            system.apply_theme(dark);
+            system.sync_appearance();
         }
         if let Some(media) = self.media.borrow().as_ref() {
-            media.apply_theme(dark);
+            media.sync_appearance();
         }
 
         if let Some(editor) = self.settings.borrow().as_ref() {
-            crate::native_window::apply_theme(&editor.window, dark);
+            native_window::inherit_appearance(&editor.window, &self.window);
         }
     }
 
@@ -99,26 +101,17 @@ impl Workbench {
         };
         let mode = crate::theme::ThemeMode::from_response(Some(response));
         let dark = mode.is_dark();
-        if self.window.global::<Tokens>().get_dark() != dark {
-            self.apply_theme(dark);
+        let tokens = self.window.global::<Tokens>();
+        if tokens.get_dark() != dark {
+            self.apply_appearance(dark, tokens.get_reduce_motion());
         }
     }
 
-    pub fn new(
-        tasks: Vec<TaskSnapshot>,
-        sequence: u64,
-        dark: bool,
-    ) -> Result<Rc<Self>, slint::PlatformError> {
-        let window = WorkbenchWindow::new()?;
-        window.set_product_version(env!("CARGO_PKG_VERSION").into());
-        crate::native_window::apply_theme(&window, dark);
-        let state = Rc::new(RefCell::new(TaskList::default()));
-        state.borrow_mut().replace(tasks, sequence);
-        let rows = Rc::new(VecModel::default());
-        window.set_tasks(ModelRc::from(rows.clone()));
-        let navigation = Rc::new(VecModel::default());
-        window.set_navigation(ModelRc::from(navigation.clone()));
-        let (commands, jobs) = mpsc::sync_channel::<WorkbenchJob>(32);
+    fn spawn_command_worker(
+        window: &WorkbenchWindow,
+        capacity: usize,
+    ) -> mpsc::SyncSender<WorkbenchJob> {
+        let (commands, jobs) = mpsc::sync_channel::<WorkbenchJob>(capacity);
         let weak = window.as_weak();
         std::thread::spawn(move || {
             let mut client = None;
@@ -228,6 +221,28 @@ impl Workbench {
                 }
             }
         });
+        commands
+    }
+
+    pub fn new(
+        tasks: Vec<TaskSnapshot>,
+        sequence: u64,
+        dark: bool,
+        reduce_motion: bool,
+    ) -> Result<Rc<Self>, slint::PlatformError> {
+        let window = WorkbenchWindow::new()?;
+        window.set_product_version(env!("CARGO_PKG_VERSION").into());
+        native_window::apply_appearance(&window, dark, reduce_motion);
+        let state = Rc::new(RefCell::new(TaskList::default()));
+        state.borrow_mut().replace(tasks, sequence);
+        let rows = Rc::new(VecModel::default());
+        window.set_tasks(ModelRc::from(rows.clone()));
+        let navigation = Rc::new(VecModel::default());
+        window.set_navigation(ModelRc::from(navigation.clone()));
+        let commands = Self::spawn_command_worker(&window, 32);
+        // Task setup and resource tools can each wait for network metadata.
+        let editor_commands = Self::spawn_command_worker(&window, 8);
+        let resource_commands = Self::spawn_command_worker(&window, 8);
         let controller = Rc::new(Self {
             window,
             state,
@@ -235,6 +250,8 @@ impl Workbench {
             navigation,
             positions: RefCell::new(HashMap::new()),
             commands,
+            editor_commands,
+            resource_commands,
             next_id: Cell::new(1),
             editor: RefCell::new(None),
             editor_id: Cell::new(0),
@@ -662,7 +679,10 @@ impl Workbench {
         }
         let view_revision = self.state.borrow().view_revision;
         let changed = self.state.borrow_mut().apply(event);
-        if let Some(id) = changed {
+        if let Some(crate::task_list::TaskChange { id, notice }) = changed {
+            if let (Some(system), Some(notice)) = (self.system.borrow().as_ref(), notice) {
+                system.notify(notice);
+            }
             if self.state.borrow().view_revision != view_revision {
                 self.render();
             } else if let Some(index) = self.positions.borrow().get(&id).copied() {
@@ -970,13 +990,17 @@ impl Workbench {
     }
 
     fn job(&self, job: WorkbenchJob) -> bool {
+        self.enqueue(&self.commands, job)
+    }
+
+    fn enqueue(&self, commands: &mpsc::SyncSender<WorkbenchJob>, job: WorkbenchJob) -> bool {
         let id = match &job {
             WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
             WorkbenchJob::Request(request) => serde_json::to_value(request)
                 .ok()
                 .and_then(|value| value["request_id"].as_u64()),
         };
-        if self.commands.try_send(job).is_err() {
+        if commands.try_send(job).is_err() {
             self.window
                 .set_notice("操作队列已满或连接关闭，请稍后重试".into());
             false
@@ -1417,9 +1441,15 @@ impl Workbench {
                 }
             }
             response @ CorePipeResponse::Settings { request_id, .. } => {
-                if let CorePipeResponse::Settings { task_sort, .. } = &response {
-                    self.apply_theme(
+                if let CorePipeResponse::Settings {
+                    task_sort,
+                    reduce_motion,
+                    ..
+                } = &response
+                {
+                    self.apply_appearance(
                         crate::theme::ThemeMode::from_response(Some(&response)).is_dark(),
+                        *reduce_motion || hls_client::os_reduce_motion(),
                     );
                     let changed = self.state.borrow().sort != *task_sort;
                     if changed {
@@ -1513,7 +1543,7 @@ impl Workbench {
         let Ok(editor) = TaskEditorWindow::new() else {
             return;
         };
-        crate::native_window::apply_theme(&editor, self.window.global::<Tokens>().get_dark());
+        native_window::inherit_appearance(&editor, &self.window);
         editor.set_mode(
             match action {
                 "批量添加" => "batch",
@@ -1583,18 +1613,18 @@ impl Workbench {
                 };
                 let request_id = self.editor_id.get();
                 let submitted = if action == "probe" {
-                    self.request(CorePipeRequest::Command {
+                    let request = CorePipeRequest::Command {
                         request_id,
                         command: CoreCommand::ProbeUrl {
                             url: spec.url.clone(),
                             spec: Some(spec),
                         },
-                    })
+                    };
+                    self.enqueue(
+                        &self.editor_commands,
+                        WorkbenchJob::Request(Box::new(request)),
+                    )
                 } else {
-                    self.send(CoreCommand::SetSetting {
-                        key: "legal_terms_accepted".into(),
-                        value: true.into(),
-                    });
                     let commands = match editor.get_mode().as_str() {
                         "curl" => vec![CoreCommand::ImportCurl {
                             command: editor.get_url().to_string(),
@@ -1624,9 +1654,26 @@ impl Workbench {
                         }
                         _ => vec![CoreCommand::CreateTask { spec }],
                     };
-                    self.job(WorkbenchJob::Batch(request_id, commands))
+                    let accept_terms = CorePipeRequest::Command {
+                        request_id: self.id(),
+                        command: CoreCommand::SetSetting {
+                            key: "legal_terms_accepted".into(),
+                            value: true.into(),
+                        },
+                    };
+                    self.enqueue(
+                        &self.editor_commands,
+                        WorkbenchJob::Request(Box::new(accept_terms)),
+                    ) && self.enqueue(
+                        &self.editor_commands,
+                        WorkbenchJob::Batch(request_id, commands),
+                    )
                 };
                 editor.set_busy(submitted);
+                if !submitted {
+                    editor.set_result_tone("error".into());
+                    editor.set_result(self.window.get_notice());
+                }
             }
             _ => {}
         }
@@ -1647,7 +1694,7 @@ impl Workbench {
         let Ok(window) = DetailsWindow::new() else {
             return;
         };
-        crate::native_window::apply_theme(&window, self.window.global::<Tokens>().get_dark());
+        native_window::inherit_appearance(&window, &self.window);
         let weak = Rc::downgrade(self);
         window.on_action(move |action| {
             if let Some(this) = weak.upgrade() {
@@ -1680,7 +1727,9 @@ impl Workbench {
                     "profile" => this.send(CoreCommand::SaveSiteProfile {
                         task_id: id.clone(),
                     }),
-                    "torrent" => this.open_resource_tools("torrent", id.clone()),
+                    "torrent" if window.get_can_select_torrent_files() => {
+                        this.open_resource_tools("torrent", id.clone())
+                    }
                     _ => {}
                 }
             }
@@ -1717,6 +1766,7 @@ impl Workbench {
             return;
         };
         window.set_filename(task.filename.clone().into());
+        window.set_can_select_torrent_files(task.resource_kind == ResourceKind::Torrent);
         window.set_status(crate::task_status_label(&task.status).into());
         window.set_transfer(
             format!(
@@ -1774,25 +1824,23 @@ impl Workbench {
         let batch_owner = Rc::downgrade(self);
         let id_owner = Rc::downgrade(self);
         let request = Rc::new(move |request| {
-            request_owner
-                .upgrade()
-                .is_some_and(|this| this.request(request))
+            request_owner.upgrade().is_some_and(|this| {
+                this.enqueue(
+                    &this.resource_commands,
+                    WorkbenchJob::Request(Box::new(request)),
+                )
+            })
         });
         let batch = Rc::new(move |commands| {
-            batch_owner
-                .upgrade()
-                .is_some_and(|this| this.job(WorkbenchJob::Batch(this.id(), commands)))
+            batch_owner.upgrade().is_some_and(|this| {
+                this.enqueue(
+                    &this.resource_commands,
+                    WorkbenchJob::Batch(this.id(), commands),
+                )
+            })
         });
         let id = Rc::new(move || id_owner.upgrade().map_or(0, |this| this.id()));
-        match ResourceTools::new(
-            mode,
-            task_id,
-            &directory,
-            self.window.global::<Tokens>().get_dark(),
-            request,
-            batch,
-            id,
-        ) {
+        match ResourceTools::new(mode, task_id, &directory, &self.window, request, batch, id) {
             Ok(tools) => {
                 if let Some(previous) = self.tools.borrow_mut().replace(tools.clone()) {
                     let _ = previous.window.hide();
@@ -1822,7 +1870,7 @@ impl Workbench {
         };
         let Ok(editor) = QueueEditor::new(
             profiles,
-            self.window.global::<Tokens>().get_dark(),
+            &self.window,
             !self.state.borrow().selected.is_empty(),
         ) else {
             return;
@@ -1899,8 +1947,7 @@ impl Workbench {
     }
 
     fn open_settings(self: &Rc<Self>, response: &CorePipeResponse) {
-        let Ok(editor) = SettingsEditor::new(response, self.window.global::<Tokens>().get_dark())
-        else {
+        let Ok(editor) = SettingsEditor::new(response, &self.window) else {
             return;
         };
         let weak = Rc::downgrade(self);
@@ -2050,7 +2097,7 @@ impl Workbench {
         let id_owner = Rc::downgrade(self);
         match crate::service_settings::ServiceSettings::new(
             mode,
-            self.window.global::<Tokens>().get_dark(),
+            &self.window,
             Rc::new(move |request| {
                 request_owner
                     .upgrade()
