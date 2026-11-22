@@ -8,7 +8,7 @@ use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
 
-pub const EXPECTED_PRODUCT_NAME: &str = "HLSDownloader";
+pub const EXPECTED_PRODUCT_NAME: &str = "HLS Downloader";
 pub const EXPECTED_UPGRADE_CODE: &str = "{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,8 +351,66 @@ struct HelperArgs {
 }
 
 pub fn run_update_helper(args: impl IntoIterator<Item = OsString>) -> Result<u8, String> {
+    run_update_helper_with_verifier(args, |_| Ok(()))
+}
+
+/// Runs verification before shutdown and records failures before restarting the workbench.
+pub fn run_update_helper_with_verifier<F>(
+    args: impl IntoIterator<Item = OsString>,
+    verify_msi: F,
+) -> Result<u8, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     let args = parse_helper_args(args)?;
-    match run_update_helper_inner(&args) {
+    run_update_helper_with_hooks(
+        &args,
+        verify_msi,
+        verify_installer_identity,
+        wait_for_product_shutdown,
+        run_msiexec,
+        restart_workbench,
+    )
+}
+
+fn run_update_helper_with_hooks<V, I, W, R, S>(
+    args: &HelperArgs,
+    verify_msi: V,
+    verify_identity: I,
+    mut wait_shutdown: W,
+    run_installer: R,
+    mut restart: S,
+) -> Result<u8, String>
+where
+    V: FnOnce(&Path) -> Result<(), String>,
+    I: FnOnce(&Path, &str) -> Result<InstallerIdentity, String>,
+    W: FnMut(&HelperArgs) -> Result<(), String>,
+    R: FnOnce(&Path, &Path) -> Result<i32, String>,
+    S: FnMut(&HelperArgs),
+{
+    let mut shutdown_attempted = false;
+    let outcome: Result<u8, String> = (|| {
+        verify_msi(&args.msi)?;
+        let identity = verify_identity(&args.msi, &args.version)?;
+        if !identity.per_user {
+            return Err("升级包安装上下文不是每用户安装".into());
+        }
+        shutdown_attempted = true;
+        wait_shutdown(args)?;
+        let exit_code = run_installer(&args.msi, &args.log)?;
+        let (status, message) = installer_exit_status(exit_code);
+        let result = InstallResult {
+            version: args.version.clone(),
+            status: status.into(),
+            exit_code,
+            message: message.into(),
+            install_log: args.log.display().to_string(),
+        };
+        write_install_result(&args.result, &result)?;
+        restart(args);
+        Ok(if status == "success" { 0 } else { 1 })
+    })();
+    match outcome {
         Ok(code) => Ok(code),
         Err(error) => {
             let result = InstallResult {
@@ -363,30 +421,13 @@ pub fn run_update_helper(args: impl IntoIterator<Item = OsString>) -> Result<u8,
                 install_log: args.log.display().to_string(),
             };
             let _ = write_install_result(&args.result, &result);
-            restart_workbench(&args);
+            if !shutdown_attempted && (args.core_pid != 0 || args.workbench_pid != 0) {
+                let _ = wait_shutdown(args);
+            }
+            restart(args);
             Err(error)
         }
     }
-}
-
-fn run_update_helper_inner(args: &HelperArgs) -> Result<u8, String> {
-    let identity = verify_installer_identity(&args.msi, &args.version)?;
-    if !identity.per_user {
-        return Err("升级包安装上下文不是每用户安装".into());
-    }
-    wait_for_product_shutdown(args)?;
-    let exit_code = run_msiexec(&args.msi, &args.log)?;
-    let (status, message) = installer_exit_status(exit_code);
-    let result = InstallResult {
-        version: args.version.clone(),
-        status: status.into(),
-        exit_code,
-        message: message.into(),
-        install_log: args.log.display().to_string(),
-    };
-    write_install_result(&args.result, &result)?;
-    restart_workbench(args);
-    Ok(if status == "success" { 0 } else { 1 })
 }
 
 fn restart_workbench(args: &HelperArgs) {
@@ -445,91 +486,27 @@ fn run_msiexec(path: &Path, log_path: &Path) -> Result<i32, String> {
 }
 
 #[cfg(windows)]
-fn run_msiexec_once(args: &[OsString]) -> Result<i32, String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, ERROR_CANCELLED, WAIT_OBJECT_0,
-    };
-    use windows_sys::Win32::System::Com::{
-        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
-    };
+fn msiexec_command(args: &[OsString]) -> Result<std::process::Command, String> {
+    use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
-    };
-    use windows_sys::Win32::UI::Shell::{
-        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    let mut directory = [0u16; 260];
+    let mut directory = vec![0u16; 32768];
     let length =
         unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) } as usize;
     if length == 0 || length >= directory.len() {
         return Err("无法定位系统 Windows Installer".into());
     }
-    let mut executable = directory[..length].to_vec();
-    executable.extend("\\msiexec.exe\0".encode_utf16());
-    let verb: Vec<u16> = "runas\0".encode_utf16().collect();
-    let mut parameters = Vec::new();
-    for argument in args {
-        if !parameters.is_empty() {
-            parameters.push(b' ' as u16);
-        }
-        // Installer 的开关不能加引号；仅包含空白的已验证文件路径需要引用。
-        let wide: Vec<u16> = argument.encode_wide().collect();
-        let quoted = wide
-            .iter()
-            .any(|ch| *ch == b' ' as u16 || *ch == b'\t' as u16);
-        if quoted {
-            parameters.push(b'"' as u16);
-        }
-        parameters.extend(wide);
-        if quoted {
-            parameters.push(b'"' as u16);
-        }
-    }
-    parameters.push(0);
-    let com = unsafe {
-        CoInitializeEx(
-            std::ptr::null(),
-            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
-        )
-    };
-    let result = (|| {
-        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-        info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
-        info.lpVerb = verb.as_ptr();
-        info.lpFile = executable.as_ptr();
-        info.lpParameters = parameters.as_ptr();
-        info.nShow = SW_SHOWNORMAL;
-        // 只提升 Installer，更新助手及重启后的工作台仍以原用户权限运行。
-        if unsafe { ShellExecuteExW(&mut info) } == 0 {
-            let error = unsafe { GetLastError() };
-            return if error == ERROR_CANCELLED {
-                Ok(1602)
-            } else {
-                Err(format!("启动升级安装失败（Windows {error}）"))
-            };
-        }
-        if info.hProcess.is_null() {
-            return Err("Windows Installer 未返回安装进程".into());
-        }
-        let wait = unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
-        let mut exit = 0;
-        let read =
-            wait == WAIT_OBJECT_0 && unsafe { GetExitCodeProcess(info.hProcess, &mut exit) } != 0;
-        unsafe { CloseHandle(info.hProcess) };
-        if !read {
-            return Err("无法读取 Windows Installer 安装结果".into());
-        }
-        Ok(exit as i32)
-    })();
-    if com >= 0 {
-        unsafe { CoUninitialize() };
-    }
-    result
+    let path = PathBuf::from(OsString::from_wide(&directory[..length])).join("msiexec.exe");
+    let mut command = std::process::Command::new(path);
+    command.args(args);
+    Ok(command)
+}
+
+#[cfg(windows)]
+fn run_msiexec_once(args: &[OsString]) -> Result<i32, String> {
+    let status = msiexec_command(args)?
+        .status()
+        .map_err(|error| format!("启动 Windows Installer 失败: {error}"))?;
+    Ok(status.code().unwrap_or(-1))
 }
 
 #[cfg(not(windows))]
@@ -617,7 +594,7 @@ fn wait_for_product_shutdown(args: &HelperArgs) -> Result<(), String> {
             request_process_window_close(args.workbench_pid);
             let core_running = process_running(args.core_pid);
             let ui_running = process_running(args.workbench_pid);
-            terminate_auxiliary_processes();
+            terminate_auxiliary_processes(&args.install_root);
             if !core_running && !ui_running {
                 return Ok(());
             }
@@ -670,14 +647,68 @@ fn request_process_window_close(pid: u32) {
     }
 }
 
+#[cfg(any(windows, test))]
+fn should_terminate_auxiliary_process(
+    exe_path: &Path,
+    install_root: &Path,
+    pid: u32,
+    current_pid: u32,
+) -> bool {
+    if pid == 0 || pid == current_pid || install_root.as_os_str().is_empty() {
+        return false;
+    }
+    fn normalized(path: &Path) -> Option<Vec<String>> {
+        let mut value = path.to_string_lossy().replace('\\', "/");
+        if cfg!(windows) {
+            value = value.to_lowercase();
+        }
+        let (is_unc, rest) = if let Some(tail) = value
+            .strip_prefix("//?/unc/")
+            .or_else(|| value.strip_prefix("//?/UNC/"))
+        {
+            (true, tail)
+        } else if let Some(tail) = value.strip_prefix("//?/") {
+            (false, tail)
+        } else if let Some(tail) = value.strip_prefix("//") {
+            (true, tail)
+        } else {
+            (false, value.as_str())
+        };
+        let mut parts: Vec<String> = rest
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .map(str::to_string)
+            .collect();
+        if parts.is_empty() || parts.iter().any(|part| part == "..") {
+            return None;
+        }
+        if is_unc {
+            parts.insert(0, "//unc".to_string());
+        }
+        Some(parts)
+    }
+    let (Some(exe), Some(root)) = (normalized(exe_path), normalized(install_root)) else {
+        return false;
+    };
+    exe.last().is_some_and(|name| {
+        name.eq_ignore_ascii_case("hlsdownloaderpresenter.exe")
+            || name.eq_ignore_ascii_case("hlsdownloadernativehost.exe")
+    }) && exe.len() > root.len()
+        && exe.starts_with(&root)
+}
+
 #[cfg(windows)]
-fn terminate_auxiliary_processes() {
+fn terminate_auxiliary_processes(install_root: &Path) {
+    use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
         return;
@@ -696,11 +727,33 @@ fn terminate_auxiliary_processes() {
             name.as_str(),
             "hlsdownloaderpresenter.exe" | "hlsdownloadernativehost.exe"
         ) {
-            request_process_window_close(entry.th32ProcessID);
-            let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID) };
+            let handle = unsafe {
+                OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                    0,
+                    entry.th32ProcessID,
+                )
+            };
             if !handle.is_null() {
+                let mut image = vec![0u16; 32768];
+                let mut length = image.len() as u32;
+                if unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) }
+                    != 0
+                {
+                    let path = PathBuf::from(OsString::from_wide(&image[..length as usize]));
+                    if should_terminate_auxiliary_process(
+                        &path,
+                        install_root,
+                        entry.th32ProcessID,
+                        std::process::id(),
+                    ) {
+                        request_process_window_close(entry.th32ProcessID);
+                        unsafe {
+                            TerminateProcess(handle, 0);
+                        }
+                    }
+                }
                 unsafe {
-                    TerminateProcess(handle, 0);
                     CloseHandle(handle);
                 }
             }
@@ -737,6 +790,242 @@ pub fn sanitize_version(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installer_product_contract_matches_official_wix() {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/build/build-native-v7-installer.ps1");
+        if !script.is_file() {
+            return;
+        }
+        let script = std::fs::read_to_string(script).unwrap();
+        let wix = script
+            .lines()
+            .find(|line| line.contains("<Product "))
+            .unwrap();
+        assert!(wix.contains(&format!("Name=\"{EXPECTED_PRODUCT_NAME}\"")));
+        assert!(wix.to_ascii_uppercase().contains(&format!(
+            "UPGRADECODE=\"{}\"",
+            normalize_guid(EXPECTED_UPGRADE_CODE)
+        )));
+        assert!(script.contains("InstallScope=\"perUser\""));
+    }
+
+    #[test]
+    fn installer_rejects_legacy_and_unrelated_product_names() {
+        for name in ["HLSDownloader", "Unrelated Downloader"] {
+            let identity = InstallerIdentity {
+                product_name: name.into(),
+                product_version: "10.0.0".into(),
+                upgrade_code: EXPECTED_UPGRADE_CODE.into(),
+                per_user: true,
+            };
+            assert!(validate_installer_identity_fields(&identity, "10.0.0")
+                .unwrap_err()
+                .contains("产品名"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_command_uses_system_directory_and_preserves_unicode_arguments() {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+        let mut directory = vec![0u16; 32768];
+        let length = unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) };
+        assert!(length > 0 && (length as usize) < directory.len());
+        let expected =
+            PathBuf::from(OsString::from_wide(&directory[..length as usize])).join("msiexec.exe");
+        let args = msiexec_args(
+            Path::new(r"C:\测试 更新\setup.msi"),
+            Path::new(r"C:\测试 更新\install.log"),
+        );
+        let command = msiexec_command(&args).unwrap();
+        assert_eq!(command.get_program(), expected.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            args.iter().map(OsString::as_os_str).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn verifier_rejection_is_recorded_before_msi_execution() {
+        for error in ["rejected signer", "missing primary thumbprint"] {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/audit-tests")
+                .join(format!(
+                    "verifier-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+            let result = root.join("last-install-result.json");
+            let args = [
+                OsString::from("--msi"),
+                root.join("unverified.msi").into_os_string(),
+                "--version".into(),
+                "10.0.0".into(),
+                "--core-pid".into(),
+                "0".into(),
+                "--workbench-pid".into(),
+                "0".into(),
+                "--install-root".into(),
+                root.clone().into_os_string(),
+                "--workbench".into(),
+                root.join("absent.exe").into_os_string(),
+                "--log".into(),
+                root.join("install.log").into_os_string(),
+                "--result".into(),
+                result.clone().into_os_string(),
+            ];
+            let failure = run_update_helper_with_verifier(args, |path| {
+                assert_eq!(path, root.join("unverified.msi"));
+                Err(error.into())
+            })
+            .unwrap_err();
+            assert_eq!(failure, error);
+            let recorded: InstallResult =
+                serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+            assert_eq!(recorded.status, "failed");
+            assert_eq!(recorded.exit_code, -1);
+            assert_eq!(recorded.message, error);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn verifier_rejection_waits_for_running_product_shutdown_before_restarting() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/audit-tests")
+            .join(format!(
+                "verifier-shutdown-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let result = root.join("last-install-result.json");
+        let args = HelperArgs {
+            msi: root.join("unverified.msi"),
+            version: "10.0.0".into(),
+            core_pid: 4242,
+            workbench_pid: 4343,
+            install_root: root.clone(),
+            workbench: root.join("absent.exe"),
+            log: root.join("install.log"),
+            result: result.clone(),
+        };
+        let steps = std::cell::RefCell::new(Vec::new());
+        let error = run_update_helper_with_hooks(
+            &args,
+            |_| Err("rejected signer".into()),
+            |_, _| panic!("identity check must not run after signer rejection"),
+            |_| {
+                assert!(
+                    result.is_file(),
+                    "failure result must be persisted before waiting for shutdown"
+                );
+                steps.borrow_mut().push("wait_shutdown");
+                Ok(())
+            },
+            |_, _| panic!("msiexec must not run after signer rejection"),
+            |_| steps.borrow_mut().push("restart"),
+        )
+        .unwrap_err();
+        assert_eq!(error, "rejected signer");
+        assert_eq!(*steps.borrow(), vec!["wait_shutdown", "restart"]);
+
+        let mut shutdown_calls = 0usize;
+        let mut restarted = false;
+        let timeout = run_update_helper_with_hooks(
+            &args,
+            |_| Ok(()),
+            |_, _| {
+                Ok(InstallerIdentity {
+                    product_name: EXPECTED_PRODUCT_NAME.into(),
+                    product_version: "10.0.0".into(),
+                    upgrade_code: EXPECTED_UPGRADE_CODE.into(),
+                    per_user: true,
+                })
+            },
+            |_| {
+                shutdown_calls += 1;
+                Err("shutdown timeout".into())
+            },
+            |_, _| panic!("msiexec must not run after shutdown failure"),
+            |_| restarted = true,
+        )
+        .unwrap_err();
+        assert_eq!(timeout, "shutdown timeout");
+        assert_eq!(shutdown_calls, 1);
+        assert!(restarted);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn auxiliary_process_selection_is_confined_to_install_components() {
+        let root = Path::new(r"C:\Apps\HLS");
+        for path in [
+            r"C:\Apps\HLS\HLSDownloaderPresenter.exe",
+            r"C:\Apps\HLS\bin\HLSDownloaderNativeHost.exe",
+            r"\\?\C:\Apps\HLS\HLSDownloaderPresenter.exe",
+        ] {
+            assert!(
+                should_terminate_auxiliary_process(Path::new(path), root, 12, 99),
+                "{path}"
+            );
+        }
+        for path in [
+            r"C:\Other\HLSDownloaderPresenter.exe",
+            r"C:\Apps\HLS2\HLSDownloaderPresenter.exe",
+            r"C:\Apps\HLS\other.exe",
+            r"C:\Apps\HLS\..\Other\HLSDownloaderPresenter.exe",
+        ] {
+            assert!(
+                !should_terminate_auxiliary_process(Path::new(path), root, 12, 99),
+                "{path}"
+            );
+        }
+        let exe = Path::new(r"C:\Apps\HLS\HLSDownloaderPresenter.exe");
+        assert!(!should_terminate_auxiliary_process(
+            exe,
+            Path::new(""),
+            12,
+            99
+        ));
+        assert!(!should_terminate_auxiliary_process(exe, root, 99, 99));
+        assert!(!should_terminate_auxiliary_process(exe, root, 0, 99));
+        #[cfg(windows)]
+        {
+            assert!(should_terminate_auxiliary_process(
+                Path::new(r"c:/apps/hls/HLSdownloaderPRESENTER.exe"),
+                root,
+                12,
+                99
+            ));
+            assert!(should_terminate_auxiliary_process(
+                Path::new(r"\\?\UNC\server\share\HLS\HLSDownloaderPresenter.exe"),
+                Path::new(r"\\server\share\HLS"),
+                12,
+                99
+            ));
+            assert!(should_terminate_auxiliary_process(
+                Path::new(r"\\?\unc\server\share\HLS\HLSDownloaderPresenter.exe"),
+                Path::new(r"\\server\share\HLS"),
+                12,
+                99
+            ));
+            assert!(!should_terminate_auxiliary_process(
+                Path::new(r"server\share\HLS\HLSDownloaderPresenter.exe"),
+                Path::new(r"\\server\share\HLS"),
+                12,
+                99
+            ));
+        }
+    }
     #[test]
     fn cover_install_uses_passive_msi_without_forcing_a_reboot() {
         let msi = Path::new(r"C:\Temp\HLSDownloader-7.1.0-Windows-x64.msi");
@@ -755,8 +1044,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "requires interactive Windows UAC approval"]
-    fn elevated_installer_returns_the_real_exit_code() {
+    #[ignore = "invokes Windows Installer on the local machine"]
+    fn current_user_installer_returns_the_real_exit_code() {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
             MsiQueryProductStateW, INSTALLSTATE_UNKNOWN,
@@ -767,7 +1056,7 @@ mod tests {
             unsafe { MsiQueryProductStateW(wide.as_ptr()) },
             INSTALLSTATE_UNKNOWN
         );
-        // 未安装的产品只返回 1605，不会改动现有产品；同时覆盖 UAC、参数和进程等待。
+        // 未安装的产品只返回 1605，不会改动现有产品；同时覆盖参数和进程等待。
         assert_eq!(
             run_msiexec_once(&["/x".into(), product, "/qn".into(), "/norestart".into()]).unwrap(),
             1605

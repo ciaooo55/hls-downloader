@@ -488,3 +488,79 @@ fn scanner_rejects_unknown_actions_and_ignores_comments_and_forwarders() {
         BTreeSet::from(["save".into(), "close".into(), "task:".into()])
     );
 }
+
+#[test]
+fn fullscreen_media_blocks_task_shortcuts_and_routes_escape() {
+    use crate::WorkbenchWindow;
+    use slint::{
+        platform::{Key, WindowEvent},
+        ComponentHandle, SharedString,
+    };
+    use std::{cell::RefCell, rc::Rc};
+
+    crate::offscreen::OffscreenPlatform::init_test();
+    let ui = WorkbenchWindow::new().unwrap();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let media = Rc::new(RefCell::new(Vec::new()));
+    ui.on_action({
+        let actions = actions.clone();
+        move |action| actions.borrow_mut().push(action.to_string())
+    });
+    ui.on_key_command({
+        let keys = keys.clone();
+        move |key, _, _| keys.borrow_mut().push(key.to_string())
+    });
+    ui.on_media_action({
+        let media = media.clone();
+        move |action| media.borrow_mut().push(action.to_string())
+    });
+    ui.show().unwrap();
+    let press = |text: SharedString| {
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    let task_shortcuts = || {
+        for key in [Key::Delete, Key::Return, Key::UpArrow, Key::DownArrow] {
+            press(key.into());
+        }
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        for key in ["a", "n", "v", "c"] {
+            press(key.into());
+        }
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+    };
+    ui.set_media_visible(true);
+    ui.set_media_fullscreen(true);
+    task_shortcuts();
+    assert!(actions.borrow().is_empty());
+    assert!(keys.borrow().is_empty());
+    ui.set_context_open(true);
+    ui.set_tools_open(true);
+    press(Key::Escape.into());
+    assert_eq!(*media.borrow(), ["escape"]);
+    assert!(keys.borrow().is_empty());
+    assert!(ui.get_context_open());
+    assert!(ui.get_tools_open());
+    ui.set_context_open(false);
+    ui.set_tools_open(false);
+    ui.set_media_fullscreen(false);
+    task_shortcuts();
+    assert_eq!(
+        *actions.borrow(),
+        ["delete", "details", "new", "paste", "task:copy_file"]
+    );
+    assert_eq!(*keys.borrow(), ["up", "down", "select_all"]);
+    press(Key::Escape.into());
+    assert_eq!(
+        keys.borrow().last().map(String::as_str),
+        Some("clear_selection")
+    );
+    ui.hide().unwrap();
+}

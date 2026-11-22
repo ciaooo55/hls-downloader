@@ -61,6 +61,30 @@ impl TaskList {
         self.rebuild();
     }
 
+    pub fn merge_snapshot(&mut self, tasks: Vec<TaskSnapshot>, sequence: u64) {
+        if sequence < self.snapshot_sequence {
+            return;
+        }
+        self.snapshot_sequence = sequence;
+        let incoming: BTreeMap<_, _> = tasks
+            .into_iter()
+            .map(|task| (task.task_id.clone(), task))
+            .collect();
+        self.tasks.retain(|id, _| {
+            incoming.contains_key(id) || self.versions.get(id).is_some_and(|v| *v > sequence)
+        });
+        for (id, task) in incoming {
+            if self.versions.get(&id).is_some_and(|v| *v > sequence) {
+                continue;
+            }
+            self.tasks.insert(id.clone(), task);
+            self.versions.insert(id, sequence);
+        }
+        self.versions
+            .retain(|id, v| *v > sequence || self.tasks.contains_key(id));
+        self.rebuild();
+    }
+
     pub fn apply(&mut self, envelope: &EventEnvelope) -> Option<TaskChange> {
         let (id, snapshot) = match &envelope.event {
             CoreEvent::TaskCreated { snapshot }
@@ -224,6 +248,79 @@ impl TaskList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn late_snapshot_preserves_newer_updates_creations_and_deletions() {
+        let mut list = TaskList::default();
+        list.replace(vec![task("a", 0), task("b", 1)], 10);
+        list.apply(&EventEnvelope {
+            sequence: 11,
+            event: CoreEvent::TaskDeleted {
+                task_id: "a".into(),
+            },
+        });
+        let mut paused = task("b", 1);
+        paused.status = "paused".into();
+        list.apply(&EventEnvelope {
+            sequence: 12,
+            event: CoreEvent::TaskUpdated { snapshot: paused },
+        });
+        list.apply(&EventEnvelope {
+            sequence: 13,
+            event: CoreEvent::TaskCreated {
+                snapshot: task("c", 2),
+            },
+        });
+        list.merge_snapshot(vec![task("a", 0), task("b", 1)], 10);
+        assert!(!list.tasks.contains_key("a"));
+        assert_eq!(list.tasks["b"].status, "paused");
+        assert!(list.tasks.contains_key("c"));
+        assert_eq!(list.versions["a"], 11);
+    }
+
+    #[test]
+    fn newer_snapshot_removes_old_tasks_and_prunes_tombstones() {
+        let mut list = TaskList::default();
+        list.replace(vec![task("a", 0), task("b", 1)], 10);
+        list.apply(&EventEnvelope {
+            sequence: 11,
+            event: CoreEvent::TaskDeleted {
+                task_id: "a".into(),
+            },
+        });
+        list.merge_snapshot(vec![task("d", 0)], 15);
+        assert_eq!(list.visible, ["d"]);
+        assert_eq!(list.versions, HashMap::from([("d".into(), 15)]));
+        list.merge_snapshot(vec![task("a", 0)], 10);
+        assert_eq!(list.snapshot_sequence, 15);
+        assert!(list.tasks.contains_key("d"));
+        assert!(!list.tasks.contains_key("a"));
+        assert_eq!(list.visible, ["d"]);
+    }
+
+    #[test]
+    fn replace_resets_session_versions_after_core_restart() {
+        let mut list = TaskList::default();
+        list.replace(vec![task("old", 0)], 100);
+        list.apply(&EventEnvelope {
+            sequence: 101,
+            event: CoreEvent::TaskDeleted {
+                task_id: "old".into(),
+            },
+        });
+        list.replace(vec![task("x", 0)], 1);
+        assert_eq!(list.snapshot_sequence, 1);
+        assert_eq!(list.versions, HashMap::from([("x".into(), 1)]));
+        assert_eq!(list.visible, ["x"]);
+        assert!(list
+            .apply(&EventEnvelope {
+                sequence: 2,
+                event: CoreEvent::TaskCreated {
+                    snapshot: task("old", 1)
+                },
+            })
+            .is_some());
+    }
+
     fn task(id: &str, index: i64) -> TaskSnapshot {
         TaskSnapshot {
             task_id: id.into(),

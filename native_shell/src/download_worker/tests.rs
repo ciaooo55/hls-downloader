@@ -273,15 +273,28 @@ fn saving_category_dirs_in_the_pipe_shape_is_refused_instead_of_dropped() {
         "竖线拼接的形状必须被拒绝，不能悄悄存进去: {refused:?}"
     );
 
-    // 合法形状照旧放行，而且四个目录一个都不能丢。
+    // 合法形状照旧放行（设置编辑器发送 JSON 对象，确认窗发送 JSON 文本，null 清空）。
     for stored in [
         serde_json::json!({"media":"E:/Videos","program":"E:/Apps","archive":"E:/Archives","other":"E:/Other"}),
+        serde_json::json!(serde_json::json!({"media":"E:/Videos","program":"E:/Apps","archive":"E:/Archives","other":"E:/Other"}).to_string()),
         serde_json::json!(null),
         serde_json::json!(""),
     ] {
         assert!(
             CoreCoordinator::validate_setting("browser_category_dirs", &stored).is_ok(),
             "合法形状被误拒: {stored}"
+        );
+    }
+    for invalid in [
+        serde_json::json!({"media":"../escape"}),
+        serde_json::json!({"media":123}),
+        serde_json::json!(1),
+        serde_json::json!(true),
+        serde_json::json!([]),
+    ] {
+        assert!(
+            CoreCoordinator::validate_setting("browser_category_dirs", &invalid).is_err(),
+            "非法分类目录形状必须被拒绝: {invalid}"
         );
     }
 }
@@ -6855,5 +6868,649 @@ fn shutdown_timeout_does_not_persist_completed_stop_or_resume_intent() {
     );
     assert!(!paths.progress.exists());
     coordinator.active.lock().unwrap().remove(&task_id);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn audit_test_root(label: &str) -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/audit-tests")
+        .join(format!(
+            "{label}-{}-{}",
+            std::process::id(),
+            handoff_now_ms()
+        ));
+    fs::create_dir_all(&root).unwrap();
+    fs::canonicalize(root).unwrap()
+}
+
+fn audit_handoff_fixture(label: &str) -> (CoreCoordinator, PathBuf) {
+    let root = audit_test_root(label);
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting("download_dir", serde_json::json!(root.join("downloads")))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([QueueProfile {
+                enabled: false,
+                ..Default::default()
+            }]),
+        )
+        .unwrap();
+    coordinator
+        .set_setting(
+            "site_rules",
+            serde_json::json!(serde_json::json!([{
+                "host":"cdn.test", "download_dir":root.join("site-rule")
+            }])
+            .to_string()),
+        )
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: "https://cdn.test/a.bin".into(),
+                filename: "a.bin".into(),
+                handoff_id: "audit".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    (coordinator, root)
+}
+
+fn audit_accept_handoff(
+    coordinator: &CoreCoordinator,
+    download_dir: String,
+    trusted_ui: bool,
+) -> Result<Vec<EventEnvelope>, String> {
+    coordinator.dispatch(CoreCommand::AcceptHandoff {
+        handoff_id: "audit".into(),
+        filename: "a.bin".into(),
+        download_dir,
+        trusted_ui,
+        allow_duplicate: false,
+    })
+}
+
+#[test]
+fn accept_handoff_trusted_ui_preserves_custom_directory_outside_default_and_site_rule() {
+    let (coordinator, root) = audit_handoff_fixture("trusted-directory");
+    let selected = root.join("custom").to_string_lossy().into_owned();
+    audit_accept_handoff(&coordinator, selected.clone(), true).unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .task_spec("task-1")
+            .unwrap()
+            .download_dir,
+        selected
+    );
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn accept_handoff_trusted_ui_rejects_parent_traversal() {
+    let (coordinator, root) = audit_handoff_fixture("trusted-traversal");
+    assert!(
+        audit_accept_handoff(&coordinator, format!("{}/../escape", root.display()), true)
+            .unwrap_err()
+            .contains("..")
+    );
+    assert!(coordinator.raw_tasks().unwrap().is_empty());
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn accept_handoff_untrusted_ui_rejects_custom_directory_outside_default() {
+    let (coordinator, root) = audit_handoff_fixture("untrusted-directory");
+    assert!(audit_accept_handoff(
+        &coordinator,
+        root.join("custom").to_string_lossy().into_owned(),
+        false
+    )
+    .is_err());
+    assert!(coordinator.raw_tasks().unwrap().is_empty());
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn accept_handoff_trusted_ui_empty_directory_uses_site_rule_outside_default() {
+    let (coordinator, root) = audit_handoff_fixture("site-rule-directory");
+    audit_accept_handoff(&coordinator, String::new(), true).unwrap();
+    assert_eq!(
+        Path::new(
+            &coordinator
+                .lock()
+                .unwrap()
+                .task_spec("task-1")
+                .unwrap()
+                .download_dir
+        ),
+        root.join("site-rule")
+    );
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn scheduler_ticks_do_not_refresh_missing_output_flags_or_emit_updates() {
+    let root = audit_test_root("scheduler-snapshots");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    let task_id = lifecycle_task(&coordinator, &root, "completed");
+    let output = root.join("finished.bin");
+    fs::write(&output, b"finished").unwrap();
+    coordinator
+        .lock()
+        .unwrap()
+        .set_output_path(&task_id, output.to_string_lossy().into_owned())
+        .unwrap();
+    assert!(!coordinator.tasks().unwrap()[0].output_missing);
+    fs::remove_file(output).unwrap();
+    let sequence = coordinator.latest_sequence().unwrap();
+    coordinator.pause_tasks_outside_schedule().unwrap();
+    coordinator.start_next_queued(false).unwrap();
+    assert!(
+        !coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&task_id)
+            .unwrap()
+            .output_missing
+    );
+    assert!(!coordinator
+        .events_after(sequence, 100)
+        .unwrap()
+        .iter()
+        .any(|event| matches!(event.event, CoreEvent::TaskUpdated { .. })));
+    assert!(
+        coordinator.tasks().unwrap()[0].output_missing,
+        "external snapshots still refresh flags"
+    );
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn settings_reject_non_string_values_and_invalid_schedule_or_policy() {
+    let string_keys = [
+        "ffmpeg_path",
+        "av_scan_command",
+        "download_dir",
+        "temp_dir",
+        "torrent_watch_dir",
+        "proxy_url",
+        "tvbox_endpoint",
+        "default_referer",
+        "default_origin",
+        "allowed_hosts",
+        "default_user_agent",
+        "proxy_mode",
+        "proxy_bypass",
+        "queue_active_days",
+        "queue_auto_start_time",
+        "queue_auto_stop_time",
+        "existing_file_policy",
+        "completion_power_action",
+        "legal_terms_version",
+        "preferred_cast_device_id",
+    ];
+    for key in string_keys {
+        for value in [
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!({}),
+            Value::Null,
+        ] {
+            assert!(
+                CoreCoordinator::validate_setting(key, &value).is_err(),
+                "{key}: {value}"
+            );
+        }
+    }
+    for key in ["queue_auto_start_time", "queue_auto_stop_time"] {
+        for clock in ["24:00", "12:60", "1:00", "noon"] {
+            assert!(CoreCoordinator::validate_setting(key, &serde_json::json!(clock)).is_err());
+        }
+        assert!(CoreCoordinator::validate_setting(key, &serde_json::json!("23:59")).is_ok());
+    }
+    for days in ["", "0", "8", "1,1", "1,01", "1,", "Mon"] {
+        assert!(
+            CoreCoordinator::validate_setting("queue_active_days", &serde_json::json!(days))
+                .is_err(),
+            "{days}"
+        );
+    }
+    assert!(
+        CoreCoordinator::validate_setting("queue_active_days", &serde_json::json!("1,3,7")).is_ok()
+    );
+    for (key, valid) in [
+        ("existing_file_policy", vec!["rename", "overwrite", "skip"]),
+        (
+            "completion_power_action",
+            vec!["", "none", "shutdown", "sleep", "hibernate"],
+        ),
+    ] {
+        assert!(CoreCoordinator::validate_setting(key, &serde_json::json!("invalid")).is_err());
+        for value in valid {
+            assert!(CoreCoordinator::validate_setting(key, &serde_json::json!(value)).is_ok());
+        }
+    }
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let sequence = coordinator.latest_sequence().unwrap();
+    assert!(coordinator
+        .set_settings(BTreeMap::from([
+            ("proxy_mode".into(), serde_json::json!("manual")),
+            ("queue_auto_start_time".into(), serde_json::json!("24:00"))
+        ]))
+        .is_err());
+    assert_eq!(coordinator.settings().unwrap().proxy_mode, "system");
+    assert_eq!(coordinator.latest_sequence().unwrap(), sequence);
+}
+
+#[test]
+fn settings_ffmpeg_path_set_and_clear_take_effect_without_environment_mutation() {
+    let root = audit_test_root("ffmpeg-settings");
+    let path = root.join("ffmpeg.exe");
+    fs::write(&path, b"configured helper fixture").unwrap();
+    let env = std::env::var_os("HLS_FFMPEG");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("ffmpeg_path", serde_json::json!(path))
+        .unwrap();
+    assert_eq!(crate::media::locate_ffmpeg(), Some(path.clone()));
+    coordinator
+        .set_setting("ffmpeg_path", serde_json::json!(""))
+        .unwrap();
+    assert_ne!(crate::media::locate_ffmpeg(), Some(path));
+    assert_eq!(std::env::var_os("HLS_FFMPEG"), env);
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn auxiliary_network_routes_honor_proxy_mode_and_per_target_bypass() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("proxy_mode".into(), serde_json::json!("manual")),
+            (
+                "proxy_url".into(),
+                serde_json::json!("http://127.0.0.1:8888"),
+            ),
+            (
+                "proxy_bypass".into(),
+                serde_json::json!("api.github.com,cdn.test"),
+            ),
+        ]))
+        .unwrap();
+    let settings = coordinator.settings().unwrap();
+    assert_eq!(
+        settings_proxy(&settings, crate::updater::LATEST_API),
+        crate::net_policy::DIRECT_PROXY_SENTINEL
+    );
+    assert_eq!(
+        settings_proxy(&settings, "https://github.com/releases/installer.msi"),
+        settings.proxy_url
+    );
+    assert_eq!(
+        settings_proxy(&settings, "https://cdn.test/source.torrent"),
+        crate::net_policy::DIRECT_PROXY_SENTINEL
+    );
+    assert_eq!(
+        settings_proxy(&settings, "https://page.test/watch"),
+        settings.proxy_url
+    );
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+    assert_eq!(
+        settings_proxy(&coordinator.settings().unwrap(), "https://page.test/watch"),
+        crate::net_policy::DIRECT_PROXY_SENTINEL
+    );
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("system"))
+        .unwrap();
+    assert_eq!(
+        settings_proxy(&coordinator.settings().unwrap(), "https://page.test/watch"),
+        crate::net_policy::SYSTEM_PROXY_SENTINEL
+    );
+}
+
+#[test]
+fn queue_drain_accepts_done_and_completed_but_rejects_pending_or_failed_tasks() {
+    let mut tasks = vec![
+        crate::TaskSnapshot {
+            status: "done".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+        crate::TaskSnapshot {
+            status: "completed".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+    ];
+    assert!(queue_is_successfully_drained(&tasks, "q"));
+    assert!(!queue_is_successfully_drained(&tasks, "missing"));
+    for status in ["failed", "queued", "canceled"] {
+        tasks[1].status = status.into();
+        assert!(!queue_is_successfully_drained(&tasks, "q"));
+    }
+}
+
+#[test]
+fn task_torrent_file_queries_hydrate_redirect_replay_context() {
+    let root = audit_test_root("torrent-replay");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let source = format!("http://{address}/source.torrent");
+    let origin = format!("http://{address}");
+    let metadata = b"d4:infod5:filesld6:lengthi3e4:pathl7:one.bineed6:lengthi2e4:pathl3:dir7:two.bineee4:name4:demo12:piece lengthi4e6:pieces40:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaee";
+    let server = thread::spawn(move || {
+        let mut private_requests = 0;
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                request.push_str(&line);
+            }
+            if request.contains("/source.torrent") {
+                write!(stream, "HTTP/1.1 302 Found\r\nLocation: /private/multi.torrent\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            } else {
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("x-replay-token: redirect-secret"),
+                    "{request}"
+                );
+                private_requests += 1;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    metadata.len()
+                )
+                .unwrap();
+                stream.write_all(metadata).unwrap();
+            }
+        }
+        assert_eq!(private_requests, 2);
+    });
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator.store_credential("torrent-replay", &serde_json::json!({"request_contexts": {
+        origin: {"path_contexts": {"/private/": {"request_headers": {"X-Replay-Token": "redirect-secret"}}}}
+    }}).to_string(), "browser_replay").unwrap();
+    coordinator
+        .dispatch_created(TaskSpec {
+            url: source,
+            filename: "demo".into(),
+            download_dir: root.to_string_lossy().into_owned(),
+            resource_kind: ResourceKind::Torrent,
+            credential_ref: Some("torrent-replay".into()),
+            start_paused: true,
+            ..Default::default()
+        })
+        .unwrap();
+    let listed = task_torrent_files(&coordinator, "task-1").unwrap();
+    let selections = listed
+        .iter()
+        .find_map(|event| match &event.event {
+            CoreEvent::TaskTorrentFiles { selections, .. } => Some(selections.clone()),
+            _ => None,
+        })
+        .unwrap();
+    set_task_torrent_files(&coordinator, "task-1", &selections).unwrap();
+    server.join().unwrap();
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn single_file_torrent_publication_uses_the_latest_output_policy_spec() {
+    let root = audit_test_root("torrent-latest-spec");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let seed = format!("http://{}/payload", listener.local_addr().unwrap());
+    let payload = b"abcde";
+    let mut torrent = format!(
+        "d8:url-list{}:{}4:infod6:lengthi5e4:name4:demo12:piece lengthi16e6:pieces20:",
+        seed.len(),
+        seed
+    )
+    .into_bytes();
+    torrent.extend_from_slice(&crate::crypto_lite::sha1(payload));
+    torrent.extend_from_slice(b"ee");
+    let source = root.join("source.torrent");
+    fs::write(&source, torrent).unwrap();
+    fs::write(root.join("demo"), b"existing output").unwrap();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("existing_file_policy", serde_json::json!("overwrite"))
+        .unwrap();
+    coordinator
+        .set_setting("bt_enable_dht", serde_json::json!(false))
+        .unwrap();
+    let spec = TaskSpec {
+        url: source.to_string_lossy().into_owned(),
+        filename: "demo".into(),
+        download_dir: root.to_string_lossy().into_owned(),
+        resource_kind: ResourceKind::Torrent,
+        ..Default::default()
+    };
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    let core = coordinator.core();
+    let stop = Arc::new(AtomicBool::new(false));
+    let server_stop = Arc::clone(&stop);
+    let server = thread::spawn(move || {
+        while !server_stop.load(Ordering::SeqCst) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(error) => panic!("{error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            // Change the persisted spec before the final payload arrives, without timing a worker race.
+            let mut guard = core.lock().unwrap();
+            let mut latest = guard.task_spec("task-1").unwrap().clone();
+            latest.preserve_existing_output = true;
+            guard.replace_spec("task-1", latest).unwrap();
+            drop(guard);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            )
+            .unwrap();
+            if !first.starts_with("HEAD ") {
+                stream.write_all(payload).unwrap();
+            }
+        }
+    });
+    let result = run_task_with_throttle(coordinator.core(), "task-1", spec, String::new());
+    stop.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    result.unwrap();
+    assert_eq!(fs::read(root.join("demo")).unwrap(), b"existing output");
+    let output = coordinator
+        .lock()
+        .unwrap()
+        .snapshot("task-1")
+        .unwrap()
+        .output_path
+        .clone();
+    assert_ne!(Path::new(&output), root.join("demo"));
+    assert_eq!(fs::read(output).unwrap(), payload);
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn torrent_probe_and_selection_use_the_configured_http_proxy() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            assert!(
+                request.starts_with("GET http://torrent.invalid/source.torrent "),
+                "{request}"
+            );
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let bytes = b"d4:infod6:lengthi3e4:name8:file.bin12:piece lengthi16e6:pieces20:aaaaaaaaaaaaaaaaaaaaee";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            )
+            .unwrap();
+            stream.write_all(bytes).unwrap();
+        }
+    });
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("proxy_mode".into(), serde_json::json!("manual")),
+            ("proxy_url".into(), serde_json::json!(proxy)),
+        ]))
+        .unwrap();
+    assert!(
+        probe_torrent_command(&coordinator, "http://torrent.invalid/source.torrent")
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event.event, CoreEvent::TorrentProbeResult { .. }))
+    );
+    assert!(select_torrent_files_command(
+        &coordinator,
+        "http://torrent.invalid/source.torrent",
+        &[]
+    )
+    .unwrap()
+    .iter()
+    .any(|event| matches!(event.event, CoreEvent::TorrentSelectionResult { .. })));
+    server.join().unwrap();
+}
+
+#[test]
+fn untrusted_relative_download_dir_also_constrains_default_work_dir() {
+    let (coordinator, root) = audit_handoff_fixture("relative-work-dir");
+    let expected = root.join("downloads").join("sub");
+    audit_accept_handoff(&coordinator, "sub".into(), false).unwrap();
+    let handoff_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-1")
+        .unwrap()
+        .clone();
+    assert_eq!(Path::new(&handoff_spec.download_dir), expected);
+    assert_eq!(Path::new(&handoff_spec.work_dir), expected);
+
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://other.test/b.bin".into(),
+                filename: "b.bin".into(),
+                download_dir: "sub".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let create_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .unwrap()
+        .clone();
+    assert_eq!(Path::new(&create_spec.download_dir), expected);
+    assert_eq!(Path::new(&create_spec.work_dir), expected);
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn coordinator_startup_syncs_persisted_ffmpeg_and_task_defaults_do_not_clobber_it() {
+    let root = audit_test_root("ffmpeg-sync");
+    let persisted = root.join("a").join("ffmpeg.exe");
+    let updated = root.join("b").join("ffmpeg.exe");
+    fs::create_dir_all(persisted.parent().unwrap()).unwrap();
+    fs::create_dir_all(updated.parent().unwrap()).unwrap();
+    fs::write(&persisted, b"ffmpeg a").unwrap();
+    fs::write(&updated, b"ffmpeg b").unwrap();
+
+    let mut core = PersistentCore::in_memory().unwrap();
+    core.store_mut()
+        .set_setting("ffmpeg_path", persisted.to_string_lossy().as_ref())
+        .unwrap();
+    let coordinator = CoreCoordinator::new(core);
+    assert_eq!(crate::media::locate_ffmpeg(), Some(persisted.clone()));
+
+    coordinator
+        .set_setting("ffmpeg_path", serde_json::json!(updated))
+        .unwrap();
+    assert_eq!(crate::media::locate_ffmpeg(), Some(updated.clone()));
+
+    // Overriding the runtime cache directly verifies task preparation never writes it back.
+    crate::media::set_configured_ffmpeg(Some(persisted.clone()));
+    let _ = coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://cdn.test/video.m3u8".into(),
+            filename: "video.mp4".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(crate::media::locate_ffmpeg(), Some(persisted));
+
+    coordinator
+        .set_setting("ffmpeg_path", serde_json::json!(""))
+        .unwrap();
+    assert_ne!(crate::media::locate_ffmpeg(), Some(updated));
+    drop(coordinator);
     fs::remove_dir_all(root).unwrap();
 }

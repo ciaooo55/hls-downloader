@@ -1,12 +1,13 @@
 use crate::{file_dialogs, native_window, ResourceRow, ResourceToolsWindow, WorkbenchWindow};
 use hls_client::{
     CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, CrawlProject, CrawlRequest,
-    CrawlSpec, HarvestCandidate, ResourceKind, TaskSpec, TorrentFileEntry, TorrentFileSelection,
+    CrawlSpec, EventEnvelope, HarvestCandidate, ResourceKind, TaskSpec, TorrentFileEntry,
+    TorrentFileSelection,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -14,6 +15,7 @@ use std::{
 pub struct ResourceTools {
     pub window: ResourceToolsWindow,
     rows: Rc<VecModel<ResourceRow>>,
+    seen: RefCell<VecDeque<u64>>,
     projects: RefCell<Vec<CrawlProject>>,
     harvest: RefCell<Vec<HarvestCandidate>>,
     torrent: RefCell<Vec<TorrentFileEntry>>,
@@ -55,6 +57,7 @@ impl ResourceTools {
         let this = Rc::new(Self {
             window,
             rows,
+            seen: RefCell::new(VecDeque::new()),
             projects: RefCell::new(Vec::new()),
             harvest: RefCell::new(Vec::new()),
             torrent: RefCell::new(Vec::new()),
@@ -543,8 +546,22 @@ impl ResourceTools {
         }
     }
 
-    pub fn event(&self, event: &CoreEvent) {
-        match event {
+    pub fn resynchronize(&self) {
+        self.seen.borrow_mut().clear();
+    }
+
+    pub fn event(&self, envelope: &EventEnvelope) {
+        if envelope.sequence > 0 {
+            let mut seen = self.seen.borrow_mut();
+            if seen.contains(&envelope.sequence) {
+                return;
+            }
+            seen.push_back(envelope.sequence);
+            if seen.len() > 512 {
+                seen.pop_front();
+            }
+        }
+        match &envelope.event {
             CoreEvent::HarvestResult { url, links }
             | CoreEvent::HarvestProbeResult { url, links }
                 if self.window.get_mode() == "harvest"
@@ -711,5 +728,104 @@ impl ResourceTools {
         } else {
             self.rows.set_vec(rows);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tools(mode: &str) -> Rc<ResourceTools> {
+        crate::offscreen::OffscreenPlatform::init_test();
+        ResourceTools::new(
+            mode,
+            "task".into(),
+            "",
+            &WorkbenchWindow::new().unwrap(),
+            Rc::new(|_| true),
+            Rc::new(|_| true),
+            Rc::new(|| 1),
+        )
+        .unwrap()
+    }
+
+    fn torrent_event(sequence: u64, name: &str) -> EventEnvelope {
+        EventEnvelope {
+            sequence,
+            event: CoreEvent::TaskTorrentFiles {
+                task_id: "task".into(),
+                source: "torrent".into(),
+                files: vec![TorrentFileEntry {
+                    index: 0,
+                    path: name.into(),
+                    size: 10,
+                    offset: 0,
+                }],
+                selections: vec![],
+                total_size: 10,
+            },
+        }
+    }
+
+    #[test]
+    fn duplicate_torrent_event_preserves_user_selection_and_new_events_refresh() {
+        let tools = tools("torrent");
+        let event = torrent_event(42, "first");
+        tools.event(&event);
+        assert!(tools.rows.row_data(0).unwrap().selected);
+        tools.window.invoke_toggle("0".into(), false);
+        tools.event(&event);
+        assert!(!tools.rows.row_data(0).unwrap().selected);
+        tools.event(&torrent_event(43, "newer"));
+        assert!(tools.rows.row_data(0).unwrap().selected);
+        assert_eq!(tools.rows.row_data(0).unwrap().label, "newer");
+        tools.event(&torrent_event(1, "previous session"));
+        tools.resynchronize();
+        tools.event(&torrent_event(1, "restart"));
+        assert_eq!(tools.rows.row_data(0).unwrap().label, "restart");
+    }
+
+    #[test]
+    fn duplicate_harvest_event_preserves_checked_rows() {
+        let tools = tools("harvest");
+        tools.window.set_source("https://example.test/".into());
+        let event = EventEnvelope {
+            sequence: 50,
+            event: CoreEvent::HarvestResult {
+                url: "https://example.test/".into(),
+                links: vec![HarvestCandidate {
+                    filename: "first".into(),
+                    ..Default::default()
+                }],
+            },
+        };
+        tools.event(&event);
+        tools.window.invoke_toggle("0".into(), true);
+        tools.event(&event);
+        assert!(tools.rows.row_data(0).unwrap().selected);
+        tools.event(&EventEnvelope {
+            sequence: 51,
+            event: event.event.clone(),
+        });
+        assert!(!tools.rows.row_data(0).unwrap().selected);
+        tools.resynchronize();
+        tools.event(&EventEnvelope {
+            sequence: 1,
+            event: event.event,
+        });
+        assert_eq!(tools.rows.row_count(), 1);
+    }
+
+    #[test]
+    fn resource_sequence_history_is_bounded_and_zero_is_not_deduplicated() {
+        let tools = tools("torrent");
+        for sequence in 1..=513 {
+            tools.event(&torrent_event(sequence, "file"));
+        }
+        assert_eq!(tools.seen.borrow().len(), 512);
+        assert_eq!(tools.seen.borrow().front(), Some(&2));
+        tools.event(&torrent_event(0, "zero"));
+        tools.event(&torrent_event(0, "zero again"));
+        assert_eq!(tools.rows.row_data(0).unwrap().label, "zero again");
     }
 }

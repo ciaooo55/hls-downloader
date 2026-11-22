@@ -122,6 +122,10 @@ export component WorkbenchWindow inherits Window {
         key-pressed(event) => {
             root.ctrl-down = event.modifiers.control;
             root.shift-down = event.modifiers.shift;
+            if (root.media-fullscreen) {
+                if (event.text == Key.Escape) { root.media-action("escape"); return accept; }
+                return reject;
+            }
             if (event.modifiers.control && (event.text == "a" || event.text == "A")) { root.key-command("select_all", true, false); return accept; }
             if (event.text == Key.Escape) { root.media-action("escape"); root.context-open = false; root.tools-open = false; root.key-command("clear_selection", false, false); return accept; }
             if (event.text == Key.Delete) { root.action("delete"); return accept; }

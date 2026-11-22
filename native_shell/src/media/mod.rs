@@ -6,7 +6,7 @@ mod harness;
 mod hls;
 mod merge;
 pub(crate) mod preview;
-pub(crate) use merge::{hls_input_options, locate_ffmpeg};
+pub(crate) use merge::{hls_input_options, locate_ffmpeg, set_configured_ffmpeg};
 mod subtitles;
 
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;

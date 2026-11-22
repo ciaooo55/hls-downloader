@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 
 pub(crate) fn hls_input_options(command: &mut Command) {
     static SUPPORT: OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> = OnceLock::new();
@@ -66,7 +66,26 @@ pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
     result
 }
 
+fn configured_ffmpeg() -> &'static RwLock<Option<PathBuf>> {
+    static CONFIGURED: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+    CONFIGURED.get_or_init(|| RwLock::new(None))
+}
+
+pub fn set_configured_ffmpeg(path: Option<PathBuf>) {
+    *configured_ffmpeg()
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = path;
+}
+
 pub fn locate_ffmpeg() -> Option<PathBuf> {
+    if let Some(path) = configured_ffmpeg()
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .filter(|path| path.is_file())
+    {
+        return Some(path.clone());
+    }
     if let Ok(path) = std::env::var("HLS_FFMPEG") {
         let path = PathBuf::from(path);
         if path.is_file() {
@@ -406,6 +425,25 @@ fn which(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_ffmpeg_can_be_set_and_cleared_without_changing_environment() {
+        let original_env = std::env::var_os("HLS_FFMPEG");
+        let original = configured_ffmpeg().read().unwrap().clone();
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/audit-tests/ffmpeg-configured");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("ffmpeg.exe");
+        std::fs::write(&path, b"configured helper fixture").unwrap();
+        set_configured_ffmpeg(Some(path.clone()));
+        assert_eq!(locate_ffmpeg(), Some(path.clone()));
+        set_configured_ffmpeg(None);
+        assert!(configured_ffmpeg().read().unwrap().is_none());
+        assert_ne!(locate_ffmpeg(), Some(path));
+        assert_eq!(std::env::var_os("HLS_FFMPEG"), original_env);
+        set_configured_ffmpeg(original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn mux_offsets_delay_only_the_later_input() {

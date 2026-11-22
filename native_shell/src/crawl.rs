@@ -383,7 +383,7 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
         return Ok(());
     }
     let active = coordinator
-        .tasks()?
+        .raw_tasks()?
         .iter()
         .filter(|t| {
             t.queue_id == queue.id

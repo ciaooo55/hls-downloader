@@ -37,6 +37,7 @@ pub struct Workbench {
     commands: mpsc::SyncSender<WorkbenchJob>,
     editor_commands: mpsc::SyncSender<WorkbenchJob>,
     resource_commands: mpsc::SyncSender<WorkbenchJob>,
+    system_commands: mpsc::SyncSender<WorkbenchJob>,
     next_id: Cell<u64>,
     editor: RefCell<Option<TaskEditorWindow>>,
     editor_id: Cell<u64>,
@@ -111,112 +112,117 @@ impl Workbench {
         window: &WorkbenchWindow,
         capacity: usize,
     ) -> mpsc::SyncSender<WorkbenchJob> {
-        let (commands, jobs) = mpsc::sync_channel::<WorkbenchJob>(capacity);
         let weak = window.as_weak();
-        std::thread::spawn(move || {
-            let mut client = None;
-            let mut last_request = std::time::Instant::now();
-            while let Ok(job) = jobs.recv() {
-                // Core closes idle command pipes after 120 s. Reconnect before sending,
-                // rather than retrying a mutation after its receipt becomes uncertain.
-                if last_request.elapsed() >= std::time::Duration::from_secs(60) {
-                    client = None;
+        let mut client = None;
+        let mut last_request = std::time::Instant::now();
+        Self::spawn_job_worker(capacity, move |job| {
+            // Core closes idle command pipes after 120 s. Reconnect before sending,
+            // rather than retrying a mutation after its receipt becomes uncertain.
+            if last_request.elapsed() >= std::time::Duration::from_secs(60) {
+                client = None;
+            }
+            let failure_id = match &job {
+                WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
+                WorkbenchJob::Request(request) => serde_json::to_value(request)
+                    .ok()
+                    .and_then(|value| value.get("request_id").and_then(serde_json::Value::as_u64)),
+            };
+            let result = (|| {
+                if client.is_none() {
+                    client = Some(CoreIpcClient::connect()?);
                 }
-                let failure_id = match &job {
-                    WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
-                    WorkbenchJob::Request(request) => {
-                        serde_json::to_value(request).ok().and_then(|value| {
-                            value.get("request_id").and_then(serde_json::Value::as_u64)
+                let client = client.as_mut().unwrap();
+                match job {
+                    WorkbenchJob::Request(request) => client.request(&request),
+                    WorkbenchJob::Snapshot(request_id) => {
+                        client.snapshot_state().map(|(tasks, latest_sequence)| {
+                            CorePipeResponse::Snapshot {
+                                request_id,
+                                tasks,
+                                latest_sequence,
+                                browser_connected: false,
+                            }
                         })
                     }
-                };
-                let result = (|| {
-                    if client.is_none() {
-                        client = Some(CoreIpcClient::connect()?);
-                    }
-                    let client = client.as_mut().unwrap();
-                    match job {
-                        WorkbenchJob::Request(request) => client.request(&request),
-                        WorkbenchJob::Snapshot(request_id) => {
-                            client.snapshot_state().map(|(tasks, latest_sequence)| {
-                                CorePipeResponse::Snapshot {
-                                    request_id,
-                                    tasks,
-                                    latest_sequence,
-                                    browser_connected: false,
+                    WorkbenchJob::Batch(request_id, commands) => {
+                        let mut events = Vec::new();
+                        for (index, command) in commands.into_iter().enumerate() {
+                            match client.request(&CorePipeRequest::Command {
+                                request_id,
+                                command,
+                            }) {
+                                Ok(CorePipeResponse::Events { events: result, .. }) => {
+                                    events.extend(result)
                                 }
-                            })
-                        }
-                        WorkbenchJob::Batch(request_id, commands) => {
-                            let mut events = Vec::new();
-                            for (index, command) in commands.into_iter().enumerate() {
-                                match client.request(&CorePipeRequest::Command {
-                                    request_id,
-                                    command,
-                                }) {
-                                    Ok(CorePipeResponse::Events { events: result, .. }) => {
-                                        events.extend(result)
-                                    }
-                                    Ok(CorePipeResponse::Error { message, .. }) => {
-                                        events.push(EventEnvelope {
-                                            sequence: 0,
-                                            event: CoreEvent::Error {
-                                                code: "batch_item_failed".into(),
-                                                message: format!("第 {} 项：{message}", index + 1),
-                                            },
-                                        })
-                                    }
-                                    Ok(_) => {
-                                        events.push(EventEnvelope {
-                                            sequence: 0,
-                                            event: CoreEvent::Error {
-                                                code: "batch_interrupted".into(),
-                                                message: format!(
-                                                    "第 {} 项响应不兼容，后续项目未提交",
-                                                    index + 1
-                                                ),
-                                            },
-                                        });
-                                        break;
-                                    }
-                                    Err(error) => {
-                                        // Never replay the remaining batch after transport failure.
-                                        events.push(EventEnvelope {
-                                            sequence: 0,
-                                            event: CoreEvent::Error {
-                                                code: "batch_interrupted".into(),
-                                                message: format!(
-                                                    "第 {} 项未能确认接收，后续项目未提交：{error}",
-                                                    index + 1
-                                                ),
-                                            },
-                                        });
-                                        break;
-                                    }
+                                Ok(CorePipeResponse::Error { message, .. }) => {
+                                    events.push(EventEnvelope {
+                                        sequence: 0,
+                                        event: CoreEvent::Error {
+                                            code: "batch_item_failed".into(),
+                                            message: format!("第 {} 项：{message}", index + 1),
+                                        },
+                                    })
+                                }
+                                Ok(_) => {
+                                    events.push(EventEnvelope {
+                                        sequence: 0,
+                                        event: CoreEvent::Error {
+                                            code: "batch_interrupted".into(),
+                                            message: format!(
+                                                "第 {} 项响应不兼容，后续项目未提交",
+                                                index + 1
+                                            ),
+                                        },
+                                    });
+                                    break;
+                                }
+                                Err(error) => {
+                                    // Never replay the remaining batch after transport failure.
+                                    events.push(EventEnvelope {
+                                        sequence: 0,
+                                        event: CoreEvent::Error {
+                                            code: "batch_interrupted".into(),
+                                            message: format!(
+                                                "第 {} 项未能确认接收，后续项目未提交：{error}",
+                                                index + 1
+                                            ),
+                                        },
+                                    });
+                                    break;
                                 }
                             }
-                            Ok(CorePipeResponse::Events { request_id, events })
                         }
+                        Ok(CorePipeResponse::Events { request_id, events })
                     }
-                })();
-                last_request = std::time::Instant::now();
-                // A lost reply must not repeat a mutation. The event stream
-                // restores its committed state; the next action reconnects.
-                if result.is_err() {
-                    client = None;
                 }
-                let response = result.unwrap_or_else(|message| CorePipeResponse::Error {
-                    request_id: failure_id,
-                    code: "ui_connection".into(),
-                    message,
-                });
-                let Ok(json) = serde_json::to_string(&response) else {
-                    continue;
-                };
-                if weak
-                    .upgrade_in_event_loop(move |ui| ui.invoke_response_json(json.into()))
-                    .is_err()
-                {
+            })();
+            last_request = std::time::Instant::now();
+            // A lost reply must not repeat a mutation. The event stream
+            // restores its committed state; the next action reconnects.
+            if result.is_err() {
+                client = None;
+            }
+            let response = result.unwrap_or_else(|message| CorePipeResponse::Error {
+                request_id: failure_id,
+                code: "ui_connection".into(),
+                message,
+            });
+            let Ok(json) = serde_json::to_string(&response) else {
+                return true;
+            };
+            weak.upgrade_in_event_loop(move |ui| ui.invoke_response_json(json.into()))
+                .is_ok()
+        })
+    }
+
+    fn spawn_job_worker(
+        capacity: usize,
+        mut dispatch: impl FnMut(WorkbenchJob) -> bool + Send + 'static,
+    ) -> mpsc::SyncSender<WorkbenchJob> {
+        let (commands, jobs) = mpsc::sync_channel(capacity);
+        std::thread::spawn(move || {
+            while let Ok(job) = jobs.recv() {
+                if !dispatch(job) {
                     break;
                 }
             }
@@ -243,6 +249,7 @@ impl Workbench {
         // Task setup and resource tools can each wait for network metadata.
         let editor_commands = Self::spawn_command_worker(&window, 8);
         let resource_commands = Self::spawn_command_worker(&window, 8);
+        let system_commands = Self::spawn_command_worker(&window, 8);
         let controller = Rc::new(Self {
             window,
             state,
@@ -252,6 +259,7 @@ impl Workbench {
             commands,
             editor_commands,
             resource_commands,
+            system_commands,
             next_id: Cell::new(1),
             editor: RefCell::new(None),
             editor_id: Cell::new(0),
@@ -292,9 +300,12 @@ impl Workbench {
         *controller.system.borrow_mut() = Some(crate::system_tools::SystemTools::new(
             controller.window.clone_strong(),
             Rc::new(move |request| {
-                request_owner
-                    .upgrade()
-                    .is_some_and(|this| this.request(request))
+                request_owner.upgrade().is_some_and(|this| {
+                    this.enqueue(
+                        &this.system_commands,
+                        WorkbenchJob::Request(Box::new(request)),
+                    )
+                })
             }),
             Rc::new(move || id_owner.upgrade().map_or(0, |this| this.id())),
         )?);
@@ -662,6 +673,14 @@ impl Workbench {
         if let Some(cast) = self.cast.borrow().as_ref() {
             cast.resynchronize();
         }
+        if let Some(tools) = self.tools.borrow().as_ref() {
+            tools.resynchronize();
+        }
+    }
+
+    fn merge_snapshot(&self, tasks: Vec<TaskSnapshot>, sequence: u64) {
+        self.state.borrow_mut().merge_snapshot(tasks, sequence);
+        self.render();
     }
 
     pub fn apply(&self, event: &EventEnvelope) {
@@ -675,7 +694,7 @@ impl Workbench {
             cast.event(event);
         }
         if let Some(tools) = self.tools.borrow().as_ref() {
-            tools.event(&event.event);
+            tools.event(event);
         }
         let view_revision = self.state.borrow().view_revision;
         let changed = self.state.borrow_mut().apply(event);
@@ -1499,7 +1518,7 @@ impl Workbench {
                 tasks,
                 latest_sequence,
                 ..
-            } => self.replace(tasks, latest_sequence),
+            } => self.merge_snapshot(tasks, latest_sequence),
             CorePipeResponse::Error {
                 request_id,
                 message,
@@ -2338,6 +2357,56 @@ fn row(task: &TaskSnapshot, selected: bool) -> TaskRow {
 
 #[cfg(test)]
 mod file_selection_tests {
+    #[test]
+    fn blocked_system_download_does_not_delay_interactive_commands() {
+        use super::{Workbench, WorkbenchJob};
+        use hls_client::{CoreCommand, CorePipeRequest};
+        use std::{sync::mpsc, time::Duration};
+
+        let (started, entered) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let (finished, completed) = mpsc::channel();
+        let system = Workbench::spawn_job_worker(8, move |job| {
+            assert!(matches!(job, WorkbenchJob::Request(request)
+                if matches!(*request, CorePipeRequest::Command { command: CoreCommand::DownloadUpdate, .. })));
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+            finished.send("system").unwrap();
+            false
+        });
+        let (dispatched, interactive) = mpsc::channel();
+        let commands = Workbench::spawn_job_worker(32, move |job| {
+            assert!(matches!(job, WorkbenchJob::Request(request)
+                if matches!(*request, CorePipeRequest::Command { command: CoreCommand::TaskAction { ref action, .. }, .. } if action == "pause")));
+            dispatched.send(()).unwrap();
+            false
+        });
+        system
+            .send(WorkbenchJob::Request(Box::new(CorePipeRequest::Command {
+                request_id: 1,
+                command: CoreCommand::DownloadUpdate,
+            })))
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        commands
+            .send(WorkbenchJob::Request(Box::new(CorePipeRequest::Command {
+                request_id: 2,
+                command: CoreCommand::TaskAction {
+                    task_id: "task".into(),
+                    action: "pause".into(),
+                },
+            })))
+            .unwrap();
+        let result = interactive.recv_timeout(Duration::from_secs(5));
+        assert!(completed.try_recv().is_err());
+        release.send(()).unwrap();
+        result.unwrap();
+        assert_eq!(
+            completed.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "system"
+        );
+    }
+
     use super::*;
 
     #[test]
