@@ -23,9 +23,9 @@ mod table_layout;
 mod target_check;
 mod task_list;
 mod theme;
-mod workbench;
 #[cfg(test)]
 mod wiring_tests;
+mod workbench;
 
 use hls_client::{
     claim_v7_presenter_instance, completion_sound, download_category, install_root,
@@ -597,7 +597,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     ) {
                                         let _ = weak.upgrade_in_event_loop(move |item| {
                                             item.invoke_open_workbench(true, "".into());
-                                            item.invoke_notice(format!("下载已提交，但保存分类目录失败：{error}").into());
+                                            item.invoke_notice(
+                                                format!("下载已提交，但保存分类目录失败：{error}")
+                                                    .into(),
+                                            );
                                         });
                                     }
                                 }
