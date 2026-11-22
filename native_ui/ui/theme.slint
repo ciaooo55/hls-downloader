@@ -263,7 +263,7 @@ export component ChoiceButton inherits Rectangle {
     border-radius: Tokens.control-radius;
     border-width: 1px;
     border-color: selected ? Tokens.accent.with-alpha(0.7) : Tokens.line;
-    background: selected ? Tokens.selected : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
+    background: selected ? (touch.pressed && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.20) : touch.has-hover && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.10) : Tokens.selected) : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     min-width: choice-content.min-width;
     preferred-width: choice-content.preferred-width;
@@ -338,7 +338,7 @@ export component HotCheckBox inherits Rectangle {
         Rectangle {
             width: 18px; height: 18px; y: (parent.height - self.height) / 2;
             border-radius: Tokens.control-radius;
-            background: !root.enabled ? (root.checked ? Tokens.faint : Tokens.surface-2) : root.checked ? (touch.has-hover ? Tokens.accent-hover : Tokens.accent) : (touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : Tokens.surface);
+            background: !root.enabled ? (root.checked ? Tokens.faint : Tokens.surface-2) : root.checked ? (touch.pressed ? Tokens.accent-pressed : touch.has-hover ? Tokens.accent-hover : Tokens.accent) : (touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : Tokens.surface);
             border-width: root.checked && !root.ring ? 0px : root.ring ? 2px : 1px;
             border-color: root.ring ? (root.checked ? Tokens.accent-hover : Tokens.accent) : touch.has-hover && root.enabled ? Tokens.muted : Tokens.faint;
             animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
@@ -526,6 +526,6 @@ export component HotComboBox {
     }
     if !root.enabled: Rectangle {
         x: 0px; y: 0px; width: root.width; height: root.height;
-        border-radius: 3px; border-width: 1px; border-color: Tokens.line;
+        border-radius: Tokens.control-radius; border-width: 1px; border-color: Tokens.line;
     }
 }

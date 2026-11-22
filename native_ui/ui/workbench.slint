@@ -30,7 +30,7 @@ component HeaderCell inherits Rectangle {
     in property <length> label-x: 16px;
     callback clicked;
     height: 38px;
-    background: touch.has-hover && root.sortable ? Tokens.control-hover : transparent;
+    background: !root.sortable ? transparent : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
     animate background { duration: Tokens.motion-fast; }
     Text { x: root.label-x; width: parent.width - root.label-x - 6px; text: root.label; color: Tokens.faint; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; vertical-alignment: center; overflow: elide; }
     touch := TouchArea { mouse-cursor: root.sortable ? pointer : default; accessible-role: button; accessible-label: root.label; clicked => { root.clicked(); } }
@@ -402,7 +402,10 @@ export component WorkbenchWindow inherits Window {
                                         }
                                         Rectangle {
                                             width: 22px;
-                                            WorkbenchIcon { name: "drag"; ink: drag.has-hover ? Tokens.muted : Tokens.faint.with-alpha(0.7); width: 14px; height: 14px; x: 4px; y: (parent.height - self.height) / 2; }
+                                            border-radius: Tokens.control-radius;
+                                            background: drag.pressed ? Tokens.control-pressed : drag.has-hover ? Tokens.control-hover : transparent;
+                                            animate background { duration: Tokens.motion-fast; }
+                                            WorkbenchIcon { name: "drag"; ink: drag.pressed ? Tokens.accent : drag.has-hover ? Tokens.muted : Tokens.faint.with-alpha(0.7); width: 14px; height: 14px; x: 4px; y: (parent.height - self.height) / 2; }
                                             Tooltip { text: @markdown("按队列顺序拖动排序"); }
                                             drag := TouchArea {
                                                 mouse-cursor: grab; accessible-role: button; accessible-label: "调整任务队列顺序";
