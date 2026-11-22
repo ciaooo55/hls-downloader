@@ -263,7 +263,7 @@ export component ChoiceButton inherits Rectangle {
     border-radius: Tokens.control-radius;
     border-width: 1px;
     border-color: selected ? Tokens.accent.with-alpha(0.7) : Tokens.line;
-    background: selected ? (touch.pressed && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.20) : touch.has-hover && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.10) : Tokens.selected) : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
+    background: selected ? (touch.pressed && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.80) : touch.has-hover && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected) : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     min-width: choice-content.min-width;
     preferred-width: choice-content.preferred-width;
