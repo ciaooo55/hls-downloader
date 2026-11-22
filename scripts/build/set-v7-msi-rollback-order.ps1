@@ -215,8 +215,7 @@ try {
         }
     }
 
-    # jpackage restores the saved directory for RemoveFoldersEx only. Standard
-    # ARP uninstall also needs it for installed-file custom actions.
+    # ARP maintenance needs the persisted directory for installed-file custom actions.
     $installDirValue = Invoke-MsiStringQuery "SELECT ``Name`` FROM ``Registry`` WHERE ``Value``='[INSTALLDIR]'"
     if ([String]::IsNullOrWhiteSpace($installDirValue)) {
         throw 'MSI does not persist INSTALLDIR for maintenance operations.'
@@ -231,7 +230,6 @@ try {
     # AppSearch 会覆盖命令行或向导传入的属性；只在未选择目录时恢复旧路径。
     $restoreDirectoryAction = 'V7RestoreInstallDir'
     $restoreDirectoryCondition = 'NOT INSTALLDIR AND V7_EXISTING_INSTALLDIR'
-    $legacyDirectorySearch = Invoke-MsiStringQuery "SELECT ``Signature_`` FROM ``AppSearch`` WHERE ``Property``='V7_LEGACY_INSTALLDIR'"
     Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='$restoreDirectoryAction'"
     Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('$restoreDirectoryAction',51,'INSTALLDIR','[V7_EXISTING_INSTALLDIR]')"
     foreach ($table in @('InstallUISequence', 'InstallExecuteSequence')) {
@@ -241,18 +239,10 @@ try {
             throw "MSI has no directory-restore slot after AppSearch in $table."
         }
         Invoke-MsiNonQuery "DELETE FROM ``$table`` WHERE ``Action``='$restoreDirectoryAction'"
-        if ($legacyDirectorySearch) {
-            Invoke-MsiNonQuery "DELETE FROM ``$table`` WHERE ``Action``='V7UseLegacyInstallDir'"
-            Invoke-MsiNonQuery "INSERT INTO ``$table`` (``Action``,``Condition``,``Sequence``) VALUES ('V7UseLegacyInstallDir','NOT V7_EXISTING_INSTALLDIR AND V7_LEGACY_INSTALLDIR AND JP_UPGRADABLE_FOUND',$([int]$searchSequence + 1))"
-        }
         Invoke-MsiNonQuery "INSERT INTO ``$table`` (``Action``,``Condition``,``Sequence``) VALUES ('$restoreDirectoryAction','$restoreDirectoryCondition',$([int]$searchSequence + 2))"
     }
-    if ($legacyDirectorySearch) {
-        Invoke-MsiNonQuery "DELETE FROM ``CustomAction`` WHERE ``Action``='V7UseLegacyInstallDir'"
-        Invoke-MsiNonQuery "INSERT INTO ``CustomAction`` (``Action``,``Type``,``Source``,``Target``) VALUES ('V7UseLegacyInstallDir',51,'V7_EXISTING_INSTALLDIR','[V7_LEGACY_INSTALLDIR]')"
-    }
 
-    # 先移除旧产品再写入新文件；旧版 jpackage 卸载可能递归移除 INSTALLDIR。
+    # 先移除旧产品再写入新文件。
     $target = [int]$initialize + 10
     if ($target -le [int]$initialize -or $target -ge [int]$installFiles) {
         throw 'MSI does not provide a major-upgrade slot before InstallFiles.'
@@ -261,7 +251,6 @@ try {
         Invoke-MsiNonQuery "UPDATE ``InstallExecuteSequence`` SET ``Sequence``=$target WHERE ``Action``='RemoveExistingProducts'"
     }
     # 只移除 MSI 管理的文件；递归清理安装目录会删除便携模式的任务库和下载成品。
-    Invoke-MsiNonQuery "DELETE FROM ``InstallExecuteSequence`` WHERE ``Action``='WixRemoveFoldersEx'"
     # 标准用户能安装 per-user MSI，但旧产品的注册回滚写入受保护的 Installer 键。
     # 必须在移除旧产品前拒绝未提升权限的升级，不能只依赖 SummaryInfo 标志。
     $privilegeAction = 'V7RequireUpgradePrivileges'
@@ -312,7 +301,7 @@ try {
     # An installed-file action is valid only when its component is scheduled locally.
     $prepareCondition = 'NOT REMOVE~="ALL" AND $' + $engineComponent + '=3'
     Set-MsiExecutableAction 'V7PrepareNativeHostManifests' $engineFile '--prepare-native-host-manifests' $prepareCondition $prepareSequence
-    # 注册表 KeyPath 有独立组件身份，不能复用 jpackage 文件组件的 ProductCode 标记。
+    # 注册表 KeyPath 使用独立组件身份。
     $nativeHostRegistry = @(
         @('V7NativeHostChromeRegistry', 'Software\Google\Chrome\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostChromeComponent', '{6BF61D0C-7529-43F4-A2B7-BBB3E3C80CEF}'),
         @('V7NativeHostEdgeRegistry', 'Software\Microsoft\Edge\NativeMessagingHosts\com.ciaooo55.hls_downloader', '[INSTALLDIR]app\resources\HLSDownloaderNativeHost.chrome.json', 'V7NativeHostEdgeComponent', '{AED8CD3B-B3B3-4C1C-9D58-89D060BAFE74}'),
@@ -376,11 +365,6 @@ try {
     $verifiedUpgradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_UPGRADABLE_FOUND'"
     $verifiedDowngradableAttributes = Invoke-MsiScalarQuery "SELECT ``Attributes`` FROM ``Upgrade`` WHERE ``ActionProperty``='JP_DOWNGRADABLE_FOUND'"
     if (([int]$verifiedDowngradableAttributes -band 0x100) -ne 0) { throw 'MSI upgrade and downgrade ranges must not overlap.' }
-    foreach ($table in @('InstallExecuteSequence', 'InstallUISequence', 'CustomAction')) {
-        if ($null -ne (Invoke-MsiStringQuery "SELECT ``Action`` FROM ``$table`` WHERE ``Action``='JpFindRelatedProducts'")) {
-            throw 'MSI must use standard related-product detection without the jpackage override.'
-        }
-    }
     foreach ($table in @('InstallExecuteSequence', 'InstallUISequence')) {
         if ($null -eq (Invoke-MsiScalarQuery "SELECT ``Sequence`` FROM ``$table`` WHERE ``Action``='FindRelatedProducts'")) {
             throw 'MSI is missing standard related-product detection.'

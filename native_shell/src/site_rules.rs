@@ -59,7 +59,7 @@ pub fn parse_site_rules(raw: &str) -> Vec<SiteRule> {
     if let Ok(rules) = serde_json::from_str::<Vec<SiteRule>>(text) {
         return rules.into_iter().filter_map(sanitize_rule).collect();
     }
-    text.lines().filter_map(parse_line).collect()
+    Vec::new()
 }
 
 fn sanitize_rule(mut rule: SiteRule) -> Option<SiteRule> {
@@ -123,59 +123,6 @@ fn valid_site_rule_host(host: &str) -> bool {
         return !wildcard && address.parse::<std::net::Ipv6Addr>().is_ok();
     }
     !host.contains([':', '[', ']'])
-}
-
-fn parse_line(line: &str) -> Option<SiteRule> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let (host, rest) = line.split_once('=')?;
-    let mut rule = SiteRule {
-        host: host.trim().to_ascii_lowercase(),
-        enabled: true,
-        ..SiteRule::default()
-    };
-    for part in rest.split(',') {
-        let (key, value) = part.split_once(':').unwrap_or((part, ""));
-        match key.trim() {
-            "speed" | "kib" => rule.speed_limit_kib = value.trim().parse().unwrap_or(0),
-            "conn" | "concurrency" => rule.concurrency = value.trim().parse().unwrap_or(0),
-            "proxy" => {
-                let proxy = value.trim().to_string();
-                if setting_text_ok(&proxy) {
-                    rule.proxy = proxy;
-                }
-            }
-            "proxy_mode" => rule.proxy_mode = value.trim().to_ascii_lowercase(),
-            "dir" | "download_dir" => {
-                let dir = value.trim().to_string();
-                if setting_text_ok(&dir) {
-                    rule.download_dir = dir;
-                }
-            }
-            "ua" | "user_agent" => {
-                let ua = value.trim().to_string();
-                if setting_text_ok(&ua) {
-                    rule.user_agent = ua;
-                }
-            }
-            "referer" => {
-                let referer = value.trim().to_string();
-                if setting_text_ok(&referer) {
-                    rule.referer = referer;
-                }
-            }
-            "origin" => {
-                let origin = value.trim().to_string();
-                if setting_text_ok(&origin) {
-                    rule.origin = origin;
-                }
-            }
-            _ => {}
-        }
-    }
-    (!rule.host.is_empty() && setting_text_ok(&rule.host)).then_some(rule)
 }
 
 pub fn host_of(url: &str) -> String {
@@ -246,19 +193,7 @@ pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
 }
 
 pub fn format_site_rules(rules: &[SiteRule]) -> String {
-    if let Ok(json) = serde_json::to_string_pretty(rules) {
-        return json;
-    }
-    rules
-        .iter()
-        .map(|rule| {
-            format!(
-                "{}=speed:{},conn:{},proxy:{}",
-                rule.host, rule.speed_limit_kib, rule.concurrency, rule.proxy
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    serde_json::to_string_pretty(rules).expect("site rules serialize to JSON")
 }
 
 pub fn matching_rule<'a>(rules: &'a [SiteRule], url: &str) -> Option<&'a SiteRule> {
@@ -286,21 +221,8 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
     }
-    let rules = if text.starts_with('[') {
-        serde_json::from_str::<Vec<SiteRule>>(text)
-            .map_err(|error| format!("站点规则 JSON 无效: {error}"))?
-    } else {
-        let mut rules = Vec::new();
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let rule = parse_line(line).ok_or_else(|| format!("站点规则文本格式无效: {line}"))?;
-            rules.push(rule);
-        }
-        rules
-    };
+    let rules: Vec<SiteRule> =
+        serde_json::from_str(text).map_err(|error| format!("站点规则 JSON 无效: {error}"))?;
     if rules.len() > 100 {
         return Err("站点规则不能超过 100 条".into());
     }
@@ -361,8 +283,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matches_suffix_host_and_line_syntax() {
-        let rules = parse_site_rules("cdn.example.test=speed:256,conn:2\n# comment\n");
+    fn matches_suffix_host_in_json() {
+        let rules = parse_site_rules(
+            r#"[{"host":"cdn.example.test","speed_limit_kib":256,"concurrency":2}]"#,
+        );
         let rule = matching_rule(&rules, "https://a.cdn.example.test/file.bin").unwrap();
         assert_eq!(rule.speed_limit_kib, 256);
         assert_eq!(rule.concurrency, 2);
@@ -372,12 +296,19 @@ mod tests {
 
     #[test]
     fn wildcard_host_is_a_compatible_suffix_alias() {
-        let rules = parse_site_rules("*.example.test=speed:128,conn:2");
+        let rules = parse_site_rules(
+            r#"[{"host":"*.example.test","speed_limit_kib":128,"concurrency":2}]"#,
+        );
         let rule = matching_rule(&rules, "https://cdn.example.test/file.bin").unwrap();
         assert_eq!(rule.speed_limit_kib, 128);
         assert!(matching_rule(&rules, "https://example.test/file.bin").is_some());
-        assert!(validate_site_rules("*.example.test=speed:128").is_ok());
-        assert!(validate_site_rules("foo*bar.example.test=speed:128").is_err());
+        assert!(
+            validate_site_rules(r#"[{"host":"*.example.test","speed_limit_kib":128}]"#).is_ok()
+        );
+        assert!(
+            validate_site_rules(r#"[{"host":"foo*bar.example.test","speed_limit_kib":128}]"#)
+                .is_err()
+        );
         assert!(
             validate_site_rules(r#"[{"host":"example.test"},{"host":"*.example.test"}]"#).is_err()
         );
@@ -388,7 +319,9 @@ mod tests {
 
     #[test]
     fn upsert_reuses_equivalent_wildcard_host() {
-        let mut rules = parse_site_rules("*.example.test=speed:128,conn:2");
+        let mut rules = parse_site_rules(
+            r#"[{"host":"*.example.test","speed_limit_kib":128,"concurrency":2}]"#,
+        );
         upsert_site_rule(
             &mut rules,
             SiteRule {
@@ -459,8 +392,11 @@ mod tests {
         assert!(validate_site_rules(r#"[{"host":"a.test","origin":"javascript:bad"}]"#).is_err());
         assert!(validate_site_rules(r#"[{"host":"a.test","proxy_mode":"direct"}]"#).is_ok());
         assert!(validate_site_rules("not-a-rule").is_err());
-        assert!(validate_site_rules("# comment only\n").is_ok());
-        assert!(validate_site_rules("cdn.test=speed:256,conn:2").is_ok());
+        assert!(validate_site_rules("# comment only\n").is_err());
+        assert!(validate_site_rules("cdn.test=speed:256,conn:2").is_err());
+        assert!(parse_site_rules("cdn.test=speed:256,conn:2").is_empty());
+        assert!(validate_site_rules("").is_ok());
+        assert!(parse_site_rules("").is_empty());
         assert_eq!(
             credential_ref_for_host("A.Test"),
             credential_ref_for_host("a.test")

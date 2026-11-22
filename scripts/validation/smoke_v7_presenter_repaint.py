@@ -107,7 +107,7 @@ def run(args):
         (local / "downloads").mkdir()
         configured = request({"type": "store_settings", "request_id": 1, "values": {
             "download_dir": str(local / "downloads"), "legal_terms_accepted": True,
-            "dark_mode": args.dark}})
+            "theme_mode": "dark" if args.dark else "light"}})
         if configured.get("type") == "error":
             raise AssertionError(configured)
         host = subprocess.Popen([str(args.host.resolve())], env=environment,

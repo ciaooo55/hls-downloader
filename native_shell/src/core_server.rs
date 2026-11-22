@@ -724,7 +724,6 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             keep_temp_files: settings.keep_temp_files,
             default_user_agent: settings.default_user_agent,
             tvbox_endpoint: settings.tvbox_endpoint,
-            dark_mode: settings.dark_mode,
             theme_mode: settings.theme_mode,
             allow_duplicate: settings.allow_duplicate,
             queue_auto_start_enabled: settings.queue_auto_start_enabled,
@@ -748,8 +747,6 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             bt_max_connections: settings.bt_max_connections,
             bt_enable_dht: settings.bt_enable_dht,
             preferred_cast_device_id: settings.preferred_cast_device_id,
-            task_column_layout: settings.task_column_layout,
-            toolbar_actions: settings.toolbar_actions,
             task_sort: settings.task_sort,
             default_cookie_configured: coordinator.default_cookie_configured().unwrap_or(false),
         },
@@ -1074,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_settings_migrate_validate_and_preserve_explicit_system() {
+    fn theme_settings_validate_and_preserve_explicit_system() {
         let server = CoreServer::in_memory().unwrap();
         let handler = server.handler();
         let mode = |response| match response {
@@ -1086,8 +1083,6 @@ mod tests {
             "system"
         );
         for (index, (key, value, expected)) in [
-            ("dark_mode", Value::Bool(false), "light"),
-            ("dark_mode", Value::Bool(true), "dark"),
             ("theme_mode", Value::String("light".into()), "light"),
             ("theme_mode", Value::String("dark".into()), "dark"),
             ("theme_mode", Value::String("system".into()), "system"),
@@ -1131,7 +1126,7 @@ mod tests {
         let response = (server.handler())(CorePipeRequest::StoreSettings {
             request_id: 92,
             values: BTreeMap::from([
-                ("dark_mode".to_string(), Value::Bool(true)),
+                ("theme_mode".to_string(), Value::String("dark".into())),
                 ("proxy_mode".to_string(), Value::String("invalid".into())),
             ]),
         });
@@ -1146,12 +1141,12 @@ mod tests {
         let settings = (server.handler())(CorePipeRequest::LoadSettings { request_id: 93 });
         match settings {
             CorePipeResponse::Settings {
-                dark_mode,
+                theme_mode,
                 proxy_mode,
                 ..
             } => {
-                assert!(
-                    !dark_mode,
+                assert_eq!(
+                    theme_mode, "system",
                     "the valid first item must roll back with the batch"
                 );
                 assert_eq!(proxy_mode, "system");

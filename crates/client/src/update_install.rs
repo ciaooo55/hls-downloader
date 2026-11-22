@@ -1,8 +1,12 @@
 //! Verified MSI execution and result reporting, independent of download engines.
 use serde::{Deserialize, Serialize};
-use std::ffi::{OsStr, OsString};
+#[cfg(windows)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 pub const EXPECTED_PRODUCT_NAME: &str = "HLSDownloader";
 pub const EXPECTED_UPGRADE_CODE: &str = "{1C80D5F7-A1EC-4BAE-A4A6-E010C5A3EE6B}";

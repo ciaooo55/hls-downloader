@@ -2,8 +2,11 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::process::ExitCode;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 fn main() -> ExitCode {
@@ -69,14 +72,14 @@ fn target_name(name: &str) -> bool {
             | "hls-native-shell.exe"
             | "hlsnativeengine.exe"
             | "hls-native-engine.exe"
-    ) || name.starts_with("hlsdownloadernativehost") && name.ends_with(".exe")
+    ) || name == "hlsdownloadernativehost.exe"
 }
 fn client_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     matches!(
         name.as_str(),
         "hlsdownloader.exe" | "hlsdownloaderpresenter.exe" | "hlsdownloadercli.exe"
-    ) || name.starts_with("hlsdownloadernativehost") && name.ends_with(".exe")
+    ) || name == "hlsdownloadernativehost.exe"
 }
 fn normalized(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
@@ -370,8 +373,8 @@ mod windows {
         }
         let maintenance = format!(r"\\.\pipe\HLSDownloader.v7.maintenance.{}", process.pid);
         let configured = std::env::var("HLS_V7_PIPE").ok();
-        // A Core without the maintenance endpoint (7.0.9 and earlier) started
-        // on its own pipe is only reachable through that pipe.
+        // Default-pipe Core uses its normal endpoint instead of a maintenance pipe.
+        // Read a custom endpoint from the running Core, not only this helper.
         let own = core_pipe(process.pid);
         let mut names = vec![maintenance.as_str()];
         if let Some(name) = own.as_deref().filter(|name| {
@@ -615,8 +618,9 @@ mod windows {
 mod tests {
     use super::*;
     #[test]
-    fn process_names_include_versioned_hosts_but_not_unrelated_apps() {
-        assert!(target_name("HLSDownloaderNativeHost-7.0.3.exe"));
+    fn process_names_include_current_hosts_but_not_unrelated_apps() {
+        assert!(target_name("HLSDownloaderNativeHost.exe"));
+        assert!(!target_name("HLSDownloaderNativeHost-other.exe"));
         assert!(client_name("HLSDownloaderPresenter.exe"));
         assert!(client_name("HLSDownloaderCli.exe"));
         assert!(target_name("hls-downloader-engine.exe"));

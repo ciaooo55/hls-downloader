@@ -51,11 +51,11 @@ def main():
         run([args.tests], 'unit-tests')
         for directory in (root, sibling):
             (directory/'app/resources').mkdir(parents=True)
-            for relative in ('HLSDownloader.exe', 'app/resources/HLSDownloaderEngine.exe', 'app/resources/HLSDownloaderNativeHost-7.0.3.exe'):
+            for relative in ('HLSDownloader.exe', 'app/resources/HLSDownloaderEngine.exe', 'app/resources/HLSDownloaderNativeHost.exe'):
                 shutil.copyfile(args.fixture, directory/relative)
         other = spawn(sibling/'HLSDownloader.exe')
         target = spawn(root/'HLSDownloader.exe')
-        host = spawn(root/'app/resources/HLSDownloaderNativeHost-7.0.3.exe')
+        host = spawn(root/'app/resources/HLSDownloaderNativeHost.exe')
         run([args.helper, root], 'installation-boundary')
         target.wait(timeout=5)
         host.wait(timeout=5)
@@ -66,7 +66,7 @@ def main():
         assert (root/'HLSDownloader.exe').exists() and lock.poll() is None
         lock.terminate()
         lock.wait(timeout=5)
-        core = spawn(root/'app/resources/HLSDownloaderEngine.exe', '--pipe-server', os.environ['HLS_V7_PIPE'])
+        core = spawn(root/'app/resources/HLSDownloaderEngine.exe', '--pipe-server')
         sentinel = root/'recovery-sentinel.bin'
         sentinel.write_bytes(b'preserve checkpoint and output')
         before = sentinel.read_bytes()
@@ -76,7 +76,7 @@ def main():
         core.terminate()
         core.wait(timeout=5)
         core = spawn(root/'app/resources/HLSDownloaderEngine.exe')
-        other_core = spawn(sibling/'app/resources/HLSDownloaderEngine.exe', '--pipe-server', os.environ['HLS_V7_PIPE'])
+        other_core = spawn(sibling/'app/resources/HLSDownloaderEngine.exe', '--pipe-server')
         run([args.helper, root], 'other-installation-pipe-owner', 1)
         assert core.poll() is None and other_core.poll() is None
         assert sentinel.read_bytes() == before

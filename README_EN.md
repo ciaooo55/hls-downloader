@@ -35,10 +35,10 @@ The installer lets you select the installation directory. New profiles save to t
 
 Current native implementation, component builds and validation are tracked in the [migration log](docs/validation/native-migration-progress.md) and [feature map](docs/validation/native-feature-mapping.md). The [historical delivery record](docs/validation/convergence.md) does not identify the current source or component builds. Canonical readiness permits frozen-source acceptance; formal delivery still requires matching packaged components and installation/startup gates.
 
-### Upgrading from 5.x / 7.x
+### Installation and data
 
-- **7.x → 10.0.0:** install the MSI in place. The existing installer/upgrade identity and `%LOCALAPPDATA%\HLS Downloader\v7` profile retain tasks and settings; do not rename or clear that directory for the new product version. Actual Windows upgrade acceptance is still required before release.
-- **5.x (Tauri/Python) → 10.0.0:** back up the old configuration, database and downloads, then install fresh. The Rust Core **does not automatically migrate 5.x tasks, settings or credentials**. Reconfigure the new installation; do not overwrite its database with the old one.
+- **10.x:** retain the product identity and `%LOCALAPPDATA%\HLS Downloader\v7` profile. Do not rename or clear that directory for a marketing version change.
+- **Pre-10 versions:** compatibility migration is no longer supported. Back up configuration, tasks and downloads, then install fresh and reconfigure. Do not overwrite the current Core database with an old one. Published artifacts have the upgrade scope documented in their own release notes.
 
 ### Requirements
 
@@ -46,13 +46,13 @@ Current native implementation, component builds and validation are tracked in th
 | --- | --- |
 | Operating system | Windows 10 or Windows 11 (x64) |
 | CPU architecture | **x64 only.** Playback and part of the capture path rely on the x64 native libraries shipped in the package (libmpv, curl-impersonate), so ARM64 Windows cannot run it |
-| Runtime | The native 10.0.0 implementation requires no Java and contains no JRE; historical Compose packages bundle a JRE |
+| Runtime | The native 10.0.0 implementation requires no Java and contains no JRE |
 | Privileges | MSI installation or upgrade requires administrator rights; see the corresponding release instructions for portable packages |
 | Browser | Chromium-based (Chrome / Edge) or Firefox, for download handoff |
 | Display | 1024×600 minimum; the UI follows the system DPI scaling |
 
 > [!NOTE]
-> **10.0.0 is in release preparation and has no packaged-release acceptance result yet.** The historical [7.0.10 stable release](docs/releases/v7.0.10.md) was tested at `deb42d1b`; that evidence does not certify 10.0.0. The corresponding release attachment `ARTIFACT-MANIFEST.json` identifies shipped components.
+> **[10.0.0 is formally released](https://github.com/ciaooo55/hls-downloader/releases/tag/v10.0.0).** Its `ARTIFACT-MANIFEST.json` and `RELEASE-EVIDENCE.json` identify the shipped components and acceptance scope. Later source changes do not inherit that artifact's acceptance results.
 
 Online subtitles can be enabled from the video player button or the extension popup, and dragged directly over the video; if the page has multiple videos, you can switch the bound player from the popup. Subtitle translation service, API key, global toggle, target language, sync mode, source text display, and default offset are configured in the desktop main window under `Settings -> Subtitle Translation` (the key is encrypted at rest by the local Core), while the browser extension only controls the per-page toggle, player selection, and starting/stopping subtitles; see the [QwenCloud subtitle guide](docs/guides/qwencloud-subtitles.md).
 
@@ -157,15 +157,9 @@ For deeper implementation and verification details, see:
 - [Local upgrade and rollback](docs/guides/v7-local-upgrade.md)
 - [Source layout and version history](docs/architecture/source-layout-and-history.md)
 
-## 🧬 One repository, multiple generations
+## 🧬 Current source
 
-The complete active v7 source lives on `main`. Historical v3, v5, and v6 implementations remain available through Git tags instead of being copied into separate drifting repositories.
-
-```powershell
-git show v3.0.39:frontend/package.json
-git show v5.0.13:backend/app/main.py
-git show v6.0.1:native_ui/Cargo.toml
-```
+`main` maintains one 10.x product line: Rust Core, the Slint native UI and MV3 extensions. Building and using it does not require old source trees or removed historical tags. Source, artifacts and evidence are tied to a specific commit and release.
 
 ## 🔐 Security, privacy, and lawful use
 

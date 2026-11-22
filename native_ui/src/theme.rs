@@ -9,26 +9,17 @@ pub enum ThemeMode {
 }
 
 impl ThemeMode {
-    pub fn from_values(mode: &str, legacy_dark: Option<bool>) -> Self {
+    pub fn from_values(mode: &str) -> Self {
         match mode {
-            "system" => Self::System,
             "light" => Self::Light,
             "dark" => Self::Dark,
-            _ => match legacy_dark {
-                Some(true) => Self::Dark,
-                Some(false) => Self::Light,
-                None => Self::System,
-            },
+            _ => Self::System,
         }
     }
 
     pub fn from_response(response: Option<&CorePipeResponse>) -> Self {
         match response {
-            Some(CorePipeResponse::Settings {
-                theme_mode,
-                dark_mode,
-                ..
-            }) => Self::from_values(theme_mode, Some(*dark_mode)),
+            Some(CorePipeResponse::Settings { theme_mode, .. }) => Self::from_values(theme_mode),
             _ => Self::System,
         }
     }
@@ -95,33 +86,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn theme_migrates_explicit_legacy_values_and_defaults_new_profiles_to_system() {
-        assert_eq!(ThemeMode::from_values("", Some(true)), ThemeMode::Dark);
-        assert_eq!(ThemeMode::from_values("", Some(false)), ThemeMode::Light);
-        assert_eq!(ThemeMode::from_values("", None), ThemeMode::System);
-        assert_eq!(ThemeMode::from_values("invalid", None), ThemeMode::System);
-        assert_eq!(
-            ThemeMode::from_values("invalid", Some(true)),
-            ThemeMode::Dark
-        );
-    }
-
-    #[test]
-    fn explicit_theme_overrides_legacy_and_only_system_tracks_os_changes() {
+    fn theme_defaults_to_system_and_resolves_explicit_modes() {
+        assert_eq!(ThemeMode::from_values(""), ThemeMode::System);
+        assert_eq!(ThemeMode::from_values("invalid"), ThemeMode::System);
+        assert_eq!(ThemeMode::from_response(None), ThemeMode::System);
+        assert_eq!(ThemeMode::from_values("system"), ThemeMode::System);
+        assert_eq!(ThemeMode::from_values("light"), ThemeMode::Light);
+        assert_eq!(ThemeMode::from_values("dark"), ThemeMode::Dark);
         for dark in [false, true] {
-            assert_eq!(
-                ThemeMode::from_values("system", Some(dark)),
-                ThemeMode::System
-            );
             assert_eq!(ThemeMode::System.resolve(dark), dark);
             assert!(!ThemeMode::Light.resolve(dark));
             assert!(ThemeMode::Dark.resolve(dark));
         }
-        assert_eq!(
-            ThemeMode::from_values("light", Some(true)),
-            ThemeMode::Light
-        );
-        assert_eq!(ThemeMode::from_values("dark", Some(false)), ThemeMode::Dark);
     }
 
     #[test]

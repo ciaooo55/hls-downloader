@@ -143,13 +143,13 @@ try {
         $data = Join-Path $scenarioRoot 'data'
         New-Item -ItemType Directory -Force -Path $data | Out-Null
         if ($scenario -in @('legacy-custom-path', 'unsupported-schema')) {
-            # Reproduce the old candidate's confirmed schema-6 startup failure.
+            # Reproduce the old candidate's confirmed unsupported-schema startup failure.
             @'
 import pathlib, sqlite3, sys
 with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
     connection.executescript(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
     connection.execute('pragma user_version = ' + str(int(sys.argv[3])))
-'@ | python - (Join-Path $repo 'native_shell\tests\fixtures\schema-v6.sql') $data $(if ($scenario -eq 'legacy-custom-path') { '6' } else { '8' })
+'@ | python - (Join-Path $repo 'native_shell\tests\fixtures\schema-v7.sql') $data $(if ($scenario -eq 'legacy-custom-path') { '7' } else { '8' })
             if ($LASTEXITCODE -ne 0) { throw 'Legacy profile fixture failed.' }
         }
         $databaseBefore = if ($scenario -eq 'unsupported-schema') { (Get-FileHash -LiteralPath (Join-Path $data 'data.db') -Algorithm SHA256).Hash } else { $null }

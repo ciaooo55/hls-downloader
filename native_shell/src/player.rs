@@ -455,7 +455,7 @@ impl Player {
             if unsafe { IsWindow(parent as _) } == 0 {
                 return Err("播放器宿主已关闭".into());
             }
-            // 使用宿主的 DPI 模式创建和移动子 HWND，坐标与 Compose 的像素矩形一致。
+            // 使用宿主的 DPI 模式创建和移动子 HWND，坐标与原生宿主的像素矩形一致。
             let previous_dpi =
                 unsafe { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent as _)) };
             if previous_dpi.is_null() {

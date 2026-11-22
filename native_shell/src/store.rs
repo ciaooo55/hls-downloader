@@ -54,12 +54,10 @@ impl CoreStore {
         let connection = Connection::open(path)
             .map_err(|error| format!("open Core database {}: {error}", path.display()))?;
         mark("connection_ready");
-        // 6 → 7 仅新增 crawl_projects，由 initialize 在同一事务内建表并更新版本。
-        // 其他旧版或未来版本必须在建表之前拒绝，不能把未知布局当成当前版本。
         let existing: u32 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| format!("read Core database {}: {error}", path.display()))?;
-        if !matches!(existing, 0 | 6 | CURRENT_SCHEMA_VERSION) {
+        if !matches!(existing, 0 | CURRENT_SCHEMA_VERSION) {
             return Err(format!(
                 "Core database {} has unsupported schema version {existing}, expected {CURRENT_SCHEMA_VERSION}",
                 path.display()
@@ -540,13 +538,7 @@ impl CoreStore {
         if matches!(mode.as_str(), "system" | "light" | "dark") {
             return Ok(mode);
         }
-        let legacy: Option<bool> = self.setting_or("dark_mode", None)?;
-        Ok(match legacy {
-            Some(true) => "dark",
-            Some(false) => "light",
-            None => "system",
-        }
-        .into())
+        Ok("system".into())
     }
 
     pub fn setting_bool(&self, key: &str, fallback: bool) -> Result<bool, String> {
@@ -1350,25 +1342,13 @@ mod tests {
     }
 
     #[test]
-    fn theme_mode_migrates_only_explicit_legacy_preferences() {
+    fn theme_mode_defaults_to_system_and_preserves_explicit_choice() {
         let mut store = CoreStore::in_memory().unwrap();
         assert_eq!(store.theme_mode().unwrap(), "system");
-        store
-            .set_setting("dark_mode", serde_json::json!(false))
-            .unwrap();
-        assert_eq!(store.theme_mode().unwrap(), "light");
-        store
-            .set_setting("dark_mode", serde_json::json!(true))
-            .unwrap();
+        store.set_setting("theme_mode", "dark").unwrap();
         assert_eq!(store.theme_mode().unwrap(), "dark");
-        store
-            .set_setting("theme_mode", serde_json::json!("system"))
-            .unwrap();
+        store.set_setting("theme_mode", "").unwrap();
         assert_eq!(store.theme_mode().unwrap(), "system");
-        store
-            .set_setting("theme_mode", serde_json::json!("invalid"))
-            .unwrap();
-        assert_eq!(store.theme_mode().unwrap(), "dark");
     }
 
     #[test]
@@ -1442,122 +1422,8 @@ mod tests {
     }
 
     #[test]
-    fn schema_six_migration_preserves_tasks_and_settings() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../.tool-cache/test-tmp")
-            .join(format!(
-                "schema-six-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-        fs::create_dir_all(&root).unwrap();
-        let database = root.join("data.db");
-        let connection = Connection::open(&database).unwrap();
-        connection
-            .execute_batch(include_str!("../tests/fixtures/schema-v6.sql"))
-            .unwrap();
-        let mut old = CoreStore {
-            connection,
-            #[cfg(not(windows))]
-            url_passwords: Default::default(),
-            path: Some(database.clone()),
-        };
-        let mut runtime = CoreRuntime::new();
-        let mut task_spec = spec();
-        task_spec.credential_ref = Some("upgrade-credential".into());
-        let events = runtime.handle(CoreCommand::CreateTask {
-            spec: task_spec.clone(),
-        });
-        old.apply_events_and_spec(&events, Some(&task_spec))
-            .unwrap();
-        let snapshot = old.load_tasks().unwrap().remove(0);
-        let task_id = &snapshot.task_id;
-        old.set_setting("minimum_bytes", 512_u64).unwrap();
-        old.store_credential("upgrade-credential", "protected-fixture", "browser_replay")
-            .unwrap();
-        old.save_handoff(
-            "upgrade-handoff",
-            r#"{"id":"upgrade-handoff","status":"accepted"}"#,
-            "accepted",
-            Some(task_id),
-            1,
-        )
-        .unwrap();
-        old.connection
-            .execute(
-                "INSERT INTO task_ranges VALUES (?1, 0, 4095, 'etag-fixture')",
-                params![task_id],
-            )
-            .unwrap();
-        old.connection
-            .execute(
-                "INSERT INTO media_tracks VALUES (?1, 'audio', '{}')",
-                params![task_id],
-            )
-            .unwrap();
-        let expected_tasks = serde_json::to_value(old.load_tasks().unwrap()).unwrap();
-        let expected_specs = serde_json::to_value(old.load_task_specs().unwrap()).unwrap();
-        let expected_handoffs = old.load_handoffs().unwrap();
-        let sequence = old.latest_sequence().unwrap();
-        assert_eq!(old.schema_version().unwrap(), 6);
-        drop(old);
-
-        let upgraded = CoreStore::open(&database).unwrap();
-        assert_eq!(upgraded.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
-        assert_eq!(
-            serde_json::to_value(upgraded.load_tasks().unwrap()).unwrap(),
-            expected_tasks
-        );
-        assert_eq!(
-            serde_json::to_value(upgraded.load_task_specs().unwrap()).unwrap(),
-            expected_specs
-        );
-        assert_eq!(upgraded.load_handoffs().unwrap(), expected_handoffs);
-        assert_eq!(upgraded.latest_sequence().unwrap(), sequence);
-        assert_eq!(upgraded.setting_u64("minimum_bytes", 0).unwrap(), 512);
-        assert_eq!(
-            upgraded
-                .load_credential("upgrade-credential")
-                .unwrap()
-                .as_deref(),
-            Some("protected-fixture")
-        );
-        let range: (i64, i64, String) = upgraded
-            .connection
-            .query_row(
-                "SELECT start_byte, end_byte, validator FROM task_ranges WHERE task_id=?1",
-                params![task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(range, (0, 4095, "etag-fixture".into()));
-        let track: String = upgraded
-            .connection
-            .query_row(
-                "SELECT track_json FROM media_tracks WHERE task_id=?1 AND track_id='audio'",
-                params![task_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(track, "{}");
-        assert!(upgraded.crawl_ids().unwrap().is_empty());
-        assert!(upgraded.crawl_states().unwrap().is_empty());
-        drop(upgraded);
-        let reopened = CoreStore::open(&database).unwrap();
-        assert_eq!(
-            serde_json::to_value(reopened.load_tasks().unwrap()).unwrap(),
-            expected_tasks
-        );
-        drop(reopened);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn schema_failure_rolls_back_tables_and_version() {
-        for version in [0, 6] {
+        for version in [0, CURRENT_SCHEMA_VERSION] {
             let connection = Connection::open_in_memory().unwrap();
             connection.execute_batch("CREATE TABLE tasks (wrong_column TEXT); INSERT INTO tasks VALUES ('preserve');").unwrap();
             connection
@@ -1585,26 +1451,28 @@ mod tests {
 
     #[test]
     fn open_rejects_unexpected_existing_schema_version() {
-        let path = std::env::temp_dir().join(format!(
-            "hls-v7-schema-guard-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute_batch("PRAGMA user_version = 99;")
-            .unwrap();
-        drop(connection);
+        for version in [6, 99] {
+            let path = std::env::temp_dir().join(format!(
+                "hls-v7-schema-guard-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            drop(connection);
 
-        let error = match CoreStore::open(&path) {
-            Ok(_) => panic!("expected open to refuse unexpected schema version"),
-            Err(error) => error,
-        };
-        assert!(error.contains("unsupported schema version"), "{error}");
-        let _ = fs::remove_file(&path);
+            let error = match CoreStore::open(&path) {
+                Ok(_) => panic!("expected open to refuse unexpected schema version"),
+                Err(error) => error,
+            };
+            assert!(error.contains("unsupported schema version"), "{error}");
+            let _ = fs::remove_file(&path);
+        }
     }
 
     #[test]
