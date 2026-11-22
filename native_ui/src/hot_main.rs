@@ -6,6 +6,7 @@
 slint::include_modules!();
 mod activation;
 mod cast_tools;
+mod core_feedback;
 mod file_dialogs;
 mod media_controller;
 mod native_window;
@@ -22,6 +23,8 @@ mod table_layout;
 mod target_check;
 mod task_list;
 mod theme;
+#[cfg(test)]
+mod wiring_tests;
 mod workbench;
 
 use hls_client::{
@@ -486,7 +489,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let result = CoreIpcClient::connect().and_then(|mut client| {
                             client
                                 .command(CoreCommand::TaskAction { task_id, action })
-                                .map(|_| ())
+                                .and_then(core_feedback::command_result)
                         });
                         let _ = result_window.upgrade_in_event_loop(move |item| {
                             if result_hud_task.lock().ok().and_then(|task| task.clone())
@@ -506,6 +509,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     item.set_action_error(true);
                     item.set_action_text("当前没有可操作的下载任务".into());
                 }
+            }
+        }
+    });
+    confirm.on_notice({
+        let workbench = Rc::clone(&workbench);
+        move |message| {
+            if let Some(window) = workbench.borrow().as_ref() {
+                window.window.set_notice(message);
             }
         }
     });
@@ -568,20 +579,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 .map_err(|issue| issue.presentation_for(copy))?;
                             (|| {
                                 let mut client = CoreIpcClient::connect()?;
-                                client.command(CoreCommand::AcceptHandoff {
-                                    handoff_id: offer.handoff_id.clone(),
-                                    filename,
-                                    download_dir: download_dir.clone(),
-                                    allow_duplicate: copy,
-                                    trusted_ui: true,
-                                })?;
+                                client
+                                    .command(CoreCommand::AcceptHandoff {
+                                        handoff_id: offer.handoff_id.clone(),
+                                        filename,
+                                        download_dir: download_dir.clone(),
+                                        allow_duplicate: copy,
+                                        trusted_ui: true,
+                                    })
+                                    .and_then(core_feedback::command_result)?;
                                 if remember {
-                                    remember_category_directory(
+                                    if let Err(error) = remember_category_directory(
                                         &mut client,
                                         &presenter_settings,
                                         &category,
                                         download_dir,
-                                    );
+                                    ) {
+                                        let _ = weak.upgrade_in_event_loop(move |item| {
+                                            item.invoke_open_workbench(true, "".into());
+                                            item.invoke_notice(
+                                                format!("下载已提交，但保存分类目录失败：{error}")
+                                                    .into(),
+                                            );
+                                        });
+                                    }
                                 }
                                 Ok::<(), String>(())
                             })()
@@ -633,10 +654,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     thread::spawn(move || {
                         let handoff_id = offer.handoff_id;
                         let result = CoreIpcClient::connect().and_then(|mut client| {
-                            client.command(CoreCommand::RejectHandoff {
-                                handoff_id: handoff_id.clone(),
-                                suppress_site_kind,
-                            })
+                            client
+                                .command(CoreCommand::RejectHandoff {
+                                    handoff_id: handoff_id.clone(),
+                                    suppress_site_kind,
+                                })
+                                .and_then(core_feedback::command_result)
                         });
                         if let Err(error) = result {
                             let _ =
@@ -775,8 +798,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             item.set_action_text("".into());
             let result_window = window.clone();
             thread::spawn(move || {
-                let result =
-                    CoreIpcClient::connect().and_then(|mut client| client.command(request));
+                let result = CoreIpcClient::connect()
+                    .and_then(|mut client| client.command(request))
+                    .and_then(core_feedback::command_result);
                 let _ = result_window.upgrade_in_event_loop(move |item| {
                     // 下一项下载完成后，旧窗口的操作结果不能隐藏新通知。
                     if item.get_task_id().as_str() != task_id.as_deref().unwrap_or("") {
@@ -1032,6 +1056,36 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     );
 
     match kind {
+        "cast" => {
+            let window = CastWindow::new()?;
+            crate::native_window::apply_theme(&window, dark);
+            window.global::<Tokens>().set_reduce_motion(true);
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
+        "settings" => {
+            let window = SettingsWindow::new()?;
+            crate::native_window::apply_theme(&window, dark);
+            window
+                .global::<Tokens>()
+                .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
+            window.set_groups(slint::ModelRc::new(slint::VecModel::from(vec![
+                "通用".into(),
+                "网络".into(),
+            ])));
+            window.set_site_rules(slint::ModelRc::new(slint::VecModel::from(vec![
+                SiteRuleRow {
+                    host: "media.example.test".into(),
+                    enabled: true,
+                    ..Default::default()
+                },
+            ])));
+            window.set_selected_group("网络".into());
+            window.show()?;
+            write_ready_marker();
+            slint::run_event_loop_until_quit()?;
+        }
         "workbench" => {
             let tasks = (0..1000)
                 .map(|index| TaskSnapshot {
@@ -1250,24 +1304,26 @@ fn remember_category_directory(
     presenter_settings: &Arc<Mutex<PresenterSettings>>,
     category: &str,
     directory: String,
-) {
+) -> Result<(), String> {
     if let Ok(mut settings) = presenter_settings.lock() {
         settings.remember(category, directory.clone());
     }
-    let Ok(response) = client.load_settings() else {
-        return;
-    };
+    let response = client.load_settings()?;
     // Never write back a derived default: a non-Settings response must not
     // blank the other three categories in the stored map.
     let CorePipeResponse::Settings { .. } = &response else {
-        return;
+        return Err(core_feedback::response_error(&response)
+            .unwrap_or("下载引擎返回了无效的设置响应")
+            .to_owned());
     };
     let mut fresh = PresenterSettings::from_response(Some(&response));
     fresh.remember(category, directory);
-    let _ = client.command(CoreCommand::SetSetting {
-        key: "browser_category_dirs".into(),
-        value: serde_json::Value::String(fresh.category_dirs_json()),
-    });
+    client
+        .command(CoreCommand::SetSetting {
+            key: "browser_category_dirs".into(),
+            value: serde_json::Value::String(fresh.category_dirs_json()),
+        })
+        .and_then(core_feedback::command_result)
 }
 
 fn event_loop(
@@ -2308,6 +2364,9 @@ fn render_progress_hud(
         None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
     });
     let first_show = !item.window().is_visible();
+    if first_show {
+        item.invoke_enter();
+    }
     if first_show && item.show().is_ok() {
         round_native_window(item.window());
         native_window::prepare_dialog(&item, true, false, None);

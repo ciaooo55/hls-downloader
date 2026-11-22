@@ -1,4 +1,4 @@
-import { Tokens, WorkbenchIcon, FocusRing, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar, HotScrollView } from "theme.slint";
+import { Tokens, WorkbenchIcon, FocusRing, HotButton, HotCloseButton, ChoiceButton, FieldLabel, HotLineEdit, CheckRow, Panel, WindowDragArea, SegmentBlock, SegmentMapBar, HotScrollView, FadePanel } from "theme.slint";
 export { Tokens, SegmentBlock } from "theme.slint";
 
 export { WorkbenchWindow, TaskRow, NavigationRow, TaskMenuRow, TaskColumn, ToolbarItem } from "workbench.slint";
@@ -128,6 +128,7 @@ export component ConfirmWindow inherits Window {
     callback core-events-ready();
     callback core-resynced(string);
     callback open-workbench(bool, string);
+    callback notice(string);
     callback command(string);
     callback move-window(float, float);
     // 窄窗（< 440px）时次要操作收为图标，保证四个主控件同屏完整可用。
@@ -272,17 +273,20 @@ export component ConfirmWindow inherits Window {
 
                     CheckRow { height: 26px; label: "记住此分类的保存位置"; enabled: !root.busy; checked <=> root.remember_directory; toggled(value) => { root.remember_directory = value; } }
 
-                    if root.details_expanded : Rectangle {
-                        private property <bool> entered: false;
-                        init => { self.entered = true; }
-                        opacity: self.entered ? 1 : 0;
-                        animate opacity { duration: Tokens.motion-slow; easing: ease-out; }
+                    Rectangle {
+                        height: root.details_expanded ? details.preferred-height : 0px;
+                        opacity: root.details_expanded ? 1 : 0;
+                        visible: self.height > 0px;
+                        clip: true;
+                        animate height, opacity { duration: Tokens.motion-slow; easing: ease-out; }
                         border-radius: Tokens.card-radius;
                         border-width: 1px;
                         border-color: Tokens.line;
                         background: Tokens.surface;
                         // 详情逐行换行显示完整地址，不再固定 116px 高度并截断。
-                        VerticalLayout {
+                        details := VerticalLayout {
+                            y: 0px;
+                            height: self.preferred-height;
                             padding: 10px;
                             spacing: 5px;
                             HorizontalLayout {
@@ -364,10 +368,12 @@ export component ProgressWindow inherits Window {
     private property <string> pending-action;
     callback command(string);
     callback move-window(float, float);
+    public function enter() { content.enter(); }
     Panel {
         width: parent.width;
         height: parent.height;
         border-radius: Tokens.card-radius;
+        content := FadePanel {
         VerticalLayout {
             padding: 12px;
             spacing: 6px;
@@ -439,6 +445,7 @@ export component ProgressWindow inherits Window {
             }
         }
     }
+    }
 }
 
 export component CompleteWindow inherits Window {
@@ -474,6 +481,8 @@ export component CompleteWindow inherits Window {
         width: parent.width;
         height: parent.height;
         border-radius: Tokens.card-radius;
+        opacity: root.entered ? 1 : 0;
+        animate opacity { duration: root.entered ? Tokens.motion : 0ms; easing: ease-out; }
         VerticalLayout {
             padding: 12px;
             spacing: 8px;
@@ -484,7 +493,7 @@ export component CompleteWindow inherits Window {
                     drag(dx, dy) => { root.move-window(dx, dy); }
                     HorizontalLayout {
                         spacing: 8px;
-                        // 完成标记：窗口出现时从 12px 长到 20px，是这个窗口唯一的一次进场动效。
+                        // 完成标记：窗口出现时从 12px 长到 20px。
                         Rectangle { width: 20px; height: 20px;
                             Rectangle {
                                 width: root.entered ? 20px : 12px; height: self.width;

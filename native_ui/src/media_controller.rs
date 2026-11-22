@@ -7,6 +7,7 @@ use hls_client::{
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     io::Cursor,
     rc::Rc,
     sync::mpsc,
@@ -64,6 +65,7 @@ pub struct MediaController {
     subtitles: RefCell<crate::player_subtitles::PlayerSubtitles>,
     position_updated: Cell<Instant>,
     pending_subtitle_reset: Cell<Option<u64>>,
+    pending_controls: RefCell<HashSet<u64>>,
     timer: slint::Timer,
 }
 
@@ -158,6 +160,7 @@ impl MediaController {
             subtitles: RefCell::new(Default::default()),
             position_updated: Cell::new(now),
             pending_subtitle_reset: Cell::new(None),
+            pending_controls: RefCell::new(HashSet::new()),
             timer: slint::Timer::default(),
         });
         let weak = Rc::downgrade(&this);
@@ -227,6 +230,11 @@ impl MediaController {
             session_generation: self.session.get(),
             action,
         });
+        if sent {
+            self.pending_controls.borrow_mut().insert(id);
+        } else {
+            self.notice("命令队列已满，请稍后重试");
+        }
         if sent && reset {
             self.pending_subtitle_reset.set(Some(id));
             self.subtitles.borrow().suspend();
@@ -587,6 +595,11 @@ impl MediaController {
             CorePipeResponse::Error { request_id, .. } => *request_id,
             _ => None,
         };
+        if id.is_some_and(|id| self.pending_controls.borrow_mut().remove(&id)) {
+            if let Some(message) = crate::core_feedback::response_error(response) {
+                self.notice(message);
+            }
+        }
         if let CorePipeResponse::Capabilities { commands, .. } = response {
             self.supported
                 .set(commands.iter().any(|c| c == "player_embed_generation"));
@@ -687,6 +700,7 @@ impl MediaController {
         self.pending_status.set(None);
         self.pending_thumbnail.set(None);
         self.pending_subtitle_reset.set(None);
+        self.pending_controls.borrow_mut().clear();
         self.seek.set(None);
         self.volume.set(None);
         self.set_thumbnail(slint::Image::default());

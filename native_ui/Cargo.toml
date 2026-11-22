@@ -37,3 +37,6 @@ path = "src/hot_main.rs"
 [build-dependencies]
 slint-build = "=1.17.1"
 winresource = "0.1"
+
+[dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }

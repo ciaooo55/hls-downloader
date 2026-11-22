@@ -1873,6 +1873,9 @@ impl Workbench {
                                 assignment,
                             });
                             editor.window.set_busy(true);
+                        } else {
+                            editor.window.set_status_tone("error".into());
+                            editor.window.set_status("命令队列已满，请稍后重试".into());
                         }
                     }
                     Err(error) => {

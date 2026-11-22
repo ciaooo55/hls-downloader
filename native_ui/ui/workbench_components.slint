@@ -73,7 +73,7 @@ export component NavigationItem inherits Rectangle {
     callback clicked;
     height: 36px; border-radius: Tokens.control-radius;
     private property <bool> focus-visible: false;
-    background: active ? Tokens.selected : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
+    background: active ? (touch.pressed && enabled ? Tokens.selected.mix(Tokens.accent, 0.80) : touch.has-hover && enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected) : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
     animate background { duration: Tokens.motion-fast; }
     opacity: root.enabled ? 1 : 0.48;
     accessible-role: tab; accessible-label: root.show-count ? root.label + "，" + root.count + " 项" : root.label; accessible-enabled: root.enabled;
