@@ -586,6 +586,10 @@ impl CoreCoordinator {
             .map_err(|_| "v7 Core mutex poisoned".to_string())
     }
 
+    pub(crate) fn raw_tasks(&self) -> Result<Vec<crate::TaskSnapshot>, String> {
+        Ok(self.lock()?.tasks())
+    }
+
     pub fn tasks(&self) -> Result<Vec<crate::TaskSnapshot>, String> {
         self.refresh_output_flags()?;
         let (mut tasks, specs) = {
@@ -1006,14 +1010,18 @@ impl CoreCoordinator {
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
             let spec = self.apply_defaults_to_spec(spec)?;
-            let mut events = Vec::new();
-            for spec in self.expand_create(spec)? {
-                events.extend(self.dispatch_created(spec)?);
-            }
-            self.start_next_queued(false)?;
-            return Ok(events);
+            return self.create_prepared_task(spec);
         }
         self.dispatch_inner(command)
+    }
+
+    fn create_prepared_task(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
+        let mut events = Vec::new();
+        for spec in self.expand_create(spec)? {
+            events.extend(self.dispatch_created(spec)?);
+        }
+        self.start_next_queued(false)?;
+        Ok(events)
     }
 
     fn expand_create(&self, spec: TaskSpec) -> Result<Vec<TaskSpec>, String> {
@@ -1524,7 +1532,7 @@ impl CoreCoordinator {
                 .lock()
                 .map_err(|_| "download worker registry poisoned".to_string())?
                 .clone();
-            let tasks = self.tasks()?;
+            let tasks = self.raw_tasks()?;
             let mut profiles = self.settings()?.queue_profiles;
             profiles.sort_by_key(|profile| std::cmp::Reverse(profile.priority));
             let next = profiles.into_iter().find_map(|profile| {
@@ -1568,7 +1576,7 @@ impl CoreCoordinator {
         if self.update_shutdown.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let tasks = self.tasks()?;
+        let tasks = self.raw_tasks()?;
         for task in tasks {
             if matches!(
                 task.status.as_str(),
@@ -1654,7 +1662,7 @@ impl CoreCoordinator {
             return Ok(());
         }
         let profiles = self.settings()?.queue_profiles;
-        for task in self.tasks()? {
+        for task in self.raw_tasks()? {
             if task_schedule_stop_due(&task, &profiles) {
                 self.dispatch_inner(CoreCommand::TaskAction {
                     task_id: task.task_id,
@@ -1746,7 +1754,15 @@ impl CoreCoordinator {
         })
     }
 
-    fn apply_defaults_to_spec(&self, mut spec: TaskSpec) -> Result<TaskSpec, String> {
+    fn apply_defaults_to_spec(&self, spec: TaskSpec) -> Result<TaskSpec, String> {
+        self.apply_defaults_to_spec_inner(spec, false)
+    }
+
+    fn apply_defaults_to_spec_inner(
+        &self,
+        mut spec: TaskSpec,
+        trust_download_dir: bool,
+    ) -> Result<TaskSpec, String> {
         validate_filename(&spec.filename)?;
         let client_dir = spec.download_dir.trim().to_string();
         if spec.local_source_path.is_none() {
@@ -1779,7 +1795,7 @@ impl CoreCoordinator {
             };
         }
         reject_path_escape(&spec.work_dir)?;
-        if client_dir.is_empty() {
+        if client_dir.is_empty() || trust_download_dir {
             reject_path_escape(&spec.download_dir)?;
         } else {
             spec.download_dir =
@@ -1836,8 +1852,11 @@ impl CoreCoordinator {
         }
         if !settings.ffmpeg_path.trim().is_empty() {
             validate_helper_executable(&settings.ffmpeg_path, &["ffmpeg", "ffmpeg.exe"])?;
-            std::env::set_var("HLS_FFMPEG", &settings.ffmpeg_path);
         }
+        crate::media::set_configured_ffmpeg(
+            (!settings.ffmpeg_path.trim().is_empty())
+                .then(|| PathBuf::from(settings.ffmpeg_path.trim())),
+        );
         if !settings.default_user_agent.trim().is_empty()
             && header_value_allowed("User-Agent", &settings.default_user_agent)
             && !spec
@@ -1981,18 +2000,11 @@ impl CoreCoordinator {
         allow_duplicate: bool,
     ) -> Result<Vec<EventEnvelope>, String> {
         self.require_legal()?;
-        let settings = self.settings()?;
-        let download_dir = if trusted_ui {
-            let requested = download_dir.trim();
-            if requested.is_empty() {
-                settings.download_dir.clone()
-            } else {
-                reject_path_escape(requested)?;
-                requested.to_string()
-            }
-        } else {
-            constrain_untrusted_download_dir(&download_dir, &settings.download_dir)?
-        };
+        let download_dir = download_dir.trim().to_string();
+        let trust_download_dir = trusted_ui && !download_dir.is_empty();
+        if trust_download_dir {
+            reject_path_escape(&download_dir)?;
+        }
         let Some(offer) = self.lock()?.pending_handoff(&handoff_id) else {
             return Err("接管请求不存在或已过期".into());
         };
@@ -2013,29 +2025,32 @@ impl CoreCoordinator {
         } else {
             filename
         };
-        let spec = self.apply_defaults_to_spec(TaskSpec {
-            url: offer.url.clone(),
-            resource_kind: offer.resource_kind,
-            local_source_path: offer.local_source_path.clone(),
-            title: if offer.title.trim().is_empty() {
-                filename.clone()
-            } else {
-                offer.title.clone()
+        let spec = self.apply_defaults_to_spec_inner(
+            TaskSpec {
+                url: offer.url.clone(),
+                resource_kind: offer.resource_kind,
+                local_source_path: offer.local_source_path.clone(),
+                title: if offer.title.trim().is_empty() {
+                    filename.clone()
+                } else {
+                    offer.title.clone()
+                },
+                filename,
+                download_dir,
+                allow_duplicate: trusted_ui && allow_duplicate,
+                preserve_existing_output: trusted_ui && allow_duplicate,
+                request_method: offer.request_method.clone(),
+                mime_type: offer.mime_type.clone(),
+                credential_ref: offer.credential_ref.clone(),
+                replay_context_ref: offer.replay_context_ref.clone(),
+                expected_size: (offer.size > 0).then_some(offer.size),
+                preferred_bandwidth: offer.preferred_bandwidth,
+                preferred_height: offer.preferred_height,
+                ..Default::default()
             },
-            filename,
-            download_dir,
-            allow_duplicate: trusted_ui && allow_duplicate,
-            preserve_existing_output: trusted_ui && allow_duplicate,
-            request_method: offer.request_method.clone(),
-            mime_type: offer.mime_type.clone(),
-            credential_ref: offer.credential_ref.clone(),
-            replay_context_ref: offer.replay_context_ref.clone(),
-            expected_size: (offer.size > 0).then_some(offer.size),
-            preferred_bandwidth: offer.preferred_bandwidth,
-            preferred_height: offer.preferred_height,
-            ..Default::default()
-        })?;
-        let mut events = self.dispatch(CoreCommand::CreateTask { spec })?;
+            trust_download_dir,
+        )?;
+        let mut events = self.create_prepared_task(spec)?;
         let task_id = events.iter().find_map(|envelope| match &envelope.event {
             CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
                 Some(snapshot.task_id.clone())
@@ -2296,10 +2311,9 @@ impl CoreCoordinator {
                 return Ok(());
             }
         }
-        let tasks = self.tasks()?;
-        let queue_id = tasks
-            .iter()
-            .find(|task| task.task_id == task_id)
+        let queue_id = self
+            .lock()?
+            .snapshot(&task_id)
             .map(|task| task.queue_id.clone())
             .unwrap_or_else(|| crate::DEFAULT_QUEUE_ID.into());
         let profile = self
@@ -2346,7 +2360,8 @@ impl CoreCoordinator {
                 .active
                 .lock()
                 .map_err(|_| "download worker registry poisoned".to_string())?;
-            let active_in_queue = tasks
+            let active_in_queue = core
+                .tasks()
                 .iter()
                 .filter(|task| task.queue_id == queue_id && active.contains(&task.task_id))
                 .count();
@@ -2862,7 +2877,7 @@ fn run_task_with_throttle(
                     false,
                 )
             } else {
-                complete_payload(&core, task_id, &paths, &paths.output, &spec)
+                complete_payload(&core, task_id, &paths, &paths.output, &latest_spec)
             }
         }
         crate::ResourceKind::File => run_http_file(core, task_id, spec, replay_json),
@@ -4073,7 +4088,8 @@ fn queue_is_successfully_drained(tasks: &[crate::TaskSnapshot], queue_id: &str) 
     let Some(first) = matching.next() else {
         return false;
     };
-    first.status == "completed" && matching.all(|task| task.status == "completed")
+    matches!(first.status.as_str(), "completed" | "done")
+        && matching.all(|task| matches!(task.status.as_str(), "completed" | "done"))
 }
 
 fn poll_media_progress<T, F>(
@@ -5024,11 +5040,17 @@ fn probe_torrent_command(
     coordinator: &CoreCoordinator,
     source: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
+    let settings = coordinator.settings()?;
+    let proxy = if source.starts_with("http://") || source.starts_with("https://") {
+        settings_proxy(&settings, source)
+    } else {
+        String::new()
+    };
     let meta = crate::torrent_engine::probe_torrent_source(
         source,
         &std::collections::HashMap::new(),
-        "",
-        coordinator.settings()?.bt_enable_dht,
+        &proxy,
+        settings.bt_enable_dht,
     )?;
     coordinator.lock()?.emit(CoreEvent::TorrentProbeResult {
         source: source.to_string(),
@@ -5044,11 +5066,17 @@ fn select_torrent_files_command(
     source: &str,
     selections: &[crate::TorrentFileSelection],
 ) -> Result<Vec<EventEnvelope>, String> {
+    let settings = coordinator.settings()?;
+    let proxy = if source.starts_with("http://") || source.starts_with("https://") {
+        settings_proxy(&settings, source)
+    } else {
+        String::new()
+    };
     let meta = crate::torrent_engine::probe_torrent_source(
         source,
         &std::collections::HashMap::new(),
-        "",
-        coordinator.settings()?.bt_enable_dht,
+        &proxy,
+        settings.bt_enable_dht,
     )?;
     let selections = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
     let total_size = meta
@@ -5080,18 +5108,20 @@ fn task_torrent_files(
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Err("该任务不是 BT 任务".into());
     }
-    let (hydrated, _) = hydrate_replay_headers(&coordinator.core, spec)?;
+    let (hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
     let headers = hydrated
         .headers
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta = crate::torrent_engine::probe_torrent_source(
-        &hydrated.url,
-        &headers,
-        &hydrated.proxy,
-        coordinator.settings()?.bt_enable_dht,
-    )?;
+    let meta = with_replay_json(&replay, || {
+        crate::torrent_engine::probe_torrent_source(
+            &hydrated.url,
+            &headers,
+            &hydrated.proxy,
+            coordinator.settings()?.bt_enable_dht,
+        )
+    })?;
     let selections =
         crate::torrent_engine::validate_torrent_selection(&meta, &hydrated.torrent_selection)?;
     let total_size = selected_torrent_bytes(&meta.files, &selections);
@@ -5110,9 +5140,9 @@ fn set_task_torrent_files(
     selections: &[crate::TorrentFileSelection],
 ) -> Result<Vec<EventEnvelope>, String> {
     let task = coordinator
-        .tasks()?
-        .into_iter()
-        .find(|task| task.task_id == task_id)
+        .lock()?
+        .snapshot(task_id)
+        .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     if matches!(
         task.status.as_str(),
@@ -5129,18 +5159,20 @@ fn set_task_torrent_files(
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Err("该任务不是 BT 任务".into());
     }
-    let (hydrated, _) = hydrate_replay_headers(&coordinator.core, spec.clone())?;
+    let (hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec.clone())?;
     let headers = hydrated
         .headers
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta = crate::torrent_engine::probe_torrent_source(
-        &hydrated.url,
-        &headers,
-        &hydrated.proxy,
-        coordinator.settings()?.bt_enable_dht,
-    )?;
+    let meta = with_replay_json(&replay, || {
+        crate::torrent_engine::probe_torrent_source(
+            &hydrated.url,
+            &headers,
+            &hydrated.proxy,
+            coordinator.settings()?.bt_enable_dht,
+        )
+    })?;
     spec.torrent_selection = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
     if !spec
         .torrent_selection
@@ -5209,10 +5241,8 @@ fn harvest_page(
         reject_task_url(referer)?;
         headers.insert("Referer".into(), referer.trim().to_string());
     }
-    let proxy = coordinator
-        .settings()
-        .map(|settings| settings.proxy_url)
-        .unwrap_or_default();
+    let settings = coordinator.settings()?;
+    let proxy = settings_proxy(&settings, url);
     if !probe_urls.is_empty() {
         if probe_urls.len() > 100 {
             return Err("一次最多读取 100 个链接的大小".into());
@@ -5237,7 +5267,7 @@ fn harvest_page(
                     total: 0,
                     sequential: true,
                     resume_from: 0,
-                    proxy: proxy.clone(),
+                    proxy: settings_proxy(&settings, candidate),
                     resource_key: candidate.to_string(),
                     etag: String::new(),
                     last_modified: String::new(),
@@ -5419,9 +5449,22 @@ fn discover_cast(coordinator: &CoreCoordinator, mode: &str) -> Result<Vec<EventE
     Ok(events)
 }
 
+fn settings_proxy(settings: &CoreSettings, url: &str) -> String {
+    crate::net_policy::effective_proxy(
+        &settings.proxy_mode,
+        &settings.proxy_url,
+        &settings.proxy_bypass,
+        url,
+        "",
+    )
+}
+
 fn check_update(coordinator: &CoreCoordinator, silent: bool) -> Result<Vec<EventEnvelope>, String> {
     // 网络请求完成后再获取任务/数据库共享锁，避免阻塞进度写入和其他客户端。
-    let event = match crate::updater::check_for_update(crate::updater::CURRENT_VERSION) {
+    let event = match crate::updater::check_for_update_with_proxy(
+        crate::updater::CURRENT_VERSION,
+        &settings_proxy(&coordinator.settings()?, crate::updater::LATEST_API),
+    ) {
         Ok(info) if info.newer => CoreEvent::UpdateAvailable {
             current: info.current,
             latest: info.latest,
@@ -5450,14 +5493,20 @@ fn check_update(coordinator: &CoreCoordinator, silent: bool) -> Result<Vec<Event
 fn download_update(coordinator: &CoreCoordinator) -> Result<Vec<EventEnvelope>, String> {
     let info = match crate::updater::last_update() {
         Some(info) => info,
-        None => crate::updater::check_for_update(crate::updater::CURRENT_VERSION)?,
+        None => crate::updater::check_for_update_with_proxy(
+            crate::updater::CURRENT_VERSION,
+            &settings_proxy(&coordinator.settings()?, crate::updater::LATEST_API),
+        )?,
     };
     if !info.newer {
         return coordinator.lock()?.emit(CoreEvent::UpdateCurrent {
             current: info.current,
         });
     }
-    let path = crate::updater::download_installer(&info)?;
+    let path = crate::updater::download_installer_with_proxy(
+        &info,
+        &settings_proxy(&coordinator.settings()?, &info.installer_url),
+    )?;
     let identity = crate::updater::verify_installer_identity(&path, &info.latest)?;
     coordinator.lock()?.emit(CoreEvent::UpdateReady {
         latest: info.latest,
@@ -5478,7 +5527,10 @@ fn install_update(
     if !info.newer {
         return Err("当前已经是最新版本".into());
     }
-    let path = crate::updater::download_installer(&info)?;
+    let path = crate::updater::download_installer_with_proxy(
+        &info,
+        &settings_proxy(&coordinator.settings()?, &info.installer_url),
+    )?;
     crate::updater::verify_installer_identity(&path, &info.latest)?;
     coordinator.prepare_for_update(Duration::from_secs(15))?;
     let launch = match crate::updater::launch_update_helper(&path, &info.latest, workbench_pid) {
@@ -5600,9 +5652,9 @@ fn refresh_task_request(
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let next_action = coordinator
-        .tasks()?
-        .into_iter()
-        .find(|task| task.task_id == task_id)
+        .lock()?
+        .snapshot(task_id)
+        .cloned()
         .and_then(|task| {
             ["resume", "retry", "start"]
                 .into_iter()

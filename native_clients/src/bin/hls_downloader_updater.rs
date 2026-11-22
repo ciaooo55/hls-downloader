@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::ffi::OsString;
-#[cfg(windows)]
 use std::path::Path;
+#[cfg(test)]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -93,6 +93,7 @@ fn embedded_primary_signer() -> Option<&'static str> {
     option_env!("HLS_V7_SIGN_CERT_THUMBPRINT").filter(|value| !value.trim().is_empty())
 }
 
+#[cfg(test)]
 fn find_msi_argument(args: &[OsString]) -> Result<PathBuf, String> {
     let mut index = 0usize;
     while index < args.len() {
@@ -107,11 +108,10 @@ fn find_msi_argument(args: &[OsString]) -> Result<PathBuf, String> {
     Err("缺少更新助手参数 --msi".into())
 }
 
-fn verify_update_signer(args: &[OsString]) -> Result<(), String> {
-    let msi = find_msi_argument(args)?;
+fn verify_update_signer_path(msi: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let signer = verified_leaf_signer_thumbprint(&msi)?;
+        let signer = verified_leaf_signer_thumbprint(msi)?;
         authorize_signer_thumbprint(&signer, embedded_primary_signer(), SIGNER_TRUST_JSON)
     }
     #[cfg(not(windows))]
@@ -287,11 +287,7 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    if let Err(error) = verify_update_signer(&args) {
-        eprintln!("update helper signer verification failed: {error}");
-        return ExitCode::from(1);
-    }
-    match hls_native_clients::run_update_helper(args) {
+    match hls_native_clients::run_update_helper_with_verifier(args, verify_update_signer_path) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("update helper failed: {error}");

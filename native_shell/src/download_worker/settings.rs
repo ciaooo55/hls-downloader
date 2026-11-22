@@ -231,10 +231,16 @@ impl CoreCoordinator {
                 .collect();
             core.assign_queue_and_set_settings(orphaned, crate::DEFAULT_QUEUE_ID.into(), &values)?;
         } else {
-            self.lock()?.store_mut().set_settings(&values)?;
-            self.lock()?.emit(CoreEvent::SettingsChanged {
+            let mut core = self.lock()?;
+            core.store_mut().set_settings(&values)?;
+            core.emit(CoreEvent::SettingsChanged {
                 keys: values.keys().cloned().collect(),
             })?;
+        }
+        if let Some(path) = values.get("ffmpeg_path").and_then(Value::as_str) {
+            crate::media::set_configured_ffmpeg(
+                (!path.trim().is_empty()).then(|| std::path::PathBuf::from(path.trim())),
+            );
         }
         if values.keys().any(|key| {
             matches!(
@@ -282,7 +288,52 @@ impl CoreCoordinator {
         }
         if matches!(
             key,
-            "download_speed_schedule_start" | "download_speed_schedule_end"
+            "ffmpeg_path"
+                | "av_scan_command"
+                | "download_dir"
+                | "temp_dir"
+                | "torrent_watch_dir"
+                | "proxy_url"
+                | "tvbox_endpoint"
+                | "default_referer"
+                | "default_origin"
+                | "allowed_hosts"
+                | "default_user_agent"
+                | "proxy_mode"
+                | "proxy_bypass"
+                | "queue_active_days"
+                | "queue_auto_start_time"
+                | "queue_auto_stop_time"
+                | "existing_file_policy"
+                | "completion_power_action"
+                | "legal_terms_version"
+                | "preferred_cast_device_id"
+        ) && !value.is_string()
+        {
+            return Err(format!("设置项 {key} 必须是文本"));
+        }
+        if key == "queue_active_days" {
+            validate_active_days(value.as_str().unwrap())?;
+        }
+        if key == "existing_file_policy"
+            && !matches!(value.as_str(), Some("rename" | "overwrite" | "skip"))
+        {
+            return Err("已有文件处理策略无效".into());
+        }
+        if key == "completion_power_action"
+            && !matches!(
+                value.as_str(),
+                Some("" | "none" | "shutdown" | "sleep" | "hibernate")
+            )
+        {
+            return Err("完成动作无效".into());
+        }
+        if matches!(
+            key,
+            "download_speed_schedule_start"
+                | "download_speed_schedule_end"
+                | "queue_auto_start_time"
+                | "queue_auto_stop_time"
         ) && !value.as_str().is_some_and(valid_clock)
         {
             return Err("限速计划时间必须使用有效的 HH:mm（00:00 到 23:59）".into());
@@ -315,9 +366,15 @@ impl CoreCoordinator {
             }
         }
         if key == "browser_category_dirs" {
-            if let Some(raw) = value.as_str() {
-                crate::category::validate_category_dirs(raw)?;
-                let dirs = crate::category::parse_category_dirs(raw);
+            let raw = match value {
+                Value::Null => None,
+                Value::String(raw) => Some(raw.clone()),
+                Value::Object(_) => Some(value.to_string()),
+                _ => return Err("分类目录格式无效".into()),
+            };
+            if let Some(raw) = raw {
+                crate::category::validate_category_dirs(&raw)?;
+                let dirs = crate::category::parse_category_dirs(&raw);
                 reject_path_escape(&dirs.media)?;
                 reject_path_escape(&dirs.program)?;
                 reject_path_escape(&dirs.archive)?;
@@ -472,17 +529,7 @@ pub(super) fn validate_queue_profiles(value: &Value) -> Result<(), String> {
         if !valid_clock(&profile.start_time) || !valid_clock(&profile.stop_time) {
             return Err("队列计划时间必须使用 HH:mm".into());
         }
-        let days: Vec<_> = profile.active_days.split(',').map(str::trim).collect();
-        let unique_days: HashSet<_> = days.iter().copied().collect();
-        if days.is_empty()
-            || unique_days.len() != days.len()
-            || !days.iter().all(|day| {
-                day.parse::<u8>()
-                    .is_ok_and(|value| (1..=7).contains(&value))
-            })
-        {
-            return Err("队列活动星期必须使用 1 到 7".into());
-        }
+        validate_active_days(&profile.active_days)?;
         if !matches!(
             profile.completion_action.as_str(),
             "" | "none" | "shutdown" | "sleep" | "hibernate"
@@ -495,6 +542,19 @@ pub(super) fn validate_queue_profiles(value: &Value) -> Result<(), String> {
         .any(|profile| profile.id == crate::DEFAULT_QUEUE_ID)
     {
         return Err("默认队列不能删除".into());
+    }
+    Ok(())
+}
+
+fn validate_active_days(value: &str) -> Result<(), String> {
+    let mut days = HashSet::new();
+    for day in value.split(',').map(str::trim) {
+        let day = day
+            .parse::<u8>()
+            .map_err(|_| "队列活动星期必须使用 1 到 7".to_string())?;
+        if !(1..=7).contains(&day) || !days.insert(day) {
+            return Err("队列活动星期必须使用唯一的 1 到 7".into());
+        }
     }
     Ok(())
 }

@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const LATEST_API: &str = "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest";
+pub(crate) const LATEST_API: &str =
+    "https://api.github.com/repos/ciaooo55/hls-downloader/releases/latest";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdateInfo {
@@ -146,11 +147,15 @@ fn parse_sha256_digest(value: &str) -> Option<String> {
 }
 
 pub fn check_for_update(current: &str) -> Result<UpdateInfo, String> {
+    check_for_update_with_proxy(current, "")
+}
+
+pub fn check_for_update_with_proxy(current: &str, proxy: &str) -> Result<UpdateInfo, String> {
     let mut headers = std::collections::HashMap::new();
     headers.insert("User-Agent".into(), "hls-downloader-v7".into());
     headers.insert("Accept".into(), "application/vnd.github+json".into());
     let (status, body) =
-        crate::http_engine::fetch_bytes_limited(LATEST_API, &headers, "", 1024 * 1024)
+        crate::http_engine::fetch_bytes_limited(LATEST_API, &headers, proxy, 1024 * 1024)
             .map_err(|error| error.to_string())?;
     if status != 200 {
         return Err(format!("GitHub releases HTTP {status}"));
@@ -158,7 +163,11 @@ pub fn check_for_update(current: &str) -> Result<UpdateInfo, String> {
     parse_github_release(&String::from_utf8_lossy(&body), current)
 }
 
-pub fn download_installer(info: &UpdateInfo) -> Result<std::path::PathBuf, String> {
+pub fn download_installer(info: &UpdateInfo) -> Result<PathBuf, String> {
+    download_installer_with_proxy(info, "")
+}
+
+pub fn download_installer_with_proxy(info: &UpdateInfo, proxy: &str) -> Result<PathBuf, String> {
     if info.installer_url.is_empty() {
         return Err("GitHub 发布没有 Windows 安装包。请打开发布页手动下载。".into());
     }
@@ -202,7 +211,7 @@ pub fn download_installer(info: &UpdateInfo) -> Result<std::path::PathBuf, Strin
         total: info.installer_size,
         sequential: true,
         resume_from: 0,
-        proxy: String::new(),
+        proxy: proxy.to_string(),
         resource_key: info.installer_url.clone(),
         etag: String::new(),
         last_modified: String::new(),

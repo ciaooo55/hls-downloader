@@ -64,7 +64,7 @@ pub fn parse_site_rules(raw: &str) -> Vec<SiteRule> {
 
 fn sanitize_rule(mut rule: SiteRule) -> Option<SiteRule> {
     rule.host = rule.host.trim().to_ascii_lowercase();
-    if rule.host.is_empty() || !setting_text_ok(&rule.host) {
+    if site_rule_match_host(&rule.host).is_empty() || !setting_text_ok(&rule.host) {
         return None;
     }
     if !setting_text_ok(&rule.proxy) {
@@ -109,7 +109,7 @@ fn site_rule_match_host(host: &str) -> &str {
 fn valid_site_rule_host(host: &str) -> bool {
     let wildcard = host.starts_with("*.");
     let host = host.strip_prefix("*.").unwrap_or(host);
-    if host.is_empty()
+    if site_rule_match_host(host).is_empty()
         || host.len() > 255
         || host.chars().any(char::is_whitespace)
         || host.contains(['/', '\\', '@', '*', '\0'])
@@ -281,6 +281,17 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dot_only_hosts_are_rejected_by_validation_and_loading() {
+        for host in [".", "...", "*..", "*. ..."] {
+            let raw = serde_json::json!([{"host":host}]).to_string();
+            assert!(validate_site_rules(&raw).is_err(), "{host}");
+            if !host.contains(' ') {
+                assert!(parse_site_rules(&raw).is_empty(), "{host}");
+            }
+        }
+    }
 
     #[test]
     fn matches_suffix_host_in_json() {
