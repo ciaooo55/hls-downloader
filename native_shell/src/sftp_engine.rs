@@ -5,9 +5,7 @@
 //! fallback when the URL has no password. URL passwords never go to OpenSSH.
 
 use std::fs::{self, File, OpenOptions};
-#[cfg(test)]
-use std::io::Read;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -210,32 +208,51 @@ fn progress_path(output: &Path) -> PathBuf {
     output.with_extension("progress.json")
 }
 
+fn locked_host_file(path: &Path) -> Result<(File, String), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    file.lock().map_err(|e| e.to_string())?;
+    let mut existing = String::new();
+    file.read_to_string(&mut existing)
+        .map_err(|e| e.to_string())?;
+    Ok((file, existing))
+}
+
 pub fn tofu_record(host: &str, port: u16, fingerprint: &str) -> Result<(), String> {
     if fingerprint.is_empty() || fingerprint == "pending" {
         return Err("SFTP host key missing".into());
     }
-    let path = known_hosts_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
+    record_host_key(&known_hosts_path(), host, port, fingerprint)
+}
+
+fn record_host_key(path: &Path, host: &str, port: u16, fingerprint: &str) -> Result<(), String> {
+    let (mut file, existing) = locked_host_file(path)?;
     let key = format!("{host}:{port}");
-    let existing = fs::read_to_string(&path).unwrap_or_default();
     for line in existing.lines() {
-        if let Some((stored_host, stored_fp)) = line.split_once(' ') {
-            if stored_host == key && stored_fp != fingerprint {
+        let (stored_host, stored_fp) = line.split_once(' ').ok_or("SFTP 主机密钥记录损坏")?;
+        if stored_host == key {
+            if stored_fp != fingerprint {
                 return Err("SFTP 主机密钥不匹配，可能不是原来的服务器".into());
             }
-            if stored_host == key {
-                return Ok(());
-            }
+            return Ok(());
         }
     }
-    let mut text = existing;
-    if !text.ends_with('\n') && !text.is_empty() {
-        text.push('\n');
-    }
-    text.push_str(&format!("{key} {fingerprint}\n"));
-    fs::write(path, text).map_err(|error| error.to_string())
+    let separator = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    writeln!(file, "{separator}{key} {fingerprint}")
+        .and_then(|()| file.sync_all())
+        .map_err(|e| e.to_string())
 }
 
 pub fn fingerprint_bytes(bytes: &[u8]) -> String {
@@ -244,7 +261,7 @@ pub fn fingerprint_bytes(bytes: &[u8]) -> String {
 
 fn stored_tofu_fingerprint(host: &str, port: u16) -> Option<String> {
     let key = format!("{host}:{port}");
-    let existing = fs::read_to_string(known_hosts_path()).ok()?;
+    let (_lock, existing) = locked_host_file(&known_hosts_path()).ok()?;
     existing.lines().find_map(|line| {
         let (stored_host, stored_fp) = line.split_once(' ')?;
         (stored_host == key && !stored_fp.trim().is_empty()).then(|| stored_fp.trim().to_string())
@@ -344,19 +361,20 @@ fn keyscan_output(host: &str, port: u16) -> Result<String, String> {
 }
 
 fn upsert_openssh_known_host(path: &Path, line: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
+    let (mut file, existing) = locked_host_file(path)?;
     let line = line.trim();
     let host = line.split_whitespace().next().unwrap_or("");
-    let existing = fs::read_to_string(path).unwrap_or_default();
     let mut lines: Vec<String> = existing
         .lines()
         .filter(|old| old.split_whitespace().next().unwrap_or("") != host)
         .map(str::to_string)
         .collect();
     lines.push(line.to_string());
-    fs::write(path, lines.join("\n") + "\n").map_err(|error| error.to_string())
+    file.rewind()
+        .and_then(|()| file.set_len(0))
+        .and_then(|()| writeln!(file, "{}", lines.join("\n")))
+        .and_then(|()| file.sync_all())
+        .map_err(|e| e.to_string())
 }
 
 fn load_state(path: &Path) -> ResumeState {
@@ -412,6 +430,9 @@ fn resume_offset(
     if stat.size > 0
         && current_size > 0
         && current_size < stat.size
+        && state.offset == current_size
+        && !stat.mtime.is_empty()
+        && stat.mtime != "0"
         && state.version == STATE_VERSION
         && state.resource_key == resource_key
         && state.total == stat.size
@@ -443,7 +464,7 @@ fn transfer_from_session(
     if offset > 0 {
         remote.seek(offset)?;
     }
-    let mut local = if offset > 0 && output.exists() {
+    let mut local = if offset > 0 {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -467,6 +488,9 @@ fn transfer_from_session(
         let count = remote.read(&mut buf)?;
         if count == 0 {
             break;
+        }
+        if count > buf.len() || count as u64 > total.saturating_sub(written) {
+            return Err("SFTP 数据超过远程 STAT 声明的长度".into());
         }
         crate::net_policy::consume(count, || match read_control(control).as_str() {
             "cancel" => Err("canceled".to_string()),
@@ -554,8 +578,15 @@ fn download_with_session(
     };
     let state = load_state(&state_file);
     let offset = resume_offset(current, &stat, &target.resource_key(), &state);
-    if offset == 0 && output.exists() {
-        let _ = fs::remove_file(output);
+    if offset == 0 {
+        match fs::remove_file(&state_file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
+        }
+        match fs::remove_file(output) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
+        }
     }
     let written = match transfer_from_session(session, target, output, control, offset, stat.size) {
         Ok(bytes) => bytes,
@@ -577,7 +608,7 @@ fn download_with_session(
         }
         Err(error) => return Err(error),
     };
-    if stat.size > 0 && written != stat.size {
+    if written != stat.size {
         return Err(format!(
             "文件长度不匹配，期望 {}，实际 {written}",
             stat.size
@@ -588,9 +619,7 @@ fn download_with_session(
 }
 
 pub fn download_sftp(url: &str, output: &Path, control: &Path) -> Result<u64, String> {
-    if read_control(control) == "cancel" {
-        return Err("canceled".into());
-    }
+    check_sftp_control(control)?;
     let target = parse_sftp_url(url)?;
     #[cfg(test)]
     if let Ok(root) = std::env::var("HLS_V7_SFTP_FIXTURE") {
@@ -615,6 +644,14 @@ fn openssh_fallback_ok(error: &str) -> bool {
     error.contains("登录失败") || error.contains("连接超时") || error.contains("拒绝连接")
 }
 
+fn check_sftp_control(control: &Path) -> Result<(), String> {
+    match read_control(control).as_str() {
+        "cancel" => Err("canceled".into()),
+        "pause" => Err("paused".into()),
+        _ => Ok(()),
+    }
+}
+
 fn openssh_get(
     target: &SftpTarget,
     output: &Path,
@@ -625,24 +662,41 @@ fn openssh_get(
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let sftp = which("sftp").ok_or_else(|| "OpenSSH sftp not found".to_string())?;
-    let local = output.display().to_string().replace('\\', "/");
+    let local = output.to_str().ok_or("OpenSSH 无法准确编码本地文件路径")?;
+    #[cfg(windows)]
+    let local = local.replace('\\', "/");
     // OpenSSH `sftp -b -` cannot verify the remote file's exact `mtime` or
     // size before deciding whether to run `get -a`, and `ls -l` only reports
     // human-formatted timestamps after the batch finishes. Appending to a
     // partial file without verified remote identity risks silently splicing
     // bytes from two different revisions, so this fallback always fetches a
     // clean copy and drops stale resume metadata.
-    let _ = fs::remove_file(state_path(output));
-    if output.exists() {
-        let _ = fs::remove_file(output);
+    #[cfg(windows)]
+    let local = local.as_str();
+    let batch = openssh_batch_script(&target.path, local)?;
+    check_sftp_control(control)?;
+    for path in [state_path(output).as_path(), output] {
+        match fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+            _ => {}
+        }
     }
-    let batch = openssh_batch_script(&target.path, &local);
-    let status = Command::new(sftp)
+    let mut child = Command::new(sftp)
         .args([
             "-P",
             &target.port.to_string(),
             "-o",
             "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=20",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+            "UpdateHostKeys=no",
+            "-o",
+            "VerifyHostKeyDNS=no",
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
@@ -663,20 +717,46 @@ fn openssh_get(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .and_then(|mut child| {
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(batch.as_bytes())?;
+        .map_err(|e| e.to_string())?;
+    // Output from an SSH server is untrusted. Keep diagnostics bounded while
+    // draining both pipes so a full pipe cannot block the transfer.
+    fn capture(mut pipe: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut prefix = Vec::new();
+            let _ = (&mut pipe).take(64 * 1024).read_to_end(&mut prefix);
+            let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+            let _ = tx.send(prefix);
+        });
+        rx
+    }
+    let stdout = capture(child.stdout.take().expect("piped stdout"));
+    let stderr = capture(child.stderr.take().expect("piped stderr"));
+    let status = (|| {
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(batch.as_bytes())
+            .map_err(|e| e.to_string())?;
+        loop {
+            check_sftp_control(control)?;
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                return Ok::<_, String>(status);
             }
-            child.wait_with_output()
-        })
-        .map_err(|error| error.to_string())?;
-    if read_control(control) == "cancel" {
-        return Err("canceled".into());
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    })();
+    let status = status.inspect_err(|_| {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
+    let wait = std::time::Duration::from_secs(1);
+    if !status.success() {
+        let bytes = stderr.recv_timeout(wait).unwrap_or_default();
+        return Err(format!("sftp failed: {}", String::from_utf8_lossy(&bytes)));
     }
-    if !status.status.success() {
-        let stderr = String::from_utf8_lossy(&status.stderr);
-        return Err(format!("sftp failed: {stderr}"));
-    }
+    let listing = stdout.recv_timeout(wait).map_err(|e| e.to_string())?;
     let written = fs::metadata(output)
         .map(|meta| meta.len())
         .map_err(|error| error.to_string())?;
@@ -684,7 +764,7 @@ fn openssh_get(
     // or mis-targeted transfer must surface as an error.  The native path already
     // enforces `stat`; this one reports its own length, which is exactly why it
     // needs the same check before it claims the download fit.
-    match parse_ls_size(&String::from_utf8_lossy(&status.stdout), &target.path) {
+    match parse_ls_size(&String::from_utf8_lossy(&listing), &target.path) {
         Some(remote) if remote == written => {
             let _ = fs::remove_file(state_path(output));
             Ok(remote)
@@ -694,12 +774,18 @@ fn openssh_get(
     }
 }
 
-fn openssh_batch_script(remote_path: &str, local_path: &str) -> String {
-    let remote = remote_path.replace('"', "");
-    let local = local_path.replace('"', "");
-    // `ls -l` rides along as the first batch entry, so the listing costs no extra
-    // connection: it is the only authority this path has over the remote entity.
-    format!("ls -l \"{remote}\"\nget \"{remote}\" \"{local}\"\n")
+fn openssh_batch_script(remote: &str, local: &str) -> Result<String, String> {
+    // OpenSSH batch commands are line-oriented. Never silently strip quotes
+    // or let a platform-specific local filename introduce another command.
+    if [remote, local]
+        .iter()
+        .any(|s| s.chars().any(char::is_control) || s.contains('"'))
+    {
+        return Err("OpenSSH 批处理无法准确表示文件路径".into());
+    }
+    Ok(format!(
+        "ls -l \"{remote}\"\nget \"{remote}\" \"{local}\"\n"
+    ))
 }
 
 /// Parse the remote size out of one `ls -l` line from the OpenSSH sftp client.
@@ -714,7 +800,10 @@ fn openssh_batch_script(remote_path: &str, local_path: &str) -> String {
 fn parse_ls_size(listing: &str, remote_path: &str) -> Option<u64> {
     listing
         .lines()
-        .filter(|line| line.contains(remote_path))
+        .filter_map(|line| line.strip_suffix(remote_path))
+        .filter(|prefix| {
+            prefix.ends_with(char::is_whitespace) && prefix.split_whitespace().count() == 8
+        })
         .find_map(|line| {
             let mut fields = line.split_whitespace();
             let permissions = fields.next()?;
@@ -858,6 +947,10 @@ mod tests {
             resume_offset(40, &stat, "sftp://nas.local:22/b.bin", &state),
             0
         );
+        assert_eq!(
+            resume_offset(42, &stat, "sftp://nas.local:22/a.bin", &state),
+            0
+        );
         let changed = SftpStat {
             size: 100,
             mtime: "11".into(),
@@ -866,6 +959,49 @@ mod tests {
             resume_offset(40, &changed, "sftp://nas.local:22/a.bin", &state),
             0
         );
+    }
+
+    #[test]
+    fn stat_overrun_fails_before_extra_bytes_reach_disk() {
+        let root = std::env::temp_dir().join(format!("hls-sftp-stat-limit-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("remote.bin"), b"abc").unwrap();
+        let target = parse_sftp_url("sftp://user@nas.local/remote.bin").unwrap();
+        let session = FixtureSession { root: root.clone() };
+        let output = root.join("out.bin");
+        for declared in [0, 2] {
+            assert!(transfer_from_session(
+                &session,
+                &target,
+                &output,
+                &root.join("control"),
+                0,
+                declared
+            )
+            .is_err());
+            assert_eq!(fs::metadata(&output).unwrap().len(), 0);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_first_use_pins_only_one_key_and_rejects_a_corrupt_store() {
+        let dir = std::env::temp_dir().join(format!("hls-sftp-tofu-lock-{}", std::process::id()));
+        let pins = dir.join("known_hosts");
+        let barrier = std::sync::Barrier::new(2);
+        let attempt = |key: &str| {
+            barrier.wait();
+            record_host_key(&pins, "nas.local", 22, key).is_ok()
+        };
+        let accepted = std::thread::scope(|scope| {
+            let other = scope.spawn(|| attempt("first"));
+            usize::from(attempt("second")) + usize::from(other.join().unwrap())
+        });
+        assert_eq!(accepted, 1);
+        fs::write(&pins, [0xff]).unwrap();
+        assert!(record_host_key(&pins, "nas.local", 22, "third").is_err());
+        assert_eq!(fs::read(&pins).unwrap(), [0xff]);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1082,6 +1218,7 @@ mod tests {
     fn parses_the_size_out_of_an_openssh_ls_line() {
         let line = "-rw-r--r--    0 1000     1000        12345 Sep 24 15:00 /video/a.mp4";
         assert_eq!(parse_ls_size(line, "/video/a.mp4"), Some(12345));
+        assert_eq!(parse_ls_size(line, "/video/a.mp"), None);
         // Directories and symlinks are not downloadable entities.
         assert_eq!(
             parse_ls_size(
@@ -1171,7 +1308,9 @@ mod tests {
 
     #[test]
     fn openssh_fallback_batch_never_appends_without_verified_mtime() {
-        let script = openssh_batch_script("/pub/a.bin", "/tmp/a.bin");
+        assert!(openssh_batch_script("/pub/a.bin", "/tmp/a\nb").is_err());
+        assert!(openssh_batch_script("/pub/\"a.bin", "/tmp/a").is_err());
+        let script = openssh_batch_script("/pub/a.bin", "/tmp/a.bin").unwrap();
         assert!(script.contains("ls -l \"/pub/a.bin\""));
         assert!(script.contains("\nget \"/pub/a.bin\" \"/tmp/a.bin\"\n"));
         assert!(!script.contains("get -a"));

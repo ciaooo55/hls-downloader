@@ -2,6 +2,21 @@ use crate::SiteRuleRow;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
+// Core treats a wildcard, a terminal DNS dot, and alternate IPv6 spellings
+// as aliases when matching the same site credential.
+pub(crate) fn host_identity(host: &str) -> String {
+    let host = host.trim();
+    let host = host.strip_prefix("*.").unwrap_or(host).trim_matches('.');
+    if let Some(ip) = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .and_then(|s| s.parse::<std::net::Ipv6Addr>().ok())
+    {
+        return format!("[{ip}]");
+    }
+    host.to_ascii_lowercase()
+}
+
 // Keep unedited fields and vault references when converting JSON to a form.
 // This module never handles plaintext secrets.
 pub struct SiteRuleDraft {
@@ -91,8 +106,11 @@ pub fn encode(rules: &[SiteRuleDraft], latest: &str) -> Result<String, String> {
         if host.is_empty() {
             return Err(format!("第 {} 条规则请填写域名", index + 1));
         }
-        let identity = host.trim_start_matches("*.").trim_matches('.').to_owned();
-        if !hosts.insert(identity) {
+        let identity = host_identity(&host);
+        if identity.is_empty() {
+            return Err(format!("第 {} 条规则的域名无效", index + 1));
+        }
+        if !hosts.insert(identity.clone()) {
             return Err("站点规则不能包含重复域名".into());
         }
         let number = |value: &str, maximum: u32, label: &str| {
@@ -129,7 +147,7 @@ pub fn encode(rules: &[SiteRuleDraft], latest: &str) -> Result<String, String> {
         // a previous domain's credential when the domain is edited.
         let credential = latest
             .iter()
-            .find(|rule| rule.row.host.trim().eq_ignore_ascii_case(&host))
+            .find(|rule| host_identity(&rule.row.host) == identity)
             .and_then(|rule| rule.original.get("credential_ref"))
             .cloned()
             .unwrap_or_else(|| Value::from(""));
@@ -176,6 +194,9 @@ mod tests {
         let encoded: Value = serde_json::from_str(&encode(&rules, latest).unwrap()).unwrap();
         assert_eq!(encoded[0]["credential_ref"], "vault:updated");
         assert_eq!(encoded[0]["extra"], 42);
+        rules[0].edit("host", "*.CDN.test.");
+        let encoded: Value = serde_json::from_str(&encode(&rules, latest).unwrap()).unwrap();
+        assert_eq!(encoded[0]["credential_ref"], "vault:updated");
         rules[0].edit("host", "other.test");
         let encoded: Value = serde_json::from_str(&encode(&rules, latest).unwrap()).unwrap();
         assert_eq!(encoded[0]["credential_ref"], "");

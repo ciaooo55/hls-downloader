@@ -33,6 +33,15 @@ impl ActivationServer {
                         request_id,
                         command: CoreCommand::OpenMain { launch_id },
                     } => {
+                        if launch_id.as_deref().is_some_and(|id| {
+                            id.is_empty() || id.len() > 80 || id.chars().any(char::is_control)
+                        }) {
+                            return CorePipeResponse::Error {
+                                request_id: Some(request_id),
+                                code: "invalid_launch_id".into(),
+                                message: "启动标识无效".into(),
+                            };
+                        }
                         // Preserve each browser launch receipt. Legacy untracked opens may coalesce.
                         match tx.try_send(launch_id) {
                             Ok(()) | Err(mpsc::TrySendError::Full(None)) => {
@@ -97,7 +106,12 @@ pub fn forward_workbench(launch_id: Option<String>) -> Result<(), String> {
                     },
                 })
             }) {
-                Ok(CorePipeResponse::Events { .. }) => return Ok(()),
+                Ok(CorePipeResponse::Events { request_id: 1, .. }) => return Ok(()),
+                Ok(CorePipeResponse::Error { code, message, .. })
+                    if code != "ui_busy" && code != "ui_stopping" =>
+                {
+                    return Err(message)
+                }
                 Ok(CorePipeResponse::Error { message, .. }) => last_error = message,
                 Ok(_) => last_error = "UI 激活响应不兼容".into(),
                 Err(error) => last_error = error,

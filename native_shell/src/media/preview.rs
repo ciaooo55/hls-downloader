@@ -63,9 +63,16 @@ pub(crate) fn reset_ready(root: &Path, file: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
-    let expected = fs::read_to_string(root.join("playback-ready").join(relative))
+    use std::io::Read;
+    let expected = fs::File::open(root.join("playback-ready").join(relative))
         .ok()
-        .and_then(|text| text.parse::<u64>().ok());
+        .and_then(|file| {
+            let mut size = String::new();
+            file.take(21).read_to_string(&mut size).ok()?;
+            (size.len() <= 20)
+                .then(|| size.parse::<u64>().ok())
+                .flatten()
+        });
     expected.is_some_and(|size| {
         size > 0
             && fs::metadata(root.join(relative))

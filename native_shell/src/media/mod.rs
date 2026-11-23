@@ -9,14 +9,42 @@ pub(crate) mod preview;
 pub(crate) use merge::{hls_input_options, locate_ffmpeg, set_configured_ffmpeg};
 mod subtitles;
 
+const MAX_EXPANDED_MEDIA_BYTES: usize = 32 * 1024 * 1024;
+
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Direct media callers can supply sensitive headers without a stored replay context.
+/// Bind them to the initial URL so every nested fetch uses the HTTP engine's origin rules.
+fn with_media_headers<R>(
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+    run: impl FnOnce() -> R,
+) -> R {
+    let replay = crate::credentials::scoped_replay_json();
+    if !replay.is_empty()
+        || !headers
+            .keys()
+            .any(|name| crate::download_worker::sensitive_header_name(name))
+    {
+        return run();
+    }
+    let protected: std::collections::BTreeMap<_, _> = headers
+        .iter()
+        .filter(|(name, _)| crate::download_worker::sensitive_header_name(name))
+        .collect();
+    let context = serde_json::json!({"_task_url": url, "request_headers": protected}).to_string();
+    crate::with_replay_json(&context, run)
+}
 
 /// Resolve a playlist/manifest URI against `base`. Absolute schemes other than
 /// http(s) (file, javascript, data, skd, …) are dropped so fetch/mux never
 /// follow them. Relative paths keep the existing origin/directory join.
 pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
     let reference = reference.trim().trim_start_matches('\u{feff}');
-    if reference.is_empty() || reference.chars().any(|ch| ch.is_control()) {
+    if reference.is_empty()
+        || reference.contains('\\')
+        || reference.chars().any(|ch| ch.is_control())
+    {
         return String::new();
     }
     let lower = reference.to_ascii_lowercase();
@@ -33,6 +61,9 @@ pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
             "http"
         };
         return inherit_access_query(base, &format!("{scheme}://{rest}"));
+    }
+    if reference.starts_with('#') {
+        return format!("{}{reference}", base.split('#').next().unwrap_or(base));
     }
     let clean_base = base.split(['?', '#']).next().unwrap_or(base);
     if reference.starts_with('?') {
@@ -108,8 +139,11 @@ fn inherit_access_query(base: &str, resolved: &str) -> String {
 }
 
 fn url_query(url: &str) -> &str {
-    url.split_once('?')
-        .map(|(_, tail)| tail.split('#').next().unwrap_or(""))
+    url.split('#')
+        .next()
+        .unwrap_or("")
+        .split_once('?')
+        .map(|(_, tail)| tail)
         .unwrap_or("")
 }
 
@@ -179,6 +213,27 @@ mod tests {
     use super::resolve_http_uri;
 
     #[test]
+    fn raw_media_secrets_follow_the_original_origin() {
+        let headers = std::collections::HashMap::from([("X-Api-Key".into(), "secret".into())]);
+        super::with_media_headers("https://entry.test/master", &headers, || {
+            let mut request = headers.clone().into_iter().collect();
+            let context = crate::credentials::scoped_replay_json();
+            crate::credentials::apply_replay_json_for(
+                &mut request,
+                &context,
+                "https://cdn.test/seg",
+            );
+            assert!(request.is_empty());
+            crate::credentials::apply_replay_json_for(
+                &mut request,
+                &context,
+                "https://entry.test/seg",
+            );
+            assert_eq!(request.get("X-Api-Key").map(String::as_str), Some("secret"));
+        });
+    }
+
+    #[test]
     fn resolves_children_from_query_bearing_origin_base() {
         assert_eq!(
             resolve_http_uri("https://cdn.example?token=abc", "/seg.ts"),
@@ -187,6 +242,18 @@ mod tests {
         assert_eq!(
             resolve_http_uri("https://cdn.example?token=abc", "seg.ts"),
             "https://cdn.example/seg.ts?token=abc"
+        );
+    }
+
+    #[test]
+    fn fragment_query_is_never_sent_to_child_resources() {
+        assert_eq!(
+            resolve_http_uri("https://cdn.test/main#tab?token=private", "s.ts"),
+            "https://cdn.test/s.ts"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.test/main?part=1#old", "#new"),
+            "https://cdn.test/main?part=1#new"
         );
     }
 

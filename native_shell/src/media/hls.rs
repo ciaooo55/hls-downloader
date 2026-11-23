@@ -99,6 +99,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
         segments: Vec::new(),
         renditions: Vec::new(),
     };
+    let mut remaining_bytes = super::MAX_EXPANDED_MEDIA_BYTES;
     let mut pending_bandwidth = 0u64;
     let mut pending_codecs = String::new();
     let mut pending_resolution = (0u32, 0u32);
@@ -122,7 +123,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             continue;
         }
         if let Some(value) = tag_value(line, "#EXT-X-TARGETDURATION:") {
-            playlist.target_duration = value.parse().unwrap_or(6.0);
+            playlist.target_duration = parse_hls_duration(value)?;
         } else if let Some(value) = tag_value(line, "#EXT-X-MEDIA-SEQUENCE:") {
             playlist.media_sequence = value.parse().unwrap_or(0);
         } else if let Some(attrs) = tag_value(line, "#EXT-X-SERVER-CONTROL:") {
@@ -131,7 +132,10 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
         } else if let Some(attrs) = tag_value(line, "#EXT-X-SKIP:") {
             playlist.skipped_segments = attr_u64(attrs, "SKIPPED-SEGMENTS").unwrap_or(0);
         } else if let Some(attrs) = tag_value(line, "#EXT-X-PART-INF:") {
-            playlist.part_target = attr_f64(attrs, "PART-TARGET").unwrap_or(0.0);
+            playlist.part_target = attr_str(attrs, "PART-TARGET")
+                .map(|value| parse_hls_duration(&value))
+                .transpose()?
+                .unwrap_or(0.0);
         } else if line == "#EXT-X-ENDLIST" {
             playlist.end_list = true;
         } else if line == "#EXT-X-DISCONTINUITY" {
@@ -157,17 +161,24 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             let uri = attr_str(attrs, "URI")
                 .map(|uri| resolve(base, &uri))
                 .filter(|uri| !uri.is_empty());
-            let byterange = match (uri.as_deref(), attr_str(attrs, "BYTERANGE")) {
-                (Some(uri), Some(value)) => Some(resolve_byterange(
+            let uri = uri.ok_or("HLS MAP 缺少有效 URI")?;
+            if current_key.as_ref().is_some_and(|key| key.iv.is_none()) {
+                return Err("AES-128 HLS MAP 缺少显式 IV".into());
+            }
+            let byterange = match attr_str(attrs, "BYTERANGE") {
+                Some(value) => Some(resolve_byterange(
                     parse_byterange(&value)?,
-                    uri,
+                    &uri,
                     &mut map_range_ends,
                 )?),
-                _ => None,
+                None => {
+                    map_range_ends.clear();
+                    None
+                }
             };
-            playlist.map_uri = uri.clone();
+            playlist.map_uri = Some(uri.clone());
             playlist.map_byterange = byterange;
-            current_map = uri.map(|uri| InitMap {
+            current_map = Some(InitMap {
                 uri,
                 byterange,
                 key: current_key.clone(),
@@ -203,11 +214,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             current_key = Some(key.clone());
             playlist.key = Some(key);
         } else if let Some(value) = tag_value(line, "#EXTINF:") {
-            pending_duration = value
-                .split(',')
-                .next()
-                .and_then(|item| item.parse().ok())
-                .unwrap_or(0.0);
+            pending_duration = parse_hls_duration(value.split(',').next().unwrap_or(value))?;
         } else if let Some(value) = tag_value(line, "#EXT-X-BYTERANGE:") {
             pending_range = Some(parse_byterange(value)?);
         } else if let Some(attrs) = tag_value(line, "#EXT-X-PART:") {
@@ -220,6 +227,12 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     pending_range = None;
                     continue;
                 }
+                charge_segment(
+                    &mut remaining_bytes,
+                    &resolved,
+                    current_key.as_ref(),
+                    current_map.as_ref(),
+                )?;
                 playlist.segments.push(Segment {
                     uri: resolved.clone(),
                     media_sequence: playlist
@@ -232,7 +245,10 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     gap: pending_gap
                         || attr_str(attrs, "GAP")
                             .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
-                    duration: attr_f64(attrs, "DURATION").unwrap_or(0.0),
+                    duration: attr_str(attrs, "DURATION")
+                        .map(|value| parse_hls_duration(&value))
+                        .transpose()?
+                        .unwrap_or(0.0),
                     discontinuity,
                     byterange: match attr_str(attrs, "BYTERANGE") {
                         Some(value) => Some(resolve_byterange(
@@ -255,7 +271,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 pending_range = None;
             }
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MEDIA:") {
-            playlist.renditions.push(Rendition {
+            let rendition = Rendition {
                 kind: attr_str(attrs, "TYPE").unwrap_or_default(),
                 group_id: attr_str(attrs, "GROUP-ID").unwrap_or_default(),
                 name: attr_str(attrs, "NAME").unwrap_or_default(),
@@ -265,7 +281,14 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     .filter(|uri| !uri.is_empty()),
                 default: attr_str(attrs, "DEFAULT")
                     .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
-            });
+            };
+            remaining_bytes = remaining_bytes
+                .checked_sub(
+                    std::mem::size_of::<Rendition>()
+                        + rendition.uri.as_ref().map_or(0, String::len),
+                )
+                .ok_or("HLS 清单展开超过长度上限")?;
+            playlist.renditions.push(rendition);
         } else if !line.starts_with('#') {
             let uri = resolve(base, line);
             if uri.is_empty() {
@@ -282,6 +305,9 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             }
             if playlist.is_master || pending_bandwidth > 0 {
                 playlist.is_master = true;
+                remaining_bytes = remaining_bytes
+                    .checked_sub(std::mem::size_of::<Variant>() + uri.len())
+                    .ok_or("HLS 清单展开超过长度上限")?;
                 playlist.variants.push(Variant {
                     bandwidth: pending_bandwidth,
                     uri,
@@ -301,6 +327,12 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 if byterange.is_none() {
                     media_range_ends.clear();
                 }
+                charge_segment(
+                    &mut remaining_bytes,
+                    &uri,
+                    current_key.as_ref(),
+                    current_map.as_ref(),
+                )?;
                 playlist.segments.push(Segment {
                     is_ad: ad_cue_active || pending_daterange_ad || url_is_ad(&uri),
                     uri,
@@ -575,6 +607,19 @@ pub fn download_hls(
 pub(crate) const REMUX_STAGING_TS: &str = "merged.ts";
 
 pub fn download_hls_with(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    task_dir: &Path,
+    control: &Path,
+    options: HlsDownloadOptions,
+) -> Result<PathBuf, String> {
+    super::with_media_headers(url, headers, || {
+        download_hls_scoped(url, headers, proxy, task_dir, control, options)
+    })
+}
+
+fn download_hls_scoped(
     url: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
@@ -1511,14 +1556,7 @@ fn prepare_segments(
         let identity = segment_identity(&segment);
         let init_map_path = match &segment.init_map {
             Some(init_map) => Some(ensure_init_map(
-                init_map,
-                segment.media_sequence,
-                headers,
-                proxy,
-                &seg_dir,
-                control,
-                key_cache,
-                map_cache,
+                init_map, headers, proxy, &seg_dir, control, key_cache, map_cache,
             )?),
             None => None,
         };
@@ -1889,10 +1927,8 @@ fn load_key(
     Ok(bytes)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn ensure_init_map(
     init_map: &InitMap,
-    sequence: u64,
     headers: &HashMap<String, String>,
     proxy: &str,
     seg_dir: &Path,
@@ -1910,7 +1946,7 @@ fn ensure_init_map(
     // 仅 map_cache 中本次运行成功落盘的条目可以复用。
     let encryption = if let Some(key) = &init_map.key {
         let key_bytes = load_key(key, headers, proxy, key_cache)?;
-        let iv = key.iv.unwrap_or_else(|| sequence_iv(sequence));
+        let iv = key.iv.ok_or("AES-128 HLS MAP 缺少显式 IV")?;
         Some((key_bytes, iv))
     } else {
         None
@@ -2105,9 +2141,9 @@ impl LiveSubSession {
                 })
             })
             .collect();
-        let _ = fs::write(
-            task_dir.join("live_subtitles.json"),
-            serde_json::json!({ "tracks": tracks }).to_string(),
+        let _ = write_json_atomic(
+            &task_dir.join("live_subtitles.json"),
+            &serde_json::json!({ "tracks": tracks }).to_string(),
         );
     }
 
@@ -2207,18 +2243,19 @@ fn capture_live_subtitle_track(
     }
     let cache = task_dir.join("live-subtitles").join(&track.key);
     fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
-    let text = String::from_utf8_lossy(&body);
+    let text = std::str::from_utf8(&body).map_err(|_| "HLS 文本不是 UTF-8")?;
     let trimmed = text.trim_start_matches('\u{feff}').trim_start();
     if trimmed.starts_with("WEBVTT") {
         let identity = crate::crypto_lite::sha256_hex(&body);
-        if track.seen.insert(identity) {
+        if !track.seen.contains(&identity) {
             let path = cache.join(format!("{:08}.vtt", track.count));
-            fs::write(&path, &body).map_err(|error| error.to_string())?;
+            write_text_atomic(&path, text)?;
+            track.seen.insert(identity);
             track.count += 1;
         }
         return Ok(());
     }
-    let playlist = match parse_playlist(&text, &track.uri) {
+    let playlist = match parse_playlist(text, &track.uri) {
         Ok(parsed) if !parsed.is_master => parsed,
         _ => return Ok(()),
     };
@@ -2285,15 +2322,15 @@ fn download_vod_subtitle(
     if status != 200 && status != 206 {
         return Err(format!("HLS subtitle HTTP {status}"));
     }
-    let text = String::from_utf8_lossy(&body);
+    let text = std::str::from_utf8(&body).map_err(|_| "HLS 文本不是 UTF-8")?;
     let merged = if text
         .trim_start_matches('\u{feff}')
         .trim_start()
         .starts_with("WEBVTT")
     {
-        text.into_owned()
+        text.to_owned()
     } else {
-        let playlist = parse_playlist(&text, uri)?;
+        let playlist = parse_playlist(text, uri)?;
         if playlist.is_master {
             return Err("HLS subtitle rendition must reference a media playlist".into());
         }
@@ -2346,8 +2383,8 @@ fn load_playlist(
     if status != 200 && status != 206 {
         return Err(format!("HLS playlist HTTP {status}"));
     }
-    let text = String::from_utf8_lossy(&body);
-    parse_playlist(&text, url)
+    let text = std::str::from_utf8(&body).map_err(|_| "HLS 文本不是 UTF-8")?;
+    parse_playlist(text, url)
 }
 
 // 只重试可恢复的网络失败；解密和写盘失败不应重新请求相同资源。
@@ -2883,8 +2920,32 @@ fn attr_u64(attrs: &str, key: &str) -> Option<u64> {
     attr_str(attrs, key)?.parse().ok()
 }
 
-fn attr_f64(attrs: &str, key: &str) -> Option<f64> {
-    attr_str(attrs, key)?.parse().ok()
+fn charge_segment(
+    remaining: &mut usize,
+    uri: &str,
+    key: Option<&MediaKey>,
+    map: Option<&InitMap>,
+) -> Result<(), String> {
+    let key_size = |key: &MediaKey| key.uri.len() + key.method.len();
+    let bytes = std::mem::size_of::<Segment>()
+        + uri.len()
+        + key.map_or(0, key_size)
+        + map.map_or(0, |map| {
+            map.uri.len() + map.key.as_ref().map_or(0, key_size)
+        });
+    *remaining = remaining
+        .checked_sub(bytes)
+        .ok_or("HLS 清单展开超过长度上限")?;
+    Ok(())
+}
+
+fn parse_hls_duration(value: &str) -> Result<f64, String> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|duration| duration.is_finite() && *duration >= 0.0)
+        .ok_or_else(|| "无效 HLS 时长".into())
 }
 
 fn resolve(base: &str, reference: &str) -> String {
@@ -2924,6 +2985,37 @@ fn read_control(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn segment_budget_accounts_for_inherited_map_keys() {
+        let key = MediaKey {
+            method: "AES-128".into(),
+            uri: "k".repeat(512),
+            iv: Some([0; 16]),
+        };
+        let map = InitMap {
+            uri: "init.mp4".into(),
+            key: Some(key.clone()),
+            byterange: None,
+        };
+        let mut budget = std::mem::size_of::<Segment>() + 1_024;
+        assert!(charge_segment(&mut budget, "s", None, Some(&map)).is_ok());
+        assert!(charge_segment(&mut budget, "s", Some(&key), Some(&map)).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_hls_durations_and_ambiguous_maps() {
+        let base = "https://cdn.test/live.m3u8";
+        for tags in [
+            "#EXTINF:NaN,",
+            "#EXT-X-TARGETDURATION:inf",
+            "#EXT-X-PART:DURATION=-1,URI=\"p.m4s\"",
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXT-X-MAP:URI=\"init.mp4\"",
+            "#EXT-X-MAP:URI=\"m\",BYTERANGE=\"4@0\"\n#EXT-X-MAP:URI=\"m\"\n#EXT-X-MAP:URI=\"m\",BYTERANGE=\"4\"",
+        ] {
+            assert!(super::parse_playlist(&format!("#EXTM3U\n{tags}\ns.ts"), base).is_err());
+        }
+    }
+
     use super::*;
     use crate::http_engine::fetch_hls_bytes;
     use std::io::{BufRead, BufReader};
@@ -3045,7 +3137,6 @@ mod tests {
         for _ in 0..2 {
             assert!(ensure_init_map(
                 &map,
-                0,
                 &HashMap::new(),
                 "",
                 &segments,
@@ -3062,7 +3153,6 @@ mod tests {
         fs::write(&path, b"stale partial file").unwrap();
         let fresh = ensure_init_map(
             &map,
-            0,
             &HashMap::new(),
             "",
             &segments,
@@ -3076,7 +3166,6 @@ mod tests {
         assert_eq!(
             ensure_init_map(
                 &map,
-                0,
                 &HashMap::new(),
                 "",
                 &segments,

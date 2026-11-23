@@ -210,7 +210,7 @@ fn parse_magnet_sources(uri: &str) -> Result<(TorrentMeta, Vec<String>), String>
     } else {
         web_seeds.retain(|seed| !exact_sources.contains(seed));
         if info_hash.is_empty() {
-            exact_sources.clear();
+            return Err("magnet 缺少支持的 BTIH 主题".into());
         }
     }
     if info_hash.is_empty() && web_seeds.is_empty() && exact_sources.is_empty() {
@@ -311,6 +311,9 @@ pub fn parse_torrent_file(bytes: &[u8]) -> Result<TorrentMeta, String> {
             pieces.push(hash);
         }
     }
+    if name.contains('/') || !torrent_path_is_safe(&name) {
+        return Err("invalid torrent name".into());
+    }
     let files = torrent_files(info)?;
     let length = files
         .iter()
@@ -410,6 +413,9 @@ fn torrent_files(
             .and_then(BValue::as_str)
             .ok_or("torrent file name is missing")?
             .to_string();
+        if path.contains('/') || !torrent_path_is_safe(&path) {
+            return Err(format!("invalid torrent file name: {path}"));
+        }
         return Ok(vec![TorrentFileEntry {
             index: 0,
             path,
@@ -421,6 +427,9 @@ fn torrent_files(
         .get(b"files".as_ref())
         .and_then(BValue::as_list)
         .ok_or("torrent file list is missing")?;
+    if files.is_empty() {
+        return Err("torrent file list is empty".into());
+    }
     let mut offset = 0u64;
     let mut entries = Vec::with_capacity(files.len());
     let mut paths = BTreeSet::new();
@@ -455,6 +464,14 @@ fn torrent_files(
         offset = offset
             .checked_add(size)
             .ok_or("torrent total length overflows")?;
+    }
+    for path in &paths {
+        if path
+            .match_indices('/')
+            .any(|(end, _)| paths.contains(&path[..end]))
+        {
+            return Err(format!("torrent path is both file and directory: {path}"));
+        }
     }
     Ok(entries)
 }
@@ -493,11 +510,15 @@ pub fn validate_torrent_selection(
         return Ok(every);
     }
     let mut selected = Vec::with_capacity(selections.len());
+    let mut seen = BTreeSet::new();
     for item in selections {
+        if !seen.insert(item.index) {
+            return Err("种子文件重复选择".into());
+        }
         let Some(file) = meta
             .files
-            .iter()
-            .find(|file| file.index == item.index && file.path == item.path)
+            .get(item.index as usize)
+            .filter(|file| file.index == item.index && file.path == item.path)
         else {
             return Err(format!("种子文件不存在: {}", item.path));
         };
@@ -726,7 +747,9 @@ fn transfer_torrent(
             options.enable_dht,
         ) {
             Ok(meta) => meta,
-            Err(error) if magnet.web_seeds.is_empty() => return Err(error),
+            Err(error) if !magnet.info_hash.is_empty() || magnet.web_seeds.is_empty() => {
+                return Err(error)
+            }
             Err(_) => magnet,
         }
     } else if spec_url.ends_with(".torrent") || spec_url.starts_with("http") {
@@ -1015,8 +1038,8 @@ fn decode_base32(value: &str) -> Option<Vec<u8>> {
     let mut bits: u32 = 0;
     let mut bit_count = 0;
     let mut out = Vec::new();
-    for ch in value.chars() {
-        let index = ALPHABET.iter().position(|&item| item == ch as u8)?;
+    for byte in value.bytes() {
+        let index = ALPHABET.iter().position(|&item| item == byte)?;
         bits = (bits << 5) | index as u32;
         bit_count += 5;
         if bit_count >= 8 {
@@ -1123,10 +1146,13 @@ fn announce_peers(
     } else {
         meta.announce.clone()
     };
-    for announce in &announces {
+    for announce in announces.iter().take(64) {
+        if peers.len() >= 1000 {
+            break;
+        }
         if announce.starts_with("udp://") {
             if let Ok(found) = announce_udp(announce, &info_hash, meta.length) {
-                peers.extend(found);
+                peers.extend(found.into_iter().take(1000 - peers.len()));
             }
             continue;
         }
@@ -1141,18 +1167,22 @@ fn announce_peers(
             meta.length
         );
         let tracker_headers = strip_sensitive_headers(headers);
-        if let Ok((_, body)) = crate::with_replay_json("", || {
+        if let Ok((200, body)) = crate::with_replay_json("", || {
             crate::http_engine::fetch_bytes_limited(&url, &tracker_headers, proxy, 1024 * 1024)
         }) {
-            peers.extend(parse_compact_peers(&body));
+            peers.extend(
+                parse_compact_peers(&body)
+                    .into_iter()
+                    .take(1000 - peers.len()),
+            );
         }
     }
-    if enable_dht {
+    if enable_dht && peers.len() < 1000 {
         if let Ok(found) = dht_get_peers(&info_hash) {
-            peers.extend(found);
+            peers.extend(found.into_iter().take(1000 - peers.len()));
         }
     }
-    peers.sort_by_key(|addr| addr.to_string());
+    peers.sort_unstable();
     peers.dedup();
     Ok(peers)
 }
@@ -1173,7 +1203,7 @@ const DEFAULT_TRACKERS: &[&str] = &[
 
 fn resolve_hint_peers(hints: &[String]) -> Vec<std::net::SocketAddr> {
     let mut peers = Vec::new();
-    for hint in hints {
+    for hint in hints.iter().take(1000) {
         if let Ok(addr) = hint.parse::<std::net::SocketAddr>() {
             peers.push(addr);
         }
@@ -1256,18 +1286,17 @@ fn announce_udp(
         .set_read_timeout(Some(Duration::from_secs(4)))
         .map_err(|error| error.to_string())?;
     let target = format!("{host}:{port}");
+    socket.connect(target).map_err(|error| error.to_string())?;
     let tx = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
         & 0xffff_ffff) as u32;
     socket
-        .send_to(&udp_connect_request(tx), &target)
+        .send(&udp_connect_request(tx))
         .map_err(|error| error.to_string())?;
     let mut buf = [0u8; 1024];
-    let (count, _) = socket
-        .recv_from(&mut buf)
-        .map_err(|error| error.to_string())?;
+    let count = socket.recv(&mut buf).map_err(|error| error.to_string())?;
     if count < 16 || be32(&buf[0..4]) != 0 {
         return Err("udp tracker connect 失败".into());
     }
@@ -1290,13 +1319,9 @@ fn announce_udp(
     announce.extend_from_slice(&tx2.to_be_bytes());
     announce.extend_from_slice(&((-1i32) as u32).to_be_bytes());
     announce.extend_from_slice(&6881u16.to_be_bytes());
-    socket
-        .send_to(&announce, &target)
-        .map_err(|error| error.to_string())?;
-    let (count, _) = socket
-        .recv_from(&mut buf)
-        .map_err(|error| error.to_string())?;
-    if count < 20 || be32(&buf[0..4]) != 1 {
+    socket.send(&announce).map_err(|error| error.to_string())?;
+    let count = socket.recv(&mut buf).map_err(|error| error.to_string())?;
+    if count < 20 || be32(&buf[0..4]) != 1 || be32(&buf[4..8]) != tx2 {
         return Err("udp tracker announce 失败".into());
     }
     Ok(decode_compact(&buf[20..count]))
@@ -1314,6 +1339,7 @@ pub fn krpc_get_peers_query(txid: &[u8], node_id: &[u8], info_hash: &[u8]) -> Ve
     out
 }
 
+#[cfg(test)]
 pub fn parse_krpc_peers(body: &[u8]) -> (Vec<std::net::SocketAddr>, Vec<std::net::SocketAddr>) {
     let Ok(value) = bencode::parse(body) else {
         return (Vec::new(), Vec::new());
@@ -1321,6 +1347,12 @@ pub fn parse_krpc_peers(body: &[u8]) -> (Vec<std::net::SocketAddr>, Vec<std::net
     let Some(dict) = value.as_dict() else {
         return (Vec::new(), Vec::new());
     };
+    krpc_reply_peers(dict)
+}
+
+fn krpc_reply_peers(
+    dict: &std::collections::BTreeMap<Vec<u8>, BValue>,
+) -> (Vec<std::net::SocketAddr>, Vec<std::net::SocketAddr>) {
     let Some(reply) = dict.get(b"r".as_ref()).and_then(BValue::as_dict) else {
         return (Vec::new(), Vec::new());
     };
@@ -1376,9 +1408,11 @@ fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> 
             bootstrap.extend(addrs.filter(std::net::SocketAddr::is_ipv4).take(1));
         }
     }
+    let mut pending = std::collections::BTreeMap::new();
     let mut queried = 0u16;
     for target in bootstrap.iter().copied() {
         let tx = queried.to_be_bytes();
+        pending.insert(tx, target);
         let _ = socket.send_to(&krpc_get_peers_query(&tx, &node_id, info_hash), target);
         queried = queried.saturating_add(1);
     }
@@ -1387,14 +1421,31 @@ fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> 
     while Instant::now() < deadline {
         let mut buf = [0u8; 2048];
         match socket.recv_from(&mut buf) {
-            Ok((count, _)) => {
-                let (found, closer) = parse_krpc_peers(&buf[..count]);
+            Ok((count, source)) => {
+                let Ok(BValue::Dict(dict)) = bencode::parse(&buf[..count]) else {
+                    continue;
+                };
+                let Some(tx) = dict
+                    .get(b"t".as_ref())
+                    .and_then(BValue::as_bytes)
+                    .and_then(|raw| <[u8; 2]>::try_from(raw).ok())
+                else {
+                    continue;
+                };
+                if pending.get(&tx) != Some(&source)
+                    || dict.get(b"y".as_ref()).and_then(BValue::as_str) != Some("r")
+                {
+                    continue;
+                }
+                pending.remove(&tx);
+                let (found, closer) = krpc_reply_peers(&dict);
                 peers.extend(found);
                 for node in closer.into_iter().take(8) {
                     if queried >= 24 {
                         break;
                     }
                     let tx = queried.to_be_bytes();
+                    pending.insert(tx, node);
                     let _ = socket.send_to(&krpc_get_peers_query(&tx, &node_id, info_hash), node);
                     queried = queried.saturating_add(1);
                 }
@@ -1402,7 +1453,7 @@ fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> 
             Err(_) => continue,
         }
     }
-    peers.sort_by_key(|addr| addr.to_string());
+    peers.sort_unstable();
     peers.dedup();
     Ok(peers)
 }
@@ -1415,6 +1466,9 @@ fn fetch_ut_metadata_from_peer(
     use std::io::{Read, Write};
     use std::net::TcpStream;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(12)))
         .map_err(|error| error.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(12)))
@@ -1442,12 +1496,12 @@ fn fetch_ut_metadata_from_peer(
     }
     let handshake_body = b"d1:md11:ut_metadatai1e6:ut_pexi2ee1:pi6881ee";
     send_extended(&mut stream, 0, handshake_body)?;
+    let deadline = Instant::now() + Duration::from_secs(12);
     let mut metadata_id = 0u8;
-    let mut pex_id = 0u8;
     let mut metadata_size = 0usize;
     for _ in 0..24 {
-        let (id, body) = read_message(&mut stream)?;
-        take_extended(id, &body, &mut pex_id, extra_peers);
+        let (id, body) = read_message(&mut stream, deadline)?;
+        take_extended(id, &body, extra_peers);
         if id != 20 || body.is_empty() {
             continue;
         }
@@ -1467,7 +1521,7 @@ fn fetch_ut_metadata_from_peer(
             }
             if let Some(m) = dict.get(b"m".as_ref()).and_then(BValue::as_dict) {
                 if let Some(id) = m.get(b"ut_metadata".as_ref()).and_then(BValue::as_int) {
-                    metadata_id = id.max(0) as u8;
+                    metadata_id = u8::try_from(id).unwrap_or(0);
                 }
             }
             break;
@@ -1484,10 +1538,11 @@ fn fetch_ut_metadata_from_peer(
     for index in 0..pieces {
         let request = format!("d8:msg_typei0e5:piecei{index}ee");
         send_extended(&mut stream, metadata_id, request.as_bytes())?;
+        let deadline = Instant::now() + Duration::from_secs(12);
         loop {
-            let (id, body) = read_message(&mut stream)?;
-            take_extended(id, &body, &mut pex_id, extra_peers);
-            if id != 20 || body.len() < 2 || body[0] == 0 {
+            let (id, body) = read_message(&mut stream, deadline)?;
+            take_extended(id, &body, extra_peers);
+            if id != 20 || body.len() < 2 || body[0] != 1 {
                 continue;
             }
             let (header, rest) = bencode::parse_value(&body[1..])?;
@@ -1507,15 +1562,16 @@ fn fetch_ut_metadata_from_peer(
             let piece = dict
                 .get(b"piece".as_ref())
                 .and_then(BValue::as_int)
-                .unwrap_or(0) as usize;
-            if piece != index {
+                .unwrap_or(-1);
+            if piece != index as i64 {
                 continue;
             }
-            let start = piece * 16 * 1024;
-            let end = (start + rest.len()).min(info.len());
-            if end > start {
-                info[start..end].copy_from_slice(&rest[..end - start]);
+            let start = index * 16 * 1024;
+            let end = (start + 16 * 1024).min(info.len());
+            if rest.len() != end - start {
+                return Err("ut_metadata piece length mismatch".into());
             }
+            info[start..end].copy_from_slice(rest);
             break;
         }
     }
@@ -1554,33 +1610,13 @@ fn send_extended(
     send_message(stream, 20, &body)
 }
 
-fn take_extended(
-    id: u8,
-    body: &[u8],
-    pex_id: &mut u8,
-    extra_peers: &mut Vec<std::net::SocketAddr>,
-) {
-    if id != 20 || body.is_empty() {
-        return;
+fn take_extended(id: u8, body: &[u8], extra_peers: &mut Vec<std::net::SocketAddr>) {
+    // Incoming IDs are the ones we advertised in our extended handshake.
+    const MAX_EXTRA_PEERS: usize = 1000;
+    if id == 20 && body.first() == Some(&2) && extra_peers.len() < MAX_EXTRA_PEERS {
+        let remaining = MAX_EXTRA_PEERS - extra_peers.len();
+        extra_peers.extend(parse_ut_pex(&body[1..]).into_iter().take(remaining));
     }
-    if body[0] == 0 {
-        if let Ok((value, _)) = bencode::parse_value(&body[1..]) {
-            if let Some(m) = value
-                .as_dict()
-                .and_then(|dict| dict.get(b"m".as_ref()))
-                .and_then(BValue::as_dict)
-            {
-                if let Some(id) = m.get(b"ut_pex".as_ref()).and_then(BValue::as_int) {
-                    *pex_id = id.max(0) as u8;
-                }
-            }
-        }
-        return;
-    }
-    if body[0] != *pex_id && body[0] != 2 {
-        return;
-    }
-    extra_peers.extend(parse_ut_pex(&body[1..]));
 }
 
 pub fn parse_ut_pex(payload: &[u8]) -> Vec<std::net::SocketAddr> {
@@ -1597,17 +1633,22 @@ pub fn parse_ut_pex(payload: &[u8]) -> Vec<std::net::SocketAddr> {
 }
 
 pub fn parse_compact_peers(body: &[u8]) -> Vec<std::net::SocketAddr> {
-    if let Ok(value) = bencode::parse(body) {
-        if let Some(dict) = value.as_dict() {
-            if let Some(raw) = dict.get(b"peers".as_ref()).and_then(BValue::as_bytes) {
-                return decode_compact(raw);
-            }
-        }
+    let Ok(BValue::Dict(dict)) = bencode::parse(body) else {
+        return Vec::new();
+    };
+    if dict.contains_key(b"failure reason".as_ref()) {
+        return Vec::new();
     }
-    decode_compact(body)
+    dict.get(b"peers".as_ref())
+        .and_then(BValue::as_bytes)
+        .map(decode_compact)
+        .unwrap_or_default()
 }
 
 fn decode_compact(raw: &[u8]) -> Vec<std::net::SocketAddr> {
+    if !raw.len().is_multiple_of(6) {
+        return Vec::new();
+    }
     raw.as_chunks::<6>()
         .0
         .iter()
@@ -1694,6 +1735,9 @@ fn download_from_peer_ex_with_telemetry(
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
         .map_err(|error| error.to_string())?;
     stream
+        .set_write_timeout(Some(Duration::from_secs(15)))
+        .map_err(|error| error.to_string())?;
+    stream
         .set_read_timeout(Some(Duration::from_secs(15)))
         .map_err(|error| error.to_string())?;
     let info_hash = decode_info_hash(&meta.info_hash)?;
@@ -1716,7 +1760,6 @@ fn download_from_peer_ex_with_telemetry(
     }
     telemetry.peer_count = telemetry.peer_count.max(1);
     reporter(*telemetry);
-    let mut pex_id = 0u8;
     if peer_hs[25] & 0x10 != 0 {
         send_extended(
             &mut stream,
@@ -1759,11 +1802,15 @@ fn download_from_peer_ex_with_telemetry(
             return Err("peer has no available pending pieces".into());
         }
         'pieces: for index in pending {
+            let mut progress_deadline = Instant::now() + Duration::from_secs(30);
             if !unchoked {
                 while !unchoked {
                     check_torrent_control(control)?;
                     if !piece_is_selected(meta, index, selection_path) {
                         continue 'pieces;
+                    }
+                    if Instant::now() >= progress_deadline {
+                        return Err("peer unchoke timed out".into());
                     }
                     let Some(message) = reader.recv_timeout(Duration::from_millis(100))? else {
                         continue;
@@ -1774,7 +1821,7 @@ fn download_from_peer_ex_with_telemetry(
                         (id, body) => {
                             peer_availability_known |=
                                 note_peer_availability(id, &body, &mut peer_pieces);
-                            take_extended(id, &body, &mut pex_id, extra_peers);
+                            take_extended(id, &body, extra_peers);
                         }
                     }
                 }
@@ -1794,6 +1841,9 @@ fn download_from_peer_ex_with_telemetry(
                     if !piece_is_selected(meta, index, selection_path) {
                         continue 'pieces;
                     }
+                    if Instant::now() >= progress_deadline {
+                        return Err("peer block timed out".into());
+                    }
                     let Some((id, body)) = reader.recv_timeout(Duration::from_millis(100))? else {
                         continue;
                     };
@@ -1803,7 +1853,7 @@ fn download_from_peer_ex_with_telemetry(
                         _ => {
                             peer_availability_known |=
                                 note_peer_availability(id, &body, &mut peer_pieces);
-                            take_extended(id, &body, &mut pex_id, extra_peers);
+                            take_extended(id, &body, extra_peers);
                         }
                     }
                 }
@@ -1824,6 +1874,9 @@ fn download_from_peer_ex_with_telemetry(
                     if !piece_is_selected(meta, index, selection_path) {
                         let _ = send_message(&mut stream, 8, &payload);
                         continue 'pieces;
+                    }
+                    if Instant::now() >= progress_deadline {
+                        return Err("peer block timed out".into());
                     }
                     let Some((id, body)) = reader.recv_timeout(Duration::from_millis(100))? else {
                         continue;
@@ -1852,11 +1905,12 @@ fn download_from_peer_ex_with_telemetry(
                         }
                         piece[begin..begin + data.len()].copy_from_slice(data);
                         filled += data.len();
+                        progress_deadline = Instant::now() + Duration::from_secs(30);
                         break;
                     } else {
                         peer_availability_known |=
                             note_peer_availability(id, &body, &mut peer_pieces);
-                        take_extended(id, &body, &mut pex_id, extra_peers);
+                        take_extended(id, &body, extra_peers);
                     }
                 }
             }
@@ -1933,8 +1987,8 @@ fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) -> bool {
 /// 信任服务器内容；这里逐 piece 校验，保证与 swarm 路径一致的数据完整性。
 /// `piece_length` 已在 `parse_torrent_file` 被 `MAX_PIECE_LENGTH` 限制，分块分配安全。
 fn verify_web_seed_pieces(path: &Path, meta: &TorrentMeta) -> Result<(), String> {
-    use std::io::{Read, Seek, SeekFrom};
-    if meta.pieces.is_empty() || meta.piece_length == 0 {
+    // Legacy topicless magnets have no authoritative length or piece table.
+    if meta.magnet && meta.info_hash.is_empty() && meta.pieces.is_empty() {
         return Ok(());
     }
     let actual_length = fs::metadata(path)
@@ -1951,12 +2005,7 @@ fn verify_web_seed_pieces(path: &Path, meta: &TorrentMeta) -> Result<(), String>
     for (index, hash) in meta.pieces.iter().enumerate() {
         let start = index as u64 * meta.piece_length;
         let len = ((meta.length - start).min(meta.piece_length)) as usize;
-        file.seek(SeekFrom::Start(start))
-            .map_err(|error| format!("seek web seed piece {index}: {error}"))?;
-        let mut buf = vec![0u8; len];
-        file.read_exact(&mut buf)
-            .map_err(|error| format!("read web seed piece {index}: {error}"))?;
-        if crate::crypto_lite::sha1(&buf) != *hash {
+        if !piece_is_complete(&mut file, start, len, hash) {
             return Err(format!("web seed 内容与种子 piece {index} 的 SHA1 不匹配"));
         }
     }
@@ -1965,14 +2014,21 @@ fn verify_web_seed_pieces(path: &Path, meta: &TorrentMeta) -> Result<(), String>
 
 fn piece_is_complete(file: &mut fs::File, start: u64, len: usize, hash: &[u8; 20]) -> bool {
     use std::io::{Read, Seek, SeekFrom};
-    let mut buf = vec![0u8; len];
     if file.seek(SeekFrom::Start(start)).is_err() {
         return false;
     }
-    if file.read_exact(&mut buf).is_err() {
-        return false;
+    let mut remaining = len;
+    let mut buffer = [0u8; 32 * 1024];
+    let mut hasher = crate::crypto_lite::Sha1Hasher::new();
+    while remaining > 0 {
+        let count = remaining.min(buffer.len());
+        if file.read_exact(&mut buffer[..count]).is_err() {
+            return false;
+        }
+        hasher.update(&buffer[..count]);
+        remaining -= count;
     }
-    crate::crypto_lite::sha1(&buf) == *hash
+    hasher.finish() == *hash
 }
 
 fn send_message(stream: &mut std::net::TcpStream, id: u8, payload: &[u8]) -> Result<(), String> {
@@ -2020,7 +2076,7 @@ impl PeerMessageReader {
         // 下载写盘或限速时让 TCP 反压对端，不能把持续到来的 peer 消息无限堆进内存。
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let handle = std::thread::spawn(move || loop {
-            let message = read_message(&mut read_stream)
+            let message = read_message(&mut read_stream, Instant::now() + Duration::from_secs(15))
                 .map_err(|error| format!("peer {peer} message read: {error}"));
             let failed = message.is_err();
             if sender.send(message).is_err() || failed {
@@ -2061,13 +2117,31 @@ impl Drop for PeerMessageReader {
     }
 }
 
-fn read_message(stream: &mut std::net::TcpStream) -> Result<(u8, Vec<u8>), String> {
-    use std::io::Read;
+fn read_message(
+    stream: &mut std::net::TcpStream,
+    deadline: Instant,
+) -> Result<(u8, Vec<u8>), String> {
+    let mut read_exact = |mut bytes: &mut [u8]| -> Result<(), String> {
+        while !bytes.is_empty() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("peer response timed out".into());
+            }
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|e| e.to_string())?;
+            match stream.read(bytes) {
+                Ok(0) => return Err("truncated peer message".into()),
+                Ok(n) => bytes = &mut bytes[n..],
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Ok(())
+    };
     loop {
         let mut len_buf = [0u8; 4];
-        stream
-            .read_exact(&mut len_buf)
-            .map_err(|error| error.to_string())?;
+        read_exact(&mut len_buf)?;
         let len = u32::from_be_bytes(len_buf) as usize;
         if len == 0 {
             continue; // keep-alive
@@ -2076,9 +2150,7 @@ fn read_message(stream: &mut std::net::TcpStream) -> Result<(u8, Vec<u8>), Strin
             return Err("peer message too large".into());
         }
         let mut body = vec![0u8; len];
-        stream
-            .read_exact(&mut body)
-            .map_err(|error| error.to_string())?;
+        read_exact(&mut body)?;
         return Ok((body[0], body[1..].to_vec()));
     }
 }
@@ -2127,17 +2199,25 @@ mod bencode {
     }
 
     pub(super) fn parse_value(input: &[u8]) -> Result<(BValue, &[u8]), String> {
-        parse_value_at_depth(input, 0)
+        let mut remaining = 262_144;
+        parse_value_at_depth(input, 0, &mut remaining)
     }
 
-    fn parse_value_at_depth(input: &[u8], depth: usize) -> Result<(BValue, &[u8]), String> {
+    fn parse_value_at_depth<'a>(
+        input: &'a [u8],
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<(BValue, &'a [u8]), String> {
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or("bencode item limit exceeded")?;
         if depth >= 64 {
             return Err("bencode nesting exceeds 64 levels".into());
         }
         match input.first() {
             Some(b'i') => parse_int(input),
-            Some(b'l') => parse_list(input, depth),
-            Some(b'd') => parse_dict(input, depth),
+            Some(b'l') => parse_list(input, depth, remaining),
+            Some(b'd') => parse_dict(input, depth, remaining),
             Some(b'0'..=b'9') => parse_bytes(input),
             _ => Err("invalid bencode".into()),
         }
@@ -2168,6 +2248,12 @@ mod bencode {
             .iter()
             .position(|byte| *byte == b':')
             .ok_or("truncated bytes")?;
+        if colon == 0
+            || (colon > 1 && input[0] == b'0')
+            || !input[..colon].iter().all(u8::is_ascii_digit)
+        {
+            return Err("invalid byte string length".into());
+        }
         let len: usize = std::str::from_utf8(&input[..colon])
             .map_err(|error| error.to_string())?
             .parse()
@@ -2188,18 +2274,26 @@ mod bencode {
         Ok((BValue::Bytes(input[start..end].to_vec()), &input[end..]))
     }
 
-    fn parse_list(input: &[u8], depth: usize) -> Result<(BValue, &[u8]), String> {
+    fn parse_list<'a>(
+        input: &'a [u8],
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<(BValue, &'a [u8]), String> {
         let mut rest = &input[1..];
         let mut items = Vec::new();
         while rest.first() != Some(&b'e') {
-            let (value, next) = parse_value_at_depth(rest, depth + 1)?;
+            let (value, next) = parse_value_at_depth(rest, depth + 1, remaining)?;
             items.push(value);
             rest = next;
         }
         Ok((BValue::List(items), &rest[1..]))
     }
 
-    fn parse_dict(input: &[u8], depth: usize) -> Result<(BValue, &[u8]), String> {
+    fn parse_dict<'a>(
+        input: &'a [u8],
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<(BValue, &'a [u8]), String> {
         let mut rest = &input[1..];
         let mut map = BTreeMap::new();
         while rest.first() != Some(&b'e') {
@@ -2207,7 +2301,7 @@ mod bencode {
             let BValue::Bytes(key) = key else {
                 return Err("dict key must be bytes".into());
             };
-            let (value, next) = parse_value_at_depth(next, depth + 1)?;
+            let (value, next) = parse_value_at_depth(next, depth + 1, remaining)?;
             if map.insert(key, value).is_some() {
                 return Err("duplicate bencode dictionary key".into());
             }
@@ -2300,6 +2394,7 @@ mod tests {
             "d6:lengthi1e4:pathl1:aeei2e",
             "d6:lengthi1e4:pathl1:aeed6:lengthi1e4:pathl1:Aee",
             "d6:lengthi1e4:pathl3:a/bee",
+            "d6:lengthi1e4:pathl1:aeed6:lengthi1e4:pathl1:A1:bee",
         ] {
             let bytes = format!("d5:filesl{files}ee");
             let value = bencode::parse(bytes.as_bytes()).unwrap();
@@ -2442,6 +2537,31 @@ mod tests {
         let mut out = format!("{}:", value.len()).into_bytes();
         out.extend_from_slice(value.as_bytes());
         out
+    }
+
+    #[test]
+    fn hash_bound_magnet_cannot_fall_back_to_unverified_bytes() {
+        let error = transfer_torrent(
+            "magnet:?xt=urn:btih:invalid&ws=http://127.0.0.1:1/a",
+            Path::new(""),
+            Path::new(""),
+            &Default::default(),
+            "",
+            TorrentOptions::default(),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert!(error.contains("info_hash"), "{error}");
+    }
+
+    #[test]
+    fn torrent_rejects_unsafe_single_file_and_wide_bencode() {
+        assert!(parse_torrent_file(b"d4:infod6:lengthi0e4:name3:NULee").is_err());
+        let mut wide = vec![b'l'];
+        wide.extend_from_slice(&b"0:".repeat(262_144));
+        wide.push(b'e');
+        assert!(bencode::parse(&wide).unwrap_err().contains("item limit"));
+        assert!(parse_magnet("magnet:?xt=urn:unsupported:test&ws=https://cdn.test/a").is_err());
     }
 
     #[test]
@@ -2860,7 +2980,11 @@ mod tests {
 
     #[test]
     fn compact_peers_decode_six_byte_rows() {
-        let peers = parse_compact_peers(&[10, 0, 0, 1, 0x1A, 0xE1]);
+        let mut reply = b"d5:peers6:".to_vec();
+        reply.extend_from_slice(&[10, 0, 0, 1, 0x1A, 0xE1, b'e']);
+        let peers = parse_compact_peers(&reply);
+        assert!(parse_compact_peers(b"d14:failure reason4:busye").is_empty());
+        assert!(parse_compact_peers(b"server error").is_empty());
         assert_eq!(peers[0].to_string(), "10.0.0.1:6881");
     }
 

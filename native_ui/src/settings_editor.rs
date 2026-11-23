@@ -307,11 +307,8 @@ impl SettingsEditor {
             .unwrap_or_default()
             .iter()
             .any(|saved| {
-                saved
-                    .row
-                    .host
-                    .trim()
-                    .eq_ignore_ascii_case(rule.row.host.trim())
+                crate::site_rules::host_identity(&saved.row.host)
+                    == crate::site_rules::host_identity(&rule.row.host)
                     && saved.row.has_credential
             });
             self.window
@@ -423,18 +420,23 @@ impl SettingsEditor {
 }
 
 fn validate_schedule_time(key: &str, text: &str) -> Result<(), String> {
-    if matches!(key, "schedule_start" | "schedule_end") {
-        let bytes = text.as_bytes();
-        if bytes.len() != 5
-            || bytes[2] != b':'
-            || !bytes[..2].iter().chain(&bytes[3..]).all(u8::is_ascii_digit)
-            || text[..2].parse::<u8>().map_or(true, |hour| hour > 23)
-            || text[3..].parse::<u8>().map_or(true, |minute| minute > 59)
-        {
-            return Err("限速计划时间必须使用有效的 HH:mm（00:00 到 23:59）".into());
-        }
+    if matches!(
+        key,
+        "schedule_start" | "schedule_end" | "queue_auto_start_time" | "queue_auto_stop_time"
+    ) && !valid_clock(text)
+    {
+        return Err("计划时间必须使用有效的 HH:mm（00:00 到 23:59）".into());
     }
     Ok(())
+}
+
+pub(crate) fn valid_clock(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() == 5
+        && bytes[2] == b':'
+        && bytes[..2].iter().chain(&bytes[3..]).all(u8::is_ascii_digit)
+        && &bytes[..2] <= b"23".as_slice()
+        && &bytes[3..] <= b"59".as_slice()
 }
 
 fn storage_changes(
@@ -495,13 +497,18 @@ mod tests {
     use super::*;
     #[test]
     fn schedule_times_require_a_valid_hhmm() {
-        for key in ["schedule_start", "schedule_end"] {
+        for key in [
+            "schedule_start",
+            "schedule_end",
+            "queue_auto_start_time",
+            "queue_auto_stop_time",
+        ] {
             for valid in ["00:00", "23:59", "08:30", "22:00"] {
                 assert!(validate_schedule_time(key, valid).is_ok());
             }
             for invalid in [
                 "", "26:99", "25:99", "24:00", "12:60", "1:00", "01:0", "+1:00", " 01:00",
-                "01:00 ", "ab:cd", "中文a",
+                "01:00 ", "ab:cd", "中文a", "1:000",
             ] {
                 assert!(
                     validate_schedule_time(key, invalid).is_err(),

@@ -158,7 +158,8 @@ impl ServiceSettings {
             }) {
                 return Err("Cookie 和 Authorization 请填写在对应的输入框中".into());
             }
-            if !self.window.get_authorization().trim().is_empty() {
+            let clear = self.window.get_clear_credential();
+            if !clear && !self.window.get_authorization().trim().is_empty() {
                 headers.insert(
                     "Authorization".into(),
                     self.window.get_authorization().trim().to_owned(),
@@ -167,9 +168,13 @@ impl ServiceSettings {
             CorePipeRequest::SetSiteRuleCredential {
                 request_id: id,
                 host: self.window.get_host().trim().to_owned(),
-                cookie: self.window.get_cookie().to_string(),
+                cookie: if clear {
+                    String::new()
+                } else {
+                    self.window.get_cookie().to_string()
+                },
                 request_headers: headers,
-                clear: self.window.get_clear_credential(),
+                clear,
             }
         } else {
             return Ok(());

@@ -205,6 +205,9 @@ fn expand_segment_base(
     )
     .map_err(|error| error.to_string())?;
     let segments = parse_sidx(&bytes, range.start)?;
+    if track.base_url.len().saturating_mul(segments.len()) > super::MAX_EXPANDED_MEDIA_BYTES {
+        return Err("DASH SIDX exceeds URL byte budget".into());
+    }
     track.media = vec![track.base_url.clone(); segments.len()];
     track.media_ranges = segments.iter().map(|(range, _)| Some(*range)).collect();
     track.media_durations = segments.into_iter().map(|(_, duration)| duration).collect();
@@ -241,7 +244,7 @@ pub fn parse_mpd(xml: &str, base: &str) -> Result<DashManifest, String> {
 }
 
 fn parse_mpd_at(xml: &str, base: &str, now: f64) -> Result<DashManifest, String> {
-    parse_mpd_with_url_budget(xml, base, now, 32 * 1024 * 1024)
+    parse_mpd_with_url_budget(xml, base, now, super::MAX_EXPANDED_MEDIA_BYTES)
 }
 
 fn parse_mpd_with_url_budget(
@@ -260,8 +263,14 @@ fn parse_mpd_for_recording(
     mut url_budget: usize,
     cursors: &[LiveTrackCursor],
 ) -> Result<DashManifest, String> {
-    let document =
-        roxmltree::Document::parse(xml).map_err(|error| format!("invalid DASH XML: {error}"))?;
+    let document = roxmltree::Document::parse_with_options(
+        xml,
+        roxmltree::ParsingOptions {
+            nodes_limit: 100_000,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| format!("invalid DASH XML: {error}"))?;
     let root = document.root_element();
     if !root.tag_name().name().eq_ignore_ascii_case("MPD") {
         return Err("not a DASH manifest".into());
@@ -508,7 +517,7 @@ fn parse_mpd_for_recording(
                     (&id, bandwidth),
                     period_duration.filter(|_| !dynamic || has_timeline),
                     &mut media_durations,
-                    dynamic.then_some(&mut url_budget),
+                    &mut url_budget,
                 )?);
             }
             media_ranges.resize(media.len(), None);
@@ -538,9 +547,7 @@ fn parse_mpd_for_recording(
                 if url.is_empty() {
                     return Err("invalid DASH segment URL".into());
                 }
-                if dynamic {
-                    consume_live_url_budget(&url, &mut url_budget)?;
-                }
+                consume_url_budget(&url, &mut url_budget)?;
                 media.push(url);
                 media_ranges.push(range);
             }
@@ -549,6 +556,7 @@ fn parse_mpd_for_recording(
         let (init, init_range) = if whole_file {
             // SegmentBase 没有 indexRange 时整份 BaseURL 就是一个分片；同址的
             // Initialization 已包含在整文件里，不能重复拼接。
+            consume_url_budget(&base_url, &mut url_budget)?;
             media.push(base_url.clone());
             media_ranges.push(None);
             if let Some(seconds) = period_duration.filter(|value| value.is_finite() && *value > 0.0)
@@ -583,11 +591,9 @@ fn parse_mpd_for_recording(
                 media_durations = vec![seconds; media.len()];
             }
         }
-        if dynamic {
-            consume_live_url_budget(&base_url, &mut url_budget)?;
-            if let Some(url) = &init {
-                consume_live_url_budget(url, &mut url_budget)?;
-            }
+        consume_url_budget(&base_url, &mut url_budget)?;
+        if let Some(url) = &init {
+            consume_url_budget(url, &mut url_budget)?;
         }
         representations.push(Representation {
             id,
@@ -721,12 +727,39 @@ pub fn download_dash_selected(
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
+    super::with_media_headers(url, headers, || {
+        download_dash_scoped(
+            url,
+            headers,
+            proxy,
+            task_dir,
+            control,
+            preferred_bandwidth,
+            preferred_height,
+            download_subtitles,
+            preferred_audio,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn download_dash_scoped(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    task_dir: &Path,
+    control: &Path,
+    preferred_bandwidth: u64,
+    preferred_height: u32,
+    download_subtitles: bool,
+    preferred_audio: &str,
+) -> Result<PathBuf, String> {
     let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
         .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("DASH manifest HTTP {status}"));
     }
-    let xml = String::from_utf8_lossy(&body).into_owned();
+    let xml = String::from_utf8(body).map_err(|_| "DASH 清单不是 UTF-8")?;
     let manifest = parse_mpd(&xml, url)?;
     let mut vod = DashCheckpoint::load(task_dir);
     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
@@ -1356,7 +1389,9 @@ fn download_live_dash(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_secs_f64();
-        if let Ok(anchored) = parse_mpd_for_recording(&xml, url, now, 32 * 1024 * 1024, &cursors) {
+        if let Ok(anchored) =
+            parse_mpd_for_recording(&xml, url, now, super::MAX_EXPANDED_MEDIA_BYTES, &cursors)
+        {
             manifest = anchored;
         }
     }
@@ -1551,12 +1586,13 @@ fn download_live_dash(
         let Some(body) = refresh_live_manifest(url, headers, proxy, control)? else {
             break;
         };
-        xml = String::from_utf8_lossy(&body).into_owned();
+        xml = String::from_utf8(body).map_err(|_| "DASH 清单不是 UTF-8")?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_secs_f64();
-        manifest = parse_mpd_for_recording(&xml, url, now, 32 * 1024 * 1024, &cursors)?;
+        manifest =
+            parse_mpd_for_recording(&xml, url, now, super::MAX_EXPANDED_MEDIA_BYTES, &cursors)?;
     }
     if primary.durations.is_empty() {
         return Err("DASH representation produced no segments".into());
@@ -2650,7 +2686,7 @@ fn download_dash_subtitle_track(
     let mut media_count = 0usize;
     for (index, media) in track.media.iter().enumerate() {
         if matches!(read_control(control).as_str(), "pause" | "cancel") {
-            break;
+            return Err(control_stop_error(control));
         }
         files.push(resume_or_fetch(
             media,
@@ -2678,8 +2714,9 @@ fn download_dash_subtitle_track(
     if mime.starts_with("text/vtt") || (track.init.is_none() && codecs.starts_with("wvtt")) {
         let texts: Vec<String> = files
             .iter()
-            .filter_map(|path| fs::read_to_string(path).ok())
-            .collect();
+            .map(fs::read_to_string)
+            .collect::<Result<_, _>>()
+            .map_err(|error| error.to_string())?;
         let merged = merge_webvtt_segments(&texts);
         if !has_cues(&merged) {
             return Err("subtitle track has no cues".into());
@@ -2778,10 +2815,13 @@ fn ceil_segment_units(value: f64) -> f64 {
     }
 }
 
-fn consume_live_url_budget(url: &str, remaining: &mut usize) -> Result<(), String> {
+fn consume_url_budget(url: &str, remaining: &mut usize) -> Result<(), String> {
+    if url.is_empty() {
+        return Err("invalid DASH resource URL".into());
+    }
     *remaining = remaining
         .checked_sub(url.len())
-        .ok_or("dynamic DASH manifest exceeds live URL byte budget")?;
+        .ok_or("DASH manifest exceeds URL byte budget")?;
     Ok(())
 }
 
@@ -2943,7 +2983,7 @@ fn expand_live_duration(
             base_url,
             &apply_template(template, id, number, time, bandwidth)?,
         );
-        consume_live_url_budget(&url, url_budget)?;
+        consume_url_budget(&url, url_budget)?;
         media.push(url);
         let end = (index + 1) as f64 * duration as f64 / timescale as f64;
         let begin = index as f64 * duration as f64 / timescale as f64;
@@ -2961,7 +3001,7 @@ fn expand_timeline(
     (id, bandwidth): (&str, u64),
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
-    mut url_budget: Option<&mut usize>,
+    url_budget: &mut usize,
 ) -> Result<Vec<String>, String> {
     let template_attr = |key: &str| {
         templates
@@ -3006,9 +3046,7 @@ fn expand_timeline(
                             bandwidth,
                         )?,
                     );
-                    if let Some(budget) = url_budget.as_deref_mut() {
-                        consume_live_url_budget(&url, budget)?;
-                    }
+                    consume_url_budget(&url, url_budget)?;
                     media.push(url);
                 }
             }
@@ -3068,9 +3106,7 @@ fn expand_timeline(
                 base_url,
                 &apply_template(template, id, number, clock, bandwidth)?,
             );
-            if let Some(budget) = url_budget.as_deref_mut() {
-                consume_live_url_budget(&url, budget)?;
-            }
+            consume_url_budget(&url, url_budget)?;
             media.push(url);
             number = number
                 .checked_add(1)
@@ -5236,22 +5272,32 @@ mod tests {
     }
 
     #[test]
+    fn static_dash_expansion_obeys_the_shared_url_budget() {
+        let xml = r#"<MPD><Period duration="PT20S"><SegmentTemplate duration="1" media="$Number$.m4s"/><Representation id="v"/></Period></MPD>"#;
+        assert!(
+            parse_mpd_with_url_budget(xml, "https://cdn.test/main.mpd", 0.0, 128)
+                .unwrap_err()
+                .contains("URL byte budget")
+        );
+    }
+
+    #[test]
     fn dash_live_resolved_url_byte_budget_is_shared() {
         let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z"><Period><SegmentTemplate duration="1" media="$RepresentationID$-$Number$.m4s"/><Representation id="v"/><Representation id="a"/></Period></MPD>"#;
         let base = format!("https://cdn.test/{}/live.mpd", "x".repeat(1000));
         assert!(parse_mpd_with_url_budget(xml, &base, 3.0, 9000).is_ok());
         assert!(parse_mpd_with_url_budget(xml, &base, 3.0, 6000)
             .unwrap_err()
-            .contains("live URL byte budget"));
+            .contains("URL byte budget"));
         assert!(parse_mpd_with_url_budget(xml, &base, 0.0, 3000).is_ok());
         let list = r#"<MPD type="dynamic"><Period><Representation id="v"><SegmentList><SegmentURL media="a.m4s"/><SegmentURL media="b.m4s"/></SegmentList></Representation></Period></MPD>"#;
         assert!(parse_mpd_with_url_budget(list, &base, 3.0, 3000)
             .unwrap_err()
-            .contains("live URL byte budget"));
+            .contains("URL byte budget"));
         let timeline = r#"<MPD type="dynamic"><Period><SegmentTemplate media="$Number$.m4s"><SegmentTimeline><S d="1" r="5"/></SegmentTimeline></SegmentTemplate><Representation id="v"/></Period></MPD>"#;
         assert!(parse_mpd_with_url_budget(timeline, &base, 3.0, 5000)
             .unwrap_err()
-            .contains("live URL byte budget"));
+            .contains("URL byte budget"));
     }
 
     #[test]

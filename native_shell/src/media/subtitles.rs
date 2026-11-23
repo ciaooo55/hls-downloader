@@ -110,7 +110,15 @@ fn timestamp_offset(text: &str) -> f64 {
                 }
             }
             "MPEGTS" => {
-                mpegts = rest.trim().parse().unwrap_or(0.0);
+                let Some(ticks) = rest
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|ticks| *ticks < 1 << 33)
+                else {
+                    return 0.0;
+                };
+                mpegts = ticks as f64;
             }
             _ => {}
         }
@@ -199,6 +207,9 @@ fn parse_timestamp(value: &str) -> Option<f64> {
         ),
         _ => return None,
     };
+    if minutes >= 60 || seconds >= 60 {
+        return None;
+    }
     Some(hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64 + fraction)
 }
 
@@ -241,6 +252,14 @@ fn strip_vtt_only_tags(payload: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_timestamp_maps_do_not_shift_valid_cues() {
+        for ticks in ["inf", "NaN", "8589934592"] {
+            let text = format!("WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:01.000,MPEGTS:{ticks}\n\n00:00:02.000 --> 00:00:03.000\ncue");
+            assert!(super::merge_webvtt_segments(&[text]).contains("00:00:02.000 --> 00:00:03.000"));
+        }
+    }
+
     use super::*;
 
     #[test]

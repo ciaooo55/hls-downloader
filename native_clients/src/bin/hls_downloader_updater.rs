@@ -108,22 +108,33 @@ fn find_msi_argument(args: &[OsString]) -> Result<PathBuf, String> {
     Err("缺少更新助手参数 --msi".into())
 }
 
-fn verify_update_signer_path(msi: &Path) -> Result<(), String> {
+#[cfg(windows)]
+fn lock_update_package(msi: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1) // FILE_SHARE_READ
+        .open(msi)
+        .map_err(|error| format!("无法锁定升级安装包: {error}"))
+}
+
+fn verify_update_signer_path(msi: &Path, package: &std::fs::File) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let signer = verified_leaf_signer_thumbprint(msi)?;
+        let signer = verified_leaf_signer_thumbprint(msi, package)?;
         authorize_signer_thumbprint(&signer, embedded_primary_signer(), SIGNER_TRUST_JSON)
     }
     #[cfg(not(windows))]
     {
-        let _ = msi;
+        let _ = (msi, package);
         Err("更新签名证书校验只适用于 Windows".into())
     }
 }
 
 #[cfg(windows)]
-fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
+fn verified_leaf_signer_thumbprint(path: &Path, package: &std::fs::File) -> Result<String, String> {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Security::Cryptography::{
         CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID,
@@ -155,6 +166,7 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
     let mut file: WINTRUST_FILE_INFO = unsafe { std::mem::zeroed() };
     file.cbStruct = std::mem::size_of::<WINTRUST_FILE_INFO>() as u32;
     file.pcwszFilePath = path_wide.as_ptr();
+    file.hFile = package.as_raw_handle();
 
     let mut trust: WINTRUST_DATA = unsafe { std::mem::zeroed() };
     trust.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
@@ -271,9 +283,6 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
             .collect::<String>())
     })();
 
-    // This helper performs one signer verification per process. Keep the System32
-    // WinTrust module loaded until process exit so the dynamically resolved
-    // function pointers can never outlive their module.
     trust.dwStateAction = WTD_STATEACTION_CLOSE;
     unsafe {
         WinVerifyTrust(
@@ -281,13 +290,26 @@ fn verified_leaf_signer_thumbprint(path: &Path) -> Result<String, String> {
             &mut action,
             &mut trust as *mut _ as *mut core::ffi::c_void,
         );
+        windows_sys::Win32::Foundation::FreeLibrary(module);
     }
     result
 }
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    match hls_native_clients::run_update_helper_with_verifier(args, verify_update_signer_path) {
+    // Keep the verified package locked until Windows Installer returns, including during shutdown.
+    let mut package = None;
+    let outcome = hls_native_clients::run_update_helper_with_verifier(args, |msi| {
+        #[cfg(windows)]
+        let file = lock_update_package(msi)?;
+        #[cfg(not(windows))]
+        let file = std::fs::File::open(msi).map_err(|error| error.to_string())?;
+        verify_update_signer_path(msi, &file)?;
+        package = Some(file);
+        Ok(())
+    });
+    drop(package);
+    match outcome {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("update helper failed: {error}");
@@ -389,7 +411,11 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::write(&path, b"unsigned signer fixture").unwrap();
-        let error = verified_leaf_signer_thumbprint(&path).unwrap_err();
+        let package = lock_update_package(&path).unwrap();
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        let error = verified_leaf_signer_thumbprint(&path, &package).unwrap_err();
+        drop(package);
         assert!(error.contains("Authenticode"));
         std::fs::remove_file(path).unwrap();
     }

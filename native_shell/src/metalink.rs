@@ -30,109 +30,110 @@ pub fn parse_metalink(text: &str) -> Result<Vec<MetalinkFile>, String> {
     if !looks_like_metalink(body) {
         return Err("不是有效的 metalink 文件".into());
     }
-    let metalink3 = body.contains("metalinker.org") || body.contains("preference=");
-    let mut files = Vec::new();
-    for block in file_blocks(body) {
-        let parsed = if metalink3 {
-            parse_file_block(&block, true)
-        } else {
-            parse_file_block(&block, false)
-        };
-        if let Some(file) = parsed {
-            files.push(file);
-        }
-        if files.len() >= 100 {
-            break;
-        }
+    if text.len() > 8 * 1024 * 1024 {
+        return Err("metalink 文件过大".into());
     }
+    let options = roxmltree::ParsingOptions {
+        nodes_limit: 100_000,
+        ..Default::default()
+    };
+    let doc = roxmltree::Document::parse_with_options(body.trim_start_matches('\u{feff}'), options)
+        .map_err(|error| format!("metalink XML 无效: {error}"))?;
+    let root = doc.root_element();
+    if root.tag_name().name() != "metalink" {
+        return Err("不是有效的 metalink 文件".into());
+    }
+    let same_tag = |n: roxmltree::Node<'_, '_>, tag: &str| {
+        n.is_element()
+            && n.tag_name().namespace() == root.tag_name().namespace()
+            && n.tag_name().name() == tag
+    };
+    let files: Vec<_> = root
+        .descendants()
+        .filter(|n| {
+            same_tag(*n, "file")
+                && n.parent_element().is_some_and(|p| {
+                    p == root || (same_tag(p, "files") && p.parent_element() == Some(root))
+                })
+        })
+        .filter_map(parse_file_block)
+        .take(100)
+        .collect();
     if files.is_empty() {
         return Err("metalink 里没有可下载的远程地址".into());
     }
     Ok(files)
 }
 
-fn file_blocks(xml: &str) -> Vec<String> {
-    let lower = xml.to_ascii_lowercase();
-    let mut blocks = Vec::new();
-    let mut search = 0;
-    while let Some(rel) = find_file_open(&lower[search..]) {
-        let start = search + rel;
-        let Some(end_rel) = lower[start..].find("</file>") else {
-            break;
-        };
-        blocks.push(xml[start..start + end_rel + 7].to_string());
-        search = start + end_rel + 7;
-    }
-    blocks
-}
-
-fn find_file_open(lower: &str) -> Option<usize> {
-    let mut search = 0;
-    while let Some(rel) = lower[search..].find("<file") {
-        let start = search + rel;
-        let next = *lower.as_bytes().get(start + 5)?;
-        if matches!(next, b' ' | b'>' | b'\n' | b'\t' | b'\r') {
-            if let Some(gt) = lower[start..].find('>') {
-                if lower[start..start + gt].trim_end().ends_with('/') {
-                    search = start + gt + 1;
-                    continue;
-                }
-            }
-            return Some(start);
-        }
-        search = start + 5;
-    }
-    None
-}
-
-fn parse_file_block(block: &str, metalink3: bool) -> Option<MetalinkFile> {
-    let open_header = block.find('>').map(|gt| &block[..gt]).unwrap_or(block);
-    let name = attr(open_header, "name")
-        .or_else(|| tag_text(block, "name"))
-        .map(|value| sanitize(&value))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "download".into());
-    let size = tag_text(block, "size")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    let checksum = first_checksum(block);
+fn parse_file_block(file: roxmltree::Node<'_, '_>) -> Option<MetalinkFile> {
+    let ns = file.tag_name().namespace();
+    let matches = |n: roxmltree::Node<'_, '_>, tag: &str| {
+        n.is_element() && n.tag_name().namespace() == ns && n.tag_name().name() == tag
+    };
+    let field = |tag: &str| {
+        file.children()
+            .find(|n| matches(*n, tag))
+            .and_then(|n| n.text())
+            .map(str::trim)
+    };
+    let name = sanitize(
+        file.attribute("name")
+            .or_else(|| field("name"))
+            .unwrap_or("download"),
+    );
+    let size = field("size").and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut ranked = Vec::new();
-    let mut rest = block;
-    while let Some(start) = rest.to_ascii_lowercase().find("<url") {
-        let after = &rest[start..];
-        let Some(gt) = after.find('>') else {
-            break;
-        };
-        let open = &after[..gt];
-        let inner = &after[gt + 1..];
-        let Some(close_rel) = inner.to_ascii_lowercase().find("</url>") else {
-            break;
-        };
-        let url = safe_url(inner[..close_rel].trim());
-        rest = &inner[close_rel + 6..];
-        let Some(url) = url else {
+    let mut checksum = String::new();
+    for node in file.descendants().filter(|n| n.is_element()) {
+        let Some(parent) = node.parent_element() else {
             continue;
         };
-        let rank = if metalink3 {
-            attr(open, "preference")
-                .and_then(|value| value.parse::<i32>().ok())
-                .unwrap_or(0)
-                .saturating_neg()
-        } else {
-            attr(open, "priority")
-                .and_then(|value| value.parse::<i32>().ok())
-                .unwrap_or(100)
+        let Some(value) = node.text().map(str::trim) else {
+            continue;
         };
-        ranked.push((rank, url));
+        if matches(node, "url")
+            && (parent == file
+                || (matches(parent, "resources") && parent.parent_element() == Some(file)))
+        {
+            if let Some(url) = safe_url(value) {
+                let rank = if let Some(preference) = node.attribute("preference") {
+                    preference.parse::<i32>().unwrap_or(0).saturating_neg()
+                } else {
+                    node.attribute("priority")
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(100)
+                };
+                ranked.push((rank, url));
+            }
+        } else if checksum.is_empty()
+            && matches(node, "hash")
+            && (parent == file
+                || (matches(parent, "verification") && parent.parent_element() == Some(file)))
+        {
+            let (algo, len) = match node
+                .attribute("type")
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "sha-256" | "sha256" => ("sha256", 64),
+                "sha-1" | "sha1" => ("sha1", 40),
+                "md5" => ("md5", 32),
+                _ => continue,
+            };
+            if value.len() == len && value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                checksum = format!("{algo}:{}", value.to_ascii_lowercase());
+            }
+        }
     }
     ranked.sort_by_key(|(rank, _)| *rank);
     let (url, mirrors) = pick_urls(ranked)?;
     Some(MetalinkFile {
         name,
+        size,
+        checksum,
         url,
         mirrors,
-        checksum,
-        size,
     })
 }
 
@@ -161,113 +162,25 @@ fn pick_urls(ranked: Vec<(i32, String)>) -> Option<(String, Vec<String>)> {
     ordered.into_iter().next().map(|url| (url, Vec::new()))
 }
 
-fn first_checksum(block: &str) -> String {
-    let mut rest = block;
-    while let Some(start) = rest.to_ascii_lowercase().find("<hash") {
-        let after = &rest[start..];
-        let Some(gt) = after.find('>') else {
-            break;
-        };
-        let kind = attr(&after[..gt], "type")
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let inner = &after[gt + 1..];
-        let Some(close) = inner.to_ascii_lowercase().find("</hash>") else {
-            break;
-        };
-        let digest = inner[..close].trim().to_ascii_lowercase();
-        rest = &inner[close + 7..];
-        let (algo, expected_len) = match kind.as_str() {
-            "sha-256" | "sha256" => ("sha256", 64),
-            "sha-1" | "sha1" => ("sha1", 40),
-            "md5" => ("md5", 32),
-            _ => continue,
-        };
-        if digest.len() == expected_len && digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return format!("{algo}:{digest}");
-        }
-    }
-    String::new()
-}
-
-fn decode_xml_text(value: &str) -> String {
-    if !value.contains('&') {
-        return value.to_string();
-    }
-    let mut decoded = String::with_capacity(value.len());
-    let mut rest = value;
-    while let Some(start) = rest.find('&') {
-        decoded.push_str(&rest[..start]);
-        let entity = &rest[start..];
-        let Some(end) = entity.find(';') else {
-            decoded.push_str(entity);
-            return decoded;
-        };
-        let name = &entity[1..end];
-        let ch = match name {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            _ => name
-                .strip_prefix("#x")
-                .or_else(|| name.strip_prefix("#X"))
-                .and_then(|digits| u32::from_str_radix(digits, 16).ok())
-                .and_then(char::from_u32)
-                .or_else(|| {
-                    name.strip_prefix('#')
-                        .and_then(|digits| digits.parse::<u32>().ok())
-                        .and_then(char::from_u32)
-                }),
-        };
-        if let Some(ch) = ch {
-            decoded.push(ch);
-        } else {
-            decoded.push_str(&entity[..=end]);
-        }
-        rest = &entity[end + 1..];
-    }
-    decoded.push_str(rest);
-    decoded
-}
-
-fn safe_url(raw: &str) -> Option<String> {
-    let decoded = decode_xml_text(raw);
-    let value = decoded.trim().trim_start_matches('\u{feff}');
-    if value.is_empty() || value.len() > 8192 || value.chars().any(|ch| ch.is_control()) {
+fn safe_url(value: &str) -> Option<String> {
+    if value.len() > 8192
+        || value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return None;
     }
-    if crate::http_engine::remote_resource_url_allowed(value) {
-        Some(value.to_string())
-    } else {
-        None
+    let (scheme, rest) = value.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if !matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ftp"
+    ) || authority.is_empty()
+        || authority.contains('\\')
+    {
+        return None;
     }
-}
-
-fn attr(block: &str, key: &str) -> Option<String> {
-    let pattern = format!("{key}=\"");
-    let mut offset = 0;
-    while let Some(rel) = block[offset..].find(&pattern) {
-        let start = offset + rel;
-        let boundary_ok = start == 0 || block.as_bytes()[start - 1].is_ascii_whitespace();
-        let rest = &block[start + pattern.len()..];
-        if boundary_ok {
-            let end = rest.find('"')?;
-            return Some(decode_xml_text(&rest[..end]));
-        }
-        offset = start + pattern.len();
-    }
-    None
-}
-
-fn tag_text(block: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let lower = block.to_ascii_lowercase();
-    let start = lower.find(&open.to_ascii_lowercase())? + open.len();
-    let end = lower[start..].find(&close.to_ascii_lowercase())? + start;
-    Some(decode_xml_text(block[start..end].trim()))
+    Some(value.to_string())
 }
 
 fn sanitize(name: &str) -> String {
@@ -290,6 +203,8 @@ fn sanitize(name: &str) -> String {
     let cleaned = cleaned.trim_matches([' ', '.']).to_string();
     if cleaned.is_empty() {
         "download".into()
+    } else if hls_client::request_validation::reserved_dos_device_name(&cleaned) {
+        format!("_{cleaned}")
     } else {
         cleaned
     }
@@ -408,9 +323,17 @@ mod tests {
     <url preference="10">https://mirror.example.test/edge.bin</url>
   </file>
 </metalink>"#;
-        let files = parse_metalink(xml).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].url, "https://mirror.example.test/edge.bin");
-        assert_eq!(files[0].mirrors, vec!["https://cdn.example.test/edge.bin"]);
+        assert!(parse_metalink(xml).is_err());
+        let valid = r#"<metalink><file name='dir/CON.txt'>
+          <!-- <url>https://ignored.test/</url> -->
+          <pieces><hash type='md5'>098f6bcd4621d373cade4e832627b4f6</hash></pieces>
+          <url preference='-2147483648'>sftp://ignored.test/a</url>
+          <url>https://cdn.test/a</url></file></metalink>"#;
+        let file = parse_metalink(valid).unwrap().remove(0);
+        assert_eq!(file.name, "_CON.txt");
+        assert!(file.checksum.is_empty());
+        assert!(file.mirrors.is_empty());
+        assert_eq!(file.url, "https://cdn.test/a");
+        assert!(safe_url("magnet:?xt=test").is_none());
     }
 }

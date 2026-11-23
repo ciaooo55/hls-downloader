@@ -22,6 +22,7 @@ pub enum TargetIssue {
     TooLong { units: usize },
     NoPermission,
     NotADirectory,
+    ParentDirectory,
 }
 
 impl TargetIssue {
@@ -40,7 +41,7 @@ impl TargetIssue {
                 format!("文件名不能包含“{ch}”。已可一键替换为下划线。"),
                 [("修正文件名", "fix_name"), ("", "")],
             ),
-            Self::TrailingDot => ("文件名不能以句点结尾。".into(), [("修正文件名", "fix_name"), ("", "")]),
+            Self::TrailingDot => ("文件名不能以句点或空格结尾。".into(), [("修正文件名", "fix_name"), ("", "")]),
             Self::ReservedName => (
                 "该文件名是 Windows 保留名称，无法保存。".into(),
                 [("修正文件名", "fix_name"), ("", "")],
@@ -61,6 +62,10 @@ impl TargetIssue {
                 "保存位置不是文件夹。".into(),
                 [("选择其他位置", "browse"), ("使用默认目录", "default_dir")],
             ),
+            Self::ParentDirectory => (
+                "保存路径不能包含上级目录（..）。".into(),
+                [("选择其他位置", "browse"), ("使用默认目录", "default_dir")],
+            ),
         }
     }
 }
@@ -68,8 +73,8 @@ impl TargetIssue {
 const INVALID: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
 pub fn check_name(filename: &str) -> Result<(), TargetIssue> {
-    let name = filename.trim();
-    if name.is_empty() {
+    let name = filename;
+    if name.trim().is_empty() {
         return Err(TargetIssue::EmptyName);
     }
     if let Some(ch) = name
@@ -81,7 +86,7 @@ pub fn check_name(filename: &str) -> Result<(), TargetIssue> {
     if name.encode_utf16().count() > 255 {
         return Err(TargetIssue::NameTooLong);
     }
-    if name.ends_with('.') {
+    if name.ends_with(['.', ' ']) {
         return Err(TargetIssue::TrailingDot);
     }
     if reserved_dos_device_name(name) {
@@ -93,12 +98,15 @@ pub fn check_name(filename: &str) -> Result<(), TargetIssue> {
 pub fn path_units(directory: &str, filename: &str) -> usize {
     let directory = directory.trim().trim_end_matches(['\\', '/']);
     // directory + separator + name, counted as UTF-16 like the Win32 API.
-    directory.encode_utf16().count() + 1 + filename.trim().encode_utf16().count()
+    directory.encode_utf16().count() + 1 + filename.encode_utf16().count()
 }
 
 /// Checks name, length and (for an existing or creatable folder) write access.
 pub fn check_target(directory: &str, filename: &str, allow_long: bool) -> Result<(), TargetIssue> {
     check_name(filename)?;
+    if directory.trim().split(['/', '\\']).any(|part| part == "..") {
+        return Err(TargetIssue::ParentDirectory);
+    }
     if directory.trim().is_empty() {
         // Core falls back to its default download directory.
         return Ok(());
@@ -189,15 +197,15 @@ pub fn shorten_to_fit(directory: &str, filename: &str) -> Option<String> {
     let mut units = 0;
     for ch in stem.chars() {
         let width = ch.len_utf16();
-        // Leave room for the ellipsis marker.
-        if units + width > budget.saturating_sub(1) {
+        if units + width > budget {
+            if units == budget {
+                kept.pop();
+            }
+            kept.push('…');
             break;
         }
         units += width;
         kept.push(ch);
-    }
-    if kept.chars().count() < stem.chars().count() {
-        kept.push('…');
     }
     let shortened = format!("{kept}{extension}");
     check_name(&shortened).ok()?;
@@ -260,6 +268,13 @@ mod tests {
         assert!(check_name("示例视频 · 1080p.mp4").is_ok());
         assert_eq!(fix_name("a:b?.mp4"), "a_b_.mp4");
         assert_eq!(fix_name("con.txt"), "con_.txt");
+        assert_eq!(check_name("video.mp4 "), Err(TargetIssue::TrailingDot));
+        assert_eq!(check_name("video\n"), Err(TargetIssue::InvalidName('\n')));
+        assert_eq!(check_name("../file"), Err(TargetIssue::InvalidName('/')));
+        assert_eq!(
+            check_target(r"base\..\other", "file", true),
+            Err(TargetIssue::ParentDirectory)
+        );
     }
 
     #[test]
@@ -279,6 +294,8 @@ mod tests {
         assert!(shorten_to_fit(&no_room, &name).is_none());
         let one_unit = format!(r"D:\{}", "a".repeat(250));
         assert_eq!(shorten_to_fit(&one_unit, &name).as_deref(), Some("….mp4"));
+        let exact = format!("{}x.mp4", "😀".repeat(125));
+        assert_eq!(shorten_to_fit("", &exact).as_deref(), Some(exact.as_str()));
     }
 
     #[test]

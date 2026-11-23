@@ -69,7 +69,7 @@ impl QueueEditor {
                 });
                 self.selected = self.profiles.len() - 1;
             }
-            "remove" if self.profiles[self.selected].id != "default" => {
+            "remove" if self.profiles.len() > 1 && self.profiles[self.selected].id != "default" => {
                 self.profiles.remove(self.selected);
                 self.selected = self.selected.min(self.profiles.len() - 1);
             }
@@ -129,13 +129,7 @@ impl QueueEditor {
             .filter(|n| *n <= 1_048_576)
             .ok_or("限速应为 0 至 1048576 KiB/s")?;
         for time in [w.get_start_time(), w.get_stop_time()] {
-            let Some((hour, minute)) = time.split_once(':') else {
-                return Err("时间格式应为 HH:mm".into());
-            };
-            if time.len() != 5
-                || !hour.parse::<u8>().is_ok_and(|n| n < 24)
-                || !minute.parse::<u8>().is_ok_and(|n| n < 60)
-            {
+            if !crate::settings_editor::valid_clock(&time) {
                 return Err("请输入有效的 HH:mm 时间".into());
             }
         }
@@ -196,7 +190,7 @@ impl QueueEditor {
             }
             .into(),
         );
-        w.set_can_remove(p.id != "default");
+        w.set_can_remove(self.profiles.len() > 1 && p.id != "default");
         w.set_status("".into());
     }
 }

@@ -5,7 +5,7 @@ use crate::CastDeviceInfo;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -65,9 +65,9 @@ fn address_is_on_link(networks: &[(Ipv4Addr, u8)], peer: Ipv4Addr) -> bool {
     if peer.is_link_local() || peer.is_multicast() || peer.is_unspecified() || peer.is_broadcast() {
         return false;
     }
-    networks
-        .iter()
-        .any(|(local, prefix)| *local == peer || ipv4_network_contains(*local, *prefix, peer))
+    networks.iter().any(|(local, prefix)| {
+        *local == peer || (*prefix > 0 && ipv4_network_contains(*local, *prefix, peer))
+    })
 }
 
 /// 上面那条规则配上本机此刻的真实网卡列表——局域网判定的唯一事实来源。
@@ -520,9 +520,11 @@ pub fn discover_devices_for_mode(
     let plan = discovery_scan_plan(mode);
     let ssdp_worker = plan.ssdp.then(|| {
         thread::spawn(move || {
-            ssdp_search(timeout)
-                .unwrap_or_default()
+            let locations = ssdp_search(timeout).unwrap_or_default();
+            let deadline = Instant::now() + Duration::from_secs(6);
+            locations
                 .into_iter()
+                .take_while(|_| Instant::now() < deadline)
                 .filter_map(|location| describe_device(&location))
                 .collect::<Vec<_>>()
         })
@@ -1224,11 +1226,13 @@ pub fn last_session_status() -> CastPlaybackStatus {
 }
 
 pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
-    let device = last_cast()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.device.clone());
-    let Some(device) = device else {
+    let session = last_cast().lock().ok().and_then(|guard| {
+        guard
+            .device
+            .clone()
+            .map(|device| (device, guard.generation))
+    });
+    let Some((device, generation)) = session else {
         // An idle status read is normal during UI startup and reconnection.
         return if action == "status" {
             Ok(CastPlaybackStatus {
@@ -1250,7 +1254,7 @@ pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
             .into());
         }
         if action == "stop" {
-            clear_last_device();
+            clear_last_device(generation);
         }
         return Ok(CastPlaybackStatus {
             label: device.label,
@@ -1270,14 +1274,16 @@ pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
         dlna_control(&device, action)
     }?;
     if action == "stop" {
-        clear_last_device();
+        clear_last_device(generation);
     }
     Ok(result)
 }
 
-fn clear_last_device() {
+fn clear_last_device(generation: u64) {
     if let Ok(mut guard) = last_cast().lock() {
-        guard.device = None;
+        if guard.generation == generation {
+            guard.device = None;
+        }
     }
 }
 
@@ -1347,7 +1353,10 @@ fn parse_duration(value: &str) -> Option<u64> {
         ),
         _ => return None,
     };
-    (minutes < 60 && seconds < 60).then_some(hours * 3600 + minutes * 60 + seconds)
+    if minutes >= 60 || seconds >= 60 {
+        return None;
+    }
+    hours.checked_mul(3600)?.checked_add(minutes * 60 + seconds)
 }
 
 fn dlna_status(device: &CastDeviceInfo) -> CastPlaybackStatus {
@@ -1442,7 +1451,7 @@ pub fn parse_ssdp_location(response: &str) -> Option<String> {
 
 pub fn parse_device_description(xml: &str, location: &str) -> Option<CastDeviceInfo> {
     let friendly = xml_local(xml, "friendlyName").unwrap_or_else(|| "DLNA 设备".into());
-    let url_base = xml_local(xml, "URLBase").unwrap_or_else(|| origin_of(location));
+    let url_base = xml_local(xml, "URLBase").unwrap_or_else(|| location.to_string());
     let mut rest = xml;
     while let Some(start) = rest.find("<service") {
         let after = &rest[start..];
@@ -1452,12 +1461,11 @@ pub fn parse_device_description(xml: &str, location: &str) -> Option<CastDeviceI
         let control = xml_local(block, "controlURL").unwrap_or_default();
         if service_type.contains("AVTransport") && !control.is_empty() {
             let control_url = resolve_url(&url_base, &control);
-            // 这里**不判局域网**。理由同 parse_mdns_chromecasts：这是个纯解析函数，
-            // 掺进"算不算局域网"就得读本机网卡，于是同一段 XML 换个机器解析结果不同
-            // （换一台不在该网段的机器，本来能用的电视就被解析成 None）。
-            // 边界已经由真正的 I/O 关口守着：describe_device 抓取前判 LOCATION，
-            // http_post_lan 发出 SOAP 前判 control_url。
-            let host = host_of(&control_url).unwrap_or_default();
+            // 描述可以选择同一设备上的其他端口，但不能指定另一台主机。
+            let host = split_http_url(&control_url).ok()?.0;
+            if !same_device_host(location, &control_url) {
+                return None;
+            }
             return Some(CastDeviceInfo {
                 id: format!("dlna:{control_url}"),
                 label: if friendly.trim().is_empty() {
@@ -1501,11 +1509,17 @@ fn ssdp_search_on(interface: Ipv4Addr, timeout: Duration) -> Vec<String> {
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
         match socket.recv_from(&mut buf) {
-            Ok((count, _)) => {
+            Ok((count, sender)) => {
                 if let Some(location) = parse_ssdp_location(&String::from_utf8_lossy(&buf[..count]))
                 {
-                    if is_lan_url(&location) && !locations.contains(&location) {
+                    if split_http_url(&location).is_ok_and(|(host, _, _)| {
+                        host.parse::<IpAddr>().ok() == Some(sender.ip()) && is_lan_host(&host)
+                    }) && !locations.contains(&location)
+                    {
                         locations.push(location);
+                        if locations.len() >= 64 {
+                            break;
+                        }
                     }
                 }
             }
@@ -1724,7 +1738,7 @@ fn http_get_lan(url: &str, max_bytes: usize) -> Result<(Vec<u8>, String), String
                 })
                 .ok_or_else(|| "投屏设备重定向缺少 Location".to_string())?;
             let next = resolve_url(&current, &location);
-            if !is_lan_url(&next) {
+            if !same_device_host(&current, &next) || !is_lan_url(&next) {
                 return Err("投屏设备描述拒绝重定向到非局域网地址".into());
             }
             current = next;
@@ -1811,7 +1825,7 @@ fn split_http_url(url: &str) -> Result<(String, u16, String), String> {
     let rest = url
         .strip_prefix("http://")
         .ok_or_else(|| "投屏只允许明文 HTTP 局域网控制".to_string())?;
-    if rest.contains('\r') || rest.contains('\n') || rest.contains('\0') {
+    if rest.chars().any(char::is_control) {
         return Err("投屏控制地址无效".into());
     }
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
@@ -1831,6 +1845,9 @@ fn split_http_url(url: &str) -> Result<(String, u16, String), String> {
     } else {
         (authority.to_string(), 80)
     };
+    if port == 0 || host.parse::<Ipv4Addr>().is_err() {
+        return Err("投屏设备地址或端口无效".into());
+    }
     Ok((host, port, path))
 }
 
@@ -1907,8 +1924,12 @@ fn resolve_url(base: &str, reference: &str) -> String {
     format!("{dir}/{reference}")
 }
 
+fn same_device_host(base: &str, url: &str) -> bool {
+    matches!((split_http_url(base), split_http_url(url)), (Ok((a, _, _)), Ok((b, _, _))) if a == b)
+}
+
 fn is_lan_url(url: &str) -> bool {
-    host_of(url).is_some_and(|host| is_lan_host(&host))
+    split_http_url(url).is_ok_and(|(host, _, _)| is_lan_host(&host))
 }
 
 const CAST_NS_CONNECTION: &str = "urn:x-cast:com.google.cast.tp.connection";
@@ -2119,6 +2140,9 @@ fn discover_chromecasts_on(interface: Ipv4Addr, timeout: Duration) -> Vec<CastDe
                         .any(|item: &CastDeviceInfo| item.id == device.id)
                     {
                         devices.push(device);
+                        if devices.len() == 256 {
+                            return devices;
+                        }
                     }
                 }
             }
@@ -2238,6 +2262,9 @@ fn proto_read_varint(buf: &[u8], mut at: usize) -> Option<(u64, usize)> {
     loop {
         let byte = *buf.get(at)?;
         at += 1;
+        if shift == 63 && byte > 1 {
+            return None;
+        }
         value |= u64::from(byte & 0x7F) << shift;
         if byte & 0x80 == 0 {
             return Some((value, at));
@@ -2305,6 +2332,8 @@ fn chromecast_connect_windows(
         Duration::from_secs(4),
     )
     .map_err(|error| error.to_string())?;
+    raw.set_write_timeout(Some(Duration::from_secs(4)))
+        .map_err(|error| error.to_string())?;
     raw.set_read_timeout(Some(Duration::from_millis(900)))
         .map_err(|error| error.to_string())?;
     let cred = schannel::schannel_cred::SchannelCred::builder()
@@ -2314,43 +2343,25 @@ fn chromecast_connect_windows(
     // succeed and the leaf has to be accepted. It must not be accepted blindly:
     // pin the leaf, and refuse an endpoint whose certificate changed. See
     // check_cast_certificate.
-    let endpoint = cast_tls_endpoint(host, port);
-    let pinned = pinned_cast_fingerprint(&endpoint);
-    let observed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let stream = {
-        let endpoint = endpoint.clone();
-        let observed = Arc::clone(&observed);
-        schannel::tls_stream::Builder::new()
-            .domain(host)
-            .verify_callback(move |validation| {
-                let Some(fingerprint) = cast_certificate_fingerprint(&validation) else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Chromecast 未提供可用于固定的 TLS 证书",
-                    ));
-                };
-                if let Err(error) =
-                    check_cast_certificate(pinned.as_deref(), &endpoint, &fingerprint)
-                {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        error,
-                    ));
-                }
-                if let Ok(mut slot) = observed.lock() {
-                    *slot = Some(fingerprint);
-                }
-                Ok(())
-            })
-            .connect(cred, raw)
-    };
-    let stream = stream.map_err(|error| error.to_string())?;
-    if let Ok(guard) = observed.lock() {
-        if let Some(fingerprint) = guard.as_ref() {
-            remember_cast_fingerprint(&endpoint, fingerprint);
-        }
-    }
-    Ok(stream)
+    let endpoint = format!("{host}:{port}");
+    let database = crate::profile_paths::default_v7_database_path();
+    let root = database
+        .parent()
+        .ok_or("无法定位 Chromecast 证书记录目录")?
+        .to_owned();
+    schannel::tls_stream::Builder::new()
+        .domain(host)
+        .verify_callback(move |validation| {
+            let fingerprint = cast_certificate_fingerprint(&validation).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Chromecast 未提供可用于固定的 TLS 证书",
+                )
+            })?;
+            remember_cast_tls_pin(&root, &endpoint, &fingerprint)
+        })
+        .connect(cred, raw)
+        .map_err(|e| e.to_string())
 }
 
 /// SHA-256 fingerprint of the leaf certificate the server presented, uppercase hex.
@@ -2378,64 +2389,42 @@ fn cast_certificate_fingerprint(
 /// different certificate is refused. See `check_cast_certificate`.
 const CAST_TLS_PIN_FILE: &str = "cast-tls-pins.json";
 
-fn cast_tls_pins() -> &'static Mutex<BTreeMap<String, String>> {
-    static PINS: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
-    PINS.get_or_init(|| Mutex::new(BTreeMap::new()))
+fn read_cast_pins(root: &Path) -> std::io::Result<BTreeMap<String, String>> {
+    match std::fs::read(root.join(CAST_TLS_PIN_FILE)) {
+        Ok(data) => serde_json::from_slice(&data).map_err(std::io::Error::other),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Err(e) => Err(e),
+    }
 }
 
-/// The directory the Core database lives in, so a pin travels with its database.
-fn cast_profile_root() -> Option<PathBuf> {
-    crate::profile_paths::default_v7_database_path()
-        .parent()
-        .map(Path::to_path_buf)
-}
-
-fn cast_tls_endpoint(host: &str, port: u16) -> String {
-    format!("{host}:{port}")
-}
-
-fn read_cast_pins(root: &Path) -> BTreeMap<String, String> {
-    let Ok(text) = std::fs::read_to_string(root.join(CAST_TLS_PIN_FILE)) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_str::<BTreeMap<String, String>>(&text).unwrap_or_default()
-}
-
-/// Pins `fingerprint` for `endpoint`, replacing any previous value.
-fn remember_cast_tls_pin(root: &Path, endpoint: &str, fingerprint: &str) {
-    let mut pins = read_cast_pins(root);
+fn remember_cast_tls_pin(root: &Path, endpoint: &str, fingerprint: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    // Multiple Core processes may share a profile. Lock a separate file so the
+    // pin database can still be atomically replaced while the lock is held.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join("cast-tls-pins.lock"))?;
+    lock.lock()?;
+    let mut pins = read_cast_pins(root)?;
+    let existing = pins.get(endpoint).map(String::as_str);
+    check_cast_certificate(existing, endpoint, fingerprint)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+    if existing.is_some() {
+        return Ok(());
+    }
     pins.insert(endpoint.to_string(), fingerprint.to_string());
-    let Ok(text) = serde_json::to_string_pretty(&pins) else {
-        return;
-    };
-    let path = root.join(CAST_TLS_PIN_FILE);
-    if let Err(error) = std::fs::create_dir_all(root).and_then(|()| std::fs::write(&path, text)) {
-        // Not fatal: the in-process map still refuses a certificate change for the
-        // rest of this run.
-        eprintln!(
-            "v7 could not record the Chromecast TLS pin in {}: {error}",
-            path.display()
-        );
+    let bytes = serde_json::to_vec_pretty(&pins)?;
+    let temporary = root.join("cast-tls-pins.tmp");
+    let result = std::fs::write(&temporary, bytes).and_then(|()| {
+        crate::atomic_replace::replace_file(&temporary, &root.join(CAST_TLS_PIN_FILE))
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
     }
-}
-
-/// The fingerprint pinned for `endpoint`, if this Core or a previous one saw it.
-fn pinned_cast_fingerprint(endpoint: &str) -> Option<String> {
-    if let Ok(guard) = cast_tls_pins().lock() {
-        if let Some(fingerprint) = guard.get(endpoint) {
-            return Some(fingerprint.clone());
-        }
-    }
-    cast_profile_root().and_then(|root| read_cast_pins(&root).remove(endpoint))
-}
-
-fn remember_cast_fingerprint(endpoint: &str, fingerprint: &str) {
-    if let Ok(mut guard) = cast_tls_pins().lock() {
-        guard.insert(endpoint.to_string(), fingerprint.to_string());
-    }
-    if let Some(root) = cast_profile_root() {
-        remember_cast_tls_pin(&root, endpoint, fingerprint);
-    }
+    result
 }
 
 /// Decides whether a freshly observed Chromecast certificate may be trusted.
@@ -3075,6 +3064,10 @@ mod tests {
         );
         assert!(parse_ssdp_location("LOCATION: http://8.8.8.8/desc.xml").is_some());
         assert!(!is_lan_url("http://8.8.8.8/desc.xml"));
+        assert!(!address_is_on_link(
+            &[(Ipv4Addr::LOCALHOST, 0)],
+            Ipv4Addr::new(8, 8, 8, 8)
+        ));
     }
 
     #[test]
@@ -3093,6 +3086,11 @@ mod tests {
   </device>
 </root>"#;
         let device = parse_device_description(xml, "http://192.168.1.20:8008/desc.xml").unwrap();
+        assert!(parse_device_description(
+            &xml.replace("/upnp/control/AVTransport", "http://127.0.0.1/control"),
+            "http://192.168.1.20:8008/desc.xml"
+        )
+        .is_none());
         assert_eq!(device.label, "客厅电视");
         assert_eq!(
             device.control_url,
@@ -3240,7 +3238,7 @@ mod tests {
     }
 
     #[test]
-    fn chromecast_pins_survive_a_restart_and_ignore_corruption() {
+    fn chromecast_pins_survive_a_restart_and_reject_corruption() {
         let dir = std::env::temp_dir().join(format!(
             "hls-cast-pins-{}-{}",
             std::process::id(),
@@ -3250,29 +3248,20 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(read_cast_pins(&dir).is_empty());
+        assert!(read_cast_pins(&dir).unwrap().is_empty());
 
-        remember_cast_tls_pin(&dir, "192.168.2.11:8009", "AAAA");
-        remember_cast_tls_pin(&dir, "192.168.2.12:8009", "BBBB");
-        let pins = read_cast_pins(&dir);
+        remember_cast_tls_pin(&dir, "192.168.2.11:8009", "AAAA").unwrap();
+        remember_cast_tls_pin(&dir, "192.168.2.12:8009", "BBBB").unwrap();
+        let pins = read_cast_pins(&dir).unwrap();
         assert_eq!(
             pins.get("192.168.2.11:8009").map(String::as_str),
             Some("AAAA")
         );
 
-        // Re-pinning replaces, never duplicates.
-        remember_cast_tls_pin(&dir, "192.168.2.11:8009", "CCCC");
-        assert_eq!(read_cast_pins(&dir).len(), 2);
-        assert_eq!(
-            read_cast_pins(&dir)
-                .get("192.168.2.11:8009")
-                .map(String::as_str),
-            Some("CCCC")
-        );
-
-        // A truncated write must not wedge the next connection.
+        assert!(remember_cast_tls_pin(&dir, "192.168.2.11:8009", "CCCC").is_err());
+        assert_eq!(read_cast_pins(&dir).unwrap(), pins);
         std::fs::write(dir.join(CAST_TLS_PIN_FILE), b"{ not json").unwrap();
-        assert!(read_cast_pins(&dir).is_empty());
+        assert!(remember_cast_tls_pin(&dir, "192.168.2.11:8009", "CCCC").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3281,6 +3270,7 @@ mod tests {
         assert_eq!(parse_control_action("seek:-15"), ("seek", -15));
         assert_eq!(parse_control_action("seek_to:125"), ("seek_to", 125));
         assert_eq!(parse_control_action("seek_forward"), ("seek", 10));
+        assert_eq!(parse_duration("18446744073709551615:00:00"), None);
         assert_eq!(parse_duration("01:02:03.250"), Some(3723));
         assert_eq!(parse_duration("02:05"), Some(125));
         assert_eq!(parse_duration("00:99:00"), None);

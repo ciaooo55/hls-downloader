@@ -10,6 +10,20 @@ pub enum ClipboardContent {
     Files(Vec<String>),
 }
 
+// Bound the entire selection as well as each path before allocating its buffer.
+const MAX_SELECTION_UNITS: usize = 2 * 1024 * 1024;
+
+fn add_path_units(total: usize, length: usize) -> Result<usize, String> {
+    if length == 0 || length > 32767 {
+        return Err("文件路径长度无效".into());
+    }
+    let next = total + length + 1;
+    if next > MAX_SELECTION_UNITS {
+        return Err("所选文件路径总长度过大，请分批操作".into());
+    }
+    Ok(next)
+}
+
 /// Reads one clipboard snapshot. Explorer file selections take precedence over text.
 pub fn read_clipboard() -> Result<ClipboardContent, String> {
     #[cfg(windows)]
@@ -41,11 +55,10 @@ pub fn read_clipboard() -> Result<ClipboardContent, String> {
                 return Err("一次最多粘贴 4096 个文件，请分批导入".into());
             }
             let mut paths = Vec::with_capacity(count as usize);
+            let mut total = 1;
             for index in 0..count {
                 let length = DragQueryFileW(handle, index, std::ptr::null_mut(), 0);
-                if length == 0 || length > 32767 {
-                    return Err(format!("第 {} 个文件路径无效", index + 1));
-                }
+                total = add_path_units(total, length as usize)?;
                 let mut path = vec![0u16; length as usize + 1];
                 if DragQueryFileW(handle, index, path.as_mut_ptr(), length + 1) != length {
                     return Err(format!("无法读取第 {} 个文件路径", index + 1));
@@ -171,6 +184,9 @@ pub fn hdrop_bytes(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
     if paths.is_empty() {
         return Err("没有可拖出的文件".into());
     }
+    if paths.len() > 4096 {
+        return Err("一次最多选择 4096 个文件，请分批操作".into());
+    }
     let mut wide: Vec<u16> = Vec::new();
     for path in paths {
         if !path.is_absolute() {
@@ -180,6 +196,7 @@ pub fn hdrop_bytes(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
         if path.contains('\0') {
             return Err("文件路径包含无效字符".into());
         }
+        add_path_units(wide.len() + 1, path.encode_utf16().count())?;
         wide.extend(path.encode_utf16());
         wide.push(0);
     }
@@ -207,7 +224,7 @@ pub fn begin_file_drag(paths: &[PathBuf]) -> Result<DragOutcome, String> {
     write_files(paths)?;
     #[cfg(windows)]
     {
-        windows_drag_from_clipboard()
+        windows_drag_from_clipboard(paths)
     }
     #[cfg(not(windows))]
     {
@@ -232,7 +249,8 @@ fn drag_drop_result(hr: i32, effect: u32) -> Result<DragOutcome, String> {
 }
 
 #[cfg(windows)]
-fn windows_drag_from_clipboard() -> Result<DragOutcome, String> {
+fn windows_drag_from_clipboard(paths: &[PathBuf]) -> Result<DragOutcome, String> {
+    use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
     #[link(name = "ole32")]
     unsafe extern "system" {
         fn OleInitialize(reserved: *mut core::ffi::c_void) -> i32;
@@ -252,11 +270,26 @@ fn windows_drag_from_clipboard() -> Result<DragOutcome, String> {
         if hr < 0 && hr != 1 {
             return Err(format!("OleInitialize {hr:#x}"));
         }
+        let sequence = GetClipboardSequenceNumber();
+        let selected = matches!(read_clipboard(), Ok(ClipboardContent::Files(files))
+            if files.len() == paths.len() && files.iter().zip(paths).all(|(file, path)| Path::new(file) == path));
+        if !selected {
+            OleUninitialize();
+            return Err("剪贴板内容已更改，请重新拖出文件".into());
+        }
         let mut data: *mut core::ffi::c_void = std::ptr::null_mut();
         let got = OleGetClipboard(&mut data);
         if got < 0 || data.is_null() {
             OleUninitialize();
             return Err("剪贴板没有可拖出的文件".into());
+        }
+        let vtbl = *(data as *mut *const usize);
+        let release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
+            std::mem::transmute(*vtbl.add(2));
+        if sequence == 0 || GetClipboardSequenceNumber() != sequence {
+            release(data);
+            OleUninitialize();
+            return Err("剪贴板内容已更改，请重新拖出文件".into());
         }
         let source = Box::into_raw(Box::new(DropSource::new()));
         let mut effect: u32 = 0;
@@ -267,9 +300,6 @@ fn windows_drag_from_clipboard() -> Result<DragOutcome, String> {
             &mut effect,
         );
         drop_release(source);
-        let vtbl = *(data as *mut *const usize);
-        let release: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32 =
-            std::mem::transmute(*vtbl.add(2));
         release(data);
         OleUninitialize();
         drag_drop_result(dragged, effect)
@@ -454,6 +484,16 @@ mod tests {
         assert_eq!(String::from_utf16(&units).unwrap(), expected);
         assert!(hdrop_bytes(&[root.join("first\0second.bin")]).is_err());
         assert!(hdrop_bytes(&[PathBuf::from("relative.bin")]).is_err());
+    }
+
+    #[test]
+    fn clipboard_file_selection_budget_includes_terminators() {
+        assert_eq!(
+            add_path_units(MAX_SELECTION_UNITS - 3, 2).unwrap(),
+            MAX_SELECTION_UNITS
+        );
+        assert!(add_path_units(MAX_SELECTION_UNITS - 2, 2).is_err());
+        assert!(add_path_units(1, 32768).is_err());
     }
 
     #[test]

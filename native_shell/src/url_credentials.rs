@@ -44,42 +44,43 @@ impl CoreStore {
         &self,
         value: T,
     ) -> Result<T, String> {
-        let mut value = serde_json::to_value(value).map_err(|e| e.to_string())?;
-        self.sanitize_url_value(&mut value)?;
-        serde_json::from_value(value).map_err(|e| e.to_string())
+        let (clean, passwords) = collect_url_passwords(value)?;
+        if passwords.is_empty() {
+            return Ok(clean);
+        }
+        self.store_sanitized(clean, passwords, |clean, _| Ok(clean))
     }
 
-    fn sanitize_url_value(&self, value: &mut serde_json::Value) -> Result<(), String> {
-        match value {
-            serde_json::Value::String(text) => {
-                // Some IPC records contain another serialized JSON document.
-                if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text) {
-                    if nested.is_object() || nested.is_array() {
-                        let before = nested.clone();
-                        self.sanitize_url_value(&mut nested)?;
-                        if nested != before {
-                            *text = nested.to_string();
-                        }
-                        return Ok(());
-                    }
-                }
-                *text = map_ftp_passwords(text, |authority, password| {
-                    self.protect_url_password(authority, password)
-                })?;
-            }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    self.sanitize_url_value(item)?;
-                }
-            }
-            serde_json::Value::Object(items) => {
-                for item in items.values_mut() {
-                    self.sanitize_url_value(item)?;
-                }
-            }
-            _ => {}
+    pub(super) fn write_sanitized<T: Serialize + DeserializeOwned, R>(
+        &self,
+        value: T,
+        write: impl FnOnce(T, &rusqlite::Transaction<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let (clean, passwords) = collect_url_passwords(value)?;
+        self.store_sanitized(clean, passwords, write)
+    }
+
+    fn store_sanitized<T, R>(
+        &self,
+        clean: T,
+        passwords: Vec<(String, String)>,
+        write: impl FnOnce(T, &rusqlite::Transaction<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        for (authority, password) in &passwords {
+            self.protect_url_password(authority, password)?;
         }
-        Ok(())
+        let result = write(clean, &transaction)?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        #[cfg(not(windows))]
+        for (authority, password) in passwords {
+            self.protect_url_password(&authority, &password)?;
+        }
+        Ok(result)
     }
 
     pub(crate) fn hydrate_url(&self, url: &str) -> Result<String, String> {
@@ -96,6 +97,9 @@ impl CoreStore {
         let Some(at) = authority.rfind('@') else {
             return Ok(url.into());
         };
+        if authority[..at].contains(':') {
+            return Ok(url.into());
+        }
         let key = url_password_key(&format!("{scheme}://{authority}"));
         #[cfg(windows)]
         let password: Option<String> = self
@@ -139,18 +143,25 @@ impl CoreStore {
             ] {
                 let mut statement = self
                     .connection
-                    .prepare(&format!("SELECT rowid, {column} FROM {table}"))
+                    .prepare(&format!("SELECT rowid, {column} FROM {table} WHERE rowid >= ?1 ORDER BY rowid LIMIT 1"))
                     .map_err(|e| e.to_string())?;
-                let rows = statement
-                    .query_map([], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                    })
-                    .map_err(|e| e.to_string())?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())?;
-                drop(statement);
-                for (id, text) in rows {
-                    let sanitized = self.sanitize_urls(text.clone())?;
+                let mut next = i64::MIN;
+                loop {
+                    use rusqlite::OptionalExtension;
+                    let row = statement
+                        .query_row([next], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                        })
+                        .optional()
+                        .map_err(|e| e.to_string())?;
+                    let Some((id, text)) = row else { break };
+                    let mut value = serde_json::Value::String(text.clone());
+                    sanitize_url_value(&mut value, &mut |authority, password| {
+                        self.protect_url_password(authority, password)
+                    })?;
+                    let sanitized = value
+                        .as_str()
+                        .expect("sanitizing a string preserves its type");
                     if sanitized != text {
                         changed = true;
                         self.connection
@@ -160,6 +171,10 @@ impl CoreStore {
                             )
                             .map_err(|e| e.to_string())?;
                     }
+                    let Some(following) = id.checked_add(1) else {
+                        break;
+                    };
+                    next = following;
                 }
             }
             Ok(())
@@ -180,6 +195,71 @@ impl CoreStore {
         }
         result
     }
+}
+
+type UrlPasswords = Vec<(String, String)>;
+
+fn collect_url_passwords<T: Serialize + DeserializeOwned>(
+    value: T,
+) -> Result<(T, UrlPasswords), String> {
+    let mut value = serde_json::to_value(value).map_err(|e| e.to_string())?;
+    let mut passwords = Vec::new();
+    sanitize_url_value(&mut value, &mut |authority, password| {
+        passwords.push((authority.into(), password.into()));
+        Ok(())
+    })?;
+    Ok((
+        serde_json::from_value(value).map_err(|e| e.to_string())?,
+        passwords,
+    ))
+}
+
+fn sanitize_url_value(
+    value: &mut serde_json::Value,
+    protect: &mut impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::String(text) => {
+            // Some IPC records contain another serialized JSON document.
+            if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text) {
+                if nested.is_object() || nested.is_array() {
+                    let before = nested.clone();
+                    sanitize_url_value(&mut nested, protect)?;
+                    if nested != before {
+                        *text = nested.to_string();
+                    }
+                    return Ok(());
+                }
+            }
+            *text = map_ftp_passwords(text, protect)?;
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                sanitize_url_value(item, protect)?;
+            }
+        }
+        serde_json::Value::Object(items) if !items.keys().any(|key| key.contains("://")) => {
+            for item in items.values_mut() {
+                sanitize_url_value(item, protect)?;
+            }
+        }
+        serde_json::Value::Object(items) => {
+            // URL-indexed maps need the same redaction as ordinary field values.
+            for (key, mut item) in std::mem::take(items) {
+                sanitize_url_value(&mut item, protect)?;
+                let key = if key.contains("://") {
+                    map_ftp_passwords(&key, &mut *protect)?
+                } else {
+                    key
+                };
+                if items.insert(key, item).is_some() {
+                    return Err("URL 凭据脱敏后出现重复键".into());
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -368,6 +448,8 @@ mod tests {
             .unwrap();
         assert_eq!(clean, "ftp://alice@host/file");
         assert_eq!(store.hydrate_url(&clean).unwrap(), "ftp://alice:@host/file");
+        let supplied = "ftp://alice:explicit%40pass@host/path@file?mail=a@b";
+        assert_eq!(store.hydrate_url(supplied).unwrap(), supplied);
         #[cfg(windows)]
         {
             store
@@ -376,6 +458,30 @@ mod tests {
                 .unwrap();
             assert!(store.hydrate_url(&clean).is_err());
         }
+    }
+
+    #[test]
+    fn failed_setting_write_preserves_prior_password_and_redacts_url_map_keys() {
+        let mut store = CoreStore::in_memory().unwrap();
+        let first = serde_json::json!({"ftp://user:first@host/file":true});
+        store.set_setting("urls", first).unwrap();
+        let stored = store
+            .connection
+            .query_row(
+                "SELECT value_json FROM settings WHERE key='urls'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(stored, r#"{"ftp://user@host/file":true}"#);
+        store.connection.execute_batch("CREATE TRIGGER reject_update BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(store
+            .set_setting("urls", "ftp://user:second@host/file")
+            .is_err());
+        assert_eq!(
+            store.hydrate_url("ftp://user@host/file").unwrap(),
+            "ftp://user:first@host/file"
+        );
     }
 
     #[test]
