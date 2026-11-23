@@ -1963,6 +1963,7 @@ impl CoreCoordinator {
             && safe(stored)
             && method(incoming) == method(stored)
             && normalized_headers(incoming) == normalized_headers(stored)
+            && incoming.preferred_variant_id == stored.preferred_variant_id
             && incoming.preferred_bandwidth == stored.preferred_bandwidth
             && incoming.preferred_height == stored.preferred_height
             && incoming.preferred_audio == stored.preferred_audio
@@ -2105,6 +2106,7 @@ impl CoreCoordinator {
                 expected_size: (offer.size > 0).then_some(offer.size),
                 preferred_bandwidth: offer.preferred_bandwidth,
                 preferred_height: offer.preferred_height,
+                preferred_variant_id: offer.preferred_variant_id.clone(),
                 ..Default::default()
             },
             trust_download_dir,
@@ -2748,6 +2750,7 @@ fn run_task_with_throttle(
                 concurrency: spec.concurrency.max(1) as usize,
                 preferred_bandwidth: spec.preferred_bandwidth,
                 preferred_height: spec.preferred_height,
+                preferred_variant_id: spec.preferred_variant_id.clone(),
                 preferred_audio: spec.preferred_audio.clone(),
                 skip_ads,
                 download_subtitles,
@@ -2784,6 +2787,7 @@ fn run_task_with_throttle(
             let progress = paths.progress.clone();
             let bandwidth = spec.preferred_bandwidth;
             let height = spec.preferred_height;
+            let variant_id = spec.preferred_variant_id.clone();
             let download_subtitles = core
                 .lock()
                 .map_err(|_| "v7 Core mutex poisoned".to_string())?
@@ -2801,6 +2805,7 @@ fn run_task_with_throttle(
                         &control,
                         bandwidth,
                         height,
+                        &variant_id,
                         download_subtitles,
                         &audio_name,
                     )

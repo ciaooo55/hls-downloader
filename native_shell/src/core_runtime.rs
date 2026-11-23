@@ -517,6 +517,7 @@ impl CoreRuntime {
             expected_size: (offer.size > 0).then_some(offer.size),
             preferred_bandwidth: offer.preferred_bandwidth,
             preferred_height: offer.preferred_height,
+            preferred_variant_id: offer.preferred_variant_id.clone(),
             ..Default::default()
         };
         let snapshot = self.create_task(spec);
@@ -1759,6 +1760,7 @@ mod tests {
                 size: 1024,
                 preferred_bandwidth: 2_500_000,
                 preferred_height: 720,
+                preferred_variant_id: "v2".into(),
             },
         });
         assert!(matches!(events[0].event, CoreEvent::HandoffOffered { .. }));
@@ -1786,6 +1788,10 @@ mod tests {
             2_500_000
         );
         assert_eq!(runtime.task_spec("task-1").unwrap().preferred_height, 720);
+        assert_eq!(
+            runtime.task_spec("task-1").unwrap().preferred_variant_id,
+            "v2"
+        );
         assert_eq!(
             runtime.task_spec("task-1").unwrap().mime_type,
             "application/vnd.microsoft.portable-executable"

@@ -373,6 +373,13 @@ fn duplicate_identity_requires_same_safe_request_shape() {
         &changed_quality,
         &plain
     ));
+    let mut changed_variant = changed_quality.clone();
+    changed_quality.preferred_variant_id = "v1".into();
+    changed_variant.preferred_variant_id = "v2".into();
+    assert!(!CoreCoordinator::duplicate_request_identity_matches(
+        &changed_variant,
+        &changed_quality
+    ));
     let mut changed_audio = same.clone();
     changed_audio.preferred_audio = "English".into();
     assert!(!CoreCoordinator::duplicate_request_identity_matches(

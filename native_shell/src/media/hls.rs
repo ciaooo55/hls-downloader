@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playlist {
+    document_url: String,
     pub is_master: bool,
     pub end_list: bool,
     pub media_sequence: u64,
@@ -92,6 +93,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
         return Err("not an HLS playlist".into());
     }
     let mut playlist = Playlist {
+        document_url: base.into(),
         is_master: false,
         end_list: false,
         media_sequence: 0,
@@ -371,13 +373,52 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     Ok(playlist)
 }
 
-pub fn select_variant_for(
-    playlist: &Playlist,
+pub fn select_variant_for<'a>(
+    playlist: &'a Playlist,
     preferred_bandwidth: u64,
     preferred_height: u32,
-) -> Option<&Variant> {
-    if playlist.variants.is_empty() {
-        return None;
+    preferred_variant_id: &str,
+) -> Option<&'a Variant> {
+    if !preferred_variant_id.is_empty() {
+        let resolved = super::resolve_http_uri(&playlist.document_url, preferred_variant_id);
+        let variants = &playlist.variants;
+        if let Some(exact) = variants
+            .iter()
+            .find(|v| v.uri == preferred_variant_id)
+            .or_else(|| variants.iter().find(|v| v.uri == resolved))
+        {
+            return Some(exact);
+        }
+        if let Some(target) = variant_origin_path(&resolved) {
+            let mut best = None;
+            let mut score = None;
+            for variant in variants
+                .iter()
+                .filter(|v| variant_origin_path(&v.uri).as_ref() == Some(&target))
+            {
+                let distance = (
+                    if preferred_bandwidth > 0 {
+                        variant.bandwidth.abs_diff(preferred_bandwidth)
+                    } else {
+                        0
+                    },
+                    if preferred_height > 0 {
+                        variant.resolution.1.abs_diff(preferred_height)
+                    } else {
+                        0
+                    },
+                );
+                if score.is_none_or(|previous| distance < previous) {
+                    best = Some(variant);
+                    score = Some(distance);
+                } else if score == Some(distance) {
+                    best = None;
+                }
+            }
+            if best.is_some() {
+                return best;
+            }
+        }
     }
     if preferred_bandwidth > 0 {
         return playlist.variants.iter().min_by_key(|variant| {
@@ -409,6 +450,16 @@ pub fn select_variant_for(
             variant.bandwidth,
         )
     })
+}
+
+fn variant_origin_path(uri: &str) -> Option<(String, String)> {
+    let clean = uri.split(['?', '#']).next()?;
+    let (_, authority_path) = clean.split_once("://")?;
+    let origin = crate::http_engine::request_origin(clean);
+    let path = authority_path
+        .find('/')
+        .map_or("/", |i| &authority_path[i..]);
+    (!origin.is_empty()).then(|| (origin, crate::harvest::normalize_url_path(path)))
 }
 
 fn is_audio_only(variant: &Variant) -> bool {
@@ -532,6 +583,7 @@ pub struct HlsDownloadOptions {
     pub concurrency: usize,
     pub preferred_bandwidth: u64,
     pub preferred_height: u32,
+    pub preferred_variant_id: String,
     pub preferred_audio: String,
     pub skip_ads: bool,
     pub download_subtitles: bool,
@@ -549,6 +601,7 @@ impl Default for HlsDownloadOptions {
             concurrency: 8,
             preferred_bandwidth: 0,
             preferred_height: 0,
+            preferred_variant_id: String::new(),
             preferred_audio: String::new(),
             skip_ads: true,
             download_subtitles: true,
@@ -648,6 +701,7 @@ fn download_hls_scoped(
             &playlist,
             options.preferred_bandwidth,
             options.preferred_height,
+            &options.preferred_variant_id,
         )
         .ok_or_else(|| "HLS master has no variants".to_string())?;
         audio_uri = select_audio_track(&playlist, variant, &options.preferred_audio)
@@ -672,7 +726,7 @@ fn download_hls_scoped(
         if let Some(audio) = audio_uri.take() {
             let mut audio_playlist = load_playlist(&audio, headers, proxy)?;
             if audio_playlist.is_master {
-                let variant = select_variant_for(&audio_playlist, 0, 0)
+                let variant = select_variant_for(&audio_playlist, 0, 0, "")
                     .ok_or("HLS audio master has no variants")?;
                 audio_playlist = load_playlist(&variant.uri, headers, proxy)?;
             }
@@ -1620,15 +1674,15 @@ const SEGMENT_COMMIT_INTERVAL: std::time::Duration = std::time::Duration::from_s
 type DurableSegments<'a> = &'a (dyn Fn(&[PathBuf]) -> Result<(), String> + Sync);
 
 #[derive(Default)]
-struct SegmentBatch {
-    files: Vec<PathBuf>,
+pub(super) struct SegmentBatch<T = PathBuf> {
+    files: Vec<T>,
     bytes: u64,
     oldest: Option<std::time::Instant>,
 }
 
-impl SegmentBatch {
+impl<T> SegmentBatch<T> {
     /// Adds a landed segment; returns the batch to commit when one is due.
-    fn push(&mut self, path: PathBuf, bytes: u64) -> Option<Vec<PathBuf>> {
+    pub(super) fn push(&mut self, path: T, bytes: u64) -> Option<Vec<T>> {
         self.files.push(path);
         self.bytes = self.bytes.saturating_add(bytes);
         let oldest = *self.oldest.get_or_insert_with(std::time::Instant::now);
@@ -1638,7 +1692,12 @@ impl SegmentBatch {
         due.then(|| self.take())
     }
 
-    fn take(&mut self) -> Vec<PathBuf> {
+    pub(super) fn remaining(&self) -> Option<std::time::Duration> {
+        self.oldest
+            .map(|oldest| SEGMENT_COMMIT_INTERVAL.saturating_sub(oldest.elapsed()))
+    }
+
+    pub(super) fn take(&mut self) -> Vec<T> {
         self.bytes = 0;
         self.oldest = None;
         std::mem::take(&mut self.files)
@@ -1647,21 +1706,21 @@ impl SegmentBatch {
 
 /// Flushes already-published segment files to stable storage. On Unix the
 /// containing directories are synced too, so the renames survive power loss.
-fn sync_segment_files(paths: &[PathBuf]) -> Result<(), String> {
+pub(super) fn sync_segment_files(paths: &[PathBuf]) -> Result<(), String> {
     for path in paths {
         fs::OpenOptions::new()
             .write(true)
             .open(path)
             .and_then(|file| file.sync_data())
-            .map_err(|error| format!("同步 HLS 分片失败 {}: {error}", path.display()))?;
+            .map_err(|error| format!("同步媒体分片失败 {}: {error}", path.display()))?;
     }
     #[cfg(unix)]
     {
         let parents: BTreeSet<&Path> = paths.iter().filter_map(|path| path.parent()).collect();
         for parent in parents {
-            if let Ok(dir) = fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
+            fs::File::open(parent)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|error| format!("同步媒体分片目录失败 {}: {error}", parent.display()))?;
         }
     }
     Ok(())
@@ -2680,7 +2739,7 @@ fn volatile_query_name(name: &str, short_sig: bool) -> bool {
 /// [`sync_segment_files`] before any checkpoint vouches for it (VOD group
 /// commit).
 #[allow(clippy::too_many_arguments)]
-fn save_segment(
+pub(super) fn save_segment(
     url: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
@@ -3927,11 +3986,11 @@ mod tests {
         let playlist = parse_playlist(text, "https://cdn.test/master.m3u8").unwrap();
         assert!(playlist.is_master);
         assert_eq!(
-            select_variant_for(&playlist, 800_000, 0).unwrap().uri,
+            select_variant_for(&playlist, 800_000, 0, "").unwrap().uri,
             "https://cdn.test/low.m3u8"
         );
         assert_eq!(
-            select_variant_for(&playlist, 0, 720).unwrap().uri,
+            select_variant_for(&playlist, 0, 720, "").unwrap().uri,
             "https://cdn.test/low.m3u8"
         );
         assert_eq!(variant_choices(&playlist)[0].height, 1080);
@@ -3940,12 +3999,60 @@ mod tests {
         assert_eq!(
             select_audio_track(
                 &playlist,
-                select_variant_for(&playlist, 0, 0).unwrap(),
+                select_variant_for(&playlist, 0, 0, "").unwrap(),
                 "English"
             )
             .unwrap()
             .name,
             "English"
+        );
+    }
+
+    #[test]
+    fn exact_variant_survives_rotated_query_and_relative_paths() {
+        let text = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\na.m3u8?token=new\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\nb.m3u8?token=new\n";
+        let playlist = parse_playlist(text, "https://cdn.test/media/master.m3u8").unwrap();
+        let second = &playlist.variants[1];
+        for id in [
+            &second.uri,
+            "https://CDN.test:443/media/b.m3u8?token=old#video",
+            "./b.m3u8?token=old",
+            "/media/b.m3u8",
+        ] {
+            assert_eq!(
+                select_variant_for(&playlist, 5_000_000, 1080, id),
+                Some(second)
+            );
+        }
+        assert_eq!(
+            select_variant_for(
+                &playlist,
+                5_000_000,
+                1080,
+                "https://other.test/media/b.m3u8"
+            ),
+            Some(&playlist.variants[0])
+        );
+    }
+
+    #[test]
+    fn ambiguous_rotated_variant_uses_quality_or_falls_back() {
+        let playlist = parse_playlist(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=9000\nother.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nshared.m3u8?id=a\n#EXT-X-STREAM-INF:BANDWIDTH=2000\nshared.m3u8?id=b\n",
+            "https://cdn.test/master.m3u8",
+        ).unwrap();
+        let rotated = "shared.m3u8?token=old";
+        assert_eq!(
+            select_variant_for(&playlist, 0, 0, rotated),
+            Some(&playlist.variants[0])
+        );
+        assert_eq!(
+            select_variant_for(&playlist, 8500, 0, rotated),
+            Some(&playlist.variants[2])
+        );
+        assert_eq!(
+            select_variant_for(&playlist, 1000, 0, "shared.m3u8?id=b"),
+            Some(&playlist.variants[2])
         );
     }
 
