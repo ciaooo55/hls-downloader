@@ -2727,8 +2727,11 @@ fn write_cast<W: Write>(
 
 fn read_cast<R: Read>(stream: &mut R) -> Result<Option<(String, String)>, String> {
     let mut header = [0u8; 4];
-    if stream.read_exact(&mut header).is_err() {
-        return Ok(None);
+    if let Err(error) = stream.read_exact(&mut header) {
+        return match error.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => Ok(None),
+            _ => Err(format!("Chromecast 连接已断开: {error}")),
+        };
     }
     let len = u32::from_be_bytes(header) as usize;
     if len == 0 || len > 64 * 1024 {
@@ -3195,6 +3198,27 @@ mod tests {
         let mut frame = 64u32.to_be_bytes().to_vec();
         frame.extend_from_slice(b"short");
         assert!(decode_cast_payload(&frame).is_none());
+    }
+
+    #[test]
+    fn read_cast_returns_err_on_eof_and_none_on_timeout() {
+        struct ErrorReader(std::io::ErrorKind);
+        impl Read for ErrorReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(self.0, "simulated"))
+            }
+        }
+        assert_eq!(
+            read_cast(&mut ErrorReader(std::io::ErrorKind::WouldBlock)).unwrap(),
+            None
+        );
+        assert_eq!(
+            read_cast(&mut ErrorReader(std::io::ErrorKind::TimedOut)).unwrap(),
+            None
+        );
+        let mut empty = std::io::Cursor::new(Vec::<u8>::new());
+        let err = read_cast(&mut empty).unwrap_err();
+        assert!(err.contains("Chromecast 连接已断开"), "{err}");
     }
 
     #[test]
